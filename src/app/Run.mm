@@ -332,6 +332,11 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                         }
                         appendIntelRings(vertices, map->field, units, slot);
                         appendRallyLine(vertices, map->field, units, slot);
+                        // The order queue in a capture too: a headless run cannot hold
+                        // shift, so the capture draws what the modifier would — the
+                        // route here, its predicted times with the HUD below.
+                        rm::app::appendOrderRoute(vertices, map->field, units, slot,
+                                                  ground);
                         captured.push_back(rm::SelectionEntry{batch, i});
                         capturedSelection.push_back(units.store.idAt(slot));
                         // Where the ringed unit stands, so a script can place a ghost or aim a
@@ -545,6 +550,20 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
             rm::app::appendContactBlips(hud, units, renderer.camera(), map->field,
                                         renderer.labelFont(), shotViewport);
             appendSceneIcons(shotParticles, units, renderer.camera(), shotRefs);
+
+            // The predicted order times the capture stands in for shift on. Paired
+            // with the route decals above, a queued `--march` wears its ETA.
+            std::size_t shotOrderTimes = 0;
+            for (const rm::sim::UnitId id : capturedSelection) {
+                if (units.store.alive(id)) {
+                    shotOrderTimes += rm::app::appendOrderTimes(
+                        hud, units, renderer.camera(), map->field,
+                        renderer.labelFont(), shotViewport, id.index);
+                }
+            }
+            if (shotOrderTimes > 0) {
+                std::printf("  order-times: %zu\n", shotOrderTimes);
+            }
 
             // THE CONSTRUCTION SITES IN A CAPTURE TOO, for the reason the HUD is here: a
             // screenshot is how this project verifies anything, and an effect only visible in
@@ -3143,30 +3162,6 @@ int runWindowed(const Session& session) {
             appendResourceDeposits(decalVertices, units, map->field);
             // One unit's order queue as ground decals, shared by the selection pass
             // and the shift-held army pass below — one hand so the two cannot drift.
-            const auto drawOrderQueue = [&](std::vector<rm::DecalVertex>& out,
-                                            const rm::HeightField& field,
-                                            const UnitScene& scene, rm::UnitIndex slot,
-                                            std::array<float, 3> at) {
-                const std::deque<rm::sim::QueuedCommand>& queue =
-                    scene.store.orders()[slot].entries();
-                std::array<float, 2> from{at[0], at[2]};
-                for (const rm::sim::QueuedCommand& order : queue) {
-                    if (order.kind() == rm::sim::CommandKind::Stop) {
-                        continue;  // a stop has no destination to draw a line to
-                    }
-                    const std::array<float, 2> to{rm::sim::fxToFloat(order.targetX()),
-                                                  rm::sim::fxToFloat(order.targetZ())};
-                    // One colour per order family — the chain reads as the orders
-                    // it holds, not as one indifferent string of waypoints.
-                    const rm::app::QueueRouteColours colours =
-                        rm::app::queueRouteColours(order.kind());
-                    appendGroundSegment(out, field, from, to, colours.line,
-                                        kQueueLineWidthElmos);
-                    appendGroundNode(out, field, to, colours.node,
-                                     kQueueNodeHalfElmos);
-                    from = to;
-                }
-            };
             // Dead selections draw nothing rather than being pruned here: a frame is not
             // where a selection changes, and a ring under a wreck is the bug this avoids.
             for (const rm::sim::UnitId sel : selected) {
@@ -3210,7 +3205,17 @@ int runWindowed(const Session& session) {
                 // unit through every queued destination, a diamond at each node — each
                 // segment in its order family's hue, so a patrol loop, a queued attack and
                 // a build site read as three different intentions rather than one chain.
-                drawOrderQueue(decalVertices, map->field, units, sel.index, ground);
+                rm::app::appendOrderRoute(decalVertices, map->field, units,
+                                          sel.index, ground);
+                // SHIFT IS WHEN THE QUEUE EARNS ITS NUMBERS: the same modifier that
+                // writes the chain also asks "when", so each node wears the forecast
+                // the pure predictor priced it at — selected units too, since holding
+                // shift is how the whole army's queues come up.
+                if (window.shiftHeldNow()) {
+                    (void)rm::app::appendOrderTimes(hudScratch, units, window.camera(),
+                                                    map->field, window.labelFont(),
+                                                    viewport, sel.index);
+                }
             }
             // SHIFT HOLDS EVERY QUEUE UP, not just the selection's. Queuing is aimed at
             // the whole army — a shift-click appends to any unit's orders — so the
@@ -3229,9 +3234,12 @@ int runWindowed(const Session& session) {
                         continue;  // already drawn above, with its rings
                     }
                     const rm::sim::Transform& mat = units.store.transforms()[at];
-                    drawOrderQueue(decalVertices, map->field, units, at,
+                    rm::app::appendOrderRoute(decalVertices, map->field, units, at,
                                    {rm::sim::fxToFloat(mat.x), rm::sim::fxToFloat(mat.y),
                                     rm::sim::fxToFloat(mat.z)});
+                    (void)rm::app::appendOrderTimes(hudScratch, units, window.camera(),
+                                                    map->field, window.labelFont(),
+                                                    viewport, at);
                 }
                 }
 

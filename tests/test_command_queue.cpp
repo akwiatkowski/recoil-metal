@@ -5,9 +5,11 @@
 // copied rather than invented and "what feels right" is not a specification. Then the wiring:
 // three queued moves actually run in order through the tick, which is §7 P4.1's stated test and
 // the only thing that can catch the queue being right and unused.
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/sim/CommandQueue.hpp"
+#include "core/scene/OrderTimes.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/StateHash.hpp"
@@ -2657,4 +2659,143 @@ TEST_CASE("a fueled air guard pursues like its land twin", "[guard][fuel]") {
     CHECK(roster.store.motion()[guard.index].moving);
     REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
     CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Guard);
+}
+
+// --- Predicted times -------------------------------------------------------------
+//
+// The labels a shift-held queue wears over its nodes: pure arithmetic over the same
+// entries the decal pass walks, so a prediction can never name a node the drawing
+// skipped. Straight-line speed and full build rate — a promise would need the world;
+// this is a forecast.
+
+TEST_CASE("a queue's predicted times accumulate travel along the chain") {
+    CommandQueue queue;
+    (void)queue.give(moveTo(100, 0, {}, true), true);
+    (void)queue.give(moveTo(100, 100, {}, true), true);
+    (void)queue.give(moveTo(200, 100, {}, true), true);
+
+    rm::unitdef::UnitDef mover;
+    mover.name = "test_tank";
+    mover.speedElmosPerSecond = 10.0f;
+    rm::test::Roster roster;
+    const auto times = rm::predictedOrderTimes(roster.catalog, queue, mover,
+                                                    rm::sim::Fx{}, rm::sim::Fx{});
+    REQUIRE(times.size() == 3);
+    // 100 elmos at 10 elmos/s, then the same again, then again — each node inherits
+    // the one's before it, which is what cumulative means.
+    CHECK(*times[0] == Catch::Approx(10.0f));
+    CHECK(*times[1] == Catch::Approx(20.0f));
+    CHECK(*times[2] == Catch::Approx(30.0f));
+}
+
+TEST_CASE("a queued building's predicted time carries its own construction") {
+    // The ticket's second half: "for queued buildings cumulative time = sum of
+    // previous" plus the build itself — travel to the site, then buildRate into
+    // buildTime.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef product;
+    product.name = "test_building";
+    product.buildTime = rm::sim::Mag::fromInt(200);
+    const rm::UnitTypeIndex productType = roster.addType(product);
+
+    CommandQueue queue;
+    (void)queue.give(moveTo(100, 0, {}, true), true);
+    (void)queue.give(Command{.kind = CommandKind::Build, .queued = true,
+                             .targetX = rm::sim::fxFromFloat(200),
+                             .targetZ = {},
+                             .buildType = productType},
+                     true);
+
+    rm::unitdef::UnitDef mover;
+    mover.name = "test_engineer";
+    mover.speedElmosPerSecond = 10.0f;
+    mover.buildRate = 20.0f;
+    const auto times = rm::predictedOrderTimes(roster.catalog, queue, mover,
+                                                    rm::sim::Fx{}, rm::sim::Fx{});
+    REQUIRE(times.size() == 2);
+    CHECK(*times[0] == Catch::Approx(10.0f));
+    // 10s travel + 100 elmos more of travel + 200/20 = 10s of construction.
+    CHECK(*times[1] == Catch::Approx(30.0f));
+}
+
+TEST_CASE("a stop predicts nothing because it draws no node") {
+    CommandQueue queue;
+    (void)queue.give(moveTo(100, 0, {}, true), true);
+    (void)queue.give(Command{.kind = CommandKind::Stop, .queued = true}, true);
+    (void)queue.give(moveTo(200, 0, {}, true), true);
+
+    rm::unitdef::UnitDef mover;
+    mover.speedElmosPerSecond = 10.0f;
+    rm::test::Roster roster;
+    const auto times = rm::predictedOrderTimes(roster.catalog, queue, mover,
+                                                    rm::sim::Fx{}, rm::sim::Fx{});
+    REQUIRE(times.size() == 3);
+    CHECK(times[0].has_value());
+    CHECK_FALSE(times[1].has_value());
+    // A stop halts the unit where it stood — the chain resumes from the first node's
+    // position, so the third order is another 100 elmos from there, not from origin.
+    CHECK(*times[2] == Catch::Approx(20.0f));
+}
+
+TEST_CASE("a static producer's queue is all work and no travel") {
+    // A factory's production orders are Build orders that never move — the cumulative
+    // time is the answer to "when does my second tank roll out". Distinct products,
+    // because identical give() calls cancel one another: a repeated product arrives as
+    // one entry carrying `remainingCount`, which the batch test below covers.
+    rm::test::Roster roster;
+    const auto product = [&](const char* name, int buildSeconds) {
+        rm::unitdef::UnitDef def;
+        def.name = name;
+        def.buildTime = rm::sim::Mag::fromInt(buildSeconds * 30);
+        return roster.addType(def);
+    };
+    const rm::UnitTypeIndex tank = product("test_tank", 10);
+    const rm::UnitTypeIndex bot = product("test_bot", 20);
+    const rm::UnitTypeIndex scout = product("test_scout", 10);
+
+    CommandQueue queue;
+    for (const rm::UnitTypeIndex type : {tank, bot, scout}) {
+        (void)queue.give(Command{.kind = CommandKind::Build, .queued = true,
+                                 .buildType = type},
+                         true);
+    }
+
+    rm::unitdef::UnitDef factory;
+    factory.name = "test_factory";
+    factory.buildRate = 30.0f;
+    const auto times = rm::predictedOrderTimes(roster.catalog, queue, factory,
+                                                    rm::sim::fxFromFloat(500),
+                                                    rm::sim::fxFromFloat(500));
+    REQUIRE(times.size() == 3);
+    CHECK(*times[0] == Catch::Approx(10.0f));
+    CHECK(*times[1] == Catch::Approx(30.0f));
+    CHECK(*times[2] == Catch::Approx(40.0f));
+}
+
+TEST_CASE("a queued batch's predicted time is every copy's build time") {
+    // Shift-clicking the same product twice does not make two entries — the queue's
+    // own cancel rule merges them into one SharedCommand with `remainingCount` = 2,
+    // and the prediction must price the batch, not the line item.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef product;
+    product.name = "test_tank_product";
+    product.buildTime = rm::sim::Mag::fromInt(300);
+    const rm::UnitTypeIndex productType = roster.addType(product);
+
+    CommandQueue queue;
+    const auto batch = std::make_shared<const rm::sim::SharedCommand>(
+        rm::sim::SharedCommand{.kind = CommandKind::Build,
+                               .buildType = productType,
+                               .originalCount = 3,
+                               .remainingCount = 3});
+    (void)queue.give(rm::sim::QueuedCommand{UnitId{0, 1}, batch}, true);
+
+    rm::unitdef::UnitDef factory;
+    factory.name = "test_factory";
+    factory.buildRate = 30.0f;
+    const auto times = rm::predictedOrderTimes(roster.catalog, queue, factory,
+                                                    rm::sim::fxFromFloat(500),
+                                                    rm::sim::fxFromFloat(500));
+    REQUIRE(times.size() == 1);
+    CHECK(*times[0] == Catch::Approx(30.0f));
 }

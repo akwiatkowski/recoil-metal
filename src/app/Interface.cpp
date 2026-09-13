@@ -4,6 +4,7 @@
                                // blueprint needs to be DRAWN rather than merely simulated
 #include "core/model/Pose.hpp"
 #include "core/scene/BuildEffects.hpp"
+#include "core/scene/OrderTimes.hpp"
 #include "core/ui/IconAtlas.hpp"
 #include "core/ui/CommandPanel.hpp"
 #include "core/unit/Role.hpp"
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 
 namespace rm::app {
 namespace {
@@ -220,6 +222,25 @@ void appendRallyLine(std::vector<rm::DecalVertex>& out, const rm::HeightField& f
                             {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.z)},
                             {rally->second[0], rally->second[1]}, kRallyLineColour,
                             kRangeRingThicknessElmos);
+}
+
+void appendOrderRoute(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
+                      const UnitScene& scene, rm::UnitIndex slot,
+                      std::array<float, 3> at) {
+    std::array<float, 2> from{at[0], at[2]};
+    for (const rm::sim::QueuedCommand& order : scene.store.orders()[slot].entries()) {
+        if (order.kind() == rm::sim::CommandKind::Stop) {
+            continue;  // a stop has no destination to draw a line to
+        }
+        const std::array<float, 2> to{rm::sim::fxToFloat(order.targetX()),
+                                      rm::sim::fxToFloat(order.targetZ())};
+        // One colour per order family — the chain reads as the orders it holds,
+        // not as one indifferent string of waypoints.
+        const QueueRouteColours colours = queueRouteColours(order.kind());
+        rm::appendGroundSegment(out, field, from, to, colours.line, kQueueLineWidthElmos);
+        rm::appendGroundNode(out, field, to, colours.node, kQueueNodeHalfElmos);
+        from = to;
+    }
 }
 
 void appendResourceDeposits(std::vector<rm::DecalVertex>& out, const UnitScene& scene,
@@ -1257,6 +1278,47 @@ rm::sim::AdjacencyPreview appendAdjacencyPreview(
         }
     }
     return preview;
+}
+
+std::size_t appendOrderTimes(
+    rm::ui::Geometry& out, const UnitScene& scene, const rm::OrbitCamera& camera,
+    const rm::HeightField& field, const rm::text::Font& font,
+    const rm::ui::UiViewport& viewport, rm::UnitIndex slot) {
+    const rm::sim::CommandQueue& queue = scene.store.orders()[slot];
+    const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(slot));
+    const rm::ui::Extent extent = viewport.hudExtent();
+    if (queue.entries().empty() || def == nullptr || !font.usable()
+        || extent.width <= 0 || extent.height <= 0) {
+        return 0;
+    }
+    const rm::sim::Transform& t = scene.store.transforms()[slot];
+    const auto times = rm::predictedOrderTimes(
+        scene.catalog, queue, *def, t.x, t.z);
+    const auto battlefield = rm::ui::frameLayout(viewport).battlefield;
+    std::size_t drawn = 0;
+    for (std::size_t i = 0; i < queue.entries().size(); ++i) {
+        if (!times[i]) continue;
+        const rm::sim::QueuedCommand& order = queue.entries()[i];
+        const float x = rm::sim::fxToFloat(order.targetX());
+        const float z = rm::sim::fxToFloat(order.targetZ());
+        const auto screen = rm::worldToScreen(camera,
+            simd_make_float3(x, field.heightAtWorld(x, z), z),
+            extent.width, extent.height);
+        if (!screen || !battlefield.contains((*screen)[0], (*screen)[1])) continue;
+        const int whole = static_cast<int>(*times[i] + 0.5f);
+        char buffer[16];
+        std::snprintf(buffer, sizeof buffer, "%d:%02d", whole / 60, whole % 60);
+        // The number wears its node's hue so label and diamond read as one order;
+        // only the alpha comes up to full — the line's translucency is for the
+        // ground, not the answer.
+        const auto node = queueRouteColours(order.kind()).node;
+        const float width = rm::text::measureText(font.glyphs, buffer);
+        rm::text::appendText(out.label, font.glyphs, buffer,
+                             (*screen)[0] - width * 0.5f, (*screen)[1] - 18.0f,
+                             rm::ui::Colour{{node[0], node[1], node[2], 1.0f}});
+        ++drawn;
+    }
+    return drawn;
 }
 
 void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,

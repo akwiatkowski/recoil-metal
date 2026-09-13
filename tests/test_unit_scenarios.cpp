@@ -1009,6 +1009,51 @@ TEST_CASE("a build ghost's adjacency preview labels what each neighbour gains",
     CHECK(away.label.empty());
 }
 
+TEST_CASE("a shift-held queue hangs a predicted time on each node", "[ui][order-times]") {
+    // The screenshot path cannot hold a modifier, so this is the label's regression
+    // net: two queued moves of 100 elmos at 10 elmos/s must wear "0:10" and "0:20"
+    // at their nodes, and an idle unit nothing at all.
+    Scenario scenario;
+    rm::unitdef::UnitDef def;
+    def.name = "test_mover";
+    def.speedElmosPerSecond = 10.0f;
+    const auto mover = scenario.spawn(def, 200, 200);
+    const auto idle = scenario.spawn(def, 600, 200);
+    auto& queue = scenario.scene.store.orders()[mover.index];
+    (void)queue.give(rm::sim::Command{
+        .kind = rm::sim::CommandKind::Move, .queued = true,
+        .targetX = rm::sim::Fx::fromInt(300), .targetZ = rm::sim::Fx::fromInt(200)}, true);
+    (void)queue.give(rm::sim::Command{
+        .kind = rm::sim::CommandKind::Move, .queued = true,
+        .targetX = rm::sim::Fx::fromInt(300), .targetZ = rm::sim::Fx::fromInt(300)}, true);
+    (void)queue.give(rm::sim::Command{.kind = rm::sim::CommandKind::Stop, .queued = true},
+                     true);  // a stop draws no node, so it hangs no label
+
+    rm::OrbitCamera camera;
+    camera.target = simd_make_float3(400, 0, 250);
+    camera.distance = 600;
+    std::vector<rm::text::Glyph> glyphs(rm::text::kGlyphCount);
+    for (rm::text::Glyph& glyph : glyphs) {
+        glyph.advance = 8.0f;
+        glyph.width = 6.0f;
+        glyph.height = 10.0f;
+    }
+    const rm::text::Font font{.glyphs = glyphs, .lineHeight = 18,
+        .solidUv = {0.5f, 0.5f, 0.6f, 0.6f}};
+    const auto viewport = rm::ui::UiViewport::authored(1600, 900);
+
+    rm::ui::Geometry geometry;
+    const auto count = rm::app::appendOrderTimes(geometry, scenario.scene, camera,
+        scenario.field, font, viewport, mover.index);
+    CHECK(count == 2);
+    CHECK(!geometry.label.empty());
+
+    rm::ui::Geometry empty;
+    CHECK(rm::app::appendOrderTimes(empty, scenario.scene, camera,
+        scenario.field, font, viewport, idle.index) == 0);
+    CHECK(empty.label.empty());
+}
+
 TEST_CASE("factory panel clicks control the real production queue", "[corpus][ui][production]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus at " + root.string());

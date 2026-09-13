@@ -95,6 +95,14 @@ void appendIntelRings(std::vector<rm::DecalVertex>& out, const rm::HeightField& 
 void appendRallyLine(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
  const UnitScene& scene, rm::UnitIndex slot);
 
+/// One unit's drawn order queue: a segment from the unit through every queued
+/// destination and a node at each, both in the order family's hue. Shared by the
+/// live shift-overlay and the headless capture, so a screenshot shows the same
+/// queue the window does.
+void appendOrderRoute(std::vector<rm::DecalVertex>& out, const rm::HeightField& field,
+                      const UnitScene& scene, rm::UnitIndex slot,
+                      std::array<float, 3> at);
+
 /// Public map resources: green mass rings and amber hydrocarbon rings.
 void appendResourceDeposits(std::vector<rm::DecalVertex>& out, const UnitScene& scene,
                             const rm::HeightField& field);
@@ -374,6 +382,16 @@ std::size_t appendConstructionBars(rm::ui::Geometry& out, const UnitScene& scene
     const rm::HeightField& field, const rm::text::Font& font,
     const rm::ui::UiViewport& viewport, rm::UnitTypeIndex ghostType,
     const std::array<float, 2>& site);
+
+/// Predicted "done at" labels for one unit's order queue — a "0:12" worn by each
+/// node, drawn while shift is held. A forecast, not a promise: straight-line travel
+/// at rated speed, full build rate, no stalls (`rm::predictedOrderTimes` holds the
+/// math; this only hangs the numbers on the nodes the queue already draws).
+/// Returns the labels drawn so a headless capture can assert the overlay.
+[[nodiscard]] std::size_t appendOrderTimes(
+    rm::ui::Geometry& out, const UnitScene& scene, const rm::OrbitCamera& camera,
+    const rm::HeightField& field, const rm::text::Font& font,
+    const rm::ui::UiViewport& viewport, rm::UnitIndex slot);
 
 [[nodiscard]] std::optional<rm::sim::UnitId> pickAnyBatch(const rm::Ray& ray,
                                                           const UnitScene& scene);
