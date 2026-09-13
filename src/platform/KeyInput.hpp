@@ -10,6 +10,7 @@ namespace rm {
 /// existing keyboard-layout behavior and does not smuggle in a physical-key policy.
 enum class Key : std::uint8_t {
     A,
+    B,
     C,
     D,
     E,
@@ -57,6 +58,7 @@ struct KeyEvent {
 [[nodiscard]] constexpr std::optional<Key> keyForCharacter(char character) noexcept {
     switch (character) {
         case 'a': return Key::A;
+        case 'b': return Key::B;
         case 'c': return Key::C;
         case 'd': return Key::D;
         case 'e': return Key::E;

@@ -216,6 +216,21 @@ bool issueGuard(UnitScene& scene, std::span<const rm::sim::UnitId> units,
     }).has_value();
 }
 
+[[nodiscard]] bool cycleBuildPriority(UnitScene& scene,
+                                      std::span<const rm::sim::UnitId> units,
+                                      rm::PlayerIndex player, rm::TickIndex tick) {
+    // The toggle's own shape: an immediate action on the producers in the selection,
+    // no queue and no target — the command intake walks Normal → High → Low.
+    return submitCommand(scene, rm::sim::CommandIssue{
+        .tick = tick,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player),
+        .player = player,
+        .kind = rm::sim::CommandKind::CycleBuildPriority,
+        .units = {units.begin(), units.end()},
+    }).has_value();
+}
+
 bool issueCancelFactoryBuild(UnitScene& scene, rm::sim::UnitId factory,
     rm::PlayerIndex player, rm::TickIndex tick, rm::CommandId commandId) {
     if (commandId == rm::kInvalidCommandId) return false;

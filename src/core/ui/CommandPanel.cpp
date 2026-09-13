@@ -110,6 +110,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         case sim::CommandKind::ReclaimUnit:  // reached through Reclaim's descriptor, not its own
         case sim::CommandKind::Capture:  // no rack cell yet; issued through its own order path
         case sim::CommandKind::MissileLaunch:  // fills Reclaim's dead cell on a silo, below
+        case sim::CommandKind::CycleBuildPriority:  // the B key and the production panel's cell
             break;  // None has a command-rack descriptor.
         }
     }

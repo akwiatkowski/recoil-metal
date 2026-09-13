@@ -1886,6 +1886,7 @@ std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
     view.factoryName = def->description.empty() ? def->name : def->description;
     view.repeat = scene.store.factoryRepeat(builder);
     view.canRepeat = def->hasCategory("FACTORY");
+    view.priority = scene.store.buildPriority(builder);
 
     // The queue as the sim holds it, current first; only Build orders are production. A
     // shared order's remaining count is the stack a player shift-clicked.

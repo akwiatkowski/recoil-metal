@@ -148,6 +148,11 @@ enum class CommandKind : std::uint8_t {
     /// action like `ToggleFactoryRepeat`, not presentation state — it changes what the
     /// economy charges for and what the command stage advances.
     ToggleProduction = 18,
+    /// Cycle a producer's construction priority Normal → High → Low. Authoritative like
+    /// `ToggleProduction`: the allocator serves High before Normal before Low out of
+    /// whatever the tier above left, so the tier changes what a stalled tick pays for.
+    /// Never queued — it acts on intake, the same beat it was issued.
+    CycleBuildPriority = 19,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {

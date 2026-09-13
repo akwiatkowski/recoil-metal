@@ -80,6 +80,7 @@ public:
         std::vector<UnitTypeIndex> types;
         std::vector<bool> factoryRepeat;
         std::vector<bool> productionPaused;
+        std::vector<BuildPriority> buildPriority;
         std::vector<bool> doNotTarget;
         std::vector<std::optional<UnitId>> parents;
         std::vector<std::vector<UnitId>> children;
@@ -251,6 +252,16 @@ public:
     [[nodiscard]] bool setProductionPaused(UnitId unit, bool paused) noexcept;
     [[nodiscard]] bool productionPaused(UnitId unit) const noexcept;
 
+    /// Per-live-unit construction priority. The allocator serves High before Normal before
+    /// Low out of whatever the tier above left; the flag is authoritative like
+    /// `productionPaused`, so a stalled match under the same log allocates identically.
+    /// `buildPriorities` exposes the slot-indexed span the economy pass consumes.
+    [[nodiscard]] bool setBuildPriority(UnitId unit, BuildPriority tier) noexcept;
+    [[nodiscard]] BuildPriority buildPriority(UnitId unit) const noexcept;
+    [[nodiscard]] std::span<const BuildPriority> buildPriorities() const noexcept {
+        return buildPriority_;
+    }
+
     /// Controls automatic acquisition only; explicit target orders remain authoritative.
     [[nodiscard]] bool setDoNotTarget(UnitId unit, bool enabled) noexcept;
     [[nodiscard]] bool doNotTarget(UnitId unit) const noexcept;
@@ -316,6 +327,7 @@ private:
     std::vector<std::map<std::string, std::string>> enhancements_;
     std::vector<bool> factoryRepeat_;
     std::vector<bool> productionPaused_;
+    std::vector<BuildPriority> buildPriority_;
     std::vector<bool> doNotTarget_;
     std::vector<CommandQueue> orders_;
     std::vector<std::optional<UnitId>> parents_;

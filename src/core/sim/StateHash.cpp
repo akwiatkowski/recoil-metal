@@ -480,6 +480,14 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         if (store.productionPaused(store.idAt(slot))) {
             feed(h, std::uint8_t{3});
         }
+        // The build-priority tier decides what a stalled allocator pays first, so two
+        // runs that disagree on it pay different work. Normal stays silent — the
+        // all-Normal stream is the pre-tier stream.
+        if (const BuildPriority tier = store.buildPriority(store.idAt(slot));
+            tier != BuildPriority::Normal) {
+            feed(h, std::uint8_t{4});
+            feed(h, static_cast<std::uint8_t>(tier));
+        }
         if (store.doNotTarget(store.idAt(slot))) {
             feed(h, std::uint8_t{2});
         }

@@ -582,6 +582,23 @@ rm::ui::EffectsPreference parseUiEffects(int argc, const char* argv[]) {
     return {};
 }
 
+[[nodiscard]] std::optional<BuildPriority> parseBuildPriority(int argc, const char* argv[]) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string_view{argv[i]} == "--priority"
+            && std::string_view{argv[i + 1]}.starts_with('-') == false) {
+            const std::string_view value{argv[i + 1]};
+            if (value == "high") {
+                return BuildPriority::High;
+            }
+            if (value == "low") {
+                return BuildPriority::Low;
+            }
+            return BuildPriority::Normal;
+        }
+    }
+    return std::nullopt;
+}
+
 /// Whether a bare flag appears anywhere in the arguments.
 [[nodiscard]] bool hasFlag(int argc, const char* argv[], std::string_view flag) {
     for (int i = 1; i < argc; ++i) {

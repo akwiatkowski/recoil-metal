@@ -241,6 +241,11 @@ struct StagedWreck {
 /// Every `--wreck` on the command line, in order. See `StagedWreck`.
 [[nodiscard]] std::vector<StagedWreck> parseWrecks(int argc, const char* argv[]);
 
+/// `--priority <high|low>`: a construction-priority tier to set on every producer
+/// of the seated player's army before the run — a headless capture's only way to
+/// make the production panel show a non-Normal tier, since no keypress exists there.
+[[nodiscard]] std::optional<BuildPriority> parseBuildPriority(int argc, const char* argv[]);
+
 /// Whether `flag` appears at all.
 [[nodiscard]] bool hasFlag(int argc, const char* argv[], std::string_view flag);
 

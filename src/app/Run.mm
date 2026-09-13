@@ -1308,6 +1308,28 @@ int runWindowed(const Session& session) {
                     }
                     std::fflush(stdout);
                 }
+            } else if (event.key == rm::Key::B && !event.repeat && !selected.empty()) {
+                // BUILD PRIORITY — Normal → High → Low on the producers in the
+                // selection; a stalled bank pays High before Normal before Low.
+                // The production panel's own cell sends the same command for one
+                // factory. Silent unless something eligible took it.
+                if (runnerForKeys != nullptr
+                    && cycleBuildPriority(units, selected,
+                                          playerDriving(units, units.playerArmy),
+                                          runnerForKeys->tick)) {
+                    for (const rm::sim::UnitId id : selected) {
+                        const rm::unitdef::UnitDef* def = units.store.alive(id)
+                            ? units.catalog.def(units.store.typeAt(id.index)) : nullptr;
+                        if (def != nullptr
+                            && (def->isBuilder() || def->hasCategory("FACTORY"))) {
+                            constexpr std::array<const char*, 3> names{"low", "normal", "high"};
+                            std::printf("build priority: %s\n",
+                                names[static_cast<std::size_t>(units.store.buildPriority(id))]);
+                            break;
+                        }
+                    }
+                    std::fflush(stdout);
+                }
             } else if (const std::optional<std::size_t> digit = rm::digitForKey(event.key)) {
                 auto& group = controlGroups[*digit];
                 if (event.modifiers.control) {

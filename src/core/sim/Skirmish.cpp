@@ -770,7 +770,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 match.resourceFlows ? std::span<UnitResourceFlow>{*match.resourceFlows}
                                     : std::span<UnitResourceFlow>{}, static_cast<int>(army), enhancementMine,
                 match.captures != nullptr ? std::span<CaptureWork>{captureMine}
-                                          : std::span<CaptureWork>{});
+                                          : std::span<CaptureWork>{},
+                store.buildPriorities());
 
             // Written back over this army's entries, in order — the two lists were built
             // by the same filter in the same pass, so the nth of `mine` is the nth of

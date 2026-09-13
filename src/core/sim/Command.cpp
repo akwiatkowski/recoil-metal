@@ -383,6 +383,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "toggle-factory-repeat";
     case CommandKind::ToggleProduction:
         return "toggle-production";
+    case CommandKind::CycleBuildPriority:
+        return "cycle-build-priority";
     case CommandKind::Repair:
         return "repair";
     case CommandKind::Script:
@@ -438,6 +440,9 @@ namespace {
     }
     if (name == "toggle-production") {
         return CommandKind::ToggleProduction;
+    }
+    if (name == "cycle-build-priority") {
+        return CommandKind::CycleBuildPriority;
     }
     if (name == "cancel-factory-build") return CommandKind::CancelFactoryBuild;
     if (name == "repair") {
@@ -1291,6 +1296,26 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                 continue;
             }
             (void)store.setProductionPaused(unit, !store.productionPaused(unit));
+            result.accepted.push_back(unit);
+        }
+        return result;
+    }
+    if (issue.kind == CommandKind::CycleBuildPriority) {
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit)) {
+                continue;
+            }
+            const Player* player = playerFor(issue.player, players);
+            const unitdef::UnitDef* definition = catalog.def(store.typeAt(unit.index));
+            // Producers only: a unit with no build rate funds nothing, so a tier on it
+            // would be a flag that never moves a resource — refused rather than stored.
+            if (player == nullptr || !authorised(*player, store, unit, armies)
+                || definition == nullptr
+                || !(definition->isBuilder() || definition->hasCategory("FACTORY"))) {
+                continue;
+            }
+            (void)store.setBuildPriority(
+                unit, nextBuildPriority(store.buildPriority(unit)));
             result.accepted.push_back(unit);
         }
         return result;
@@ -3065,6 +3090,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     case CommandKind::Dive:
     case CommandKind::ToggleFactoryRepeat:
     case CommandKind::ToggleProduction:
+    case CommandKind::CycleBuildPriority:
     case CommandKind::CancelFactoryBuild:
         return false;  // applied immediately by semantic issue intake; it never enters a queue
     case CommandKind::Script:

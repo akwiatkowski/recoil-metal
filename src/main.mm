@@ -259,6 +259,30 @@ int main(int argc, const char* argv[]) {
                            gapSigned != 0.0 ? static_cast<float>(gapSigned) : 120.0f);
             }
             orderFirstExtractors(units, map->markers, content, map->field, passability);
+            // `--priority <high|low>` stages a non-Normal tier on every producer the
+            // player owns, so a `--screenshot` capture can show the production
+            // panel's lit cell without a keypress to script.
+            if (const std::optional<rm::BuildPriority> tier = parseBuildPriority(argc, argv);
+                tier.has_value()) {
+                std::size_t staged = 0;
+                for (std::size_t slot = 0; slot < units.store.slotCount(); ++slot) {
+                    const rm::UnitIndex index{static_cast<rm::UnitIndex>(slot)};
+                    if (!units.store.slotAlive(index)
+                        || units.store.motion()[slot].armyIndex != units.playerArmy) {
+                        continue;
+                    }
+                    const rm::unitdef::UnitDef* def =
+                        units.catalog.def(units.store.typeAt(index));
+                    if (def != nullptr
+                        && (def->isBuilder() || def->hasCategory("FACTORY"))) {
+                        if (units.store.setBuildPriority(units.store.idAt(index), *tier)) {
+                            ++staged;
+                        }
+                    }
+                }
+                std::printf("priority: %zu producer(s) at tier %d\n", staged,
+                            static_cast<int>(*tier));
+            }
         }
 
         // Tilt every unit onto its slope once, here, because the headless paths

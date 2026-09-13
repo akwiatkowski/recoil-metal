@@ -469,11 +469,16 @@ void advanceConstruction(Construction& work) noexcept;
 /// because silently skipping a mismatched entry would leave it never built and never
 /// reported.
 /// A whole-match caller defers the final capacity clamp until `shareOverflow` has run.
+///
+/// `priorities` is `UnitStore::buildPriorities()` — a slot-indexed tier per unit, looked up
+/// by each work record's producer. An empty span means every consumer is Normal, which is
+/// bit-identical to the pre-tier allocator: one pass over the whole supply.
 void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<RepairWork> repairs = {}, std::span<SiloAmmo> siloAmmo = {},
                   bool deferOverflow = false, std::span<UnitResourceFlow> flows = {},
                   int armyIndex = kNoArmy, std::span<EnhancementWork> enhancements = {},
-                  std::span<CaptureWork> captures = {});
+                  std::span<CaptureWork> captures = {},
+                  std::span<const BuildPriority> priorities = {});
 ///
 /// Run AFTER every army has ticked, because an army's spare capacity is only known once it
 /// has spent. Not a flat `1/n`: retail walks the recipients dividing the *remaining* excess

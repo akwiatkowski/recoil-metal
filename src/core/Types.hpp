@@ -194,4 +194,17 @@ using Brad = std::uint16_t;
 /// that a collision is not the explanation anyone reaches for when two hashes match.
 using StateHash = std::uint64_t;
 
+/// Who gets paid first when the economy cannot pay everyone — Zero-K's construction
+/// priority, carried per producer rather than per project so a builder's construction,
+/// repairs, captures, silo ammunition and enhancement all move together. Ordered so a
+/// comparison IS the funding order: High is served first, Low last.
+enum class BuildPriority : std::uint8_t { Low = 0, Normal = 1, High = 2 };
+
+/// Normal → High → Low → Normal, the order a single cycle key walks.
+[[nodiscard]] constexpr BuildPriority nextBuildPriority(BuildPriority tier) noexcept {
+    return tier == BuildPriority::Normal ? BuildPriority::High
+         : tier == BuildPriority::High   ? BuildPriority::Low
+                                         : BuildPriority::Normal;
+}
+
 } // namespace rm

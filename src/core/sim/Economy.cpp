@@ -117,7 +117,8 @@ void advanceConstruction(Construction& work) noexcept {
 void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<RepairWork> repairs, std::span<SiloAmmo> siloAmmo, bool deferOverflow,
                   std::span<UnitResourceFlow> flows, int armyIndex,
-                  std::span<EnhancementWork> enhancements, std::span<CaptureWork> captures) {
+                  std::span<EnhancementWork> enhancements, std::span<CaptureWork> captures,
+                  std::span<const BuildPriority> priorities) {
     // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
     // pass, so its over-cap excess is still lost rather than becoming a hidden reserve.
     economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
@@ -151,20 +152,27 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     };
 
     // Bucketed by HOW MANY RESOURCES ARE STILL OUTSTANDING — not by nominal demand
-    // (`C-159`). A two-resource consumer whose mass is already covered drops into the
-    // single-resource bucket and is funded at `r2`, which is the case that made the engine's
-    // scheme look wrong until the immediates were read.
-    Resources multi;   // both resources outstanding
-    Resources single;  // one or neither
+    // (`C-159`) — and by PRIORITY TIER. A two-resource consumer whose mass is already
+    // covered drops into the single-resource bucket of its own tier and is funded at that
+    // pass's `r2`. The tier is the producer's (`priorities` is slot-indexed): a High
+    // engineer's construction, repairs and captures all jump the queue together, while
+    // upkeep — nobody's producer — stays Normal.
+    constexpr std::size_t kNormal = static_cast<std::size_t>(BuildPriority::Normal);
+    std::array<Resources, 3> multi{};   // both resources outstanding, per tier
+    std::array<Resources, 3> single{};  // one or neither, per tier
 
-    const auto bucket = [&multi, &single](Resources out) {
+    const auto tierAt = [&priorities](UnitIndex index) {
+        return index < priorities.size()
+                   ? static_cast<std::size_t>(priorities[index]) : kNormal;
+    };
+    const auto bucket = [&multi, &single](Resources out, std::size_t tier) {
         const int resources = (out.mass > Mag{} ? 1 : 0) + (out.energy > Mag{} ? 1 : 0);
-        (resources == 2 ? multi : single) += out;
+        (resources == 2 ? multi[tier] : single[tier]) += out;
     };
 
     const Resources upkeepOutstanding = outstanding(economy.upkeepPerTick,
                                                     economy.upkeepAllocated);
-    bucket(upkeepOutstanding);
+    bucket(upkeepOutstanding, kNormal);
 
     Resources wanted = economy.upkeepPerTick;
     for (Construction& work : building) {
@@ -173,20 +181,20 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         }
         const Resources demand = drainPerTick(work);
         wanted += demand;
-        bucket(outstanding(demand, work.allocated));
+        bucket(outstanding(demand, work.allocated), tierAt(work.builder.index));
     }
     for (const RepairWork& repair : repairs) {
         wanted += repair.demand;
-        bucket(repair.demand);
+        bucket(repair.demand, tierAt(repair.builder));
     }
     for (const CaptureWork& work : captures) {
         wanted += work.demand;
-        bucket(work.demand);
+        bucket(work.demand, tierAt(work.captor));
     }
     for (const EnhancementWork& work : enhancements) {
         const Resources demand = drainPerTick(work);
         wanted += demand;
-        bucket(outstanding(demand, work.allocated));
+        bucket(outstanding(demand, work.allocated), tierAt(work.owner.index));
     }
     const auto autoBuilding = [&siloAmmo](const SiloAmmo& ammo) {
         if (!ammo.building()) return false;
@@ -198,7 +206,8 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     for (const SiloAmmo& ammo : siloAmmo) {
         if (!ammo.paused && autoBuilding(ammo)) {
             wanted += ammo.costPerTick;
-            bucket(outstanding(ammo.costPerTick, ammo.delivered));
+            bucket(outstanding(ammo.costPerTick, ammo.delivered),
+                   tierAt(ammo.owner.index));
         }
     }
 
@@ -209,39 +218,19 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     // without being fed to the hash itself.
     economy.requestedLastTick = wanted;
 
-    // Pass two: the two ratios. `supply` is what is on hand — retail's `stored + income`,
-    // which income has already been folded into above.
-    const Resources supply = economy.stored;
-    const Resources total{.mass = multi.mass + single.mass,
-                          .energy = multi.energy + single.energy};
-
-    // r1 over the COMBINED total, and the resource that bound it. Energy wins an exact tie
-    // because the engine's comparison updates only on a strict improvement and its loop
-    // starts at energy (`C-159`).
-    const Fx massRatio = fundingRatio(supply.mass, total.mass);
-    const Fx energyRatio = fundingRatio(supply.energy, total.energy);
-    const bool massBinds = massRatio < energyRatio;
-    const Fx r1 = massBinds ? massRatio : energyRatio;
-
-    // r2 covers the single-resource bucket out of whatever the multi-resource bucket left,
-    // and it ignores the binding resource — that one is already spent to the last unit.
-    const Resources remaining{
-        .mass = std::max(Mag{}, supply.mass - multi.mass * r1),
-        .energy = std::max(Mag{}, supply.energy - multi.energy * r1),
-    };
-    const Fx r2 = massBinds ? fundingRatio(remaining.energy, single.energy)
-                            : fundingRatio(remaining.mass, single.mass);
-
-    economy.multiResourceFunded = r1;
-    economy.singleResourceFunded = r2;
-    economy.massIsBinding = massBinds;
-    economy.fundedFraction = std::min(r1, r2);
-
-    // Grant, and spend. A consumer takes `r1` when it is outstanding on the binding resource,
-    // else `r2` — which is the bucket it was counted in.
-    const auto grantFor = [massBinds, r1, r2](Resources out) {
-        const Mag binding = massBinds ? out.mass : out.energy;
-        return binding > Mag{} ? r1 : r2;
+    // Pass two: the two ratios — ONE PASS PER TIER, High first. Each tier is funded from
+    // what the tier above left, `supply` shrinking by what was actually granted: a stalled
+    // bank pays its High work in full before a Normal one sees a unit of mass. An
+    // all-Normal call is a single pass over the full supply, which is bit-identical to
+    // the allocator before tiers existed — including the zero-demand corners, because a
+    // pass runs even for an empty tier so a still-billed work still gets its ratio stamp.
+    Resources granted;
+    Resources supply = economy.stored;
+    const auto recordCharge = [flows, armyIndex](UnitId unit, Resources charge) {
+        if (unit.index < flows.size() && flows[unit.index].unit == unit
+            && flows[unit.index].armyIndex == armyIndex) {
+            flows[unit.index].usageLastTick += charge;
+        }
     };
 
     // Grant, then CONSUME. Retail keeps these separate and the separation is the whole
@@ -250,15 +239,9 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     // resource lands exactly at zero, but the non-binding one keeps a residue that carries
     // into the next tick as a pre-credit (`C-162`). Zeroing `allocated` here instead would
     // look tidier and would delete that behaviour entirely.
-    Resources granted;
-    const auto recordCharge = [flows, armyIndex](UnitId unit, Resources charge) {
-        if (unit.index < flows.size() && flows[unit.index].unit == unit
-            && flows[unit.index].armyIndex == armyIndex) {
-            flows[unit.index].usageLastTick += charge;
-        }
-    };
-    const auto grantAndConsume = [&granted, &outstanding, &grantFor](Resources demand,
-                                                                     Resources& allocated) {
+    const auto grantAndConsume = [&granted, &outstanding](Resources demand,
+                                                        Resources& allocated,
+                                                        const auto& grantFor) {
         const Resources out = outstanding(demand, allocated);
         const Fx ratio = grantFor(out);
         const Resources share = out * ratio;
@@ -272,104 +255,170 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         return ratio;
     };
 
-    grantAndConsume(economy.upkeepPerTick, economy.upkeepAllocated);
-    // The allocator has one aggregate upkeep request. Attribute its actual charge
-    // proportionally to the units that submitted it, preserving the final residue.
-    Resources remainingCharge = granted;
-    Resources remainingDemand = economy.upkeepPerTick;
-    for (auto& flow : flows) {
-        if (flow.armyIndex != armyIndex) continue;
-        const Resources share{
-            .mass = flow.upkeepPerTick.mass == remainingDemand.mass ? remainingCharge.mass
-                : remainingCharge.mass * fundingRatio(flow.upkeepPerTick.mass, remainingDemand.mass),
-            .energy = flow.upkeepPerTick.energy == remainingDemand.energy ? remainingCharge.energy
-                : remainingCharge.energy * fundingRatio(flow.upkeepPerTick.energy, remainingDemand.energy),
-        };
-        flow.usageLastTick += share;
-        remainingCharge.mass -= share.mass;
-        remainingCharge.energy -= share.energy;
-        remainingDemand.mass -= flow.upkeepPerTick.mass;
-        remainingDemand.energy -= flow.upkeepPerTick.energy;
-    }
+    // The reported ratios are the LOWEST tier that asked for anything: the economy
+    // readout says how badly off the worst-funded work is, not how comfortable the High
+    // tier is. With all demand at Normal — including every priorities-less call — this
+    // is the single pass's numbers, exactly as before.
+    Fx lowestR1 = kFxOne;
+    Fx lowestR2 = kFxOne;
+    bool lowestBinds = false;
+    for (std::size_t tier = multi.size(); tier-- > 0;) {  // High → Normal → Low
+        const Resources total{.mass = multi[tier].mass + single[tier].mass,
+                              .energy = multi[tier].energy + single[tier].energy};
 
-    for (Construction& work : building) {
-        if (work.paused) {
-            // Held, not cancelled: the queue and the residue survive, but the stale funding
-            // ratio must not — an unpause would otherwise spend a full beat's grant the
-            // pause never earned.
-            work.fundedLastTick = Fx{};
-            continue;
+        // r1 over the COMBINED total, and the resource that bound it. Energy wins an
+        // exact tie because the engine's comparison updates only on a strict
+        // improvement and its loop starts at energy (`C-159`).
+        const Fx massRatio = fundingRatio(supply.mass, total.mass);
+        const Fx energyRatio = fundingRatio(supply.energy, total.energy);
+        const bool massBinds = massRatio < energyRatio;
+        const Fx r1 = massBinds ? massRatio : energyRatio;
+
+        // r2 covers the single-resource bucket out of whatever the multi-resource
+        // bucket left, and it ignores the binding resource — that one is already spent
+        // to the last unit.
+        const Resources remaining{
+            .mass = std::max(Mag{}, supply.mass - multi[tier].mass * r1),
+            .energy = std::max(Mag{}, supply.energy - multi[tier].energy * r1),
+        };
+        const Fx r2 = massBinds ? fundingRatio(remaining.energy, single[tier].energy)
+                                : fundingRatio(remaining.mass, single[tier].mass);
+        if (total.mass > Mag{} || total.energy > Mag{}) {
+            lowestR1 = r1;
+            lowestR2 = r2;
+            lowestBinds = massBinds;
         }
-        if (!stillBilled(work)) {
-            continue;
-        }
-        // The request stays deliberately uncapped even on the completing tick: retail does not
-        // reconcile it with what `Materialize` applies (`C-100`, `C-187`).
-        //
-        // THE PROGRESS ITSELF ALREADY HAPPENED, at the start of the beat in the command-dispatch
-        // stage (`advanceConstruction`). All that is left here is the bill and the ratio the
-        // NEXT beat's progress will be multiplied by — retail's split across two stages exactly.
-        const Resources before = granted;
-        work.fundedLastTick = grantAndConsume(drainPerTick(work), work.allocated);
-        recordCharge(work.builder, {.mass = granted.mass - before.mass,
-                                   .energy = granted.energy - before.energy});
-        work.workedThisTick = false;
-    }
-    for (EnhancementWork& work : enhancements) {
-        if (work.paused || work.finished()) {
-            work.fundedLastTick = Fx{};
-            continue;
-        }
-        const Resources before = granted;
-        work.fundedLastTick = grantAndConsume(drainPerTick(work), work.allocated);
-        recordCharge(work.owner, {.mass = granted.mass - before.mass,
-                                 .energy = granted.energy - before.energy});
-    }
-    for (RepairWork& repair : repairs) {
-        // Repairs have no carry-forward allocation: their live target can be healed, filled,
-        // or destroyed before the next tick, so this request is consumed in the award beat.
-        Resources allocated;
-        const Resources before = granted;
-        repair.funded = grantAndConsume(repair.demand, allocated);
-        if (repair.builder < flows.size()) {
-            recordCharge(flows[repair.builder].unit, {.mass = granted.mass - before.mass,
-                                                     .energy = granted.energy - before.energy});
-        }
-    }
-    for (CaptureWork& work : captures) {
-        // Like repairs, captures carry no allocation forward: the award beat funds
-        // this beat's demand or nothing, and the apply pass advances only fully
-        // funded beats. `funded` is the ratio the next progress step reads.
-        Resources allocated;
-        const Resources before = granted;
-        work.funded = grantAndConsume(work.demand, allocated);
-        if (work.captor < flows.size()) {
-            recordCharge(flows[work.captor].unit, {.mass = granted.mass - before.mass,
-                                                  .energy = granted.energy - before.energy});
-        }
-    }
-    for (SiloAmmo& ammo : siloAmmo) {
-        if (ammo.paused || !autoBuilding(ammo)) {
-            continue;
-        }
-        // C-084: this is an event delivery accumulator, not Construction's lagged ratio.
-        // A partial award remains here until an entire production beat is affordable.
-        const Resources out = outstanding(ammo.costPerTick, ammo.delivered);
-        const Fx ratio = grantFor(out);
-        const Resources share = out * ratio;
-        ammo.delivered += share;
-        recordCharge(ammo.owner, share);
-        granted += share;
-        if (ammo.delivered.mass >= ammo.costPerTick.mass
-            && ammo.delivered.energy >= ammo.costPerTick.energy) {
-            ammo.delivered = {};
-            ++ammo.elapsedTicks;
-            if (ammo.elapsedTicks >= ammo.totalTicks) {
-                ++ammo.stored;
-                ammo.elapsedTicks = 0;
+
+        // A consumer takes `r1` when it is outstanding on the binding resource, else
+        // `r2` — which is the bucket it was counted in.
+        const auto grantFor = [massBinds, r1, r2](Resources out) {
+            const Mag binding = massBinds ? out.mass : out.energy;
+            return binding > Mag{} ? r1 : r2;
+        };
+
+        const Resources passStart = granted;
+        if (tier == kNormal) {
+            // Upkeep belongs to no producer, so it waits for the Normal pass — it can
+            // no longer starve a High build, and a High build can no longer be starved
+            // by it either.
+            const Resources before = granted;
+            grantAndConsume(economy.upkeepPerTick, economy.upkeepAllocated, grantFor);
+            // The allocator has one aggregate upkeep request. Attribute its actual charge
+            // proportionally to the units that submitted it, preserving the final residue.
+            Resources remainingCharge{.mass = granted.mass - before.mass,
+                                      .energy = granted.energy - before.energy};
+            Resources remainingDemand = economy.upkeepPerTick;
+            for (auto& flow : flows) {
+                if (flow.armyIndex != armyIndex) continue;
+                const Resources share{
+                    .mass = flow.upkeepPerTick.mass == remainingDemand.mass ? remainingCharge.mass
+                        : remainingCharge.mass * fundingRatio(flow.upkeepPerTick.mass, remainingDemand.mass),
+                    .energy = flow.upkeepPerTick.energy == remainingDemand.energy ? remainingCharge.energy
+                        : remainingCharge.energy * fundingRatio(flow.upkeepPerTick.energy, remainingDemand.energy),
+                };
+                flow.usageLastTick += share;
+                remainingCharge.mass -= share.mass;
+                remainingCharge.energy -= share.energy;
+                remainingDemand.mass -= flow.upkeepPerTick.mass;
+                remainingDemand.energy -= flow.upkeepPerTick.energy;
             }
         }
+
+        for (Construction& work : building) {
+            if (work.paused) {
+                // Held, not cancelled: the queue and the residue survive, but the stale funding
+                // ratio must not — an unpause would otherwise spend a full beat's grant the
+                // pause never earned.
+                work.fundedLastTick = Fx{};
+                continue;
+            }
+            if (!stillBilled(work) || tierAt(work.builder.index) != tier) {
+                continue;
+            }
+            // The request stays deliberately uncapped even on the completing tick: retail does not
+            // reconcile it with what `Materialize` applies (`C-100`, `C-187`).
+            //
+            // THE PROGRESS ITSELF ALREADY HAPPENED, at the start of the beat in the command-dispatch
+            // stage (`advanceConstruction`). All that is left here is the bill and the ratio the
+            // NEXT beat's progress will be multiplied by — retail's split across two stages exactly.
+            const Resources before = granted;
+            work.fundedLastTick = grantAndConsume(drainPerTick(work), work.allocated, grantFor);
+            recordCharge(work.builder, {.mass = granted.mass - before.mass,
+                                       .energy = granted.energy - before.energy});
+            work.workedThisTick = false;
+        }
+        for (EnhancementWork& work : enhancements) {
+            if (work.paused || work.finished()) {
+                work.fundedLastTick = Fx{};
+                continue;
+            }
+            if (tierAt(work.owner.index) != tier) {
+                continue;
+            }
+            const Resources before = granted;
+            work.fundedLastTick = grantAndConsume(drainPerTick(work), work.allocated, grantFor);
+            recordCharge(work.owner, {.mass = granted.mass - before.mass,
+                                     .energy = granted.energy - before.energy});
+        }
+        for (RepairWork& repair : repairs) {
+            if (tierAt(repair.builder) != tier) {
+                continue;
+            }
+            // Repairs have no carry-forward allocation: their live target can be healed, filled,
+            // or destroyed before the next tick, so this request is consumed in the award beat.
+            Resources allocated;
+            const Resources before = granted;
+            repair.funded = grantAndConsume(repair.demand, allocated, grantFor);
+            if (repair.builder < flows.size()) {
+                recordCharge(flows[repair.builder].unit, {.mass = granted.mass - before.mass,
+                                                         .energy = granted.energy - before.energy});
+            }
+        }
+        for (CaptureWork& work : captures) {
+            if (tierAt(work.captor) != tier) {
+                continue;
+            }
+            // Like repairs, captures carry no allocation forward: the award beat funds
+            // this beat's demand or nothing, and the apply pass advances only fully
+            // funded beats. `funded` is the ratio the next progress step reads.
+            Resources allocated;
+            const Resources before = granted;
+            work.funded = grantAndConsume(work.demand, allocated, grantFor);
+            if (work.captor < flows.size()) {
+                recordCharge(flows[work.captor].unit, {.mass = granted.mass - before.mass,
+                                                      .energy = granted.energy - before.energy});
+            }
+        }
+        for (SiloAmmo& ammo : siloAmmo) {
+            if (ammo.paused || !autoBuilding(ammo) || tierAt(ammo.owner.index) != tier) {
+                continue;
+            }
+            // C-084: this is an event delivery accumulator, not Construction's lagged ratio.
+            // A partial award remains here until an entire production beat is affordable.
+            const Resources out = outstanding(ammo.costPerTick, ammo.delivered);
+            const Fx ratio = grantFor(out);
+            const Resources share = out * ratio;
+            ammo.delivered += share;
+            recordCharge(ammo.owner, share);
+            granted += share;
+            if (ammo.delivered.mass >= ammo.costPerTick.mass
+                && ammo.delivered.energy >= ammo.costPerTick.energy) {
+                ammo.delivered = {};
+                ++ammo.elapsedTicks;
+                if (ammo.elapsedTicks >= ammo.totalTicks) {
+                    ++ammo.stored;
+                    ammo.elapsedTicks = 0;
+                }
+            }
+        }
+
+        supply.mass = std::max(Mag{}, supply.mass - (granted.mass - passStart.mass));
+        supply.energy = std::max(Mag{}, supply.energy - (granted.energy - passStart.energy));
     }
+    economy.multiResourceFunded = lowestR1;
+    economy.singleResourceFunded = lowestR2;
+    economy.massIsBinding = lowestBinds;
+    economy.fundedFraction = std::min(lowestR1, lowestR2);
 
     economy.usageLastTick = granted;
     economy.stored.mass = std::max(Mag{}, economy.stored.mass - granted.mass);

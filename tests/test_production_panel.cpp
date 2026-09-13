@@ -107,10 +107,13 @@ TEST_CASE("factory queue controls share the rendered panel bounds", "[ui][produc
     CHECK(rect.bottom() < frame.commands.y);
     CHECK(rect.y >= frame.battlefield.y);
     const auto repeat = rm::ui::productionRepeatRect(rect);
+    const auto priority = rm::ui::productionPriorityRect(rect);
     const auto clear = rm::ui::productionClearRect(rect);
     auto view = factoryWith(1);
     CHECK(rm::ui::productionCommandAt(rect, view, repeat.x + 1, repeat.y + 1)
           == rm::sim::CommandKind::ToggleFactoryRepeat);
+    CHECK(rm::ui::productionCommandAt(rect, view, priority.x + 1, priority.y + 1)
+          == rm::sim::CommandKind::CycleBuildPriority);
     CHECK(rm::ui::productionCommandAt(rect, view, clear.x + 1, clear.y + 1)
           == rm::sim::CommandKind::Stop);
     CHECK_FALSE(rm::ui::productionCommandAt(rect, view, rect.x - 1, rect.y));
@@ -139,8 +142,9 @@ TEST_CASE("every order gets a row when they fit, and a count on the right", "[ui
     rm::ui::appendProductionPanel(out, font, font, rm::ui::neutralTheme(),
                                   rm::ui::Rect{0, 0, 320, 154}, view);
 
-    // Title, three product names, Clear Queue, and each row's CANCEL label.
-    CHECK(glyphsIn(out.label) == 12 + 3 * 6 + 11 + 3 * 6);
+    // Title, three product names, Clear Queue, each row's CANCEL, and the
+    // priority cell's NORMAL.
+    CHECK(glyphsIn(out.label) == 12 + 3 * 6 + 11 + 3 * 6 + 6);
     // "REPEAT OFF" (10) plus three counts on the readout layer.
     CHECK(glyphsIn(out.foregroundReadout) == 10 + 3 * 2);
     // The well and its half fill, on top of the panel's own chrome.
@@ -176,7 +180,7 @@ TEST_CASE("orders past the room expose page controls instead of losing cancellat
     // Two rows of room, seven orders: two rows, both cancel controls, and four pages.
     rm::ui::appendProductionPanel(out, font, font, rm::ui::neutralTheme(),
                                   rm::ui::Rect{0, 0, 320, 106}, factoryWith(7));
-    CHECK(glyphsIn(out.label) == 12 + 2 * 6 + 11 + 2 * 6 + 2);
+    CHECK(glyphsIn(out.label) == 12 + 2 * 6 + 11 + 2 * 6 + 2 + 6);
     CHECK(glyphsIn(out.foregroundReadout) == 10 + 2 * 2 + 3);
 }
 
@@ -203,7 +207,7 @@ TEST_CASE("an idle factory says so and a non-factory draws nothing", "[ui][produ
     rm::ui::Geometry out;
     rm::ui::appendProductionPanel(out, font, font, rm::ui::neutralTheme(),
                                   rm::ui::Rect{0, 0, 320, 154}, factoryWith(0));
-    CHECK(glyphsIn(out.label) == 12 + 4 + 11);  // title, idle and clear
+    CHECK(glyphsIn(out.label) == 12 + 4 + 11 + 6);  // title, idle, clear and the tier
 
     rm::ui::Geometry none;
     rm::ui::appendProductionPanel(none, font, font, rm::ui::neutralTheme(),

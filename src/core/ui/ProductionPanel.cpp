@@ -38,6 +38,13 @@ Rect productionRepeatRect(const Rect& rect) noexcept {
     return {rect.right() - 112.0f, rect.y + 5.0f, 104.0f, 22.0f};
 }
 
+Rect productionPriorityRect(const Rect& rect) noexcept {
+    // Narrower than the repeat cell: its label is one word, and the width it does
+    // not take stays with the factory's name.
+    const Rect repeat = productionRepeatRect(rect);
+    return {repeat.x - 8.0f - 64.0f, repeat.y, 64.0f, repeat.height};
+}
+
 Rect productionClearRect(const Rect& rect, bool paged) noexcept {
     const float width = rect.width - 2 * kInset;
     return {rect.x + kInset, rect.bottom() - 28.0f, paged ? width * 0.5f - 4.0f : width, 22.0f};
@@ -92,6 +99,8 @@ std::optional<sim::CommandKind> productionCommandAt(
     if (view.empty() || rect.width <= 0 || rect.height <= 0 || !rect.contains(x, y)) {
         return std::nullopt;
     }
+    if (productionPriorityRect(rect).contains(x, y))
+        return sim::CommandKind::CycleBuildPriority;
     if (view.canRepeat && productionRepeatRect(rect).contains(x, y))
         return sim::CommandKind::ToggleFactoryRepeat;
     if ((!view.queue.empty() || view.building)
@@ -122,6 +131,21 @@ void appendProductionPanel(Geometry& out, const text::Font& labelFont,
     if (view.canRepeat)
         text::appendRect(out.chrome, labelFont, repeat.x, repeat.y, repeat.width, repeat.height,
                          view.repeat ? theme.edgeLit : theme.well);
+    // So is the priority cell beside it: lit while the tier is anything but Normal, so a
+    // deliberate stall choice reads on the instrument without opening anything.
+    const Rect priority = productionPriorityRect(rect);
+    text::appendRect(out.chrome, labelFont, priority.x, priority.y, priority.width,
+                     priority.height,
+                     view.priority == BuildPriority::Normal ? theme.well : theme.edgeLit);
+    if (labelFont.usable()) {
+        const char* tier = view.priority == BuildPriority::High ? "HIGH"
+                         : view.priority == BuildPriority::Low  ? "LOW"
+                                                                : "NORMAL";
+        const float tierWidth = text::measureText(labelFont.glyphs, tier);
+        (void)text::appendText(out.label, labelFont.glyphs, tier,
+                               priority.x + (priority.width - tierWidth) * 0.5f,
+                               rect.y + kTitleBaseline, kInk);
+    }
     const float titleBaseline = rect.y + kTitleBaseline;
     const std::string corner = !view.canRepeat ? "UPGRADES" : view.repeat ? "REPEAT ON" : "REPEAT OFF";
     const float cornerWidth = readoutFont.usable()
@@ -134,7 +158,9 @@ void appendProductionPanel(Geometry& out, const text::Font& labelFont,
         : std::string{};
     const float assistWidth = assist.empty() ? 0.0f
         : text::measureText(readoutFont.glyphs, assist) + kInset;
-    const float titleWidth = std::max(0.0f, rect.width - 128.0f - assistWidth);
+    // The header's right edge is claimed by the repeat cell and the priority cell
+    // beside it — the title stops short of both.
+    const float titleWidth = std::max(0.0f, rect.width - 192.0f - assistWidth);
     const std::string title = fitLine(labelFont.glyphs, view.factoryName, titleWidth);
     (void)text::appendText(out.label, labelFont.glyphs, title, rect.x + kInset,
                            titleBaseline, kInk);

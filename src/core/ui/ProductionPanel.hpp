@@ -38,6 +38,9 @@ struct ProductionView {
     float assistRate = 0.0f;
     bool repeat = false;
     bool canRepeat = true;               ///< upgrades are never repeatable
+    /// The factory's construction-priority tier — the allocator serves High
+    /// before Normal before Low when the bank stalls. The cell cycles it.
+    BuildPriority priority = BuildPriority::Normal;
 
     [[nodiscard]] bool empty() const noexcept { return factoryName.empty(); }
 };
@@ -45,6 +48,9 @@ struct ProductionView {
 /// Same anchored rectangle for rendering, click interception and drag exclusion.
 [[nodiscard]] Rect productionPanelRect(const FrameLayout& frame) noexcept;
 [[nodiscard]] Rect productionRepeatRect(const Rect& rect) noexcept;
+/// The priority cell, left of repeat — both a state display and the control
+/// that cycles it (`CycleBuildPriority` through `productionCommandAt`).
+[[nodiscard]] Rect productionPriorityRect(const Rect& rect) noexcept;
 [[nodiscard]] Rect productionClearRect(const Rect& rect, bool paged = false) noexcept;
 struct ProductionPage {
     std::size_t page = 0;
