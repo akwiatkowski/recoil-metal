@@ -1054,6 +1054,56 @@ TEST_CASE("a shift-held queue hangs a predicted time on each node", "[ui][order-
     CHECK(empty.label.empty());
 }
 
+TEST_CASE("a spread move gives each unit its own destination off the click",
+          "[orders][spread-move]") {
+    // Option-right-click: the blob lands LOOSE — each unit keeps its bearing from the
+    // group's centroid at three times the distance — rather than piling onto one
+    // AoE-sized point. The queued order stays an ordinary Move so routes and the
+    // predicted-time labels keep working unchanged.
+    Scenario scenario;
+    rm::unitdef::UnitDef def;
+    def.name = "test_tank";
+    def.speedElmosPerSecond = 10.0f;
+    const auto a = scenario.spawn(def, 200, 200);
+    const auto b = scenario.spawn(def, 240, 200);
+    const auto c = scenario.spawn(def, 220, 240);
+    const rm::sim::UnitId group[]{a, b, c};
+    auto runner = scenario.runner();
+    int tick = 0;
+
+    // Centroid (220, 213.3); click (500, 500) → destination = click + offset * 3:
+    // a lands (440, 460), b (560, 460), c (500, 580).
+    CHECK(rm::app::issueSpreadMove(scenario.scene, group, 0,
+                                   static_cast<rm::TickIndex>(tick),
+                                   rm::sim::Fx::fromInt(500), rm::sim::Fx::fromInt(500),
+                                   false));
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+    const auto head = [&](rm::sim::UnitId id) {
+        const auto& entries = scenario.scene.store.orders()[id.index].entries();
+        REQUIRE(!entries.empty());
+        const rm::sim::QueuedCommand& order = entries.front();
+        CHECK(order.kind() == rm::sim::CommandKind::Move);
+        return std::pair{rm::sim::fxToFloat(order.targetX()),
+                         rm::sim::fxToFloat(order.targetZ())};
+    };
+    CHECK(head(a).first == Catch::Approx(440.0f).margin(2.0f));
+    CHECK(head(a).second == Catch::Approx(460.0f).margin(2.0f));
+    CHECK(head(b).first == Catch::Approx(560.0f).margin(2.0f));
+    CHECK(head(b).second == Catch::Approx(460.0f).margin(2.0f));
+    CHECK(head(c).first == Catch::Approx(500.0f).margin(2.0f));
+    CHECK(head(c).second == Catch::Approx(580.0f).margin(2.0f));
+
+    // One unit has nothing to spread from — a spread move of one is a move.
+    const rm::sim::UnitId lone[]{a};
+    CHECK(rm::app::issueSpreadMove(scenario.scene, lone, 0,
+                                   static_cast<rm::TickIndex>(tick),
+                                   rm::sim::Fx::fromInt(600), rm::sim::Fx::fromInt(600),
+                                   false));
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+    CHECK(head(a).first == Catch::Approx(600.0f).margin(2.0f));
+    CHECK(head(a).second == Catch::Approx(600.0f).margin(2.0f));
+}
+
 TEST_CASE("factory panel clicks control the real production queue", "[corpus][ui][production]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus at " + root.string());

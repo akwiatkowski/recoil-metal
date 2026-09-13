@@ -53,6 +53,10 @@ struct MouseModifiers {
     bool shift = false;
     bool command = false;
     bool control = false;
+    /// Option (Alt): the "vary this order" modifier — an option-right-click issues a
+    /// spread move, each selected unit landing its scaled offset from the click
+    /// rather than all of them on it.
+    bool option = false;
 
     /// AppKit's clickCount: 2 on the second click of a double-click. The first click of the
     /// pair still arrives as 1 and is handled normally — a double-click refines what the

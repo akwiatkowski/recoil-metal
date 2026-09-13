@@ -76,6 +76,45 @@ bool gFafLog = false;
                      queued, kind, phase);
 }
 
+[[nodiscard]] bool issueSpreadMove(UnitScene& scene,
+                                   std::span<const rm::sim::UnitId> units,
+                                   rm::PlayerIndex player, rm::TickIndex tick,
+                                   rm::sim::Fx toX, rm::sim::Fx toZ, bool queued) {
+    // The click is the CENTROID'S destination, not everyone's: every member keeps its
+    // bearing from the group's middle and lands the scaled distance out, so the order
+    // loosens the formation around the click instead of collapsing it onto it.
+    std::vector<rm::sim::UnitId> alive;
+    alive.reserve(units.size());
+    float centroidX = 0.0f, centroidZ = 0.0f;
+    for (const rm::sim::UnitId id : units) {
+        if (!scene.store.alive(id)) {
+            continue;
+        }
+        const rm::sim::Transform& at = scene.store.transforms()[id.index];
+        centroidX += rm::sim::fxToFloat(at.x);
+        centroidZ += rm::sim::fxToFloat(at.z);
+        alive.push_back(id);
+    }
+    if (alive.size() <= 1) {
+        return issueMove(scene, alive, player, tick, toX, toZ, queued);
+    }
+    centroidX /= static_cast<float>(alive.size());
+    centroidZ /= static_cast<float>(alive.size());
+    const float clickX = rm::sim::fxToFloat(toX);
+    const float clickZ = rm::sim::fxToFloat(toZ);
+    bool submitted = false;
+    for (const rm::sim::UnitId id : alive) {
+        const rm::sim::Transform& at = scene.store.transforms()[id.index];
+        const float offsetX = rm::sim::fxToFloat(at.x) - centroidX;
+        const float offsetZ = rm::sim::fxToFloat(at.z) - centroidZ;
+        submitted |= issueMove(scene, id, player, tick,
+                               rm::sim::fxFromFloat(clickX + offsetX * kSpreadMoveFactor),
+                               rm::sim::fxFromFloat(clickZ + offsetZ * kSpreadMoveFactor),
+                               queued);
+    }
+    return submitted;
+}
+
 [[nodiscard]] bool issueAttack(UnitScene& scene, std::span<const rm::sim::UnitId> units,
                                 rm::PlayerIndex player, rm::TickIndex tick,
                                 rm::sim::UnitId target, rm::sim::Fx toX, rm::sim::Fx toZ,

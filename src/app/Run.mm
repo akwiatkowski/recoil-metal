@@ -1586,14 +1586,25 @@ int runWindowed(const Session& session) {
                                        rm::sim::fxFromFloat(ground.z), queue)) {
                     submitted += overcharging.size();
                 }
+                // OPTION-RIGHT-CLICK IS THE SPREAD MOVE: same destination gesture, but
+                // every unit lands its scaled offset from the click instead of all of
+                // them piling onto it — the anti-AoE order. Only a plain move spreads;
+                // an armed kind or a target keeps its own meaning.
+                const bool spread = !target && mods.option
+                    && groundKind == rm::sim::CommandKind::Move;
                 const bool ordinarySubmitted = ordinary.empty()
                     || (target
                             ? issueAttack(units, ordinary, player, tick, *target,
                                           rm::sim::fxFromFloat(ground.x),
                                           rm::sim::fxFromFloat(ground.z), queue)
-                            : issueMove(units, ordinary, player, tick,
-                                        rm::sim::fxFromFloat(ground.x),
-                                        rm::sim::fxFromFloat(ground.z), queue, groundKind));
+                            : spread
+                                ? issueSpreadMove(units, ordinary, player, tick,
+                                                  rm::sim::fxFromFloat(ground.x),
+                                                  rm::sim::fxFromFloat(ground.z), queue)
+                                : issueMove(units, ordinary, player, tick,
+                                            rm::sim::fxFromFloat(ground.x),
+                                            rm::sim::fxFromFloat(ground.z), queue,
+                                            groundKind));
                 if (ordinarySubmitted) {
                     submitted += ordinary.size();
                 }
@@ -1616,8 +1627,9 @@ int runWindowed(const Session& session) {
                 // this lambda produces. One line per order makes the two distinguishable from
                 // the console alone, which is the only instrument a windowed session has.
                 std::printf("order: %s%s — %zu of %zu unit(s) submitted at (%.0f, %.0f)\n",
-                            rm::sim::commandKindName(
-                                target ? rm::sim::CommandKind::Attack : groundKind),
+                            target ? "attack"
+                                : spread ? "spread-move"
+                                : rm::sim::commandKindName(groundKind),
                             queue ? " (queued)" : "", submitted, selected.size(),
                             static_cast<double>(ground.x), static_cast<double>(ground.z));
                 std::fflush(stdout);

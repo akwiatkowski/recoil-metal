@@ -272,6 +272,7 @@ static std::array<float, 2> viewPointIn(NSView* view, NSPoint windowPoint) {
         .shift = (modifierFlags & NSEventModifierFlagShift) != 0,
         .command = (modifierFlags & NSEventModifierFlagCommand) != 0,
         .control = (modifierFlags & NSEventModifierFlagControl) != 0,
+        .option = (modifierFlags & NSEventModifierFlagOption) != 0,
         .clicks = static_cast<int>(event.clickCount),
     };
     (*self.clickCallback)(ray, button, mods);

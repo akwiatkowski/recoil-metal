@@ -234,6 +234,24 @@ extern bool gFafLog;
                              rm::sim::CommandKind kind = rm::sim::CommandKind::Move,
                              rm::sim::CommandPhase phase = rm::sim::CommandPhase::PreTick);
 
+/// How wide a spread move loosens the group around its destination — each unit's
+/// offset from the selection centroid, scaled by this. Three times the standing
+/// spacing: an artillery shell or bomb run aimed at the click catches a fraction of
+/// the group instead of the whole of it, while the formation still reads as the
+/// group it was.
+inline constexpr float kSpreadMoveFactor = 3.0f;
+
+/// A move order fanned out per unit: each member of the selection keeps its bearing
+/// from the group centroid but lands `kSpreadMoveFactor` times as far from the click
+/// — the blob arrives loose instead of piled onto one point. Submitted as one
+/// ordinary `Move` per unit, so the queue, routes and predicted times all stay those
+/// of a move order. A single unit has nothing to spread from; it gets a plain move.
+[[nodiscard]] bool issueSpreadMove(UnitScene& scene,
+                                   std::span<const rm::sim::UnitId> units,
+                                   rm::PlayerIndex player, rm::TickIndex tick,
+                                   rm::sim::Fx toX, rm::sim::Fx toZ,
+                                   bool queued = false);
+
 /// issueMove's sibling for a TARGETED attack: the handle turns the order into a pursuit —
 /// the unit follows the target's real position, holds at its own longest weapon's reach,
 /// and the order completes when the target dies. toX/toZ are where the target is right now.
