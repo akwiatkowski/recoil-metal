@@ -16,6 +16,7 @@
 
 #include "core/scene/CombatEffects.hpp"
 #include "core/scene/ProjectileFx.hpp"
+#include "core/sim/Adjacency.hpp"
 #include "core/scene/Particles.hpp"
 #include "core/scene/Picking.hpp"
 #include "core/scene/UnitIcons.hpp"
@@ -359,6 +360,20 @@ std::size_t appendConstructionBars(rm::ui::Geometry& out, const UnitScene& scene
     const rm::OrbitCamera& camera, const rm::HeightField& field, const rm::text::Font& font,
     const rm::ui::UiViewport& viewport, std::span<const rm::sim::UnitId> selected,
     std::optional<std::array<float, 2>> cursor = std::nullopt);
+
+/// The adjacency preview for a structure ghost at `site`: a floating label over every
+/// neighbour the ghost would grant a bonus, and one at the site for what the ghost
+/// itself would receive — "+12% M", "-6% E". Draws nothing for a non-participant or a
+/// site with no paying neighbours.
+///
+/// Returns the preview it drew so the caller can put the connection line under each
+/// labelled pair — one `adjacencyPreview` call feeds both halves of the feature, which
+/// is what keeps the lines and the numbers from disagreeing.
+[[nodiscard]] rm::sim::AdjacencyPreview appendAdjacencyPreview(
+    rm::ui::Geometry& out, const UnitScene& scene, const rm::OrbitCamera& camera,
+    const rm::HeightField& field, const rm::text::Font& font,
+    const rm::ui::UiViewport& viewport, rm::UnitTypeIndex ghostType,
+    const std::array<float, 2>& site);
 
 [[nodiscard]] std::optional<rm::sim::UnitId> pickAnyBatch(const rm::Ray& ray,
                                                           const UnitScene& scene);

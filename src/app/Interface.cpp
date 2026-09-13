@@ -1176,6 +1176,89 @@ std::size_t appendConstructionBars(rm::ui::Geometry& out, const UnitScene& scene
     return drawn;
 }
 
+rm::sim::AdjacencyPreview appendAdjacencyPreview(
+    rm::ui::Geometry& out, const UnitScene& scene, const rm::OrbitCamera& camera,
+    const rm::HeightField& field, const rm::text::Font& font,
+    const rm::ui::UiViewport& viewport, rm::UnitTypeIndex ghostType,
+    const std::array<float, 2>& site) {
+    // The ghost's tolerance is the placement mode's, not the free-placement default:
+    // under grid placement a label that promised a bonus two elmos of daylight away
+    // would be lying about what the tick will pay.
+    rm::sim::AdjacencyPreview preview = rm::sim::adjacencyPreview(
+        scene.store, scene.catalog, scene.playerArmy,
+        scene.catalog.adjacency(ghostType),
+        rm::sim::fxFromFloat(site[0]), rm::sim::fxFromFloat(site[1]),
+        scene.placementMode == rm::sim::PlacementMode::Grid
+            ? rm::sim::Fx{} : rm::sim::kAdjacencyGapElmos);
+    const auto extent = viewport.hudExtent();
+    if (preview.links.empty() || !font.usable() || extent.width <= 0
+        || extent.height <= 0) {
+        return preview;
+    }
+    const auto battlefield = rm::ui::frameLayout(viewport).battlefield;
+    const auto parts = [](const rm::sim::AdjacencyFlow& flow, auto&& emit) {
+        const auto one = [&](rm::sim::Fx v, const char* suffix, rm::ui::Colour tint) {
+            if (v == rm::sim::Fx{}) return;
+            const float pct = rm::sim::fxToFloat(v) * 100.0f;
+            char buffer[24];
+            if (const float whole = std::roundf(pct); std::fabs(pct - whole) < 0.05f) {
+                std::snprintf(buffer, sizeof buffer, "%+.0f%%%s",
+                              static_cast<double>(whole), suffix);
+            } else {
+                std::snprintf(buffer, sizeof buffer, "%+.1f%%%s",
+                              static_cast<double>(pct), suffix);
+            }
+            emit(buffer, tint);
+        };
+        one(flow.massProduction, "M", rm::ui::kMass);
+        one(flow.energyProduction, "E", rm::ui::kEnergy);
+        one(flow.energyUpkeep, "E", rm::ui::kEnergy);
+    };
+    // One line above the thing the number belongs to, each part in its resource's
+    // colour — mass green beside the extractor, energy amber over the generator. The
+    // whole line is then centred on the projection it was measured for.
+    const auto label = [&](const rm::sim::AdjacencyFlow& flow,
+                           const std::array<float, 2>& screen) {
+        float width = 0.0f;
+        parts(flow, [&](std::string_view text, rm::ui::Colour) {
+            width += rm::text::measureText(font.glyphs, text) + 4.0f;
+        });
+        float pen = screen[0] - width * 0.5f;
+        const float baseline = screen[1];
+        parts(flow, [&](std::string_view text, rm::ui::Colour tint) {
+            pen = rm::text::appendText(out.label, font.glyphs, text, pen, baseline, tint)
+                  + 4.0f;
+        });
+    };
+    for (const auto& link : preview.links) {
+        if (!link.fromGhost.any()) {
+            continue;
+        }
+        const rm::sim::Transform& t = scene.store.transforms()[link.slot];
+        const float x = rm::sim::fxToFloat(t.x);
+        const float z = rm::sim::fxToFloat(t.z);
+        const auto screen = rm::worldToScreen(camera,
+            simd_make_float3(x, field.heightAtWorld(x, z), z), extent.width, extent.height);
+        if (screen && battlefield.contains((*screen)[0], (*screen)[1])) {
+            label(link.fromGhost, {{(*screen)[0], (*screen)[1] - 28.0f}});
+        }
+    }
+    const rm::sim::AdjacencyFlow gets{
+        .massProduction = preview.received.massProduction - rm::sim::kFxOne,
+        .energyProduction = preview.received.energyProduction - rm::sim::kFxOne,
+        .energyUpkeep = preview.received.energyUpkeep - rm::sim::kFxOne,
+    };
+    if (gets.any()) {
+        const float ground = field.heightAtWorld(site[0], site[1]);
+        const auto screen = rm::worldToScreen(camera,
+            simd_make_float3(site[0], ground, site[1]), extent.width, extent.height);
+        if (screen && battlefield.contains((*screen)[0], (*screen)[1])) {
+            label(gets, {{(*screen)[0], (*screen)[1] - 28.0f}});
+        }
+    }
+    return preview;
+}
+
 void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
                       const rm::OrbitCamera& camera, const rm::text::Font& font,
                       const rm::ui::UiViewport& viewport) {

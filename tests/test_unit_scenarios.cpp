@@ -957,6 +957,58 @@ TEST_CASE("world construction bars follow selection hover progress and sight", "
     CHECK(draw(selected).first == 0);
 }
 
+TEST_CASE("a build ghost's adjacency preview labels what each neighbour gains",
+          "[ui][adjacency]") {
+    // The screenshot path cannot click, so this is the label's regression net: a pgen
+    // ghost beside a standing factory must put the factory's discount in the label
+    // channel — and nothing at all where no bonus crosses.
+    Scenario scenario;
+    const auto structure = [](std::string name) {
+        rm::unitdef::UnitDef def;
+        def.name = std::move(name);
+        def.motion = rm::unitdef::MotionType::None;
+        def.skirtSquaresX = 2.0f;
+        def.skirtSquaresZ = 2.0f;
+        def.categories = {"STRUCTURE", "SIZE4"};
+        return def;
+    };
+    rm::unitdef::UnitDef factory = structure("test_factory");
+    (void)scenario.spawn(factory, 200, 200);
+    rm::unitdef::UnitDef pgen = structure("test_pgen");
+    pgen.adjacencyBuffs = "T1PowerGeneratorAdjacencyBuffs";
+    const rm::UnitTypeIndex ghostType = scenario.registerType(pgen);
+
+    rm::OrbitCamera camera;
+    camera.target = simd_make_float3(200, 0, 200);
+    camera.distance = 200;
+    std::vector<rm::text::Glyph> glyphs(rm::text::kGlyphCount);
+    for (rm::text::Glyph& glyph : glyphs) {
+        glyph.advance = 8.0f;
+        glyph.width = 6.0f;
+        glyph.height = 10.0f;
+    }
+    const rm::text::Font font{.glyphs = glyphs, .lineHeight = 18,
+        .solidUv = {0.5f, 0.5f, 0.6f, 0.6f}};
+    const auto viewport = rm::ui::UiViewport::authored(1600, 900);
+
+    // Touching the factory's skirt: the ghost's upkeep discount lands on it, so a label
+    // does too — "-6%E" over the factory.
+    rm::ui::Geometry geometry;
+    const auto preview = rm::app::appendAdjacencyPreview(geometry, scenario.scene, camera,
+        scenario.field, font, viewport, ghostType, {216.0f, 200.0f});
+    REQUIRE(preview.links.size() == 1);
+    CHECK(rm::sim::fxToFloat(preview.links.front().fromGhost.energyUpkeep)
+          == Catch::Approx(-0.0625f));
+    CHECK(!geometry.label.empty());
+
+    // Out of reach, nothing is drawn: a label where no bonus crosses is a lie.
+    rm::ui::Geometry away;
+    const auto far = rm::app::appendAdjacencyPreview(away, scenario.scene, camera,
+        scenario.field, font, viewport, ghostType, {300.0f, 200.0f});
+    CHECK(far.links.empty());
+    CHECK(away.label.empty());
+}
+
 TEST_CASE("factory panel clicks control the real production queue", "[corpus][ui][production]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus at " + root.string());

@@ -55,4 +55,50 @@ inline constexpr Fx kAdjacencyGapElmos = Fx::fromInt(4);
 void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
                       std::vector<AdjacencyEffects>& out, Fx tolerance = kAdjacencyGapElmos);
 
+// --- The ghost's preview -----------------------------------------------------
+//
+// What placing a structure WOULD pay, answered before it exists — the build ghost's
+// question. The grant arithmetic is the pair scan's own, run for one hypothetical
+// participant: the same skirt test, the same tolerance, the same army gate.
+
+/// One direction of a link: what one side would add to the other's multipliers.
+/// Deltas, not totals — a positive production grant is a bonus, a negative upkeep
+/// grant is the discount a generator gives a factory.
+struct AdjacencyFlow {
+    Fx massProduction{};
+    Fx energyProduction{};
+    Fx energyUpkeep{};
+
+    /// True when a grant crosses in this direction. Every authored grant is a bonus —
+    /// production adds, maintenance discounts — so a link is always good news, just of
+    /// a different size and sign.
+    [[nodiscard]] bool any() const noexcept {
+        return massProduction != Fx{} || energyProduction != Fx{} || energyUpkeep != Fx{};
+    }
+};
+
+/// One touching neighbour, and the grant in each direction. A link exists only when a
+/// bonus actually crosses — two skirted buildings can share an edge and pay nothing.
+struct AdjacencyLink {
+    UnitIndex slot;
+    AdjacencyFlow toGhost;    ///< the standing neighbour's grant onto the ghost
+    AdjacencyFlow fromGhost;  ///< the ghost's grant onto it
+};
+
+/// The answer for a ghosted structure: the multipliers it would receive (summed like
+/// `adjacencyEffects`, ones for a non-receiver) and a link per neighbour a grant
+/// would cross to or from.
+struct AdjacencyPreview {
+    AdjacencyEffects received;
+    std::vector<AdjacencyLink> links;
+};
+
+/// Evaluates `ghost` — a catalogue adjacency row — as if placed at `x`,`z` (the unit's
+/// position; the skirt offset is applied inside, matching `adjacencyEffects`). An empty
+/// `links` and all-ones `received` for a non-participant or an army of `kNoArmy`.
+[[nodiscard]] AdjacencyPreview adjacencyPreview(
+    const UnitStore& store, const UnitCatalog& catalog, int army,
+    const UnitCatalog::AdjacencyInfo& ghost, Fx x, Fx z,
+    Fx tolerance = kAdjacencyGapElmos);
+
 } // namespace rm::sim

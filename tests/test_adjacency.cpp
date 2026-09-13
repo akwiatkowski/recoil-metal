@@ -362,6 +362,113 @@ TEST_CASE("a storage requires exactly STRUCTURE and one valid authored size") {
     CHECK(incomeBesideStorage({"STRUCTURE", "SIZE4", "SIZE24"}) == baseIncome);
 }
 
+TEST_CASE("a ghost's adjacency preview reports the grant in both directions") {
+    // The card and the connection lines read this one answer: a storage ghost beside an
+    // extractor says what the extractor GAINS; an extractor ghost beside a storage says
+    // what the new building GETS. The standing world supplies the truth either way — the
+    // ghost is a participant that does not exist yet.
+    Fixture f;
+
+    rm::unitdef::UnitDef mex = smallStructure("test_mex");
+    mex.producesMassPerSecond = 2.0f;
+    const rm::UnitTypeIndex mexType = f.roster.addType(mex);
+    rm::unitdef::UnitDef storage = smallStructure("test_mass_storage");
+    storage.adjacencyBuffs = "T1MassStorageAdjacencyBuffs";
+    const rm::UnitTypeIndex storageType = f.roster.addType(storage);
+
+    const UnitId standingMex = f.roster.add(mexType, 200.0f, 200.0f, 0, 500.0f);
+    const UnitId standingStorage = f.roster.add(storageType, 216.0f, 200.0f, 0, 500.0f);
+
+    // A storage ghost beside the standing extractor: grants it +12.5%, receives nothing.
+    const auto grant = rm::sim::adjacencyPreview(
+        f.roster.store, f.roster.catalog, 0, f.roster.catalog.adjacency(storageType),
+        rm::sim::fxFromFloat(200.0f), rm::sim::fxFromFloat(216.0f));
+    REQUIRE(grant.links.size() == 1);
+    CHECK(grant.links.front().slot == standingMex.index);
+    CHECK(rm::sim::fxToFloat(grant.links.front().fromGhost.massProduction)
+          == Approx(0.125f));
+    CHECK_FALSE(grant.links.front().toGhost.any());
+    CHECK(grant.received.massProduction == rm::sim::kFxOne);
+
+    // An extractor ghost beside the standing storage: receives +12.5%, grants nothing.
+    const auto receive = rm::sim::adjacencyPreview(
+        f.roster.store, f.roster.catalog, 0, f.roster.catalog.adjacency(mexType),
+        rm::sim::fxFromFloat(232.0f), rm::sim::fxFromFloat(200.0f));
+    REQUIRE(receive.links.size() == 1);
+    CHECK(receive.links.front().slot == standingStorage.index);
+    CHECK(rm::sim::fxToFloat(receive.links.front().toGhost.massProduction)
+          == Approx(0.125f));
+    CHECK(rm::sim::fxToFloat(receive.received.massProduction) == Approx(1.125f));
+}
+
+TEST_CASE("the ghost preview only links a pair a bonus actually crosses") {
+    // The beneficial filter: two skirted structures can touch and still be nobody's
+    // business — neither authors a grant. A line drawn for them would say "adjacent"
+    // where nothing is paid, which is noise the player's eye has to discount.
+    Fixture f;
+
+    rm::unitdef::UnitDef plain = smallStructure("test_plain");
+    const rm::UnitTypeIndex plainType = f.roster.addType(plain);
+    rm::unitdef::UnitDef storage = smallStructure("test_mass_storage");
+    storage.adjacencyBuffs = "T1MassStorageAdjacencyBuffs";
+    const rm::UnitTypeIndex storageType = f.roster.addType(storage);
+
+    const UnitId friendly = f.roster.add(storageType, 232.0f, 216.0f, 0, 500.0f);
+    // An ENEMY's storage touching the site too: no bonus crosses the front line.
+    (void)f.roster.add(storageType, 200.0f, 216.0f, 1, 500.0f);
+    // And a structure that gives nothing — the ghost's receiver row is real, but the
+    // building beside it authors no grant in either direction.
+    (void)f.roster.add(plainType, 216.0f, 200.0f, 0, 500.0f);
+
+    // A buffless ghost at (216,216) touches all three. Only the friendly storage
+    // answers: the plain building grants nothing, the enemy's is another army.
+    const auto preview = rm::sim::adjacencyPreview(
+        f.roster.store, f.roster.catalog, 0, f.roster.catalog.adjacency(plainType),
+        rm::sim::fxFromFloat(216.0f), rm::sim::fxFromFloat(216.0f));
+    REQUIRE(preview.links.size() == 1);
+    CHECK(preview.links.front().slot == friendly.index);
+    CHECK(rm::sim::fxToFloat(preview.links.front().toGhost.massProduction)
+          == Approx(0.125f));
+    CHECK(rm::sim::fxToFloat(preview.received.massProduction) == Approx(1.125f));
+
+    // And a ghost with no skirt — a mobile unit being placed does not ask the question.
+    rm::unitdef::UnitDef tank;
+    tank.name = "test_tank";
+    const rm::UnitTypeIndex tankType = f.roster.addType(tank);
+    CHECK(rm::sim::adjacencyPreview(f.roster.store, f.roster.catalog, 0,
+                                    f.roster.catalog.adjacency(tankType),
+                                    rm::sim::fxFromFloat(200.0f), rm::sim::fxFromFloat(208.0f))
+              .links.empty());
+}
+
+TEST_CASE("the ghost preview asks the same skirt question the tick does") {
+    // Grid placement gives the tick zero slack; the preview must hold the same line or
+    // it promises bonuses the placement will not pay.
+    Fixture f;
+
+    rm::unitdef::UnitDef storage = smallStructure("test_mass_storage");
+    storage.adjacencyBuffs = "T1MassStorageAdjacencyBuffs";
+    const rm::UnitTypeIndex storageType = f.roster.addType(storage);
+    rm::unitdef::UnitDef mex = smallStructure("test_mex");
+    const rm::UnitTypeIndex mexType = f.roster.addType(mex);
+
+    const UnitId standing = f.roster.add(storageType, 200.0f, 200.0f, 0, 500.0f);
+
+    // Two elmos of daylight between the skirts: adjacency under free placement's slack,
+    // not under grid placement's exact contact.
+    const auto slack = rm::sim::adjacencyPreview(
+        f.roster.store, f.roster.catalog, 0, f.roster.catalog.adjacency(mexType),
+        rm::sim::fxFromFloat(218.0f), rm::sim::fxFromFloat(200.0f),
+        rm::sim::kAdjacencyGapElmos);
+    REQUIRE(slack.links.size() == 1);
+    CHECK(slack.links.front().slot == standing.index);
+    CHECK(rm::sim::adjacencyPreview(f.roster.store, f.roster.catalog, 0,
+                                    f.roster.catalog.adjacency(mexType),
+                                    rm::sim::fxFromFloat(218.0f), rm::sim::fxFromFloat(200.0f),
+                                    Fx{})
+              .links.empty());
+}
+
 TEST_CASE("a tank parked between the buildings changes nothing") {
     // Mobile units carry no skirt, so they neither give nor receive — the pair scan
     // never sees them, which is also what keeps it quadratic in STRUCTURES.

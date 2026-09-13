@@ -745,6 +745,18 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                         std::printf("  ghost: %s at %.0f, %.0f\n",
                                     shotOptions[option].id.c_str(),
                                     static_cast<double>(gx), static_cast<double>(gz));
+                        // The live ghost's adjacency labels, so a headless capture can
+                        // see the numbers a player would. The connection lines are
+                        // ground decals, which this path never uploads — labels carry
+                        // the information on their own.
+                        const auto preview = rm::app::appendAdjacencyPreview(
+                            hud, units, renderer.camera(), map->field,
+                            renderer.labelFont(), shotViewport, *type, {gx, gz});
+                        for (const auto& link : preview.links) {
+                            std::printf("  adjacency link: slot %u%s%s\n", link.slot,
+                                        link.toGhost.any() ? " receives" : "",
+                                        link.fromGhost.any() ? " grants" : "");
+                        }
                     }
                     break;
                 }
@@ -3113,8 +3125,8 @@ int runWindowed(const Session& session) {
                 if (!held) cancelledLeftGesture = false;
             }
 
-            window.setHud(hudScratch);
-
+            // The HUD uploads after the ghost pass below: the build preview's adjacency
+            // labels are silkscreen too, and they only exist once the snapped site does.
             // Rings under whatever is selected, rebuilt from scratch every
             // frame. Cheap — a selection is tens of units and each ring is 192
             // vertices of arithmetic — and it is the only way a ring can follow
@@ -3268,38 +3280,23 @@ int runWindowed(const Session& session) {
                         armedRadius() * kSelectionRingMargin, tint);
 
                     if (const auto armedType = ghostType) {
-                        const rm::sim::UnitCatalog::AdjacencyInfo& mine =
-                            units.catalog.adjacency(*armedType);
-                        if (mine.participates()) {
-                            for (rm::UnitIndex slot = 0; slot < units.store.slotCount();
-                                 ++slot) {
-                                if (!units.store.slotAlive(slot)
-                                    || units.armyOf(slot) != units.playerArmy) {
-                                    continue;
-                                }
-                                const rm::sim::UnitCatalog::AdjacencyInfo& theirs =
-                                    units.catalog.adjacency(units.store.typeAt(slot));
-                                if (!theirs.participates()) {
-                                    continue;
-                                }
-                                const rm::sim::Transform& t =
-                                    units.store.transforms()[slot];
-                                if (!rm::sim::skirtsShareEdge(
-                                        rm::sim::fxFromFloat(at.x)
-                                            + mine.skirtCentreOffsetXElmos,
-                                        rm::sim::fxFromFloat(at.z)
-                                            + mine.skirtCentreOffsetZElmos,
-                                        mine.skirtHalfXElmos, mine.skirtHalfZElmos,
-                                        t.x + theirs.skirtCentreOffsetXElmos,
-                                        t.z + theirs.skirtCentreOffsetZElmos,
-                                        theirs.skirtHalfXElmos, theirs.skirtHalfZElmos)) {
-                                    continue;
-                                }
-                                rm::appendGroundSegment(
-                                    decalVertices, map->field, {at.x, at.z},
-                                    {rm::sim::fxToFloat(t.x), rm::sim::fxToFloat(t.z)},
-                                    kBuildGhostColour, 1.5f);
-                            }
+                        // The same question the tick asks, answered for a building that
+                        // is not there yet: `appendAdjacencyPreview` draws the numbers
+                        // and returns the links, so every line drawn under a label is a
+                        // bonus this placement would actually pay — one evaluation
+                        // feeding both halves, which is what keeps them agreeing.
+                        const rm::sim::AdjacencyPreview preview =
+                            rm::app::appendAdjacencyPreview(
+                                hudScratch, units, window.camera(), map->field,
+                                window.labelFont(), viewport, *armedType,
+                                {{at.x, at.z}});
+                        for (const auto& link : preview.links) {
+                            const rm::sim::Transform& t =
+                                units.store.transforms()[link.slot];
+                            rm::appendGroundSegment(
+                                decalVertices, map->field, {at.x, at.z},
+                                {rm::sim::fxToFloat(t.x), rm::sim::fxToFloat(t.z)},
+                                kBuildGhostColour, 1.5f);
                         }
                     }
 
@@ -3321,6 +3318,7 @@ int runWindowed(const Session& session) {
                 }
             }
             window.setGhosts(ghostScratch);
+            window.setHud(hudScratch);
 
             // ...and a marker wherever an order was given recently. Aged by the
             // frame's own elapsed time rather than a wall clock, so a marker

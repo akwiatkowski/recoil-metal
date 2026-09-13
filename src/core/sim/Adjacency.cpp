@@ -82,4 +82,52 @@ void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
     }
 }
 
+AdjacencyPreview adjacencyPreview(const UnitStore& store, const UnitCatalog& catalog,
+                                  int army, const UnitCatalog::AdjacencyInfo& ghost, Fx x,
+                                  Fx z, Fx tolerance) {
+    AdjacencyPreview preview;
+    if (!ghost.participates() || army < 0) {
+        return preview;
+    }
+    const Fx gx = x + ghost.skirtCentreOffsetXElmos;
+    const Fx gz = z + ghost.skirtCentreOffsetZElmos;
+    const std::span<const Transform> transforms = store.transforms();
+    const std::span<const MoveState> motion = store.motion();
+    for (UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
+        if (!store.slotAlive(slot) || motion[slot].armyIndex != army) {
+            continue;
+        }
+        const UnitCatalog::AdjacencyInfo& theirs = catalog.adjacency(store.typeAt(slot));
+        if (!theirs.participates()) {
+            continue;
+        }
+        if (!skirtsShareEdge(gx, gz, ghost.skirtHalfXElmos, ghost.skirtHalfZElmos,
+                             transforms[slot].x + theirs.skirtCentreOffsetXElmos,
+                             transforms[slot].z + theirs.skirtCentreOffsetZElmos,
+                             theirs.skirtHalfXElmos, theirs.skirtHalfZElmos, tolerance)) {
+            continue;
+        }
+        AdjacencyLink link{.slot = slot};
+        if (ghost.receives) {
+            link.toGhost.massProduction = theirs.givesMassProduction[ghost.sizeIndex];
+            link.toGhost.energyProduction = theirs.givesEnergyProduction[ghost.sizeIndex];
+            link.toGhost.energyUpkeep = theirs.givesEnergyUpkeep[ghost.sizeIndex];
+            preview.received.massProduction += link.toGhost.massProduction;
+            preview.received.energyProduction += link.toGhost.energyProduction;
+            preview.received.energyUpkeep += link.toGhost.energyUpkeep;
+        }
+        if (theirs.receives) {
+            link.fromGhost.massProduction = ghost.givesMassProduction[theirs.sizeIndex];
+            link.fromGhost.energyProduction = ghost.givesEnergyProduction[theirs.sizeIndex];
+            link.fromGhost.energyUpkeep = ghost.givesEnergyUpkeep[theirs.sizeIndex];
+        }
+        // A touching pair with no grant in either direction is geometry, not adjacency —
+        // no link, so no line and no row.
+        if (link.toGhost.any() || link.fromGhost.any()) {
+            preview.links.push_back(link);
+        }
+    }
+    return preview;
+}
+
 } // namespace rm::sim
