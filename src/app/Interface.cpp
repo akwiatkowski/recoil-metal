@@ -1620,6 +1620,32 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
     }
 }
 
+rm::ShotClass shotClassOf(const UnitScene& scene, rm::sim::UnitId unit,
+                          std::string_view visualId) {
+    if (unit.index >= scene.store.slotCount()
+        || scene.store.idAt(unit.index).generation != unit.generation) {
+        return rm::ShotClass::Shell;
+    }
+    const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(unit.index));
+    if (def == nullptr) {
+        return rm::ShotClass::Shell;
+    }
+    // `visualId` is "UNIT:LABEL" — the label half names the weapon in the def.
+    const auto colon = visualId.find(':');
+    const std::string_view label =
+        colon == std::string_view::npos ? visualId : visualId.substr(colon + 1);
+    for (const rm::unitdef::Weapon& weapon : def->weapons) {
+        if (weapon.label != label) continue;
+        if (weapon.siloLaunched() || weapon.countedProjectile
+            || weapon.role == rm::unitdef::WeaponRole::Other) {
+            return rm::ShotClass::Missile;
+        }
+        return weapon.role == rm::unitdef::WeaponRole::Artillery ? rm::ShotClass::Artillery
+                                                               : rm::ShotClass::Shell;
+    }
+    return rm::ShotClass::Shell;
+}
+
 rm::ui::InfoCard selectedUnitCard(const UnitScene& scene, const rm::ui::RosterTile& tile,
                                  rm::sim::UnitId activeBuilder) {
     auto card = rm::ui::rosterTileCard(tile);

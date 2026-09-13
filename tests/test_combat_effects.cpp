@@ -11,17 +11,55 @@
 using rm::sim::Event;
 using rm::sim::EventKind;
 
-TEST_CASE("a shot earns an additive flash at the muzzle's own height", "[effects]") {
+TEST_CASE("a shot earns an additive flash at the muzzle and recoil smoke behind it",
+          "[effects]") {
     std::vector<rm::Particle> out;
     const Event fired{.kind = EventKind::WeaponFired,
-                      .at = {rm::test::fx(100.0f), rm::test::fx(20.0f), rm::test::fx(300.0f)}};
+                      .at = {rm::test::fx(100.0f), rm::test::fx(20.0f), rm::test::fx(300.0f)},
+                      .at2 = {rm::test::fx(104.0f), rm::test::fx(24.0f),
+                              rm::test::fx(300.0f)},
+                      .visualDirection = {rm::test::fx(1.0f), rm::test::fx(0.0f),
+                                          rm::test::fx(0.0f)}};
     rm::emitCombatEffects(out, {&fired, 1});
 
-    REQUIRE(out.size() == 1);
-    // Additive: colour with zero alpha, per the Particle contract — light, not paint.
+    // The flash is additive light at the POSED muzzle — `at2`, where the projectile
+    // spawned — not a constant height over the hull.
+    REQUIRE(out.size() == 2);
     CHECK(out[0].colour[3] == 0.0f);
-    // At the muzzle's height, the same constant the projectile spawns at.
-    CHECK(out[0].origin[1] == 20.0f + rm::sim::fxToFloat(rm::sim::kMuzzleHeight));
+    CHECK(out[0].origin == std::array{104.0f, 24.0f, 300.0f});
+    // The recoil smoke blends, drifts back along the shot line and rises.
+    CHECK(out[1].colour[3] > 0.0f);
+    CHECK(out[1].velocity[0] < 0.0f);
+    CHECK(out[1].velocity[1] > 0.0f);
+    CHECK(out[1].lifetime > out[0].lifetime);
+}
+
+TEST_CASE("shot class changes the fallback flash and smoke", "[effects]") {
+    const auto burst = [](rm::ShotClass cls) {
+        std::vector<rm::Particle> out;
+        const Event fired{
+            .kind = EventKind::WeaponFired,
+            .at2 = {rm::test::fx(0.0f), rm::test::fx(10.0f), rm::test::fx(0.0f)},
+            .visualDirection = {rm::test::fx(0.0f), rm::test::fx(0.0f),
+                                rm::test::fx(1.0f)}};
+        rm::emitCombatEffects(out, {&fired, 1}, nullptr, nullptr, 0.1f, {},
+            [cls](rm::sim::UnitId, std::string_view) { return cls; });
+        return out;
+    };
+    const auto shell = burst(rm::ShotClass::Shell);
+    const auto gun = burst(rm::ShotClass::Artillery);
+    const auto missile = burst(rm::ShotClass::Missile);
+
+    // A gun's flash outshines a rifle's and a missile's — the tube throws heat, not light.
+    CHECK(gun[0].size > shell[0].size);
+    CHECK(missile[0].size < shell[0].size);
+    // Smoke follows the same ordering but runs the other way: a launch is mostly smoke.
+    CHECK(missile.size() > shell.size());
+    CHECK(gun.size() >= shell.size());
+    const auto smokeLife = [](const std::vector<rm::Particle>& burst) {
+        return burst.back().lifetime;
+    };
+    CHECK(smokeLife(missile) > smokeLife(shell));
 }
 
 TEST_CASE("an impact earns smoke that drifts and a spark that adds", "[effects]") {

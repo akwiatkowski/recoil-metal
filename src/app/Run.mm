@@ -2422,6 +2422,9 @@ int runWindowed(const Session& session) {
                                 units.store.motion()[id.index].radiusElmos);
                         }
                         return 2.0f;
+                    },
+                    [&units](rm::sim::UnitId id, std::string_view key) {
+                        return rm::app::shotClassOf(units, id, key);
                     });
 
                 // ...and as SOUND, from the same per-tick queue for the same reason. The

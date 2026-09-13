@@ -229,6 +229,12 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
 [[nodiscard]] rm::ui::InfoCard selectedUnitCard(const UnitScene& scene,
     const rm::ui::RosterTile& tile, rm::sim::UnitId activeBuilder);
 
+/// Which muzzle class a WeaponFired event was, for the fallback flash: the event's
+/// `UNIT:LABEL` visual id resolved back to the firing weapon. A dead slot still
+/// answers — the corpse's type outlives it, same as the death-burst radius reads.
+[[nodiscard]] rm::ShotClass shotClassOf(const UnitScene& scene, rm::sim::UnitId unit,
+                                        std::string_view visualId);
+
 /// What the active builder is producing, when it is a factory: its Build orders in queue
 /// order with their counts, the progress of the construction it is running, and its repeat
 /// state. Nothing for a mobile builder, a dead handle, or a unit that cannot build — an

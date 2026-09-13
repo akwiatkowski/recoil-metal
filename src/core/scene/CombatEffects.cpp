@@ -17,6 +17,15 @@ namespace {
 inline constexpr float kFlashLifetime = 0.1f;
 inline constexpr float kFlashSize = 7.0f;
 
+/// Per-class flash and recoil smoke for the fallback path — the shots whose weapon
+/// authored no `FxMuzzleFlash` bundle. Size is the flash's, smoke counts the puffs
+/// drifting back off the muzzle against the shot's own direction: a launch blows
+/// back hard, a gun kicks, a rifle barely smokes.
+inline constexpr float kGunFlashSize = 13.0f;
+inline constexpr float kMissileFlashSize = 5.0f;
+inline constexpr float kRecoilSmokeLifetime = 0.5f;
+inline constexpr float kMissileSmokeLifetime = 1.1f;
+
 /// The impact: a puff of smoke and a spark. The smoke is ordinary premultiplied grey that
 /// drifts up and fades; the spark is the flash's additive cousin, smaller and hotter.
 /// The beam: a chain of additive particles along the muzzle-to-strike line, dense enough
@@ -51,7 +60,8 @@ inline constexpr float kDeathSmokeLifetime = 2.5f;
 
 void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> events,
     const WeaponVisuals* visuals, CombatEffectState* state, float seconds,
-    std::function<float(sim::UnitId)> unitRadius) {
+    std::function<float(sim::UnitId)> unitRadius,
+    std::function<ShotClass(sim::UnitId, std::string_view)> shotClass) {
     CombatEffectState immediate;
     if (visuals && !state) state = &immediate;
     const auto burst = [&](const std::string& key, std::array<float,3> position,
@@ -70,11 +80,20 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
             const std::array<float,3> muzzle{sim::fxToFloat(event.at2[0]),
                 sim::fxToFloat(event.at2[1]), sim::fxToFloat(event.at2[2])};
             if (burst(event.visualId + "#FxMuzzleFlash", muzzle, direction, event.unit, event.visualId)) break;
-            std::array<float, 3> at = atOf(event);
-            // The muzzle's own height, the same constant the projectile spawns at
-            // (Combat.hpp) — the flash must sit where the shot comes from or the two read
-            // as unrelated.
-            at[1] += sim::fxToFloat(sim::kMuzzleHeight);
+            {
+            const ShotClass cls =
+                shotClass ? shotClass(event.unit, event.visualId) : ShotClass::Shell;
+            // The flash sits at the POSED muzzle — `at2`, where the projectile actually
+            // spawned — not a constant height over the hull. Events that carry no muzzle
+            // (a hand-built one in a test) fall back to the unit plus the spawn height.
+            std::array<float, 3> at = muzzle;
+            if (muzzle == std::array<float, 3>{0.0f, 0.0f, 0.0f}) {
+                at = atOf(event);
+                at[1] += sim::fxToFloat(sim::kMuzzleHeight);
+            }
+            const float flashSize = cls == ShotClass::Artillery ? kGunFlashSize
+                                    : cls == ShotClass::Missile ? kMissileFlashSize
+                                                              : kFlashSize;
             into.push_back(Particle{
                 .origin = at,
                 .age = 0.0f,
@@ -82,8 +101,36 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
                 .lifetime = kFlashLifetime,
                 // Warm white-yellow, additive: (rgb, 0) adds light and hides nothing.
                 .colour = {1.0f, 0.85f, 0.45f, 0.0f},
-                .size = kFlashSize,
+                .size = flashSize,
             });
+            // The recoil smoke: premultiplied grey drifting BACK along the bore, the
+            // direction the shot did not go. A missile's backblast is bigger and
+            // slower to clear; a rifle's is a wisp; artillery rolls.
+            const int puffs = cls == ShotClass::Shell ? 1 : 2;
+            const float blowback = cls == ShotClass::Missile ? 14.0f : 7.0f;
+            const float smokeLife =
+                cls == ShotClass::Missile ? kMissileSmokeLifetime : kRecoilSmokeLifetime;
+            const float smokeSize = cls == ShotClass::Shell ? 4.0f : 8.0f;
+            const float len = std::sqrt(direction[0] * direction[0]
+                                        + direction[1] * direction[1]
+                                        + direction[2] * direction[2]);
+            const std::array<float, 3> back = len > 0.0f
+                ? std::array{-direction[0] / len, -direction[1] / len, -direction[2] / len}
+                : std::array{0.0f, 0.0f, 0.0f};
+            for (int i = 0; i < puffs; ++i) {
+                const float step = static_cast<float>(i);
+                into.push_back(Particle{
+                    .origin = {at[0] + back[0] * step * 2.0f,
+                               at[1] + step * 1.0f,
+                               at[2] + back[2] * step * 2.0f},
+                    .age = 0.0f,
+                    .velocity = {back[0] * blowback, 4.0f, back[2] * blowback},
+                    .lifetime = smokeLife,
+                    .colour = {0.25f, 0.23f, 0.20f, 0.5f},
+                    .size = smokeSize,
+                });
+            }
+            }
             break;
         }
         case sim::EventKind::BeamFired: {

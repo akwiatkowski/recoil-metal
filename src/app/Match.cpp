@@ -4,6 +4,7 @@
 
 #include "app/FafAi.hpp"
 #include "app/FafOpponent.hpp"
+#include "app/Interface.hpp"  // shotClassOf — a WeaponFired's fallback-flash class
 
 #include "core/sim/BuildOrder.hpp"
 #include "core/sim/Replay.hpp"
@@ -2031,7 +2032,10 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             return 2.0f;
         };
         rm::emitCombatEffects(dust, visualEvents, &scene.weaponVisuals,
-            &scene.combatEffectState, kTickSeconds, corpseRadius);
+            &scene.combatEffectState, kTickSeconds, corpseRadius,
+            [&scene](rm::sim::UnitId id, std::string_view key) {
+                return rm::app::shotClassOf(scene, id, key);
+            });
         rm::emitProjectileTrails(dust, scene.projectiles, &scene.weaponVisuals, kTickSeconds);
         scene.projectileTrails.update(scene.projectiles, scene.weaponVisuals, kTickSeconds,
             [&](rm::sim::UnitId id, std::string_view key) { return scene.trailOrigin(id, key); });

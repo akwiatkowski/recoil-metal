@@ -66,6 +66,16 @@ struct CombatEffectState {
     std::uint32_t seed = 1;
 };
 
+/// What kind of muzzle a shot left, for the fallback flash. The authored
+/// `FxMuzzleFlash` bundle already states its own flash and smoke — this classifies
+/// only the shots that arrive with nothing, so a tank's shell, a howitzer's blast
+/// and a missile's backblast do not share one generic glint.
+enum class ShotClass : std::uint8_t {
+    Shell,      ///< direct fire: a compact flash and a wisp of smoke off the barrel
+    Artillery,  ///< the heavy gun: a bigger flash and a heavier rolling smoke
+    Missile,    ///< a launch: little flash, a hot backblast that keeps rising
+};
+
 /// Appends the particles `events` earn: muzzle flashes and beams, impact smoke and
 /// sparks, shield flashes, and death bursts scaled by the corpse's size. Kinds with
 /// no visual (construction and the rest) earn nothing.
@@ -73,9 +83,14 @@ struct CombatEffectState {
 /// `unitRadius` answers a corpse's collision radius in elmos for UnitDestroyed; the
 /// caller reads it from the dead slot, which outlives the unit. Absent, deaths fall
 /// back to tank scale rather than skipping the burst — a silent death reads as a bug.
+///
+/// `shotClass` answers a WeaponFired's class for the fallback flash — the caller
+/// resolves the event's `UNIT:LABEL` visual id back to its weapon. Absent, every
+/// fallback shot reads as a shell: the flash still appears, just unparticular.
 void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> events,
                        const WeaponVisuals* visuals = nullptr,
                        CombatEffectState* state = nullptr, float seconds = 0.1f,
-                       std::function<float(sim::UnitId)> unitRadius = {});
+                       std::function<float(sim::UnitId)> unitRadius = {},
+                       std::function<ShotClass(sim::UnitId, std::string_view)> shotClass = {});
 
 } // namespace rm
