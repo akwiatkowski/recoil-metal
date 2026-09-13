@@ -451,7 +451,7 @@ TEST_CASE("resource sites are marked and matching placement snaps to their centr
     CHECK(fixture->real("UEB1102")->buildRestriction == rm::unitdef::BuildRestriction::HydrocarbonDeposit);
 }
 
-TEST_CASE("factory trays expose all unlocked tiers with the newest units first",
+TEST_CASE("factory trays expose all unlocked tiers on the builder's own tab",
           "[corpus][ui][factory-tiers]") {
     auto fixture = makeFixture();
     if (!fixture) SKIP("retail corpus unavailable");
@@ -475,17 +475,23 @@ TEST_CASE("factory trays expose all unlocked tiers with the newest units first",
     CHECK(fixture->option("UEL0105") != nullptr);
     CHECK((fixture->option("UEL0202") != nullptr) == (tier >= 2));
     CHECK((fixture->option("UEL0303") != nullptr) == (tier >= 3));
-    const auto firstProduct = std::ranges::find_if(fixture->options,
+    // The full list is in retail order — SORT bucket, icon priority, id — and the tab
+    // strip opens on the builder's own tier, which is where the newly unlocked units
+    // sit. "Immediately visible" is therefore "first page of that tab".
+    const auto visible = rm::ui::buildOptionsForTier(fixture->options, tier);
+    const auto firstProduct = std::ranges::find_if(visible,
         [](const auto& option) { return !option.upgrade; });
-    REQUIRE(firstProduct != fixture->options.end());
+    REQUIRE(firstProduct != visible.end());
     CHECK(firstProduct->name.starts_with("T" + std::to_string(tier) + " "));
-    REQUIRE(fixture->option(productId));
-    const auto index = static_cast<std::size_t>(fixture->option(productId) - fixture->options.data());
+    const auto wanted = std::ranges::find_if(visible,
+        [&](const auto& option) { return option.id == productId; });
+    REQUIRE(wanted != visible.end());
+    const auto index = static_cast<std::size_t>(wanted - visible.begin());
     const auto frame = rm::ui::frameLayout(rm::ui::UiViewport::full(1280, 720));
-    const auto firstPage = rm::ui::buildPanelLayout(frame, fixture->options.size());
+    const auto firstPage = rm::ui::buildPanelLayout(frame, visible.size());
     REQUIRE(index < firstPage.shown); // Newly unlocked units are immediately visible.
     const auto cell = rm::ui::buildCellOrigin(firstPage, index);
-    CHECK(rm::ui::buildOptionAt(firstPage, fixture->options.size(),
+    CHECK(rm::ui::buildOptionAt(firstPage, visible.size(),
         cell[0] + firstPage.cellWidth / 2, cell[1] + firstPage.cellHeight / 2) == index);
     const auto product = fixture->registerType(*fixture->real(productId));
     REQUIRE(rm::app::issueBuild(fixture->scene, factory, 0, 0, product,
@@ -527,7 +533,11 @@ TEST_CASE("engineer trays follow the authored construction tiers", "[corpus][ui]
     CHECK((fixture->option("UEB4202") != nullptr) == (tier >= 2)); // Shield, outside the old role list.
     CHECK_FALSE(fixture->option("UEL0201"));
     REQUIRE_FALSE(fixture->options.empty());
-    CHECK(fixture->options.front().name.starts_with("T" + std::to_string(tier) + " "));
+    // The menu is bucket-ordered across tiers; the builder's own tier's tab is the
+    // tray it opens on, so that tab's first cell is the newest thing it can build.
+    const auto visible = rm::ui::buildOptionsForTier(fixture->options, tier);
+    REQUIRE_FALSE(visible.empty());
+    CHECK(visible.front().name.starts_with("T" + std::to_string(tier) + " "));
     const auto* productId = tier == 3 ? "UEB1301" : tier == 2 ? "UEB1201" : "UEB1101";
     const auto type = fixture->registerType(*fixture->real(productId));
     REQUIRE(rm::app::issueBuild(fixture->scene, engineer, 0, 0, type,

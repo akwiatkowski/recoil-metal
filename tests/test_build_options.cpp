@@ -589,6 +589,51 @@ TEST_CASE("construction inspector follows selected work and ignores finished rec
     CHECK_FALSE(rm::app::constructionCard(fixture.scene, builder));
 }
 
+TEST_CASE("options order the way retail's menu does: sort bucket, then icon priority",
+          "[ui][build]") {
+    // Retail's construction.lua buckets by SORTCONSTRUCTION, SORTECONOMY, SORTDEFENSE,
+    // SORTSTRATEGIC, SORTINTEL, SORTOTHER, then everything else, and orders inside a bucket
+    // by `BuildIconSortPriority or StrategicIconSortPriority`. What it is NOT is the
+    // cost-then-id order the roster itself keeps, so a cheap defence never jumps the queue
+    // ahead of economy.
+    Fixture fixture;
+    auto add = [&](std::string name, std::vector<std::string> categories,
+                   int buildIcon, int strategicIcon = 0) {
+        rm::unitdef::UnitDef def = aDef(std::move(name), std::move(categories));
+        def.buildIconSortPriority = buildIcon;
+        def.strategicIconSortPriority = strategicIcon;
+        fixture.add(std::move(def));
+    };
+    add("UEB9901", {"UEF", "TECH1", "STRUCTURE", "SORTINTEL"}, 30);
+    add("UEB9902", {"UEF", "TECH1", "STRUCTURE", "SORTDEFENSE"}, 40);
+    // The cheaper economy entry states only the strategic fallback; it still wins its bucket.
+    add("UEB9903", {"UEF", "TECH1", "STRUCTURE", "SORTECONOMY"}, 90);
+    add("UEB9904", {"UEF", "TECH1", "STRUCTURE", "SORTECONOMY"}, 0, 10);
+    add("UEB9905", {"UEF", "TECH1", "STRUCTURE"}, 5);  // no SORT tag: the misc bucket, last
+    fixture.scene.roster = rm::data::Roster::build(fixture.corpus, fixture.ids);
+
+    const auto got = fixture.optionsFor({fixture.spawnEngineer()});
+    const std::vector<std::string> want{
+        // The two SORTECONOMY cells first, in priority order — the fallback supplies 9904's.
+        "UEB9904", "UEB9903",
+        // Then defence, then intel — bucket order, not cost order.
+        "UEB9902", "UEB9901",
+        // Then the misc bucket: every option with no SORT tag, by id.
+        "UEB0101", "UEB0103", "UEB1101", "UEB1103", "UEB9905",
+    };
+    CHECK(got == want);
+}
+
+TEST_CASE("the options carry their product's tech tier for the tab strip", "[ui][build]") {
+    Fixture fixture;
+    const rm::sim::UnitId engineer = fixture.spawnEngineer();
+    (void)fixture.optionsFor({engineer});
+    REQUIRE_FALSE(fixture.last.empty());
+    for (const rm::ui::BuildOption& option : fixture.last) {
+        CHECK(option.tech == 1);
+    }
+}
+
 TEST_CASE("game-interface themes do not leak classic skin or faction state", "[ui]") {
     UnitScene scene;
     scene.armies.push_back(rm::sim::Army{.index = 0, .faction = rm::sim::Faction::Uef});

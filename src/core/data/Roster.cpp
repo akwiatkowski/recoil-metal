@@ -69,6 +69,9 @@ Roster Roster::build(std::span<const unitdef::UnitDef> units, std::span<const st
             .buildTime = units[i].buildTime,
             .health = units[i].health,
             .categories = units[i].categories,
+            .buildIconPriority = units[i].buildIconSortPriority != 0
+                                    ? units[i].buildIconSortPriority
+                                    : units[i].strategicIconSortPriority,
         });
     }
 

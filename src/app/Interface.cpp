@@ -641,16 +641,29 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
             .upgrade = true,
             .queuedUpgrade = upgradeFrom != def,
             .affordable = mass <= storedMass,
+            .tech = next->tech,
             .tint = rm::ui::tierTint(theme, next->tech),
         });
     }
 
+    // RETAIL'S MENU ORDER, which is not the roster's and not a tech sort. The build menu's
+    // SortFunc reads the SORT* categories as buckets — construction, economy, defense,
+    // strategic, intel, other, then the untagged tail — and inside a bucket the authored
+    // icon priority: `BuildIconSortPriority or StrategicIconSortPriority`, already folded
+    // into `RosterEntry::buildIconPriority` at build time. The id settles what the content
+    // left tied, so two runs page identically.
+    const auto menuOrder = [](const rm::data::RosterEntry& a, const rm::data::RosterEntry& b) {
+        const int bucketA = rm::unitdef::buildSortBucket(a.categories);
+        const int bucketB = rm::unitdef::buildSortBucket(b.categories);
+        if (bucketA != bucketB) return bucketA < bucketB;
+        if (a.buildIconPriority != b.buildIconPriority)
+            return a.buildIconPriority < b.buildIconPriority;
+        return a.id < b.id;
+    };
+
     if (isFactory || role == rm::unitdef::Role::Commander || role == rm::unitdef::Role::Builder) {
         auto products = scene.roster.buildableBy(faction, def->buildableCategory);
-        // The authored build tree gates tiers. Put newly unlocked units on the first page.
-        std::stable_sort(products.begin(), products.end(), [](const auto& a, const auto& b) {
-            return a.tech > b.tech;
-        });
+        std::sort(products.begin(), products.end(), menuOrder);
         for (const rm::data::RosterEntry& entry : products) {
             // ACU blueprints include T2/T3 engineering enhancement categories even at spawn.
             // Enhancement installation is not modelled yet; keep the initial ACU menu at T1.
@@ -670,6 +683,7 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
                 .buildSeconds = seconds,
                 .health = rm::sim::magToFloat(entry.health),
                 .affordable = mass <= storedMass,
+                .tech = entry.tech,
                 .tint = rm::ui::tierTint(theme, entry.tech),
             });
         }
@@ -691,9 +705,7 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
             continue;
         }
         auto products = scene.roster.buildableBy(faction, rising->buildableCategory);
-        std::stable_sort(products.begin(), products.end(), [](const auto& a, const auto& b) {
-            return a.tech > b.tech;
-        });
+        std::sort(products.begin(), products.end(), menuOrder);
         for (const rm::data::RosterEntry& entry : products) {
             const float mass = rm::sim::magToFloat(entry.costMass);
             const float seconds =
@@ -710,6 +722,7 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
                 .health = rm::sim::magToFloat(entry.health),
                 .atBuilder = true,
                 .affordable = mass <= storedMass,
+                .tech = entry.tech,
                 .tint = rm::ui::tierTint(theme, entry.tech),
             });
         }

@@ -802,6 +802,29 @@ UnitBlueprint {
     CHECK(none->strategicIcon.empty());
 }
 
+TEST_CASE("the build-menu sort priorities arrive, and their absence stays zero") {
+    // `BuildIconSortPriority` is what retail's construction menu orders cells by, with
+    // `StrategicIconSortPriority` the fallback (`construction.lua`'s SortFunc reads
+    // `bp.BuildIconSortPriority or bp.StrategicIconSortPriority`). Both are root scalars —
+    // XRL0305 states 20 and 115.
+    const Blueprint named{"XXB0006_unit.bp", R"(
+UnitBlueprint {
+    Physics = { MotionType = 'RULEUMT_Land' },
+    BuildIconSortPriority = 20,
+    StrategicIconSortPriority = 115,
+})"};
+    const auto def = rm::unitbp::loadFile(named.path());
+    REQUIRE(def.has_value());
+    CHECK(def->buildIconSortPriority == 20);
+    CHECK(def->strategicIconSortPriority == 115);
+
+    const Blueprint bare{"XXB0007_unit.bp", kMediumTank};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->buildIconSortPriority == 0);
+    CHECK(none->strategicIconSortPriority == 0);
+}
+
 TEST_CASE("a guard scan radius arrives in elmos, and its unread neighbour stays unread") {
     // DEA0202 states `AI = { GuardReturnRadius = 100, GuardScanRadius = 80 }`. The scan
     // radius is ogrids like every sibling range (`C-183`); the return radius is

@@ -180,6 +180,14 @@ struct UnitDef {
     /// unit without one keeps the plain team-colour square, which is the honest fallback.
     std::string strategicIcon;
 
+    /// Root scalars the interface sorts by. `BuildIconSortPriority` is what the
+    /// construction menu orders a tier's cells by; `StrategicIconSortPriority` is its
+    /// fallback (`construction.lua`'s SortFunc reads `bp.BuildIconSortPriority or
+    /// bp.StrategicIconSortPriority`). Zero means unstated — 0 is never a real value in
+    /// the corpus, so the fallback applies cleanly.
+    int buildIconSortPriority = 0;
+    int strategicIconSortPriority = 0;
+
     /// Elmos per second. Recoil's modern `speed` field is already per second;
     /// only the legacy `maxVelocity` is per frame (UnitDef.cpp:442-443).
     float speedElmosPerSecond = 0.0f;
@@ -752,5 +760,12 @@ struct UnitDef {
 /// and runs once when a wave unit resolves, which is the load-time side of the fixed-point
 /// boundary (§5.2) — the sim only ever sees the resulting count.
 [[nodiscard]] std::size_t waveSizeFor(const UnitDef& unit) noexcept;
+
+/// Which band of retail's build menu a sorted category set lands in — the order
+/// `construction.lua` buckets a tier's cells: SORTCONSTRUCTION, SORTECONOMY,
+/// SORTDEFENSE, SORTSTRATEGIC, SORTINTEL, SORTOTHER, and finally everything carrying
+/// no SORT tag at all. Returns 0..5 for a stated band, 6 for the misc tail.
+/// `categories` must be sorted, as `UnitDef::categories` and `RosterEntry`'s copy are.
+[[nodiscard]] int buildSortBucket(std::span<const std::string> categories) noexcept;
 
 } // namespace rm::unitdef

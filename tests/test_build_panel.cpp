@@ -118,9 +118,45 @@ TEST_CASE("a later build page maps its first cell to the global option", "[ui][b
                                    origin[1] + layout.cellHeight * 0.5f);
     REQUIRE(hit.has_value());
     CHECK(*hit == capacity);
-    CHECK(rm::ui::buildPageStepAt(layout, layout.x + layout.width - 10.0f,
+    CHECK(rm::ui::buildPageStepAt(layout, 0, layout.x + layout.width - 10.0f,
                                   layout.y + 10.0f)
               == 1);
+}
+
+TEST_CASE("the tier bitmask names which tabs the menu offers", "[ui][build]") {
+    const std::vector<BuildOption> options{
+        {.tech = 1}, {.tech = 1}, {.tech = 3},
+    };
+    CHECK(rm::ui::buildTiersPresent(options) == 0b1010);
+    CHECK(rm::ui::buildTiersPresent({}) == 0);
+}
+
+TEST_CASE("tier tabs sit in the header, hit-test to their tier, and displace the page arrows",
+          "[ui][build]") {
+    const rm::ui::FrameLayout frame = aFrame();
+    const auto layout = buildPanelLayout(frame, 6);
+    // Tiers one and three present: two tabs, ascending.
+    const std::uint32_t tiers = 0b1010;
+    const rm::ui::BuildTabs tabs = rm::ui::buildTabs(layout, tiers);
+    REQUIRE(tabs.count == 2);
+    CHECK(tabs.tier[0] == 1);
+    CHECK(tabs.tier[1] == 3);
+
+    // The strip is inside the header, right-aligned to the panel's inner edge.
+    const float headerMidY = layout.y + rm::ui::kBuildPadding + rm::ui::kBuildHeader * 0.5f;
+    CHECK(tabs.x + tabs.width <= layout.x + layout.width - rm::ui::kBuildPadding + 0.01f);
+    CHECK(rm::ui::buildTabAt(layout, tiers, tabs.x + 4.0f, headerMidY) == 1);
+    CHECK(rm::ui::buildTabAt(layout, tiers,
+                             tabs.x + tabs.width - 4.0f, headerMidY) == 3);
+    // Below the strip is the grid; above it is nothing.
+    CHECK_FALSE(rm::ui::buildTabAt(layout, tiers, tabs.x + 4.0f, layout.gridY).has_value());
+
+    // The page arrows give way: with tabs drawn their hit zone ends left of the strip.
+    const std::size_t capacity = static_cast<std::size_t>(layout.columns)
+                               * static_cast<std::size_t>(rm::ui::kBuildRows);
+    const auto paged = buildPanelLayout(frame, capacity + 1);
+    CHECK(rm::ui::buildPageStepAt(paged, tiers, tabs.x - 4.0f, headerMidY) == 1);
+    CHECK_FALSE(rm::ui::buildPageStepAt(paged, tiers, tabs.x + 4.0f, headerMidY).has_value());
 }
 
 TEST_CASE("every cell hit-tests back to its own index", "[ui][build]") {

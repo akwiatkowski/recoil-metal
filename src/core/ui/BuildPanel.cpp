@@ -148,13 +148,14 @@ std::optional<std::size_t> buildOptionAt(const BuildPanelLayout& layout, std::si
                : std::nullopt;
 }
 
-std::optional<int> buildPageStepAt(const BuildPanelLayout& layout, float pointX,
-                                   float pointY) noexcept {
+std::optional<int> buildPageStepAt(const BuildPanelLayout& layout, std::uint32_t tiers,
+                                   float pointX, float pointY) noexcept {
     if (layout.pages <= 1 || pointY < layout.y || pointY >= layout.gridY) {
         return std::nullopt;
     }
     constexpr float kArrowWidth = 22.0f;
-    const float right = layout.x + layout.width - kBuildPadding;
+    const float right =
+        layout.x + layout.width - kBuildPadding - buildTabs(layout, tiers).width;
     if (pointX >= right - kArrowWidth && pointX < right) {
         return 1;
     }
@@ -164,10 +165,57 @@ std::optional<int> buildPageStepAt(const BuildPanelLayout& layout, float pointX,
     return std::nullopt;
 }
 
+std::uint32_t buildTiersPresent(std::span<const BuildOption> options) noexcept {
+    std::uint32_t tiers = 0;
+    for (const BuildOption& option : options) {
+        if (option.tech >= 1 && option.tech <= 4) {
+            tiers |= 1u << option.tech;
+        }
+    }
+    return tiers;
+}
+
+BuildTabs buildTabs(const BuildPanelLayout& layout, std::uint32_t tiers) noexcept {
+    BuildTabs tabs;
+    for (int tier = 1; tier <= 4; ++tier) {
+        if (tiers & (1u << tier)) {
+            tabs.tier[tabs.count++] = tier;
+        }
+    }
+    tabs.width = static_cast<float>(tabs.count) * kBuildTabWidth;
+    tabs.x = layout.x + layout.width - kBuildPadding - tabs.width;
+    return tabs;
+}
+
+std::optional<int> buildTabAt(const BuildPanelLayout& layout, std::uint32_t tiers,
+                              float pointX, float pointY) noexcept {
+    const BuildTabs tabs = buildTabs(layout, tiers);
+    if (tabs.count == 0 || layout.empty() || pointY < layout.y || pointY >= layout.gridY
+        || pointX < tabs.x || pointX >= tabs.x + tabs.width) {
+        return std::nullopt;
+    }
+    const auto column =
+        static_cast<std::size_t>(std::floor((pointX - tabs.x) / kBuildTabWidth));
+    return column < tabs.count ? std::optional<int>{tabs.tier[column]} : std::nullopt;
+}
+
+std::vector<BuildOption> buildOptionsForTier(std::span<const BuildOption> options,
+                                             int tier) {
+    std::vector<BuildOption> visible;
+    visible.reserve(options.size());
+    for (const BuildOption& option : options) {
+        if (option.tech == tier) {
+            visible.push_back(option);
+        }
+    }
+    return visible;
+}
+
 void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
                       const Theme& theme, const BuildPanelLayout& layout,
                       std::span<const BuildOption> options, std::optional<std::size_t> hovered,
-                      std::string_view builderName, std::string_view builderRole) {
+                      std::string_view builderName, std::string_view builderRole,
+                      std::uint32_t tiers, int activeTier) {
     if (layout.empty() || options.empty() || !labelFont.usable()) {
         return;
     }
@@ -216,8 +264,25 @@ void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Fo
                                + std::to_string(layout.pages) + "  <  >";
         (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, page,
                                layout.x + layout.width - kBuildPadding
+                                   - buildTabs(layout, tiers).width
                                    - text::measureText(readoutFont.glyphs, page),
                                headerBaseline, kInk);
+    }
+
+    // The tier tabs: one cell per tier the menu spans, right-aligned where the arrows sit
+    // when there is a second page — `buildTabAt` and `buildPageStepAt` share this geometry.
+    const BuildTabs tabs = buildTabs(layout, tiers);
+    for (std::size_t tab = 0; tab < tabs.count; ++tab) {
+        const float tx = tabs.x + static_cast<float>(tab) * kBuildTabWidth;
+        const bool active = tabs.tier[tab] == activeTier;
+        text::appendRect(out.chrome, labelFont, tx, layout.y + kBuildPadding,
+                         kBuildTabWidth, kBuildHeader - 4.0f,
+                         fade(active ? theme.edgeLit : theme.edge, active ? 0.35f : 0.10f));
+        const std::string label = "T" + std::to_string(tabs.tier[tab]);
+        const float width = text::measureText(readoutFont.glyphs, label);
+        (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, label,
+                               tx + (kBuildTabWidth - width) * 0.5f, headerBaseline,
+                               active ? kInk : fade(kInk, 0.55f));
     }
 
     // A rule under the header, the full content width. The same device the resource panel's

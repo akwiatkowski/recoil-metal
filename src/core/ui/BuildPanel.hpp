@@ -126,6 +126,10 @@ struct BuildOption {
     /// The cost turns to the loss colour, but the cell stays fully visible and clickable.
     bool affordable = true;
 
+    /// The product's tech tier, 1..4 — what `tint` colours and what the tab strip filters
+    /// on. Carried here rather than re-derived so the strip is a pure function of the list.
+    int tech = 0;
+
     /// The tint band across the top of the cell. Carries the tech tier, so a grid of a dozen
     /// options separates into tiers without a label per row.
     Colour tint{};
@@ -199,9 +203,44 @@ struct BuildPanelLayout {
                                                        std::size_t optionCount, float pointX,
                                                        float pointY) noexcept;
 
-/// -1 or +1 when an authored HUD point hits a visible page arrow in the header.
-[[nodiscard]] std::optional<int> buildPageStepAt(const BuildPanelLayout& layout, float pointX,
+/// -1 or +1 when an authored HUD point hits a visible page arrow in the header. `tiers` is
+/// the `buildTiersPresent` bitmask: its tab strip takes the header's right edge, and the
+/// arrows sit left of it.
+[[nodiscard]] std::optional<int> buildPageStepAt(const BuildPanelLayout& layout,
+                                                 std::uint32_t tiers, float pointX,
                                                  float pointY) noexcept;
+
+// --- Tier tabs ---------------------------------------------------------------
+
+/// A tab cell is this wide: "T3" in the readout face plus a key's worth of padding.
+inline constexpr float kBuildTabWidth = 26.0f;
+
+/// Which tiers an option list spans, as a bitmask — bit T set when a cell carries tech T.
+/// The tab strip exists when the menu holds more than one tier.
+[[nodiscard]] std::uint32_t buildTiersPresent(std::span<const BuildOption> options) noexcept;
+
+/// The tab strip's geometry: which tier each cell selects, ascending, and where the strip
+/// sits. `count` is the number of set bits in `tiers`, so `tier[0..count)` is the list.
+struct BuildTabs {
+    std::array<int, 4> tier{};
+    std::size_t count = 0;
+    float x = 0.0f;
+    float width = 0.0f;
+};
+
+/// Where the strip lands: inside the header, right-aligned to the panel's inner edge.
+/// Tiers ascend left to right — T1 T2 T3 reads the way the tech path climbs.
+[[nodiscard]] BuildTabs buildTabs(const BuildPanelLayout& layout, std::uint32_t tiers) noexcept;
+
+/// Which tab an authored HUD point is over — the tier it selects, or nothing.
+[[nodiscard]] std::optional<int> buildTabAt(const BuildPanelLayout& layout,
+                                            std::uint32_t tiers, float pointX,
+                                            float pointY) noexcept;
+
+/// The options of one tier, in the order they were given. The panel draws only the active
+/// tab's cells; the caller keeps this list so the full menu survives a tab switch.
+[[nodiscard]] std::vector<BuildOption> buildOptionsForTier(
+    std::span<const BuildOption> options, int tier);
 
 /// Draws the panel: header, grid, and each cell's tint band, id and cost.
 ///
@@ -212,10 +251,15 @@ struct BuildPanelLayout {
 /// The header sets `builderRole` — the word a player thinks in, "COMMANDER" — as its lead, and
 /// `builderName` (the blueprint id) right-aligned in the readout face. An empty role promotes
 /// the id back to the lead seat rather than leaving the line blank.
+///
+/// `tiers`/`activeTier` draw the tab strip: one cell per tier the menu spans, the active
+/// one lit. Pass `0`/`0` and nothing is drawn — the strip's absence is what a menu of one
+/// tier looked like before tabs existed, and single-tier menus may keep it.
 void appendBuildPanel(Geometry& out, const text::Font& labelFont, const text::Font& readoutFont,
                       const Theme& theme, const BuildPanelLayout& layout,
                       std::span<const BuildOption> options, std::optional<std::size_t> hovered,
-                      std::string_view builderName, std::string_view builderRole = {});
+                      std::string_view builderName, std::string_view builderRole = {},
+                      std::uint32_t tiers = 0, int activeTier = 0);
 
 /// The hover card for one build option: full name, id in the corner, and the facts a player
 /// weighs before building — construction material (in the loss colour when it cannot be paid),

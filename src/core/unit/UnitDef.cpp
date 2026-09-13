@@ -298,4 +298,20 @@ std::size_t waveSizeFor(const UnitDef& unit) noexcept {
     return std::clamp(static_cast<std::size_t>(n), std::size_t{5}, std::size_t{60});
 }
 
+int buildSortBucket(std::span<const std::string> categories) noexcept {
+    // The bands in `construction.lua`'s order — its `sortCategories` table, minus each
+    // predecessor, is exactly this sequence. A unit can carry only one of them, so the
+    // first hit wins and nothing below misc ever subtracts.
+    static constexpr std::string_view kBuckets[] = {
+        "SORTCONSTRUCTION", "SORTECONOMY", "SORTDEFENSE",
+        "SORTSTRATEGIC",    "SORTINTEL",   "SORTOTHER",
+    };
+    for (std::size_t i = 0; i < std::size(kBuckets); ++i) {
+        if (std::binary_search(categories.begin(), categories.end(), kBuckets[i])) {
+            return static_cast<int>(i);
+        }
+    }
+    return static_cast<int>(std::size(kBuckets));
+}
+
 } // namespace rm::unitdef

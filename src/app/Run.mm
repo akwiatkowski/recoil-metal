@@ -17,6 +17,7 @@
 #include "core/ui/PanelPages.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -452,6 +453,23 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                 std::printf("  hud-build-option: id=%s upgrade=%d queued-upgrade=%d\n",
                     option.id.c_str(), option.upgrade, option.queuedUpgrade);
             }
+            // The same tier strip the live panel applies: a menu spanning more than one
+            // tier draws tabs and defaults to the builder's own, else the lowest.
+            std::uint32_t shotTierMask = rm::ui::buildTiersPresent(shotOptions);
+            int shotTier = 0;
+            if ((shotTierMask & (shotTierMask - 1u)) != 0) {
+                int builderTech = 0;
+                if (const rm::unitdef::UnitDef* builderDef = units.catalog.def(
+                        units.store.typeAt(shotWho.builder.index))) {
+                    builderTech = rm::unitdef::techOf(*builderDef);
+                }
+                shotTier = builderTech >= 1 && (shotTierMask & (1u << builderTech)) != 0
+                               ? builderTech
+                               : std::countr_zero(shotTierMask);
+                shotOptions = rm::ui::buildOptionsForTier(shotOptions, shotTier);
+            } else {
+                shotTierMask = 0;
+            }
             // Pair pixels with facts from the same selection, so a visually plausible idle
             // capture cannot pass an active-construction regression.
             const auto shotWork = constructionCard(units, activeBuilderFor(shotBuilders));
@@ -673,7 +691,7 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                 // interface that appears only under one cannot reach a screenshot.
                 rm::ui::appendBuildPanel(hud, renderer.labelFont(), renderer.readoutFont(),
                                          shotTheme, shotPanel, shotOptions, shotHovered,
-                                         shotWho.name, shotWho.role);
+                                         shotWho.name, shotWho.role, shotTierMask, shotTier);
                 std::printf("  build panel: %zu options for %s\n", shotOptions.size(),
                             shotWho.name.c_str());
 
@@ -1254,6 +1272,18 @@ int runWindowed(const Session& session) {
         // player was looking at when they pressed the button — so the two reading one vector is
         // the correct coupling rather than a shortcut.
         std::vector<rm::ui::BuildOption> buildOptions;
+        /// The whole menu before the tier tab filters it — `buildOptions` is the visible
+        /// slice of this. Both persist across frames because clicks address the list that
+        /// was last DRAWN, not the one being gathered.
+        std::vector<rm::ui::BuildOption> buildMenuAll;
+        /// `buildTiersPresent` over `buildMenuAll`, gated to zero when it holds a single
+        /// tier — the strip exists only when there is a choice to make. The click handler
+        /// and the draw call read this same member, so a drawn tab and a hittable tab are
+        /// the same tab.
+        std::uint32_t buildTierMask = 0;
+        /// The active tab's tier; `0` shows everything. Re-seated when the builder or the
+        /// menu changes — see the frame block.
+        int buildTier = 0;
         rm::app::BuildSelection buildWho;
         std::vector<rm::sim::UnitId> builderCandidates;
         rm::sim::UnitId activeBuilder{};
@@ -1301,6 +1331,7 @@ int runWindowed(const Session& session) {
         /// count happened to change. Ids are what the atlas actually drew.
         std::uint64_t rosterPackedKey = 0;
         std::size_t buildPagePacked = static_cast<std::size_t>(-1);
+        int buildTierPacked = -1;
         std::size_t rosterPagePacked = static_cast<std::size_t>(-1);
 
         // The strategic layer's per-type icon table, rebuilt with every pack — the slots
@@ -1732,8 +1763,16 @@ int runWindowed(const Session& session) {
                             swallowedByPanel("build");  // nothing to disarm: it was just eaten
                         }
                         armedOption.reset();
+                    } else if (const std::optional<int> tier = rm::ui::buildTabAt(
+                                   panel, buildTierMask, hudPoint[0], hudPoint[1])) {
+                        // A tab pick is a header control, checked before the arrows because
+                        // the strip owns the header's right edge. The visible list changes
+                        // next frame, so the armed cell — an index into the old one — drops.
+                        buildTier = *tier;
+                        buildPage = 0;
+                        armedOption.reset();
                     } else if (const std::optional<int> step = rm::ui::buildPageStepAt(
-                                   panel, hudPoint[0], hudPoint[1])) {
+                                   panel, buildTierMask, hudPoint[0], hudPoint[1])) {
                         if (*step < 0 && buildPage > 0) {
                             --buildPage;
                         } else if (*step > 0 && buildPage + 1 < panel.pages) {
@@ -2641,7 +2680,36 @@ int runWindowed(const Session& session) {
             const auto previousBuilder = activeBuilder;
             activeBuilder = rm::app::activeBuilderFor(builderCandidates, activeBuilder);
             if (activeBuilder != previousBuilder) productionPage = 0;
-            rm::app::gatherBuildOptions(units, activeBuilder, baseTheme, buildOptions, buildWho);
+            rm::app::gatherBuildOptions(units, activeBuilder, baseTheme, buildMenuAll, buildWho);
+            // THE TIER STRIP. The mask is gated to "more than one tier" — a menu that spans
+            // one tier has no choice to offer and shows no strip. The active tab defaults
+            // to the builder's own tier (a T2 factory opens on T2, the way retail's tabs
+            // do), or the lowest present when the menu skips it, and re-seats whenever the
+            // builder changes or the tier it was on leaves the menu.
+            buildTierMask = rm::ui::buildTiersPresent(buildMenuAll);
+            if ((buildTierMask & (buildTierMask - 1u)) == 0) {
+                buildTierMask = 0;
+            }
+            if (buildTierMask == 0) {
+                buildTier = 0;
+            } else {
+                int builderTech = 0;
+                if (const rm::unitdef::UnitDef* builderDef = units.catalog.def(
+                        units.store.typeAt(buildWho.builder.index))) {
+                    builderTech = rm::unitdef::techOf(*builderDef);
+                }
+                const int defaultTier =
+                    builderTech >= 1 && (buildTierMask & (1u << builderTech)) != 0
+                        ? builderTech
+                        : std::countr_zero(buildTierMask);
+                if (activeBuilder != previousBuilder || buildTier < 1
+                    || (buildTierMask & (1u << buildTier)) == 0) {
+                    buildTier = defaultTier;
+                }
+            }
+            buildOptions = buildTier != 0
+                               ? rm::ui::buildOptionsForTier(buildMenuAll, buildTier)
+                               : buildMenuAll;
             // AN INDEX INTO A LIST THAT HAS BEEN REBUILT IS A DIFFERENT BUILDING. Deselecting,
             // or selecting a different builder, must not leave cell 4 armed and meaning
             // something else — so the arming is dropped whenever the list it points into can no
@@ -2725,11 +2793,12 @@ int runWindowed(const Session& session) {
             // pictures that have not moved.
             if (buildWho.builder != iconsPackedFor || rosterPackedKey != rosterKeyFor(rosterTiles)
                 || units.catalog.size() != typesPackedFor || buildPagePacked != buildPanel.page
-                || rosterPagePacked != roster.page) {
+                || buildTierPacked != buildTier || rosterPagePacked != roster.page) {
                 iconsPackedFor = buildWho.builder;
                 rosterPackedKey = rosterKeyFor(rosterTiles);
                 typesPackedFor = units.catalog.size();
                 buildPagePacked = buildPanel.page;
+                buildTierPacked = buildTier;
                 rosterPagePacked = roster.page;
                 // Any glyph a newly registered type names is fetched before the pack, so a
                 // unit type first seen this frame gets its icon in this atlas rather than
@@ -2784,7 +2853,8 @@ int runWindowed(const Session& session) {
 
                 rm::ui::appendBuildPanel(hudScratch, window.labelFont(), window.readoutFont(),
                                          theme, buildPanel, buildOptions, lit,
-                                         buildWho.name, buildWho.role);
+                                         buildWho.name, buildWho.role, buildTierMask,
+                                         buildTier);
             }
 
             const rm::ui::CommandRackLayout commandRack =
@@ -3415,14 +3485,34 @@ int runWindowed(const Session& session) {
             inputHudClick(at[0] + rack.cellWidth / 2, at[1] + rack.cellHeight / 2, button);
         };
         const auto inputBuildClick = [&](const std::string& name) {
-            const auto wanted = std::find_if(buildOptions.begin(), buildOptions.end(),
+            const auto wanted = std::find_if(buildMenuAll.begin(), buildMenuAll.end(),
                 [&](const auto& option) { return uppercase(option.id) == name; });
-            inputCheck(wanted != buildOptions.end(), "missing build tray option " + name);
-            const auto index = static_cast<std::size_t>(wanted - buildOptions.begin());
-            const auto layout = rm::ui::buildPanelLayout(rm::ui::frameLayout(window.uiViewport()),
+            inputCheck(wanted != buildMenuAll.end(), "missing build tray option " + name);
+            const auto frame = rm::ui::frameLayout(window.uiViewport());
+            if (buildTierMask != 0 && wanted->tech != buildTier) {
+                // The option lives behind another tab — select it and retry next beat,
+                // the same two steps a player's hand takes.
+                const auto panel = rm::ui::buildPanelLayout(frame, buildOptions.size(), 0);
+                const rm::ui::BuildTabs tabs = rm::ui::buildTabs(panel, buildTierMask);
+                for (std::size_t tab = 0; tab < tabs.count; ++tab) {
+                    if (tabs.tier[tab] == wanted->tech) {
+                        inputHudClick(tabs.x + static_cast<float>(tab) * rm::ui::kBuildTabWidth
+                                          + rm::ui::kBuildTabWidth / 2,
+                                      panel.y + rm::ui::kBuildPadding
+                                          + rm::ui::kBuildHeader / 2);
+                        return false;
+                    }
+                }
+            }
+            const auto wantedVisible = std::find_if(buildOptions.begin(), buildOptions.end(),
+                [&](const auto& option) { return uppercase(option.id) == name; });
+            if (wantedVisible == buildOptions.end()) return false;
+            const auto index = static_cast<std::size_t>(wantedVisible - buildOptions.begin());
+            const auto layout = rm::ui::buildPanelLayout(frame,
                 buildOptions.size(), panelPages.build(units.store.typeAt(buildWho.builder.index)));
             if (index < layout.first || index >= layout.first + layout.shown) {
-                const float right = layout.x + layout.width - rm::ui::kBuildPadding;
+                const float right = layout.x + layout.width - rm::ui::kBuildPadding
+                                  - rm::ui::buildTabs(layout, buildTierMask).width;
                 inputHudClick(right - (index < layout.first ? 33.0f : 11.0f),
                               layout.y + rm::ui::kBuildHeader / 2);
                 ++pageClicks;
@@ -3819,7 +3909,8 @@ int runWindowed(const Session& session) {
                         const auto panel = rm::ui::buildPanelLayout(rm::ui::frameLayout(window.uiViewport()),
                             buildOptions.size(), panelPages.build(units.store.typeAt(inputProduct.index)));
                         if (panel.pages > 1) {
-                            inputHudClick(panel.x + panel.width - rm::ui::kBuildPadding - 11.0f,
+                            inputHudClick(panel.x + panel.width - rm::ui::kBuildPadding
+                                              - rm::ui::buildTabs(panel, buildTierMask).width - 11.0f,
                                           panel.y + rm::ui::kBuildHeader / 2);
                             ++pageClicks;
                             return;

@@ -73,6 +73,11 @@ struct RosterEntry {
     /// Its categories, kept so a `requires` filter can be applied without going back to the
     /// definition — the roster outlives the span it was built from.
     std::vector<std::string> categories;
+
+    /// The build menu's order key, resolved at build time the way retail's SortFunc reads
+    /// it: `BuildIconSortPriority or StrategicIconSortPriority`. Zero when neither was
+    /// stated — such entries sort together inside their band, broken by id.
+    int buildIconPriority = 0;
 };
 
 /// Every unit the corpus holds, indexed by what it is for.

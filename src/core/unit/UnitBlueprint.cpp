@@ -198,6 +198,15 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.strategicIcon = icon->text;
     }
 
+    // The menu order keys. Both are root scalars; the construction menu prefers the
+    // build-icon one and falls back to the strategic one (`construction.lua` SortFunc).
+    if (const std::optional<double> priority = parsed->numberAt("BuildIconSortPriority")) {
+        def.buildIconSortPriority = static_cast<int>(*priority);
+    }
+    if (const std::optional<double> priority = parsed->numberAt("StrategicIconSortPriority")) {
+        def.strategicIconSortPriority = static_cast<int>(*priority);
+    }
+
     // The upgrade path. The blueprint spells the id lower-case ('ueb0201') while `name`
     // above is the file's own upper-case; folding here means the sim compares ids without
     // carrying case rules around.
