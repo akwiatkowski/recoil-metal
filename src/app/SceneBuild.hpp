@@ -107,10 +107,11 @@ void stageTrial(UnitScene& scene, const rm::HeightField& field,
                 std::span<const rm::mapinfo::StartPosition> starts,
                 const rm::vfs::Vfs& content, std::string_view unitId, std::size_t count,
                 std::size_t foes, float gapElmos);
-/// A type's walk cycle from beside its mesh, or null. See the definition.
-[[nodiscard]] const rm::sca::Animation* loadWalkAnimation(UnitScene& scene,
-                                                          const rm::vfs::Vfs& content,
-                                                          std::string_view meshPath);
+/// A type's walk cycle — the blueprint's `Display.AnimationWalk` when stated,
+/// else the first `*walk*.sca` beside its mesh — or null. See the definition.
+[[nodiscard]] const rm::sca::Animation* loadWalkAnimation(
+    UnitScene& scene, const rm::vfs::Vfs& content,
+    const rm::unitdef::UnitDef& def, std::string_view meshPath);
 [[nodiscard]] TurretRig resolveTurretRig(const rm::Model& model,
                                          const rm::unitdef::UnitDef* def);
 

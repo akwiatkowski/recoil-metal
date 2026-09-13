@@ -296,6 +296,20 @@ TEST_CASE("a UEF medium tank reads as the vehicle it is", "[corpus]") {
     CHECK(std::filesystem::exists(mesh));
 }
 
+TEST_CASE("the UEF commander's numbered walk clip arrives by declaration", "[corpus]") {
+    // `uel0001_a001.sca` has no "walk" in its name — the units whose cycles are
+    // numbered this way are exactly the ones a directory convention cannot
+    // find, which is why `Display.AnimationWalk` is the lookup that matters.
+    const std::filesystem::path path = unitRoot() / "UEL0001/UEL0001_unit.bp";
+    if (!std::filesystem::exists(path)) {
+        SKIP("no UEL0001 blueprint at " + path.string());
+    }
+    const auto def = rm::unitbp::loadFile(path);
+    REQUIRE(def.has_value());
+    CHECK(def->animationWalk == "/units/uel0001/uel0001_a001.sca");
+    CHECK(def->animationWalkRate == Catch::Approx(1.7f));
+}
+
 TEST_CASE("retail weapons carry their manipulator specs", "[corpus][manipulators]") {
     // The data `defaultweapons.lua` rack sequences consume: turret bones and slew
     // rates, first-rack recoil/telescope bones and mesh-unit distances, animation

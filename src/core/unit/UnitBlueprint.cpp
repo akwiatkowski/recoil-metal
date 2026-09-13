@@ -746,6 +746,13 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         // would be inventing content.
         def.meshToElmos = numberOr(*display, "UniformScale", 1.0f) * scmap::kElmosPerOgrid;
 
+        // The walk clip is DECLARED, not discovered: bots whose cycles are
+        // numbered (`uel0001_a001.sca`) are invisible to a name scan, which is
+        // why this field exists at all.
+        def.animationWalk =
+            std::string{display->stringAt("AnimationWalk").value_or("")};
+        def.animationWalkRate = numberOr(*display, "AnimationWalkRate", 1.0f);
+
         if (const lua::Value* lods = display->path("Mesh", "LODs");
             lods != nullptr && !lods->items.empty()) {
             if (const std::optional<std::string_view> named = lods->items.front().stringAt("MeshName")) {

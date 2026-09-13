@@ -1074,9 +1074,16 @@ struct UnitScene {
         const float duration = batch < batches.size() && batches[batch].animation != nullptr
                                    ? batches[batch].animation->duration
                                    : 0.0f;
+        const float walkRate = batch < batches.size()
+                                   ? batches[batch].animationWalkRate
+                                   : 1.0f;
         const float speed =
             unit.speedPerTick * static_cast<float>(gAppTickRate.ticksPerSecond());
-        const float strideElmos = speed * duration;
+        // One cycle covers the ground a unit moving at top speed crosses while
+        // the clip plays at its authored rate — `AnimationWalkRate` faster than
+        // 1 means the legs were drawn for a shorter stride.
+        const float strideElmos =
+            walkRate > 0.0f ? speed * duration / walkRate : 0.0f;
         if (strideElmos > 0.0f) {
             instance.animationPhase = unit.distanceTravelledElmos / strideElmos;
         }

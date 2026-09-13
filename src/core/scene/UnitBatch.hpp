@@ -49,6 +49,11 @@ struct UnitBatch {
     // drawn many times.
     const sca::Animation* animation = nullptr;
 
+    /// The blueprint's `AnimationWalkRate` — playback rate at top speed. The
+    /// walk phase is paced by distance, so it lands here as the divisor of the
+    /// stride: one cycle covers `speed x duration / walkRate`. 1 when unstated.
+    float animationWalkRate = 1.0f;
+
     /// Optional authored construction-arm rig for this exact model. Its subtree flags are baked
     /// into the batch's bone buffer; yaw and pitch remain per UnitInstance.
     BuilderAimRig builderAim;

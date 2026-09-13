@@ -164,13 +164,17 @@ TEST_CASE("walk discovery finds the Titan's cycle by mesh convention", "[slice][
     content.mountDirectory(root);
     rm::app::UnitScene scene;
     scene.armies = rm::sim::freeForAll(2);
+    const auto titanDef = rm::unitbp::loadFile(root / "units/UEL0303/UEL0303_unit.bp");
+    REQUIRE(titanDef.has_value());
     const rm::sca::Animation* walk = rm::app::loadWalkAnimation(
-        scene, content, "/units/UEL0303/UEL0303_lod0.scm");
+        scene, content, *titanDef, "/units/UEL0303/UEL0303_lod0.scm");
     REQUIRE(walk != nullptr);
     CHECK(walk->duration > 0.0f);
     // A factory's directory holds an upgrade clip but no walk: statics keep
     // the rest pose, and discovery must say so rather than animating one.
-    CHECK(rm::app::loadWalkAnimation(scene, content, "/units/UEB0101/UEB0101_LOD0.scm")
+    const rm::unitdef::UnitDef factory{};
+    CHECK(rm::app::loadWalkAnimation(scene, content, factory,
+                                     "/units/UEB0101/UEB0101_LOD0.scm")
           == nullptr);
 }
 

@@ -107,6 +107,34 @@ TEST_CASE("a unit blueprint's numbers arrive in the engine's own units") {
     CHECK(def->meshToElmos == Approx(0.56f));
 }
 
+TEST_CASE("the walk clip a blueprint declares is the one that plays") {
+    // `Display.AnimationWalk` is a path, not a convention: bots whose cycles
+    // are numbered (the UEF ACU's a001) are invisible to a name scan, so the
+    // declaration is the only way they walk. The rate is the clip's playback
+    // rate at top speed — the divisor of the stride the walk phase paces by.
+    const Blueprint bp{"UEL0001_unit.bp", R"(
+        UnitBlueprint {
+            Display = {
+                AnimationWalk = '/units/uel0001/uel0001_a001.sca',
+                AnimationWalkRate = 1.7,
+            },
+            Physics = { MaxSpeed = 1.7, MotionType = 'RULEUMT_Land' },
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    CHECK(def->animationWalk == "/units/uel0001/uel0001_a001.sca");
+    CHECK(def->animationWalkRate == Catch::Approx(1.7f));
+}
+
+TEST_CASE("a blueprint that declares no walk clip keeps the defaults") {
+    const Blueprint bp{"UEL0201_unit.bp", kMediumTank};
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    CHECK(def->animationWalk.empty());
+    CHECK(def->animationWalkRate == Catch::Approx(1.0f));
+}
+
 TEST_CASE("the display name arrives with its localisation tag stripped") {
     // `Description` is the generic type name — "Mass Extractor", "Gatling Bot" — present in
     // 567 of the 568 shipped blueprints, and the text after the `<LOC key>` prefix is the

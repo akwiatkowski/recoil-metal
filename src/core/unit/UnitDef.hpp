@@ -630,6 +630,16 @@ struct UnitDef {
     /// which is what a collision box should be.
     float meshToElmos = 1.0f;
 
+    /// `Display.AnimationWalk` — the walk clip's VFS path, as authored. Empty
+    /// when unstated, which is most of the corpus: bots that ship one declare
+    /// it (the UEF ACU's is `uel0001_a001.sca` — no "walk" in the name for a
+    /// directory scan to find), and vehicles that roll rather than stride
+    /// carry none at all.
+    std::string animationWalk;
+    /// `Display.AnimationWalkRate`: playback rate at top speed, so the ground
+    /// covered in one cycle is `speed x duration / rate`. 1 when unstated.
+    float animationWalkRate = 1.0f;
+
     /// FIXED POINT (`Mag`), converted at parse time — the sim never sees the float
     /// (PLAN2.md §5.1). `Mag` because `MaxHealth` reaches 5,000,000 in the corpus.
     sim::Mag health{};
