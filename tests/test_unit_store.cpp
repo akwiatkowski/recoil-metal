@@ -350,16 +350,18 @@ TEST_CASE("attachments keep one parent per child and reject duplicate or cyclic 
 
     REQUIRE(store.attach(parent, child));
     store.kill(parent);
-    REQUIRE_FALSE(store.parentOf(child).has_value());
-    CHECK(store.attachmentOffsetOf(child) == std::array<rm::sim::Fx, 2>{});
+    // A kill cascades to attached children — the machinery's consumer is transport
+    // cargo, which dies aboard its carrier (retail scores it in the dispersal).
+    REQUIRE_FALSE(store.alive(child));
     REQUIRE(store.childrenOf(parent).empty());
     REQUIRE_FALSE(store.attach(parent, child));
 
     const UnitId newParent = store.spawn(tankAt(4.0f, 0.0f, 0));
-    REQUIRE(store.attach(newParent, child));
-    CHECK(store.attachmentOffsetOf(child)
+    const UnitId orphan = store.spawn(tankAt(2.0f, 0.0f, 0));
+    REQUIRE(store.attach(newParent, orphan));
+    CHECK(store.attachmentOffsetOf(orphan)
           == std::array<rm::sim::Fx, 2>{rm::test::fx(-2.0f), rm::test::fx(0.0f)});
-    store.kill(child);
+    store.kill(orphan);
     REQUIRE(store.childrenOf(newParent).empty());
 }
 

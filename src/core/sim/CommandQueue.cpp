@@ -67,7 +67,11 @@ template <typename Order>
     case CommandKind::Assist:
     case CommandKind::Guard:
     case CommandKind::Repair:
+    case CommandKind::LoadTransport:
         return a.target == b.target;
+    case CommandKind::UnloadTransport:
+    case CommandKind::Ferry:
+        return withinCancelDistance(a, b);
     case CommandKind::Script:
         // Script command data is opaque. Issuing it twice means two invocations, not a
         // shift-click cancellation gesture whose equality the core could safely infer.

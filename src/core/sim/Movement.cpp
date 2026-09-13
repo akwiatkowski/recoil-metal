@@ -796,7 +796,10 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain,
 
             const Fx radiusB = motion[b].radiusElmos;
             if (radiusB <= Fx{} || motion[a].airborne != motion[b].airborne
-                || motion[a].surfaceWater != motion[b].surfaceWater) {
+                || motion[a].surfaceWater != motion[b].surfaceWater
+                || motion[a].attached || motion[b].attached) {
+                // Attached units occupy the carrier's space, not their own —
+                // the rack is not a collision volume.
                 continue;
             }
             Transform& unitB = transforms[b];

@@ -7,6 +7,7 @@
 #include "core/sim/Movement.hpp"
 #include "core/sim/Reclaim.hpp"
 #include "core/sim/ScriptTask.hpp"
+#include "core/sim/Transport.hpp"
 #include "core/sim/UnitStore.hpp"
 
 #include "core/unit/BuildTree.hpp"
@@ -395,6 +396,12 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "cancel-factory-build";
     case CommandKind::MissileLaunch:
         return "missile-launch";
+    case CommandKind::LoadTransport:
+        return "load-transport";
+    case CommandKind::UnloadTransport:
+        return "unload-transport";
+    case CommandKind::Ferry:
+        return "ferry";
     }
     return "stop";
 }
@@ -459,6 +466,9 @@ namespace {
     if (name == "missile-launch") {
         return CommandKind::MissileLaunch;
     }
+    if (name == "load-transport") return CommandKind::LoadTransport;
+    if (name == "unload-transport") return CommandKind::UnloadTransport;
+    if (name == "ferry") return CommandKind::Ferry;
     return std::nullopt;
 }
 
@@ -573,6 +583,36 @@ namespace {
     const unitdef::UnitDef* def = catalog.def(store.typeAt(command.unit.index));
     return def != nullptr
            && std::ranges::any_of(def->weapons, &unitdef::Weapon::siloLaunched);
+}
+
+/// Issue-time gate for LoadTransport: a live transportable unit boarding a live
+/// same-army carrier whose attach table could ever take its class. A FULL
+/// carrier is still a legal order — the cargo waits for a slot — but a class
+/// the hull cannot hold is refused at the door rather than parked forever.
+[[nodiscard]] bool validLoadTransport(const Command& command, const UnitStore& store,
+                                      const UnitCatalog& catalog) noexcept {
+    if (!store.alive(command.target) || command.target == command.unit
+        || store.motion()[command.unit.index].attached
+        || store.motion()[command.target.index].attached) {
+        return false;
+    }
+    if (store.motion()[command.unit.index].armyIndex
+        != store.motion()[command.target.index].armyIndex) {
+        return false;  // cargo rides its own army's decks only
+    }
+    const unitdef::UnitDef* cargo = catalog.def(store.typeAt(command.unit.index));
+    const unitdef::UnitDef* carrier = catalog.def(store.typeAt(command.target.index));
+    return cargo != nullptr && carrier != nullptr && cargo->transportable()
+           && carrier->isTransport() && canEverCarry(*carrier, *cargo);
+}
+
+/// Issue-time gate for the transport's own orders (UnloadTransport, Ferry):
+/// the unit on the order is a live carrier.
+[[nodiscard]] bool validTransportCarrier(const Command& command, const UnitStore& store,
+                                         const UnitCatalog& catalog) noexcept {
+    const unitdef::UnitDef* def = catalog.def(store.typeAt(command.unit.index));
+    return def != nullptr && def->isTransport()
+           && !store.motion()[command.unit.index].attached;
 }
 
 [[nodiscard]] bool repairStillAllied(UnitIndex builder, UnitId target, const UnitStore& store,
@@ -851,6 +891,15 @@ void teardownMovement(MoveState& motion) {
     }
     if (command.kind == CommandKind::MissileLaunch
         && !validMissileLaunch(command, store, catalog)) {
+        return false;
+    }
+    if (command.kind == CommandKind::LoadTransport
+        && !validLoadTransport(command, store, catalog)) {
+        return false;
+    }
+    if ((command.kind == CommandKind::UnloadTransport
+         || command.kind == CommandKind::Ferry)
+        && !validTransportCarrier(command, store, catalog)) {
         return false;
     }
 
@@ -2512,6 +2561,18 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             // The wreck is gone (or unreachable): the order is done. Fall through.
         }
 
+        // THE TRANSPORT HOLD: boarding, unloading and the ferry loop never
+        // complete by arrival — a carrier that has stopped is usually just
+        // waiting to descend, and a waiting cargo is parked, not done. Their
+        // lifecycle belongs to `updateTransports`, which alone can see the
+        // attach and the touchdown that actually end them.
+        if (const QueuedCommand* head = orders[slot].active();
+            head != nullptr && (head->kind() == CommandKind::LoadTransport
+                                || head->kind() == CommandKind::UnloadTransport
+                                || head->kind() == CommandKind::Ferry)) {
+            continue;
+        }
+
         if (slot < motion.size() && motion[slot].moving) {
             continue;  // still carrying out the order at the head
         }
@@ -2590,8 +2651,8 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
     };
 
     for (UnitIndex slot = 0; slot < store.orders().size(); ++slot) {
-        if (!store.slotAlive(slot)) {
-            continue;
+        if (!store.slotAlive(slot) || store.motion()[slot].attached) {
+            continue;  // cargo rides; it does not pick fights off the rack
         }
         QueuedCommand* order = store.orders()[slot].activeMutable();
         if (order == nullptr
@@ -3111,6 +3172,14 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         }
         return routeUnit(command.unit.index, theirs.x, theirs.z, store, terrain, grid);
     }
+    case CommandKind::LoadTransport:
+    case CommandKind::UnloadTransport:
+    case CommandKind::Ferry:
+        // Owned by `updateTransports`: the chase, the descent and the attach
+        // all live there, because each retires on attachment or touchdown
+        // rather than on arrival. Starting only marks the order active.
+        return true;
+
     case CommandKind::Dive:
     case CommandKind::ToggleFactoryRepeat:
     case CommandKind::ToggleProduction:

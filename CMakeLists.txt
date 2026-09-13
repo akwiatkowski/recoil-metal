@@ -213,6 +213,7 @@ add_library(rm_core STATIC
     src/core/sim/SpatialGrid.cpp
     src/core/sim/Snapshot.cpp
     src/core/sim/Replay.cpp
+    src/core/sim/Transport.cpp
     src/core/unit/Adjacency.cpp
     src/core/unit/UnitBlueprint.cpp
     src/core/unit/Weapon.cpp
@@ -373,6 +374,7 @@ if(BUILD_TESTING)
         tests/test_production_pause.cpp
         tests/test_build_priority.cpp
         tests/test_retreat.cpp
+        tests/test_transport.cpp
         tests/test_movement.cpp
         tests/test_picking.cpp
         tests/test_selection.cpp

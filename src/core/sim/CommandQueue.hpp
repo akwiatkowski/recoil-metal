@@ -101,6 +101,10 @@ inline constexpr Fx kCancelDistance = Fx::fromInt(17);
 /// keeps a unit that has been shift-clicked to the cap from becoming uncommandable.
 inline constexpr std::size_t kCommandQueueCap = 500;
 
+/// Which leg of a `Ferry` route the transport is flying. `None` on every other
+/// kind — the field is dead weight there, the way `patrolOrigin` is for a move.
+enum class TransportPhase : std::uint8_t { None, ToBeacon, Loading, ToDrop };
+
 /// One unit's mutable execution of a shared immutable command.
 class QueuedCommand {
 public:
@@ -112,6 +116,11 @@ public:
         std::optional<std::array<Fx, 2>> patrolOrigin;
         bool returningToPatrolOrigin = false;
         ScriptTaskState scriptState;
+        /// Ferry execution: the beacon the route returns to (captured where the
+        /// order started) and the leg it is on. Present only while a Ferry is
+        /// queued; `None` and empty for everything else.
+        std::optional<std::array<Fx, 2>> transportAnchor;
+        TransportPhase transportPhase = TransportPhase::None;
     };
 
     QueuedCommand(UnitId unit, std::shared_ptr<const SharedCommand> payload)
@@ -122,7 +131,9 @@ public:
           target_(snapshot.target), payload_(std::move(payload)),
           patrolOrigin_(std::move(snapshot.patrolOrigin)),
           returningToPatrolOrigin_(snapshot.returningToPatrolOrigin),
-          scriptState_(std::move(snapshot.scriptState)) {}
+          scriptState_(std::move(snapshot.scriptState)),
+          transportAnchor_(std::move(snapshot.transportAnchor)),
+          transportPhase_(snapshot.transportPhase) {}
 
     [[nodiscard]] Snapshot snapshot() const {
         return {.unit = unit_,
@@ -131,7 +142,9 @@ public:
                 .target = target_,
                 .patrolOrigin = patrolOrigin_,
                 .returningToPatrolOrigin = returningToPatrolOrigin_,
-                .scriptState = scriptState_};
+                .scriptState = scriptState_,
+                .transportAnchor = transportAnchor_,
+                .transportPhase = transportPhase_};
     }
 
     [[nodiscard]] const SharedCommand& payload() const noexcept { return *payload_; }
@@ -190,6 +203,19 @@ public:
         returningToPatrolOrigin_ = false;
     }
 
+    [[nodiscard]] const std::optional<std::array<Fx, 2>>& transportAnchor() const noexcept {
+        return transportAnchor_;
+    }
+    [[nodiscard]] TransportPhase transportPhase() const noexcept { return transportPhase_; }
+    void setTransportPhase(TransportPhase phase) noexcept { transportPhase_ = phase; }
+    /// Arms the ferry's standing route: the point the order started at is the
+    /// beacon it keeps returning to. Idempotent once set — a ferry's beacon does
+    /// not follow the carrier.
+    void beginFerry(std::array<Fx, 2> beacon) noexcept {
+        transportAnchor_ = beacon;
+        transportPhase_ = TransportPhase::ToBeacon;
+    }
+
 private:
     UnitId unit_{};
     Fx targetX_{};
@@ -199,6 +225,8 @@ private:
     std::optional<std::array<Fx, 2>> patrolOrigin_;
     bool returningToPatrolOrigin_ = false;
     ScriptTaskState scriptState_;
+    std::optional<std::array<Fx, 2>> transportAnchor_;
+    TransportPhase transportPhase_ = TransportPhase::None;
 };
 
 /// A unit's order list.

@@ -1165,11 +1165,50 @@ void stageTrial(UnitScene& scene, const rm::HeightField& field,
     const std::string trialPath =
         "/units/" + std::string{unitId} + "/" + std::string{unitId} + "_unit.bp";
     std::size_t stood = 0;
+    std::optional<rm::sim::UnitId> firstTrial;
     for (std::size_t i = 0; i < count; ++i) {
-        if (spawnUnit(scene, content, field, trialPath,
-                      {middleX + static_cast<float>(i) * 25.0f, 0.0f, middleZ}, home,
-                      faceAway)) {
+        if (const auto id = spawnUnit(scene, content, field, trialPath,
+                                      {middleX + static_cast<float>(i) * 25.0f, 0.0f, middleZ},
+                                      home, faceAway)) {
+            if (!firstTrial) firstTrial = *id;
             ++stood;
+        }
+    }
+    // A TRANSPORT TRIAL STAGES ITS CARGO TOO: a line of same-army engineers beside the
+    // carriers, each issued the real LoadTransport order, so a headless capture shows
+    // boarding instead of parked hardware. The order goes through submitCommand like a
+    // click would — the command log records it and a replay re-runs the lift.
+    if (firstTrial && scene.store.alive(*firstTrial)) {
+        const rm::unitdef::UnitDef* trialDef =
+            scene.catalog.def(scene.store.typeAt(firstTrial->index));
+        if (trialDef != nullptr && trialDef->isTransport()) {
+            const std::string homeCommander = rm::sim::commanderBlueprintId(home.faction);
+            const std::string homePrefix =
+                homeCommander.size() >= 3 ? homeCommander.substr(0, 3) : "UEL";
+            const std::string cargoPath =
+                "/units/" + homePrefix + "0105/" + homePrefix + "0105_unit.bp";
+            const rm::sim::Transform& carrierAt =
+                scene.store.transforms()[firstTrial->index];
+            const rm::PlayerIndex player = playerDriving(scene, home.index);
+            std::size_t boarded = 0;
+            for (std::size_t i = 0; i < 4; ++i) {
+                const auto cargo = spawnUnit(scene, content, field, cargoPath,
+                    {middleX + 25.0f + static_cast<float>(i) * 8.0f, 0.0f,
+                     middleZ - 40.0f},
+                    home, faceAway);
+                if (!cargo) continue;
+                boarded += submitCommand(scene, rm::sim::CommandIssue{
+                    .phase = rm::sim::CommandPhase::PreTick,
+                    .source = static_cast<rm::CommandSource>(player),
+                    .player = player,
+                    .kind = rm::sim::CommandKind::LoadTransport,
+                    .units = {*cargo},
+                    .targetX = carrierAt.x,
+                    .targetZ = carrierAt.z,
+                    .target = *firstTrial,
+                }).has_value() ? 1 : 0;
+            }
+            std::printf("trial cargo: %zu engineer(s) ordered aboard\n", boarded);
         }
     }
     // The foe prefix from its commander's id: UEL0001 fields UEL scouts.

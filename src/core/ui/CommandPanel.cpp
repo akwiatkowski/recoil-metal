@@ -112,6 +112,9 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         case sim::CommandKind::MissileLaunch:  // fills Reclaim's dead cell on a silo, below
         case sim::CommandKind::CycleBuildPriority:  // the B key and the production panel's cell
         case sim::CommandKind::CycleRetreatThreshold:  // the V key
+        case sim::CommandKind::LoadTransport:   // issued by right-clicking a carrier, below
+        case sim::CommandKind::UnloadTransport: // the U key
+        case sim::CommandKind::Ferry:          // the Y key
             break;  // None has a command-rack descriptor.
         }
     }

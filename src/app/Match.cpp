@@ -216,6 +216,19 @@ bool issueGuard(UnitScene& scene, std::span<const rm::sim::UnitId> units,
     }).has_value();
 }
 
+bool issueLoadTransport(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                        rm::PlayerIndex player, rm::TickIndex tick, rm::sim::UnitId target,
+                        bool queued) {
+    if (!scene.store.alive(target)) return false;
+    const auto& at = scene.store.transforms()[target.index];
+    return submitCommand(scene, rm::sim::CommandIssue{
+        .tick = tick, .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player), .player = player,
+        .kind = rm::sim::CommandKind::LoadTransport, .queued = queued,
+        .units = {units.begin(), units.end()}, .targetX = at.x, .targetZ = at.z, .target = target,
+    }).has_value();
+}
+
 [[nodiscard]] bool cycleBuildPriority(UnitScene& scene,
                                       std::span<const rm::sim::UnitId> units,
                                       rm::PlayerIndex player, rm::TickIndex tick) {

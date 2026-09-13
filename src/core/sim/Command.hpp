@@ -157,6 +157,22 @@ enum class CommandKind : std::uint8_t {
     /// authoritative-but-unqueued shape as `ToggleProduction`: the setting itself
     /// is sim state, and `updateRetreats` is the pass that acts on it.
     CycleRetreatThreshold = 20,
+    /// Board the carrier `target` names: walk to it, and while the order is at
+    /// the head the carrier — idle — flies to the unit and comes down to take it
+    /// aboard. The order retires when the unit attaches; a carrier that can
+    /// never fit the class drops it outright, while a full one leaves it waiting
+    /// (`core/sim/Transport.hpp`).
+    LoadTransport = 21,
+    /// Carry the cargo to `targetX`/`targetZ`, come down, and set it on the
+    /// ground there. The transport-side counterpart of LoadTransport: it retires
+    /// when the last child steps off, so a carrier still airborne counts as
+    /// mid-order until touchdown.
+    UnloadTransport = 22,
+    /// A standing route: hold at the position where the order started — the
+    /// beacon — and carry whatever is ordered to the beacon to `targetX`/`targetZ`,
+    /// returning for the next load until the queue is cleared. Never completes on
+    /// its own; the loop is the point.
+    Ferry = 23,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {

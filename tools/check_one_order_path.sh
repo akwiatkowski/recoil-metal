@@ -34,9 +34,10 @@ root=${1:-.}
 # sends it along a route. Both write `MoveState` directly.
 pattern='orderTo\(|orderAlongPath\(|building\.push_back\(|building->push_back\('
 
-# Where they are allowed to be called from: their own definitions, and the one function that is
-# the path.
-allowed='src/core/sim/Movement.cpp|src/core/sim/Movement.hpp|src/core/sim/Command.cpp'
+# Where they are allowed to be called from: their own definitions, the one function that is
+# the path, and `Transport.cpp` — which never admits an order but EXECUTES the legs of an
+# admitted LoadTransport/UnloadTransport/Ferry, the same role Command.cpp's chase plays.
+allowed='src/core/sim/Movement.cpp|src/core/sim/Movement.hpp|src/core/sim/Command.cpp|src/core/sim/Transport.cpp'
 
 hits=$(grep -rnE "$pattern" "$root/src" 2>/dev/null \
     | grep -vE "$allowed" \

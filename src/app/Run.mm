@@ -1251,6 +1251,17 @@ int runWindowed(const Session& session) {
             } else if (event.key == rm::Key::P) {
                 armedCommand = rm::sim::CommandKind::Patrol;
                 std::printf("patrol armed: right-click a destination\n");
+            } else if (event.key == rm::Key::U && !event.repeat) {
+                // UNLOAD — armed like patrol: the next right-click is where the
+                // selected transports set their cargo down.
+                armedCommand = rm::sim::CommandKind::UnloadTransport;
+                std::printf("unload armed: right-click where the cargo lands\n");
+            } else if (event.key == rm::Key::Y && !event.repeat) {
+                // FERRY — armed like patrol: the next right-click is the drop
+                // point; each selected transport starts a standing route back
+                // to where it is standing now.
+                armedCommand = rm::sim::CommandKind::Ferry;
+                std::printf("ferry armed: right-click the drop point — the beacon is where the transport stands\n");
             } else if (event.key == rm::Key::E) {
                 // AUTO MEX standing order on the selected field engineers — the rack cell
                 // without the click. Silent unless something was eligible to toggle.
@@ -1778,7 +1789,9 @@ int runWindowed(const Session& session) {
             if (rm::ui::insideMinimap(minimap, hudPoint[0], hudPoint[1])) {
                 if (armedCommand && *armedCommand != rm::sim::CommandKind::Move
                     && *armedCommand != rm::sim::CommandKind::AttackMove
-                    && *armedCommand != rm::sim::CommandKind::Patrol) {
+                    && *armedCommand != rm::sim::CommandKind::Patrol
+                    && *armedCommand != rm::sim::CommandKind::UnloadTransport
+                    && *armedCommand != rm::sim::CommandKind::Ferry) {
                     rm::log::write(rm::log::Level::Info, "orders",
                                    "targeted command needs a world unit, not the minimap");
                     return;
@@ -2308,6 +2321,46 @@ int runWindowed(const Session& session) {
                 }
                 return;
             }
+            // A RIGHT-CLICK ON YOUR OWN TRANSPORT IS "GET IN": the transportable members
+            // of the selection walk over and sling aboard (`core/sim/Transport.cpp`) and
+            // an airborne carrier lands to take them. Everyone else — other transports,
+            // units too big for the class table — gets an ordinary move to it. This beats
+            // repair: engineers are cargo class 1, so a builder clicking a transport boards
+            // it, and repair stays a click away on the rack.
+            if (!isAttack && !armedCommand && allyHit
+                && units.playerArmy != rm::sim::kNoArmy
+                && units.armyOf(allyHit->index) == units.playerArmy) {
+                const rm::unitdef::UnitDef* targetDef =
+                    units.catalog.def(units.store.typeAt(allyHit->index));
+                if (targetDef != nullptr && targetDef->isTransport()) {
+                    std::vector<rm::sim::UnitId> boarders;
+                    std::vector<rm::sim::UnitId> movers;
+                    for (const rm::sim::UnitId sel : selected) {
+                        if (!units.store.alive(sel) || sel == *allyHit) {
+                            continue;
+                        }
+                        const rm::unitdef::UnitDef* def =
+                            units.catalog.def(units.store.typeAt(sel.index));
+                        (def != nullptr && def->transportable() ? boarders : movers)
+                            .push_back(sel);
+                    }
+                    const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                    const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                    const rm::sim::Transform& at = units.store.transforms()[allyHit->index];
+                    const bool boarding = boarders.empty()
+                        || issueLoadTransport(units, boarders, player, tick, *allyHit,
+                                              mods.shift);
+                    (void)(movers.empty()
+                               || issueMove(units, movers, player, tick, at.x, at.z,
+                                            mods.shift));
+                    if (boarding && !boarders.empty()) {
+                        std::printf("load: %zu unit(s) boarding %s\n", boarders.size(),
+                                    targetDef->name.c_str());
+                    }
+                    return;
+                }
+            }
+
             const bool explicitRepair = armedCommand == rm::sim::CommandKind::Repair;
             if (!isAttack && (!armedCommand || explicitRepair) && allyHit
                 && units.playerArmy != rm::sim::kNoArmy

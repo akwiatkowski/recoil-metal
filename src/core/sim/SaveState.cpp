@@ -67,6 +67,11 @@ constexpr std::uint32_t kVersion27 = 27;
 /// the unit is retreated and the two points that state owes. Older saves decode
 /// with everything Off and nobody mid-flight — the pre-V28 answer to both.
 constexpr std::uint32_t kVersion28 = 28;
+/// V29 admits the transport command kinds (LoadTransport, UnloadTransport,
+/// Ferry) and adds each queue entry's ferry anchor and transport phase — the
+/// execution state a mid-route carrier owes the loop. Older saves decode with
+/// no anchor and phase None, which is the state every non-transport entry holds.
+constexpr std::uint32_t kVersion29 = 29;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -336,7 +341,7 @@ void writeSharedCommand(PayloadWriter& w, const SharedCommand& command,
 [[nodiscard]] bool readSharedCommand(PayloadReader& r, SharedCommand& command,
                                      bool includesScriptTasks, bool includesGuard,
                                      bool includesReclaimUnit, bool includesCapture,
-                                     bool includesMissileLaunch) {
+                                     bool includesMissileLaunch, bool includesTransport) {
     std::uint8_t source{}, kind{}, queued{};
     std::uint32_t player{};
     std::size_t units{};
@@ -344,8 +349,10 @@ void writeSharedCommand(PayloadWriter& w, const SharedCommand& command,
     // CancelFactoryBuild and Dive never enter a queue, so the highest SAVED kind of
     // the guard era is Guard; version 17 admits ReclaimUnit above it, version 20
     // admits Capture above that, and version 26 admits MissileLaunch — its writers
-    // could produce the kind before any reader would.
-    const CommandKind highestKind = includesMissileLaunch ? CommandKind::MissileLaunch
+    // could produce the kind before any reader would. Version 29 admits the three
+    // transport kinds, Ferry highest.
+    const CommandKind highestKind = includesTransport   ? CommandKind::Ferry
+                                    : includesMissileLaunch ? CommandKind::MissileLaunch
                                     : includesCapture    ? CommandKind::Capture
                                     : includesReclaimUnit ? CommandKind::ReclaimUnit
                                     : includesGuard       ? CommandKind::Guard
@@ -389,7 +396,7 @@ void writeSharedCommand(PayloadWriter& w, const SharedCommand& command,
 }
 
 void writeCommandState(PayloadWriter& w, const UnitStore::Snapshot& s,
-                       bool includesScriptTasks) {
+                       bool includesScriptTasks, bool includesTransport) {
     w.u32(s.nextCommandSerial);
     for (const std::uint32_t counter : s.nextCommandCounters) w.u32(counter);
     w.count(s.sharedCommands.size());
@@ -414,6 +421,14 @@ void writeCommandState(PayloadWriter& w, const UnitStore::Snapshot& s,
                 w.i32((*execution.patrolOrigin)[1].raw());
             }
             w.u8(execution.returningToPatrolOrigin);
+            if (includesTransport) {
+                w.u8(execution.transportAnchor.has_value());
+                if (execution.transportAnchor) {
+                    w.i32((*execution.transportAnchor)[0].raw());
+                    w.i32((*execution.transportAnchor)[1].raw());
+                }
+                w.u8(static_cast<std::uint8_t>(execution.transportPhase));
+            }
             if (includesScriptTasks) {
                 if (execution.scriptState.opaque.size() > kMaxScriptTaskDataBytes) {
                     throw std::length_error("script task state exceeds the v12 save-state limit");
@@ -951,7 +966,7 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool co
 [[nodiscard]] bool readCommandState(PayloadReader& r, UnitStore::Snapshot& s,
                                     bool includesScriptTasks, bool includesGuard,
                                     bool includesReclaimUnit, bool includesCapture,
-                                    bool includesMissileLaunch) {
+                                    bool includesMissileLaunch, bool includesTransport) {
     if (!r.u32(s.nextCommandSerial)) return false;
     for (std::uint32_t& counter : s.nextCommandCounters) if (!r.u32(counter)) return false;
     std::size_t count{};
@@ -959,7 +974,8 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool co
     s.sharedCommands.resize(count);
     for (SharedCommand& command : s.sharedCommands) {
         if (!readSharedCommand(r, command, includesScriptTasks, includesGuard,
-                               includesReclaimUnit, includesCapture, includesMissileLaunch)) {
+                               includesReclaimUnit, includesCapture, includesMissileLaunch,
+                               includesTransport)) {
             return false;
         }
     }
@@ -994,6 +1010,21 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool co
             }
             if (!r.u8(returning) || returning > 1) return false;
             entry.execution.returningToPatrolOrigin = returning;
+            if (includesTransport) {
+                std::uint8_t hasAnchor{}, phase{};
+                if (!r.u8(hasAnchor) || hasAnchor > 1) return false;
+                if (hasAnchor) {
+                    std::int32_t anchorX{}, anchorZ{};
+                    if (!r.i32(anchorX) || !r.i32(anchorZ)) return false;
+                    entry.execution.transportAnchor =
+                        {Fx::fromRaw(anchorX), Fx::fromRaw(anchorZ)};
+                }
+                if (!r.u8(phase)
+                    || phase > static_cast<std::uint8_t>(TransportPhase::ToDrop)) {
+                    return false;
+                }
+                entry.execution.transportPhase = static_cast<TransportPhase>(phase);
+            }
             if (includesScriptTasks) {
                 std::uint8_t created{}, suspended{};
                 if (!r.u8(created) || created > 1 || !r.u8(suspended) || suspended > 1
@@ -1016,7 +1047,8 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
                    bool includesAutomaticTargets, bool includesAttachmentHeights,
                    bool includesAttachedMotion, bool includesCommands,
                    bool includesScriptTasks, bool includesProductionPaused,
-                   bool includesBuildPriority, bool includesRetreat) {
+                   bool includesBuildPriority, bool includesRetreat,
+                   bool includesTransport) {
     w.count(s.ids.generations.size()); for (Generation v : s.ids.generations) w.u32(v);
     w.count(s.ids.free.size()); for (UnitIndex v : s.ids.free) w.u32(v);
     w.u64(s.ids.live);
@@ -1034,7 +1066,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     if (includesProductionPaused) { w.count(s.productionPaused.size()); for (bool v : s.productionPaused) w.u8(v); }
     if (includesBuildPriority) { w.count(s.buildPriority.size()); for (BuildPriority v : s.buildPriority) w.u8(static_cast<std::uint8_t>(v)); }
     if (includesRetreat) { w.count(s.retreatThreshold.size()); for (RetreatThreshold v : s.retreatThreshold) w.u8(static_cast<std::uint8_t>(v)); w.count(s.retreats.size()); for (const RetreatState& v : s.retreats) { w.u8(v.active); w.i32(v.returnX.raw()); w.i32(v.returnZ.raw()); w.i32(v.toX.raw()); w.i32(v.toZ.raw()); } }
-    if (includesCommands) writeCommandState(w, s, includesScriptTasks);
+    if (includesCommands) writeCommandState(w, s, includesScriptTasks, includesTransport);
 }
 
 [[nodiscard]] bool readUnits(PayloadReader& r, UnitStore::Snapshot& s, bool includesPathPhase,
@@ -1044,7 +1076,8 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
                                  bool includesCommands, bool includesScriptTasks, bool includesGuard,
                                  bool includesReclaimUnit, bool includesCapture,
                                  bool includesProductionPaused, bool includesMissileLaunch,
-                                 bool includesBuildPriority, bool includesRetreat) {
+                                 bool includesBuildPriority, bool includesRetreat,
+                                 bool includesTransport) {
     std::size_t n{};
     if (!r.count(n, 4)) return false; s.ids.generations.resize(n); for (auto& v : s.ids.generations) if (!r.u32(v)) return false;
     if (!r.count(n, 4)) return false; s.ids.free.resize(n); for (auto& v : s.ids.free) if (!r.u32(v)) return false;
@@ -1153,7 +1186,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     }
     if (includesCommands
         && (!readCommandState(r, s, includesScriptTasks, includesGuard, includesReclaimUnit,
-                              includesCapture, includesMissileLaunch)
+                              includesCapture, includesMissileLaunch, includesTransport)
             || s.orders.size() != slots)) {
         return false;
     }
@@ -1239,7 +1272,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                    version >= kVersion4, version >= kVersion5, version >= kVersion6,
                     version >= kVersion7, version >= kVersion7, version >= kVersion8,
                     version >= kVersion12, version >= kVersion26, version >= kVersion27,
-                    version >= kVersion28);
+                    version >= kVersion28, version >= kVersion29);
     if (version >= kVersion9) writeSiloAmmo(payloadWriter, state.siloAmmo);
     if (version >= kVersion10) writeRedirects(payloadWriter, state.redirects);
     if (version >= kVersion11) {
@@ -1303,7 +1336,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion19 && version != kVersion20 && version != kVersion21
                && version != kVersion22 && version != kVersion23 && version != kVersion24
                && version != kVersion25 && version != kVersion26
-               && version != kVersion27 && version != kVersion28)
+               && version != kVersion27 && version != kVersion28
+               && version != kVersion29)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -1336,7 +1370,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        version >= kVersion12, version >= kVersion14,
                        version >= kVersion17, version >= kVersion20,
                        version >= kVersion26, version >= kVersion26,
-                       version >= kVersion27, version >= kVersion28)) return std::nullopt;
+                       version >= kVersion27, version >= kVersion28,
+                       version >= kVersion29)) return std::nullopt;
     std::vector<SiloAmmo> siloAmmo;
     if (version >= kVersion9 && !readSiloAmmo(reader, siloAmmo)) return std::nullopt;
     std::vector<MissileRedirect> redirects;
@@ -1391,7 +1426,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion28);
+    return rm::sim::encode(state, kVersion29);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

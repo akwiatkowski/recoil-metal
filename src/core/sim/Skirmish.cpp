@@ -4,6 +4,7 @@
 #include "core/sim/Assist.hpp"
 #include "core/sim/Reclaim.hpp"
 #include "core/sim/Retreat.hpp"
+#include "core/sim/Transport.hpp"
 #include "core/sim/Veterancy.hpp"
 
 namespace rm::sim {
@@ -450,6 +451,12 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                           match.playableRect ? &*match.playableRect
                                                              : nullptr,
                                           match.scriptTasks, &guardWork, &match.random, tickIndex);
+
+    // 0b. TRANSPORTS. Between dispatch and movement so a route issued here —
+    //     a carrier coming to its cargo, a ferry turning for the drop — moves
+    //     this tick like any other order's. Attach/detach land here too: the
+    //     propagation pass below publishes the new hierarchy the same tick.
+    updateTransports(store, catalog, terrain, match.passability);
 
     // 1. MOVEMENT, then collisions. Everything downstream reads where a unit has got to
     //    this tick rather than where it started it.

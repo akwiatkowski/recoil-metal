@@ -702,6 +702,74 @@ struct UnitDef {
     sim::Fx antiMissileRadiusElmos{};
     float antiMissileRatePerSecond = 0.0f;
 
+    /// The blueprint's `Transport` block — the keys the sim reads.
+    ///
+    /// `TransportClass` is bidirectional in the corpus (`14-blueprint-census.md
+    /// §8.4`): on a carrier — one of the ten `TRANSPORTATION` units — it is the
+    /// capacity in class-1 attach slots (UEA0107 declares 10), while on cargo it
+    /// is the size class the unit occupies (a Titan declares 3, and mobile units
+    /// that state nothing are class 1). `ClassNAttachSize` is the slot cost a
+    /// class-N cargo pays on this carrier; a zero cost means that class cannot
+    /// ride it at all. `ClassGenericUpTo` is the second schema — the one-unit
+    /// carriers (gunships like UEA0203) carry anything up to that class at a
+    /// cost of N slots per class-N unit.
+    struct TransportSpec {
+        int transportClass = 0;
+        int class2AttachSize = 0;
+        int class3AttachSize = 0;
+        int class4AttachSize = 0;
+        int classGenericUpTo = 0;
+        /// `AirClass` — the carrier flies, so loading means coming down to the deck.
+        bool airClass = false;
+        /// `CanFireFromTransport` — parsed; firing while attached is outside the
+        /// current sim slice.
+        bool canFireFromTransport = false;
+    };
+    TransportSpec transport;
+
+    /// A `TRANSPORTATION` carrier with a stated capacity. The ten shipped ones
+    /// are all air transports; nothing else declares a positive class here.
+    [[nodiscard]] bool isTransport() const noexcept {
+        return hasCategory("TRANSPORTATION") && transport.transportClass > 0;
+    }
+
+    /// Attach slots the carrier offers — the `TransportClass` on a carrier.
+    [[nodiscard]] int transportCapacity() const noexcept {
+        return isTransport() ? transport.transportClass : 0;
+    }
+
+    /// The attach slots a class-N cargo consumes on this carrier, or zero when
+    /// that class cannot ride it at all.
+    [[nodiscard]] int transportAttachCost(int cargoClass) const noexcept {
+        if (!isTransport() || cargoClass < 1) {
+            return 0;
+        }
+        if (transport.classGenericUpTo > 0) {
+            return cargoClass <= transport.classGenericUpTo ? cargoClass : 0;
+        }
+        switch (cargoClass) {
+        case 1: return 1;
+        case 2: return transport.class2AttachSize;
+        case 3: return transport.class3AttachSize;
+        default: return transport.class4AttachSize;
+        }
+    }
+
+    /// The size class this unit occupies as cargo — its own `TransportClass`,
+    /// defaulting to 1 like every mobile unit that states none (UEL0103 ships
+    /// no `Transport` block at all and is carried as a T1 unit).
+    [[nodiscard]] int transportCargoClass() const noexcept {
+        return transport.transportClass > 0 ? transport.transportClass : 1;
+    }
+
+    /// Whether a transport may pick this unit up: mobile, not itself a carrier,
+    /// and declaring the `RULEUCC_CallTransport` command cap — the authored flag
+    /// every transportable unit carries (137 of them) and ships and buildings do
+    /// not.
+    [[nodiscard]] bool transportable() const noexcept {
+        return isMobile() && !isTransport() && hasCommandCap("RULEUCC_CallTransport");
+    }
+
     /// Whether this unit flies.
     ///
     /// Worth carrying because an aircraft is not a ground unit with wings: BAR's

@@ -367,19 +367,14 @@ void UnitStore::kill(UnitId id) {
     retreats_[id.index] = {};
     doNotTarget_[id.index] = false;
     (void)detach(id);
-    for (const UnitId child : children_[id.index]) {
-        if (child.index < parents_.size() && parents_[child.index] == id) {
-            parents_[child.index].reset();
-            attachmentOffsets_[child.index] = {};
-            attachmentHeights_[child.index] = {};
-            attachmentParentBones_[child.index] = kNoBone;
-            attachmentSelfBones_[child.index] = kNoBone;
-            attachmentParentRest_[child.index] = {};
-            attachmentParentRestHeights_[child.index] = {};
-            attachmentSelfRest_[child.index] = {};
-            attachmentSelfRestHeights_[child.index] = {};
-            motion_[child.index].attached = false;
-        }
+    // Cargo dies with its carrier: retail disperses veterancy for the attached
+    // units at their remaining health when a loaded transport is destroyed
+    // (`TransportUnitComponent.lua:127,138`, via `engine-analysis/11-fa-sim-layer.md`)
+    // — they never get to detach. The list is copied because each recursive kill
+    // detaches its child, which erases from `children_[id.index]` under iteration.
+    const std::vector<UnitId> cargo = children_[id.index];
+    for (const UnitId child : cargo) {
+        kill(child);
     }
     children_[id.index].clear();
     ids_.release(id);

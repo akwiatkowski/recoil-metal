@@ -301,6 +301,13 @@ inline constexpr float kSpreadMoveFactor = 3.0f;
                                rm::PlayerIndex player, rm::TickIndex tick,
                                rm::sim::UnitId target, bool queued = false);
 
+/// Boards a carrier: each unit walks to `target` and slings aboard when it has
+/// room. Refused for units the class table cannot take, exactly as the sim
+/// refuses them; the carrier itself lands at the pickup.
+[[nodiscard]] bool issueLoadTransport(UnitScene& scene, std::span<const rm::sim::UnitId> units,
+                                       rm::PlayerIndex player, rm::TickIndex tick,
+                                       rm::sim::UnitId target, bool queued = false);
+
 /// Cancel a particular production entry; dispatch rechecks factory ownership and entry identity.
 [[nodiscard]] bool issueCancelFactoryBuild(UnitScene& scene, rm::sim::UnitId factory,
     rm::PlayerIndex player, rm::TickIndex tick, rm::CommandId commandId);

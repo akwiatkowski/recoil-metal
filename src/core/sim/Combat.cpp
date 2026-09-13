@@ -864,7 +864,8 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
         return false;
     }
     const std::span<const MoveState> motion = store.motion();
-    if (target.index >= motion.size() || !weapon.canTarget(motion[target.index].airborne,
+    if (target.index >= motion.size() || motion[target.index].attached
+        || !weapon.canTarget(motion[target.index].airborne,
             motion[target.index].submersible && motion[target.index].submerged, sourceSubmerged)) {
         return false;
     }
@@ -1022,8 +1023,11 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
         if (store.doNotTarget(store.idAt(slot))) {
             return std::nullopt;
         }
-        if (slot >= motion.size() || !weapon.canTarget(motion[slot].airborne,
+        if (slot >= motion.size() || motion[slot].attached
+            || !weapon.canTarget(motion[slot].airborne,
                 motion[slot].submersible && motion[slot].submerged, sourceSubmerged)) {
+            // An attached unit rides its carrier's hull — guns shoot the transport,
+            // not the cargo racked under it (retail's transport invulnerability).
             return std::nullopt;
         }
         const unitdef::UnitDef* def = catalog != nullptr ? catalog->def(store.typeAt(slot))
@@ -1440,6 +1444,9 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
         if (motion[slot].moving) {
             continue;  // an order is already deciding where this one points
         }
+        if (motion[slot].attached) {
+            continue;  // cargo aims nothing — it rides the rack
+        }
         if (motion[slot].radiusElmos <= Fx{}) {
             continue;  // retired
         }
@@ -1567,6 +1574,9 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
     for (UnitIndex slot = 0; slot < transforms.size(); ++slot) {
         if (slot >= healths.size() || !healths[slot].alive()) {
             continue;  // the dead do not shoot
+        }
+        if (slot < motions.size() && motions[slot].attached) {
+            continue;  // cargo does not fight from the rack
         }
 
         const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));

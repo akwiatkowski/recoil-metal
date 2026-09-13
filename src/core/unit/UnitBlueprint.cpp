@@ -635,6 +635,30 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.weapons = unitdef::weaponsFrom(*weapons, def.motion == unitdef::MotionType::Air);
     }
 
+    // --- transport ---------------------------------------------------------
+    //
+    // The `Transport` block. On a carrier (`TRANSPORTATION`) `TransportClass` is
+    // the attach-slot capacity; on cargo it is the size class it occupies. The
+    // cost table is `ClassNAttachSize` per cargo class, or `ClassGenericUpTo`
+    // for the one-unit carriers (UEA0203) that take anything small enough.
+    if (const lua::Value* transport = parsed->path("Transport")) {
+        const auto integer = [transport](std::string_view key) {
+            const std::optional<double> value = transport->numberAt(key);
+            return value ? static_cast<int>(*value) : 0;
+        };
+        def.transport.transportClass = integer("TransportClass");
+        def.transport.class2AttachSize = integer("Class2AttachSize");
+        def.transport.class3AttachSize = integer("Class3AttachSize");
+        def.transport.class4AttachSize = integer("Class4AttachSize");
+        def.transport.classGenericUpTo = integer("ClassGenericUpTo");
+        const auto flag = [transport](std::string_view key) {
+            const lua::Value* value = transport->find(key);
+            return value != nullptr && value->asBoolean().value_or(false);
+        };
+        def.transport.airClass = flag("AirClass");
+        def.transport.canFireFromTransport = flag("CanFireFromTransport");
+    }
+
     // --- veterancy ---------------------------------------------------------
     //
     // A TOP-LEVEL section, not part of `Defense`, and stated by 193 of the 568 shipped units.
