@@ -289,6 +289,13 @@ inline constexpr float kSpreadMoveFactor = 3.0f;
                                          std::span<const rm::sim::UnitId> units,
                                          rm::PlayerIndex player, rm::TickIndex tick);
 
+/// Cycle the target focus (Default → Snipe → AirOnly → EconomyOnly) on the armed
+/// units in `units`; anything without an acquiring weapon is refused by intake.
+/// Authoritative and immediate — never queued.
+[[nodiscard]] bool cycleTargetFocus(UnitScene& scene,
+                                    std::span<const rm::sim::UnitId> units,
+                                    rm::PlayerIndex player, rm::TickIndex tick);
+
 /// The guard order: a field builder lends BuildRate to the target's work; an immobile factory
 /// mirrors compatible factory production. Refused unless both units are distinct compatible
 /// builders in the same army, exactly as the sim refuses it.

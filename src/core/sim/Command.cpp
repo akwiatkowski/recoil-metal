@@ -391,6 +391,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "cycle-build-priority";
     case CommandKind::CycleRetreatThreshold:
         return "cycle-retreat-threshold";
+    case CommandKind::CycleTargetFocus:
+        return "cycle-target-focus";
     case CommandKind::Repair:
         return "repair";
     case CommandKind::Script:
@@ -458,6 +460,9 @@ namespace {
     }
     if (name == "cycle-retreat-threshold") {
         return CommandKind::CycleRetreatThreshold;
+    }
+    if (name == "cycle-target-focus") {
+        return CommandKind::CycleTargetFocus;
     }
     if (name == "cancel-factory-build") return CommandKind::CancelFactoryBuild;
     if (name == "repair") {
@@ -678,7 +683,7 @@ namespace {
         const auto incumbent = w < cache.size() ? std::optional{cache[w]} : std::nullopt;
         const auto found = nearestTarget(positionOf(at), store.motion()[slot].armyIndex, ranged,
             store, armies, intel, &catalog, at.heading, incumbent, playableRect,
-            {}, std::nullopt, tick, rate);
+            {}, std::nullopt, tick, rate, store.targetFocuses()[slot]);
         if (!found) continue;
         const Fx distance = groundDistanceElmos(positionOf(at),
             positionOf(store.transforms()[found->index]));
@@ -1403,6 +1408,31 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             }
             (void)store.setRetreatThreshold(
                 unit, nextRetreatThreshold(store.retreatThreshold(unit)));
+            result.accepted.push_back(unit);
+        }
+        return result;
+    }
+    if (issue.kind == CommandKind::CycleTargetFocus) {
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit)) {
+                continue;
+            }
+            const Player* player = playerFor(issue.player, players);
+            const unitdef::UnitDef* definition = catalog.def(store.typeAt(unit.index));
+            // Armed only: a focus on a unit with no acquiring weapon is a flag
+            // nothing can read — `nearestTarget` early-outs on exactly this
+            // weapon shape, so the gate asks the same question it does.
+            const bool canAcquire = definition != nullptr
+                && std::ranges::any_of(definition->weapons, [](const unitdef::Weapon& w) {
+                       return w.fires() && !w.manuallyFired() && !w.targetsProjectiles
+                              && !w.targetPriorities.empty();
+                   });
+            if (player == nullptr || !authorised(*player, store, unit, armies)
+                || !canAcquire) {
+                continue;
+            }
+            (void)store.setTargetFocus(
+                unit, nextTargetFocus(store.targetFocus(unit)));
             result.accepted.push_back(unit);
         }
         return result;
@@ -2826,7 +2856,7 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                 const std::optional<UnitId> candidate =
                     nearestTarget(from, owner, weapon, store, armies, intel, &catalog,
                                    store.transforms()[slot].heading, std::nullopt, playableRect,
-                                   {}, std::nullopt, tick, rate);
+                                   {}, std::nullopt, tick, rate, store.targetFocuses()[slot]);
                 if (!candidate) {
                     continue;
                 }
@@ -3291,6 +3321,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     case CommandKind::ToggleProduction:
     case CommandKind::CycleBuildPriority:
     case CommandKind::CycleRetreatThreshold:
+    case CommandKind::CycleTargetFocus:
     case CommandKind::CancelFactoryBuild:
         return false;  // applied immediately by semantic issue intake; it never enters a queue
     case CommandKind::Script:

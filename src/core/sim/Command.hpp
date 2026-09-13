@@ -173,6 +173,11 @@ enum class CommandKind : std::uint8_t {
     /// returning for the next load until the queue is cleared. Never completes on
     /// its own; the loop is the point.
     Ferry = 23,
+    /// Cycle an armed unit's target focus Default → Snipe → AirOnly →
+    /// EconomyOnly. Same authoritative-but-unqueued shape as
+    /// `CycleRetreatThreshold`: the setting itself is sim state, and
+    /// `nearestTarget` is the pass that reads it.
+    CycleTargetFocus = 24,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {

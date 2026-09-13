@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Types.hpp"
 #include "core/text/TextLayout.hpp"
 #include "core/ui/Hud.hpp"
 
@@ -93,6 +94,13 @@ struct RosterTile {
     /// Stockpiled missiles summed over the group: stored, capacity. Set only when the
     /// type carries a silo (`SiloAmmo` is match-owned, so this is gathered, not read).
     std::optional<std::pair<int, int>> siloStock;
+
+    /// The group's shared target focus (#15809), when every unit of the type
+    /// agrees on a non-Default one — the card stays silent while the group is
+    /// unfocused, the same way the underbar is silent at full health. `focusMixed`
+    /// marks a group that disagrees, which is its own fact worth showing.
+    std::optional<TargetFocus> focus;
+    bool focusMixed = false;
 
     /// 0..1 of maximum, clamped. A group with no stated maximum reads as FULL rather than
     /// empty: an indestructible or unread type is not a group in trouble, and an empty bar

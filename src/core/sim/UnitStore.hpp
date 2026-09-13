@@ -91,6 +91,7 @@ public:
         std::vector<bool> productionPaused;
         std::vector<BuildPriority> buildPriority;
         std::vector<RetreatThreshold> retreatThreshold;
+        std::vector<TargetFocus> targetFocus;
         std::vector<RetreatState> retreats;
         std::vector<bool> doNotTarget;
         std::vector<std::optional<UnitId>> parents;
@@ -277,6 +278,14 @@ public:
     [[nodiscard]] std::span<const RetreatThreshold> retreatThresholds() const noexcept {
         return retreatThresholds_;
     }
+    /// The per-unit target filter (#15809): narrows or re-orders what
+    /// `nearestTarget` acquires, inside the weapon's authored priorities.
+    /// `targetFocuses` exposes the slot-indexed span the combat pass consumes.
+    [[nodiscard]] bool setTargetFocus(UnitId unit, TargetFocus focus) noexcept;
+    [[nodiscard]] TargetFocus targetFocus(UnitId unit) const noexcept;
+    [[nodiscard]] std::span<const TargetFocus> targetFocuses() const noexcept {
+        return targetFocus_;
+    }
     /// The live bookkeeping — mutable because the retreat automation pass writes it.
     [[nodiscard]] std::span<RetreatState> retreats() noexcept { return retreats_; }
     [[nodiscard]] std::span<const RetreatState> retreats() const noexcept { return retreats_; }
@@ -348,6 +357,7 @@ private:
     std::vector<bool> productionPaused_;
     std::vector<BuildPriority> buildPriority_;
     std::vector<RetreatThreshold> retreatThresholds_;
+    std::vector<TargetFocus> targetFocus_;
     std::vector<RetreatState> retreats_;
     std::vector<bool> doNotTarget_;
     std::vector<CommandQueue> orders_;

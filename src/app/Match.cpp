@@ -259,6 +259,22 @@ bool issueLoadTransport(UnitScene& scene, std::span<const rm::sim::UnitId> units
     }).has_value();
 }
 
+[[nodiscard]] bool cycleTargetFocus(UnitScene& scene,
+                                    std::span<const rm::sim::UnitId> units,
+                                    rm::PlayerIndex player, rm::TickIndex tick) {
+    // Same immediate-action shape as the retreat toggle — the intake walks
+    // Default → Snipe → AirOnly → EconomyOnly, refusing anything with no
+    // acquiring weapon.
+    return submitCommand(scene, rm::sim::CommandIssue{
+        .tick = tick,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = static_cast<rm::CommandSource>(player),
+        .player = player,
+        .kind = rm::sim::CommandKind::CycleTargetFocus,
+        .units = {units.begin(), units.end()},
+    }).has_value();
+}
+
 bool issueCancelFactoryBuild(UnitScene& scene, rm::sim::UnitId factory,
     rm::PlayerIndex player, rm::TickIndex tick, rm::CommandId commandId) {
     if (commandId == rm::kInvalidCommandId) return false;

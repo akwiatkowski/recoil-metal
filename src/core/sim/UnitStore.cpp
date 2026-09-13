@@ -19,6 +19,7 @@ UnitStore::UnitStore(const Snapshot& snapshot)
        productionPaused_(snapshot.productionPaused),
        buildPriority_(snapshot.buildPriority),
        retreatThresholds_(snapshot.retreatThreshold),
+       targetFocus_(snapshot.targetFocus),
        retreats_(snapshot.retreats),
        doNotTarget_(snapshot.doNotTarget),
        orders_(snapshot.transforms.size()),
@@ -70,6 +71,7 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     productionPaused_.resize(transforms_.size(), false);
     buildPriority_.resize(transforms_.size(), BuildPriority::Normal);
     retreatThresholds_.resize(transforms_.size(), RetreatThreshold::Off);
+    targetFocus_.resize(transforms_.size(), TargetFocus::Default);
     retreats_.resize(transforms_.size());
     doNotTarget_.resize(transforms_.size(), false);
     for (std::size_t child = 0; child < transforms_.size(); ++child) {
@@ -94,6 +96,7 @@ UnitStore::Snapshot UnitStore::snapshot() const {
                    .productionPaused = productionPaused_,
                    .buildPriority = buildPriority_,
                    .retreatThreshold = retreatThresholds_,
+                   .targetFocus = targetFocus_,
                    .retreats = retreats_,
                    .doNotTarget = doNotTarget_,
                    .parents = parents_,
@@ -143,6 +146,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         productionPaused_.emplace_back(false);
         buildPriority_.emplace_back(BuildPriority::Normal);
         retreatThresholds_.emplace_back(RetreatThreshold::Off);
+        targetFocus_.emplace_back(TargetFocus::Default);
         retreats_.emplace_back();
         doNotTarget_.emplace_back(false);
         orders_.emplace_back();
@@ -169,6 +173,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
     productionPaused_[slot] = false;
     buildPriority_[slot] = BuildPriority::Normal;
     retreatThresholds_[slot] = RetreatThreshold::Off;
+    targetFocus_[slot] = TargetFocus::Default;
     retreats_[slot] = {};
     doNotTarget_[slot] = false;
     // CLEARED HERE rather than in `kill`, which is the tombstone rule applied to orders: a
@@ -364,6 +369,7 @@ void UnitStore::kill(UnitId id) {
     productionPaused_[id.index] = false;
     buildPriority_[id.index] = BuildPriority::Normal;
     retreatThresholds_[id.index] = RetreatThreshold::Off;
+    targetFocus_[id.index] = TargetFocus::Default;
     retreats_[id.index] = {};
     doNotTarget_[id.index] = false;
     (void)detach(id);
@@ -510,6 +516,20 @@ RetreatThreshold UnitStore::retreatThreshold(UnitId unit) const noexcept {
     // Dead men don't flinch: an invalid handle reads as Off, which is also the
     // answer the automation wants when a corpse's slot is walked.
     return alive(unit) ? retreatThresholds_[unit.index] : RetreatThreshold::Off;
+}
+
+bool UnitStore::setTargetFocus(UnitId unit, TargetFocus focus) noexcept {
+    if (!alive(unit)) {
+        return false;
+    }
+    targetFocus_[unit.index] = focus;
+    return true;
+}
+
+TargetFocus UnitStore::targetFocus(UnitId unit) const noexcept {
+    // A dead handle reads as Default — acquisition for a corpse never runs,
+    // but the combat pass also walks slots that died mid-tick.
+    return alive(unit) ? targetFocus_[unit.index] : TargetFocus::Default;
 }
 
 bool UnitStore::setDoNotTarget(UnitId unit, bool enabled) noexcept {

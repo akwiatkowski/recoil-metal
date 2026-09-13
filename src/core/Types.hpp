@@ -241,4 +241,31 @@ enum class RetreatThreshold : std::uint8_t {
     return RetreatThreshold::Off;
 }
 
+/// What a unit's guns prefer to shoot — the player-set target filter of
+/// #15809, standing where retail puts fire-state. The authored
+/// `TargetPriorities` table still bounds what a weapon CAN engage; the focus
+/// narrows that set (`AirOnly`, `EconomyOnly`) or re-orders it (`Snipe`), it
+/// never widens it. Category filters observe the same rule as authored
+/// priorities: they apply only to contacts the army has identified, so a
+/// blip the side has never seen is still acquirable — you cannot filter on
+/// what you do not know.
+enum class TargetFocus : std::uint8_t {
+    Default = 0,    ///< authored weapon priorities, unmodified
+    Snipe = 1,      ///< TECH3, EXPERIMENTAL and COMMAND targets win every comparison
+    AirOnly = 2,    ///< engage only AIR
+    EconomyOnly = 3, ///< engage only ECONOMIC
+};
+
+/// Default → Snipe → AirOnly → EconomyOnly → Default, the order a single
+/// cycle key walks.
+[[nodiscard]] constexpr TargetFocus nextTargetFocus(TargetFocus focus) noexcept {
+    switch (focus) {
+    case TargetFocus::Default: return TargetFocus::Snipe;
+    case TargetFocus::Snipe: return TargetFocus::AirOnly;
+    case TargetFocus::AirOnly: return TargetFocus::EconomyOnly;
+    case TargetFocus::EconomyOnly: return TargetFocus::Default;
+    }
+    return TargetFocus::Default;
+}
+
 } // namespace rm

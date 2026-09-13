@@ -72,6 +72,10 @@ constexpr std::uint32_t kVersion28 = 28;
 /// execution state a mid-route carrier owes the loop. Older saves decode with
 /// no anchor and phase None, which is the state every non-transport entry holds.
 constexpr std::uint32_t kVersion29 = 29;
+/// V30 adds the per-unit target focus (#15809) beside the retreat settings:
+/// one byte per slot. Older saves decode with every unit at Default — the
+/// pre-V30 acquisition behaviour.
+constexpr std::uint32_t kVersion30 = 30;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1048,7 +1052,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
                    bool includesAttachedMotion, bool includesCommands,
                    bool includesScriptTasks, bool includesProductionPaused,
                    bool includesBuildPriority, bool includesRetreat,
-                   bool includesTransport) {
+                   bool includesTransport, bool includesFocus) {
     w.count(s.ids.generations.size()); for (Generation v : s.ids.generations) w.u32(v);
     w.count(s.ids.free.size()); for (UnitIndex v : s.ids.free) w.u32(v);
     w.u64(s.ids.live);
@@ -1066,6 +1070,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     if (includesProductionPaused) { w.count(s.productionPaused.size()); for (bool v : s.productionPaused) w.u8(v); }
     if (includesBuildPriority) { w.count(s.buildPriority.size()); for (BuildPriority v : s.buildPriority) w.u8(static_cast<std::uint8_t>(v)); }
     if (includesRetreat) { w.count(s.retreatThreshold.size()); for (RetreatThreshold v : s.retreatThreshold) w.u8(static_cast<std::uint8_t>(v)); w.count(s.retreats.size()); for (const RetreatState& v : s.retreats) { w.u8(v.active); w.i32(v.returnX.raw()); w.i32(v.returnZ.raw()); w.i32(v.toX.raw()); w.i32(v.toZ.raw()); } }
+    if (includesFocus) { w.count(s.targetFocus.size()); for (TargetFocus v : s.targetFocus) w.u8(static_cast<std::uint8_t>(v)); }
     if (includesCommands) writeCommandState(w, s, includesScriptTasks, includesTransport);
 }
 
@@ -1077,7 +1082,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
                                  bool includesReclaimUnit, bool includesCapture,
                                  bool includesProductionPaused, bool includesMissileLaunch,
                                  bool includesBuildPriority, bool includesRetreat,
-                                 bool includesTransport) {
+                                 bool includesTransport, bool includesFocus) {
     std::size_t n{};
     if (!r.count(n, 4)) return false; s.ids.generations.resize(n); for (auto& v : s.ids.generations) if (!r.u32(v)) return false;
     if (!r.count(n, 4)) return false; s.ids.free.resize(n); for (auto& v : s.ids.free) if (!r.u32(v)) return false;
@@ -1098,6 +1103,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     if (includesProductionPaused) { if (!r.count(n, 1)) return false; s.productionPaused.resize(n); for (auto&& v : s.productionPaused) { std::uint8_t enabled{}; if (!r.u8(enabled) || enabled > 1) return false; v = enabled; } }
     if (includesBuildPriority) { if (!r.count(n, 1)) return false; s.buildPriority.resize(n); for (auto& v : s.buildPriority) { std::uint8_t tier{}; if (!r.u8(tier) || tier > static_cast<std::uint8_t>(BuildPriority::High)) return false; v = static_cast<BuildPriority>(tier); } }
     if (includesRetreat) { if (!r.count(n, 1)) return false; s.retreatThreshold.resize(n); for (auto& v : s.retreatThreshold) { std::uint8_t tier{}; if (!r.u8(tier) || tier > static_cast<std::uint8_t>(RetreatThreshold::High)) return false; v = static_cast<RetreatThreshold>(tier); } if (!r.count(n, 4)) return false; s.retreats.resize(n); for (auto& v : s.retreats) { std::uint8_t active{}; std::int32_t x{}, z{}, tx{}, tz{}; if (!r.u8(active) || active > 1 || !r.i32(x) || !r.i32(z) || !r.i32(tx) || !r.i32(tz)) return false; v = RetreatState{.active = active != 0, .returnX = Fx::fromRaw(x), .returnZ = Fx::fromRaw(z), .toX = Fx::fromRaw(tx), .toZ = Fx::fromRaw(tz)}; } }
+    if (includesFocus) { if (!r.count(n, 1)) return false; s.targetFocus.resize(n); for (auto& v : s.targetFocus) { std::uint8_t focus{}; if (!r.u8(focus) || focus > static_cast<std::uint8_t>(TargetFocus::EconomyOnly)) return false; v = static_cast<TargetFocus>(focus); } }
     const std::size_t slots=s.transforms.size();
     if (s.ids.generations.size()!=slots || s.generations.size()!=slots || s.motion.size()!=slots
          || s.health.size()!=slots || s.types.size()!=slots
@@ -1108,6 +1114,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
            || (includesProductionPaused && s.productionPaused.size()!=slots)
            || (includesBuildPriority && s.buildPriority.size()!=slots)
            || (includesRetreat && (s.retreatThreshold.size()!=slots || s.retreats.size()!=slots))
+           || (includesFocus && s.targetFocus.size()!=slots)
          || s.ids.live>slots || s.ids.free.size()>slots) return false;
 
     std::vector<bool> free(slots);
@@ -1165,6 +1172,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     if (!includesProductionPaused) s.productionPaused.resize(slots, false);
     if (!includesBuildPriority) s.buildPriority.resize(slots, BuildPriority::Normal);
     if (!includesRetreat) { s.retreatThreshold.resize(slots, RetreatThreshold::Off); s.retreats.resize(slots); }
+    if (!includesFocus) { s.targetFocus.resize(slots, TargetFocus::Default); }
     if (!includesAttachmentOffsets) {
         s.attachmentOffsets.resize(slots);
         for (std::size_t child = 0; child < slots; ++child) {
@@ -1272,7 +1280,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                    version >= kVersion4, version >= kVersion5, version >= kVersion6,
                     version >= kVersion7, version >= kVersion7, version >= kVersion8,
                     version >= kVersion12, version >= kVersion26, version >= kVersion27,
-                    version >= kVersion28, version >= kVersion29);
+                    version >= kVersion28, version >= kVersion29, version >= kVersion30);
     if (version >= kVersion9) writeSiloAmmo(payloadWriter, state.siloAmmo);
     if (version >= kVersion10) writeRedirects(payloadWriter, state.redirects);
     if (version >= kVersion11) {
@@ -1337,7 +1345,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion22 && version != kVersion23 && version != kVersion24
                && version != kVersion25 && version != kVersion26
                && version != kVersion27 && version != kVersion28
-               && version != kVersion29)
+               && version != kVersion29 && version != kVersion30)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -1371,7 +1379,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        version >= kVersion17, version >= kVersion20,
                        version >= kVersion26, version >= kVersion26,
                        version >= kVersion27, version >= kVersion28,
-                       version >= kVersion29)) return std::nullopt;
+                       version >= kVersion29, version >= kVersion30)) return std::nullopt;
     std::vector<SiloAmmo> siloAmmo;
     if (version >= kVersion9 && !readSiloAmmo(reader, siloAmmo)) return std::nullopt;
     std::vector<MissileRedirect> redirects;
@@ -1426,7 +1434,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion29);
+    return rm::sim::encode(state, kVersion30);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

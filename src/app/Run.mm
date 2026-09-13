@@ -1398,6 +1398,27 @@ int runWindowed(const Session& session) {
                     }
                     std::fflush(stdout);
                 }
+            } else if (event.key == rm::Key::X && !event.repeat && !selected.empty()) {
+                // TARGET FOCUS — Default → Snipe → AirOnly → EconomyOnly on the
+                // armed units in the selection. The order rack is full, so the
+                // setting lives on a key the way the retreat threshold does.
+                // Silent unless something eligible took it.
+                if (runnerForKeys != nullptr
+                    && cycleTargetFocus(units, selected,
+                                        playerDriving(units, units.playerArmy),
+                                        runnerForKeys->tick)) {
+                    for (const rm::sim::UnitId id : selected) {
+                        if (units.store.alive(id)) {
+                            constexpr std::array<const char*, 4> names{
+                                "default", "snipe", "air-only", "economy-only"};
+                            std::printf("target focus: %s\n",
+                                names[static_cast<std::size_t>(
+                                    units.store.targetFocus(id))]);
+                            break;
+                        }
+                    }
+                    std::fflush(stdout);
+                }
             } else if (const std::optional<std::size_t> digit = rm::digitForKey(event.key)) {
                 auto& group = controlGroups[*digit];
                 if (event.modifiers.control) {

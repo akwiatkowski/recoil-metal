@@ -1817,6 +1817,29 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
         rates[1].drainPerSecond += rm::sim::magToFloat(flow.usageLastTick.energy) * hz;
     }
 
+    // Target focus, agreed per type: the tile carries the shared setting, and a
+    // group that disagrees is marked mixed rather than read by its majority.
+    for (const rm::sim::UnitId id : selection) {
+        if (!scene.store.alive(id)) continue;
+        const auto* def = scene.catalog.def(scene.store.typeAt(id.index));
+        if (def == nullptr) continue;
+        auto tile = std::ranges::find(out, def->name, &rm::ui::RosterTile::id);
+        if (tile == out.end()) continue;
+        const rm::TargetFocus focus = scene.store.targetFocus(id);
+        if (!tile->focus && !tile->focusMixed) {
+            tile->focus = focus;
+        } else if (tile->focus != focus) {
+            tile->focusMixed = true;
+        }
+    }
+    // An all-Default group reads as no setting at all — silence, not a row that
+    // says nothing.
+    for (rm::ui::RosterTile& tile : out) {
+        if (!tile.focusMixed && tile.focus == rm::TargetFocus::Default) {
+            tile.focus.reset();
+        }
+    }
+
     // Silo stockpiles, summed per type: `SiloAmmo` is match-owned, so the tile gathers
     // it through the owner's blueprint id. An unselected silo simply finds no tile.
     for (const rm::sim::SiloAmmo& silo : scene.siloAmmo) {

@@ -157,6 +157,21 @@ InfoCard rosterTileCard(const RosterTile& tile) {
                      + std::to_string(tile.siloStock->second),
             .tint = tile.siloStock->first > 0 ? kGain : kWarn});
     }
+    // The X-key setting rides the CORNER, not a row: the card caps at three rows
+    // and an armed unit already spends them on MASS, ENERGY and HEALTH, so a fourth
+    // row would draw under the divider. The corner is the card's secondary-fact
+    // slot, and a type-wide setting is exactly that. A mixed group says so rather
+    // than lying with the majority's answer.
+    const char* focus =
+        tile.focusMixed                                     ? "MIXED"
+        : !tile.focus                                       ? nullptr
+        : *tile.focus == TargetFocus::Snipe                 ? "SNIPE"
+        : *tile.focus == TargetFocus::AirOnly               ? "AIR ONLY"
+        : *tile.focus == TargetFocus::EconomyOnly           ? "ECON ONLY"
+                                                            : nullptr;
+    if (focus != nullptr) {
+        card.corner = card.corner.empty() ? focus : card.corner + " " + focus;
+    }
     return card;
 }
 

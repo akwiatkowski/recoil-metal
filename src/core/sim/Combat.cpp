@@ -984,7 +984,7 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                        const PlayableRect* playableRect,
                                        std::span<const WorkClaim> claims,
                                        std::optional<bool> sourceSubmerged, TickIndex tick,
-                                       TickRate rate) {
+                                       TickRate rate, TargetFocus focus) {
     if (!weapon.fires() || weapon.targetsProjectiles || weapon.targetPriorities.empty()) {
         return std::nullopt;
     }
@@ -1071,6 +1071,18 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                            || intel->hasSeenEver(mine->alliance, store.idAt(slot));
         }
 
+        // The player's target focus (#15809) narrows the authored set on
+        // identified contacts — the same rule `prioritiesApply` states: a blip
+        // the side has never seen cannot be filtered on what it is, because
+        // nothing honest knows yet.
+        if (prioritiesApply
+            && (focus == TargetFocus::AirOnly || focus == TargetFocus::EconomyOnly)) {
+            const char* category = focus == TargetFocus::AirOnly ? "AIR" : "ECONOMIC";
+            if (def == nullptr || !def->hasCategory(category)) {
+                return std::nullopt;
+            }
+        }
+
         // A blip-only contact competes at its deterministic blip, the same estimate
         // the muzzle aims with — truth never enters the score, the rank, or the
         // reach check. Identity is untouched: the candidate that wins is still
@@ -1095,11 +1107,21 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
             return std::nullopt;
         }
 
-        const std::size_t row = !prioritiesApply ? kUnidentifiedPriorityRow
-                              : def != nullptr  ? priorityRow(weapon, *def)
-                                                : 0;
+        std::size_t row = !prioritiesApply ? kUnidentifiedPriorityRow
+                         : def != nullptr  ? priorityRow(weapon, *def)
+                                           : 0;
         if (row == std::numeric_limits<std::size_t>::max()) {
             return std::nullopt;
+        }
+        // Snipe is a preference, not a filter: a high-tier contact is promoted
+        // to row 0 — the unconditional win, ahead of any distance — while
+        // everything else keeps its authored order one rung down.
+        if (focus == TargetFocus::Snipe && prioritiesApply && def != nullptr
+            && (def->hasCategory("TECH3") || def->hasCategory("EXPERIMENTAL")
+                || def->hasCategory("COMMAND"))) {
+            row = 0;
+        } else if (focus == TargetFocus::Snipe && prioritiesApply) {
+            ++row;
         }
 
         const FxWide dxRaw = dx.raw();
@@ -1508,7 +1530,8 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                     candidateUnit = nearestTarget(from, motion[slot].armyIndex, weapon, store,
                                                    armies, intel, &catalog,
                                                    transforms[slot].heading, incumbent, playableRect,
-                                                   claims, sourceSubmerged, tick, rate);
+                                                   claims, sourceSubmerged, tick, rate,
+                                                   store.targetFocuses()[slot]);
                 }
                 if (candidateUnit) {
                     candidatePosition = !hasExplicitAttack && !weapon.beam
@@ -1748,7 +1771,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                        : std::nullopt)
                 : nearestTarget(from, army, weapon, store, armies, intel, &catalog,
                                  transforms[slot].heading, health.automaticTargets[w], playableRect,
-                                 claims, sourceSubmerged, tick, rate);
+                                 claims, sourceSubmerged, tick, rate,
+                                 store.targetFocuses()[slot]);
             if (!hasExplicitAttack) {
                 health.automaticTargets[w] = target.value_or(UnitId{});
             }

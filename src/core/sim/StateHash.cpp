@@ -504,6 +504,14 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, retreat.toX.raw());
             feed(h, retreat.toZ.raw());
         }
+        // The target focus decides what the guns acquire next tick — it changes
+        // the outcome the same way a threshold does. Default stays silent so a
+        // match that never cycles it hashes the pre-focus stream.
+        if (const TargetFocus focus = store.targetFocus(store.idAt(slot));
+            focus != TargetFocus::Default) {
+            feed(h, std::uint8_t{7});
+            feed(h, static_cast<std::uint8_t>(focus));
+        }
         if (store.doNotTarget(store.idAt(slot))) {
             feed(h, std::uint8_t{2});
         }

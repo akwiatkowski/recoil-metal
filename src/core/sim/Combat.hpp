@@ -246,7 +246,8 @@ struct WorkClaim {
                                                     std::span<const WorkClaim> claims = {},
                                                     std::optional<bool> sourceSubmerged = std::nullopt,
                                                     TickIndex tick = 0,
-                                                    TickRate rate = TickRate{});
+                                                    TickRate rate = TickRate{},
+                                                    TargetFocus focus = TargetFocus::Default);
 
 /// The bearing from `from` to `to`, in radians, measured the way a unit's yaw is.
 ///

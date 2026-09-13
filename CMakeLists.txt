@@ -375,6 +375,7 @@ if(BUILD_TESTING)
         tests/test_build_priority.cpp
         tests/test_retreat.cpp
         tests/test_transport.cpp
+        tests/test_target_focus.cpp
         tests/test_movement.cpp
         tests/test_picking.cpp
         tests/test_selection.cpp

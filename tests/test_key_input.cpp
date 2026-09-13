@@ -26,7 +26,7 @@ TEST_CASE("a character becomes one semantic event without losing event state") {
 }
 
 TEST_CASE("the semantic vocabulary contains exactly the keys the game binds") {
-    constexpr std::array<std::pair<char, rm::Key>, 26> kBindings{{
+    constexpr std::array<std::pair<char, rm::Key>, 27> kBindings{{
         {'\x1b', rm::Key::Escape},
         {'a', rm::Key::A},           {'d', rm::Key::D},           {'e', rm::Key::E},
         {'c', rm::Key::C},           {'i', rm::Key::I},
@@ -34,7 +34,8 @@ TEST_CASE("the semantic vocabulary contains exactly the keys the game binds") {
         {'n', rm::Key::N},
         {'o', rm::Key::O},
         {'p', rm::Key::P},           {'r', rm::Key::R},           {'s', rm::Key::S},
-        {'w', rm::Key::W},           {' ', rm::Key::Space},       {'0', rm::Key::Digit0},
+        {'w', rm::Key::W},           {'x', rm::Key::X},           {' ', rm::Key::Space},
+        {'0', rm::Key::Digit0},
         {'1', rm::Key::Digit1},      {'2', rm::Key::Digit2},      {'3', rm::Key::Digit3},
         {'4', rm::Key::Digit4},      {'5', rm::Key::Digit5},      {'6', rm::Key::Digit6},
         {'7', rm::Key::Digit7},      {'8', rm::Key::Digit8},      {'9', rm::Key::Digit9},
@@ -42,7 +43,7 @@ TEST_CASE("the semantic vocabulary contains exactly the keys the game binds") {
     for (const auto& [character, key] : kBindings) {
         CHECK(rm::keyForCharacter(character) == key);
     }
-    CHECK_FALSE(rm::keyForCharacter('x').has_value());
+    CHECK_FALSE(rm::keyForCharacter('q').has_value());
 }
 
 TEST_CASE("control-group digits keep their numeric identity") {
