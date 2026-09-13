@@ -529,6 +529,220 @@ TEST_CASE("a mid-ferry transport round-trips through save state", "[transport]")
           != rm::sim::TransportPhase::None);
 }
 
+// --- Auto-embark (#15800) ------------------------------------------------------
+//
+// A move the grid cannot serve is not refused when an idle transport can lift the
+// unit: the order is rewritten into a boarding run — the cargo walks a
+// LoadTransport to the carrier, the carrier flies an UnloadTransport to the
+// click, then ferries itself back to where it waited.
+
+/// A flat field with a cliff down the middle: the two halves have no land route
+/// between them, while the air above the wall is open.
+[[nodiscard]] rm::HeightField walledField() {
+    rm::HeightField field = flatField();
+    for (int z = 0; z < field.verticesZ(); ++z) {
+        field.raw[static_cast<std::size_t>(z)
+                      * static_cast<std::size_t>(field.verticesX())
+                  + 50] = 4000;
+    }
+    return field;
+}
+
+[[nodiscard]] CommandIssue moveIssue(const UnitId unit, float x, float z,
+                                     const std::uint32_t serial) {
+    return CommandIssue{.source = 0,
+                        .id = rm::commandId(0, serial),
+                        .player = 0,
+                        .kind = CommandKind::Move,
+                        .units = {unit},
+                        .targetX = rm::sim::fxFromFloat(x),
+                        .targetZ = rm::sim::fxFromFloat(z)};
+}
+
+TEST_CASE("an unreachable move embarks the unit on an idle transport", "[transport]") {
+    const rm::HeightField field = walledField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
+    // The wall is real: the click has no land route.
+    REQUIRE(rm::sim::findPath(grid, rm::sim::fxFromFloat(200.0f), rm::sim::fxFromFloat(400.0f),
+                            rm::sim::fxFromFloat(600.0f), rm::sim::fxFromFloat(400.0f))
+                .empty());
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const UnitId transport = landedTransport(roster, transportType, 240.0f, 400.0f);
+    const UnitId cargo = roster.add(cargoType, 200.0f, 400.0f, 0, 500.0f);
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+
+    const auto set = rm::sim::applyCommand(moveIssue(cargo, 600.0f, 400.0f, 1),
+                                         roster.store, roster.catalog, players, armies,
+                                         terrain, gridFor, roster.rate);
+    REQUIRE(set.accepted.size() == 1);
+
+    // The refusal became a boarding run: the unit owes the carrier a walk and
+    // still owes the click; the carrier owes the click an unload and itself a
+    // ride home.
+    const auto& cargoQueue = roster.store.orders()[cargo.index].entries();
+    REQUIRE(cargoQueue.size() == 2);
+    CHECK(cargoQueue[0].kind() == CommandKind::LoadTransport);
+    CHECK(cargoQueue[0].target() == transport);
+    CHECK(cargoQueue[1].kind() == CommandKind::Move);
+    const auto& carrierQueue = roster.store.orders()[transport.index].entries();
+    REQUIRE(carrierQueue.size() == 2);
+    CHECK(carrierQueue[0].kind() == CommandKind::UnloadTransport);
+    CHECK(carrierQueue[1].kind() == CommandKind::Move);
+
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    bool boarded = false;
+    bool delivered = false;
+    for (int i = 0; i < 6000 && !delivered; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        boarded = boarded || roster.motion(cargo).attached;
+        delivered = boarded && !roster.motion(cargo).attached;
+    }
+    REQUIRE(boarded);
+    REQUIRE(delivered);
+    const rm::sim::Transform& at = roster.transform(cargo);
+    CHECK(rm::sim::fxToFloat(at.x) == Catch::Approx(600.0f).margin(12.0f));
+    CHECK(rm::sim::fxToFloat(at.z) == Catch::Approx(400.0f).margin(12.0f));
+
+    // RTB: the carrier's appended Move flies it back to where it waited.
+    for (int i = 0; i < 6000 && !roster.store.orders()[transport.index].empty(); ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    }
+    CHECK(roster.store.orders()[transport.index].empty());
+    CHECK(rm::sim::fxToFloat(roster.transform(transport).x)
+          == Catch::Approx(240.0f).margin(12.0f));
+}
+
+TEST_CASE("auto-embark follows the path service's refusal too", "[transport]") {
+    const rm::HeightField field = walledField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const UnitId transport = landedTransport(roster, transportType, 240.0f, 400.0f);
+    const UnitId cargo = roster.add(cargoType, 200.0f, 400.0f, 0, 500.0f);
+    (void)transport;
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
+    rm::sim::PathService paths;
+
+    REQUIRE(rm::sim::applyCommand(moveIssue(cargo, 600.0f, 400.0f, 1), roster.store,
+                                  roster.catalog, players, armies, terrain,
+                                  [&grid](UnitId) { return &grid; }, roster.rate,
+                                  nullptr, nullptr, nullptr, &paths)
+                .accepted.size()
+            == 1);
+
+    // The deferred search retries before it admits defeat (C-176): the rewrite
+    // lands only once the service publishes its empty route.
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    match.pathService = &paths;
+    bool boarded = false;
+    bool delivered = false;
+    for (int i = 0; i < 6000 && !delivered; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        boarded = boarded || roster.motion(cargo).attached;
+        delivered = boarded && !roster.motion(cargo).attached;
+    }
+    REQUIRE(boarded);
+    REQUIRE(delivered);
+    CHECK(rm::sim::fxToFloat(roster.transform(cargo).x)
+          == Catch::Approx(600.0f).margin(12.0f));
+}
+
+TEST_CASE("a reachable move walks; no transport is borrowed", "[transport]") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const UnitId transport = landedTransport(roster, transportType, 240.0f, 400.0f);
+    const UnitId cargo = roster.add(cargoType, 200.0f, 400.0f, 0, 500.0f);
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
+
+    REQUIRE(rm::sim::applyCommand(moveIssue(cargo, 300.0f, 400.0f, 1), roster.store,
+                                  roster.catalog, players, armies, terrain,
+                                  [&grid](UnitId) { return &grid; }, roster.rate)
+                .accepted.size()
+            == 1);
+
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    for (int i = 0; i < 400; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    }
+
+    CHECK(rm::sim::fxToFloat(roster.transform(cargo).x)
+          == Catch::Approx(300.0f).margin(8.0f));
+    CHECK_FALSE(roster.motion(cargo).attached);
+    CHECK(roster.store.orders()[transport.index].empty());
+    CHECK(rm::sim::fxToFloat(roster.transform(transport).x)
+          == Catch::Approx(240.0f).margin(2.0f));
+}
+
+TEST_CASE("an unreachable move with no free carrier is still refused", "[transport]") {
+    const rm::HeightField field = walledField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const rm::UnitTypeIndex heavyType = roster.addType(cargoDef(4));
+    // A carrier of the WRONG ARMY, and one already committed to a ferry loop.
+    const UnitId theirs = landedTransport(roster, transportType, 240.0f, 400.0f, 1);
+    const UnitId busy = landedTransport(roster, transportType, 250.0f, 400.0f);
+    const UnitId cargo = roster.add(cargoType, 200.0f, 400.0f, 0, 500.0f);
+    const UnitId heavy = roster.add(heavyType, 210.0f, 400.0f, 0, 500.0f);
+    (void)theirs;
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<int> commandersEver(2, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+
+    REQUIRE(rm::sim::applyCommand(
+                dropIssue(busy, 600.0f, 400.0f, 1, CommandKind::Ferry), roster.store,
+                roster.catalog, players, armies, terrain, gridFor, roster.rate)
+                .accepted.size()
+            == 1);
+
+    // A committed carrier is not poached, a foreign one is not borrowed, and a
+    // class the hull cannot hold is not offered a ride.
+    CHECK(rm::sim::applyCommand(moveIssue(cargo, 600.0f, 400.0f, 2), roster.store,
+                                roster.catalog, players, armies, terrain, gridFor,
+                                roster.rate)
+              .accepted.empty());
+    CHECK(roster.store.orders()[cargo.index].empty());
+    CHECK(rm::sim::applyCommand(moveIssue(heavy, 600.0f, 400.0f, 3), roster.store,
+                                roster.catalog, players, armies, terrain, gridFor,
+                                roster.rate)
+              .accepted.empty());
+}
+
 TEST_CASE("a transport's cargo dies with it", "[transport]") {
     // Retail scores the attached units at their remaining health when a loaded
     // transport is destroyed — the cargo dies aboard (`TransportUnitComponent`

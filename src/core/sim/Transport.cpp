@@ -355,6 +355,22 @@ void advanceFerry(UnitStore& store, const UnitCatalog& catalog, const Terrain& t
     }
 }
 
+/// Whether `slot` has a live cargo inbound on an active `LoadTransport` —
+/// the embark claim that keeps a waiting carrier from flying off empty.
+[[nodiscard]] UnitId inboundLoader(const UnitStore& store, UnitId self) noexcept {
+    for (UnitIndex other = 0; other < store.slotCount(); ++other) {
+        if (!store.slotAlive(other)) {
+            continue;
+        }
+        const QueuedCommand* head = store.orders()[other].active();
+        if (head != nullptr && head->kind() == CommandKind::LoadTransport
+            && head->target() == self) {
+            return store.idAt(other);
+        }
+    }
+    return {};
+}
+
 /// The carrier-side drive for `UnloadTransport`: get there, come down, and
 /// set the hold on the ground. Completes when the last child steps off.
 void advanceUnload(UnitStore& store, const UnitCatalog& /*catalog*/, const Terrain& terrain,
@@ -364,6 +380,25 @@ void advanceUnload(UnitStore& store, const UnitCatalog& /*catalog*/, const Terra
     MoveState& motion = store.motion()[slot];
     CommandQueue& queue = store.orders()[slot];
     const Transform& at = store.transforms()[slot];
+
+    // THE EMBARK PICKUP. An empty hold with a live loader inbound means this
+    // unload began as an auto-embark — the click is the drop, but the pickup
+    // comes first. A grounded carrier simply waits: the loader's own drive
+    // walks the cargo to it. An airborne one flies to meet the cargo and then
+    // holds station, because re-issuing the leg every tick would keep
+    // resetting the idle-descent timer and the deck would never come down.
+    if (store.childrenOf(self).empty()) {
+        if (const UnitId loader = inboundLoader(store, self); loader.generation != 0) {
+            if (!grounded(motion)) {
+                const Transform& theirs = store.transforms()[loader.index];
+                const Fx gap = groundDistanceElmos(positionOf(at), positionOf(theirs));
+                if (gap > kFerryPickupRadius) {
+                    (void)commitLeg(slot, theirs.x, theirs.z, store, terrain, gridForType);
+                }
+            }
+            return;
+        }
+    }
 
     const Fx dx = at.x - order.targetX();
     const Fx dz = at.z - order.targetZ();
@@ -405,6 +440,72 @@ void updateTransports(UnitStore& store, const UnitCatalog& catalog, const Terrai
             break;
         }
     }
+}
+
+bool offerAutoEmbark(UnitStore& store, const UnitCatalog& catalog, UnitIndex slot,
+                     const Command& move) noexcept {
+    const unitdef::UnitDef* cargoDef = catalog.def(store.typeAt(slot));
+    const MoveState& cargoMotion = store.motion()[slot];
+    if (cargoDef == nullptr || !cargoDef->transportable() || cargoMotion.attached) {
+        return false;
+    }
+
+    // The nearest idle same-army carrier that can take the class. An empty
+    // queue is the claim — a committed transport is not poached, and a foreign
+    // one is not borrowed (cargo rides its own army's decks only).
+    const Transform& at = store.transforms()[slot];
+    UnitId carrier{};
+    Fx nearest{};
+    for (UnitIndex other = 0; other < store.slotCount(); ++other) {
+        if (other == slot || !store.slotAlive(other)
+            || store.motion()[other].attached
+            || store.motion()[other].armyIndex != cargoMotion.armyIndex
+            || !store.orders()[other].empty()) {
+            continue;
+        }
+        const UnitId id = store.idAt(other);
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(other));
+        if (def == nullptr || !hasRoomFor(store, catalog, id, *cargoDef)) {
+            continue;
+        }
+        const Fx distance =
+            groundDistanceElmos(positionOf(at), positionOf(store.transforms()[other]));
+        if (carrier.generation == 0 || distance < nearest) {
+            carrier = id;
+            nearest = distance;
+        }
+    }
+    if (carrier.generation == 0) {
+        return false;
+    }
+
+    // Board first, then still owe the click: if the carrier dies the intent
+    // the player issued is still on the queue to be tried again or refused.
+    CommandQueue& queue = store.orders()[slot];
+    Command load{};
+    load.kind = CommandKind::LoadTransport;
+    load.unit = store.idAt(slot);
+    load.target = carrier;
+    (void)queue.give(load, false);
+    queue.append(move);
+
+    // The carrier owes the click an unload and itself a ride home. While the
+    // hold is empty, `advanceUnload`'s pickup hold keeps it at the cargo.
+    CommandQueue& carrierQueue = store.orders()[carrier.index];
+    Command unload{};
+    unload.kind = CommandKind::UnloadTransport;
+    unload.unit = carrier;
+    unload.targetX = move.targetX;
+    unload.targetZ = move.targetZ;
+    (void)carrierQueue.give(unload, false);
+    const Transform& carrierAt = store.transforms()[carrier.index];
+    Command home{};
+    home.kind = CommandKind::Move;
+    home.unit = carrier;
+    home.targetX = carrierAt.x;
+    home.targetZ = carrierAt.z;
+    carrierQueue.append(home);
+    return true;
 }
 
 } // namespace rm::sim

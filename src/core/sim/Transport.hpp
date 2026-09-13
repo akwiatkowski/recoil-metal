@@ -36,6 +36,21 @@ struct PassabilityGrid;
 void updateTransports(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
                       std::span<const PassabilityGrid* const> gridForType);
 
+/// A `Move` the grid refused: offer the unit a lift instead (#15800).
+///
+/// Picks the nearest IDLE same-army carrier with room for the class, then
+/// rewrites both queues with ordinary orders: the unit's becomes
+/// `[LoadTransport, the original move]` — the click survives so a dead carrier
+/// still leaves the intent standing — and the carrier's becomes
+/// `[UnloadTransport at the click, Move back to where it waited]`. The pickup
+/// itself rides the existing loading/unload drives; while the hold is empty
+/// and a loader is inbound, `advanceUnload` holds the carrier at the pickup.
+///
+/// False when no carrier is free — the caller refuses or retires the move
+/// exactly as before.
+[[nodiscard]] bool offerAutoEmbark(UnitStore& store, const UnitCatalog& catalog,
+                                   UnitIndex slot, const Command& move) noexcept;
+
 /// How far a unit counts as "sent to the ferry" from the beacon, in elmos —
 /// an order destination inside the ring marks the unit as waiting to board.
 inline constexpr Fx kFerryPickupRadius = Fx::fromInt(10);

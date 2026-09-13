@@ -77,7 +77,10 @@ namespace {
 [[nodiscard]] bool routeUnit(UnitIndex slot, Fx toX, Fx toZ, UnitStore& store,
                              const Terrain& terrain, const PassabilityGrid& grid) {
     MoveState& motion = store.motion()[slot];
-    if (motion.airborne) {
+    // A flyer's route is the air whether it is flying or merely flyable:
+    // orderTo is also the takeoff commit, and a landed aircraft sent through
+    // ground A* searches its (empty) movement domain and goes nowhere.
+    if (motion.airborne || motion.canFly) {
         orderTo(motion, terrain, toX, toZ);
         return true;
     }
@@ -1071,7 +1074,8 @@ void teardownMovement(MoveState& motion) {
     // the existing A* over later beats. Keeping the entry active prevents ordinary dispatch from
     // treating an unpublished path as an arrived move.
     if (command.kind == CommandKind::Move && pathService != nullptr
-        && !store.motion()[command.unit.index].airborne) {
+        && !store.motion()[command.unit.index].airborne
+        && !store.motion()[command.unit.index].canFly) {
         const std::shared_ptr<const SharedCommand> payload =
             ensureSharedCommand(command, source, id, count, formationAnchorX, formationAnchorZ,
                                 {}, {}, store, shared);
@@ -1112,6 +1116,16 @@ void teardownMovement(MoveState& motion) {
     if (!startCommand(command, store, catalog, terrain, movementGrid, rate, building, events,
                       features, approachGrid)) {
         motion = previous;
+        // A refused move may still be served — by air (#15800). The offer
+        // rewrites both queues itself, so a true return skips the staging
+        // path entirely; the click is carried inside the rewrite.
+        if (command.kind == CommandKind::Move
+            && offerAutoEmbark(store, catalog, command.unit.index, command)) {
+            if (pathService != nullptr) {
+                pathService->cancel(command.unit);
+            }
+            return true;
+        }
         return false;
     }
     MoveState replacementMotion = std::move(motion);
@@ -1509,14 +1523,22 @@ bool applyCommand(const Command& ordered, UnitStore& store, const UnitCatalog& c
     return result.acceptedUnit(command.unit);
 }
 
-bool publishPathResult(const PathResult& result, UnitStore& store) {
-    if (result.path.empty() || !store.alive(result.unit)) {
+bool publishPathResult(const PathResult& result, UnitStore& store,
+                       const UnitCatalog& catalog) {
+    if (!store.alive(result.unit)) {
         return false;
     }
     CommandQueue& orders = store.orders()[result.unit.index];
     const QueuedCommand* current = orders.active();
     if (current == nullptr || current->payload().id != result.command) {
         return false;
+    }
+    if (result.path.empty()) {
+        // C-176's retries are spent: the walk was refused, but a lift may not
+        // be — the rewrite turns the dead move into a boarding run (#15800).
+        return current->kind() == CommandKind::Move
+               && offerAutoEmbark(store, catalog, result.unit.index,
+                                  current->asCommand());
     }
     orderAlongPath(store.motion()[result.unit.index], result.path);
     return true;
@@ -1607,7 +1629,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     (void)orders[slot].finish();
                     continue;
                 }
-                if (pending->kind() == CommandKind::Move && pathService != nullptr) {
+                if (pending->kind() == CommandKind::Move && pathService != nullptr
+                    && !store.motion()[slot].airborne
+                    && !store.motion()[slot].canFly) {
                     MoveState& pendingMotion = store.motion()[slot];
                     const Transform& at = store.transforms()[slot];
                     pendingMotion.pathPhaseStartX = pendingGrid->cellAtWorld(at.x);
@@ -1661,6 +1685,12 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                         }
                     }
                     (void)orders[slot].finish();
+                } else if (pending->kind() == CommandKind::Move
+                           && offerAutoEmbark(store, catalog, slot, pending->asCommand())) {
+                    // The walk was refused but a lift was found (#15800): the
+                    // rewritten queue starts with the boarding order, so
+                    // dispatch loops once more to start it this beat.
+                    continue;
                 } else {
                     (void)orders[slot].finish();
                 }
@@ -1759,10 +1789,6 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         if (orders[slot].active() == nullptr) {
             startPending();
             serviceBuilds();
-            std::fprintf(stderr, "DBG startPending slot=%u active=%d kind=%d\n", slot,
-                         orders[slot].active() != nullptr ? 1 : 0,
-                         orders[slot].active() != nullptr
-                             ? static_cast<int>(orders[slot].active()->kind()) : -1);
             if (orders[slot].active() == nullptr && store.motion()[slot].canFly) {
                 store.motion()[slot].airCombatState = MoveState::AirCombatState::None;
                 store.motion()[slot].airCombatDeadline = 0;

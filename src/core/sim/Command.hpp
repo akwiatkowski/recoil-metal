@@ -412,9 +412,11 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// Publishes a finished asynchronous plain-move route through the command authority.
 ///
 /// A result is ignored when its unit died or a later order replaced its command identity while
-/// the search was in flight. An empty result remains unpublished so normal dispatch drops the
-/// now-unroutable head.
-[[nodiscard]] bool publishPathResult(const PathResult& result, UnitStore& store);
+/// the search was in flight. An empty result means the service's retries are spent: a
+/// transportable unit is offered an embark instead, and anything else drops the now-unroutable
+/// head through normal dispatch.
+[[nodiscard]] bool publishPathResult(const PathResult& result, UnitStore& store,
+                                     const UnitCatalog& catalog);
 
 /// How close a builder must stand to a site to work on a product there, centre to centre:
 /// its build reach plus its own footprint plus the product's skirt (`CUnitMobileBuildTask`).

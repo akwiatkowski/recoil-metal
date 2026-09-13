@@ -440,7 +440,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    writes the ratio this stage will multiply by next beat.
     if (match.pathService != nullptr) {
         for (const PathResult& result : match.pathService->service()) {
-            (void)publishPathResult(result, store);
+            (void)publishPathResult(result, store, catalog);
         }
     }
     std::vector<GuardWork> guardWork;
