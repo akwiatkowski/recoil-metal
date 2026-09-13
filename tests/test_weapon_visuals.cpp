@@ -11,6 +11,28 @@
 #include <cstdio>
 #include <algorithm>
 
+TEST_CASE("authored muzzle flashes live in ticks, not seconds", "[corpus][weapon-visuals]") {
+    // LifetimeCurve keys are on the content's 10 Hz clock like the Lifetime and
+    // Repeattime scalars beside them. Read raw, the Titan's authored 0.1-0.2s
+    // glints become 1-2s lamps that hide the turret traverse — the visible bug.
+    const std::filesystem::path root = "/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance/gamedata";
+    if (!std::filesystem::exists(root / "effects.scd")) SKIP("retail effects unavailable");
+    rm::vfs::Vfs content;
+    for (const char* a : {"effects.scd","textures.scd","projectiles.scd","mohodata.scd","lua.scd","units.scd","meshes.scd"})
+        REQUIRE(content.mountArchive(root / a));
+    auto visuals = rm::loadWeaponVisuals(content);
+
+    rm::CombatEffectState effects;
+    std::vector<rm::Particle> flashes;
+    const rm::sim::Event fired{.kind=rm::sim::EventKind::WeaponFired,
+        .at2={rm::sim::Fx::fromInt(100),rm::sim::Fx::fromInt(20),{}},
+        .visualId="UEL0303:HeavyPlasma01"};
+    rm::emitCombatEffects(flashes, std::array{fired}, &visuals, &effects, 0.05f);
+    REQUIRE_FALSE(flashes.empty());
+    for (const auto& p : flashes)
+        CHECK(p.lifetime <= 0.25f);  // authored 1.0-2.0 ticks; seconds would be 10x
+}
+
 TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[corpus][weapon-visuals]") {
     const std::filesystem::path root = "/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance/gamedata";
     if (!std::filesystem::exists(root / "effects.scd")) SKIP("retail effects unavailable");
@@ -59,12 +81,12 @@ TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[co
     const auto& disruptor = emitter("/effects/emitters/adisruptor_cannon_munition_01_emit.bp");
     CHECK(disruptor.blend == rm::EffectBlend::Modulate2xInverse);
     CHECK(disruptor.emitRate.sample(0.5f) == Catch::Approx(30));
-    CHECK(disruptor.particleLifetime.sample(0.5f) == Catch::Approx(2));
+    CHECK(disruptor.particleLifetime.sample(0.5f) == Catch::Approx(0.2));
     CHECK(disruptor.startSize.sample(0.5f) == Catch::Approx(0.162));
     CHECK(disruptor.endSize.sample(0.5f) == Catch::Approx(0.057));
     std::uint32_t seed = 123;
     const auto particle = rm::makeWeaponParticle(disruptor, 0, 0.5f, {10,20,30}, seed);
-    CHECK(particle.lifetime == Catch::Approx(2));
+    CHECK(particle.lifetime == Catch::Approx(0.2));
     CHECK(particle.size == Catch::Approx(0.162f * 16));
     CHECK(particle.size + particle.growth * particle.lifetime == Catch::Approx(0.057f * 16));
     CHECK(particle.animation[0] == Catch::Approx(1));

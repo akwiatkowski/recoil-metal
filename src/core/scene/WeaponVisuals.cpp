@@ -113,6 +113,14 @@ void loadWeaponMaterials(WeaponVisuals& result, const vfs::Vfs& content,
         material.blend = static_cast<EffectBlend>(mode);
         material.emitRate = readCurve(*table, "EmitRateCurve");
         material.particleLifetime = readCurve(*table, "LifetimeCurve");
+        // The curve is on the content's ten-Hz clock like the Lifetime and
+        // Repeattime scalars beside it — the corpus tops out at 600-800 on nuke
+        // plumes and weather, meaningful only as ticks. Read raw, a 0.15s
+        // muzzle glint lives 1.5 SECONDS: a lamp that outlasts the traverse.
+        for (auto& tick : material.particleLifetime.keys) {
+            tick[1] *= 0.1f;
+            tick[2] *= 0.1f;
+        }
         material.startSize = readCurve(*table, "StartSizeCurve");
         material.endSize = readCurve(*table, "EndSizeCurve");
         material.initialRotation = readCurve(*table, "InitialRotationCurve");
