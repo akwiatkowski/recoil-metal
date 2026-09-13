@@ -182,39 +182,41 @@ BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec) {
     const int yaw = turretResolve(spec.yawBone);
     const int pitch = turretResolve(spec.pitchBone);
     const int muzzle = turretResolve(spec.muzzleBone);
-    if (yaw < 0 || pitch < 0) {
+    // Coarse meshes merge small bones away — the Aurora's lod1 keeps the Turret
+    // ring but loses Turret_Barrel. Retail's per-bone script rotations no-op on
+    // a missing bone rather than freezing the turret, so resolve each degree of
+    // freedom independently: only a mesh with NEITHER is a dead rig. The missing
+    // side's arc clamps shut below, so its solve emits exactly rest.
+    if (yaw < 0 && pitch < 0) {
         return rig;
     }
     rig.boneFlags.resize(model.bones.size());
     const int pitch2 = turretResolve(spec.pitch2Bone);
     const int muzzle2 = turretResolve(spec.muzzle2Bone);
     for (std::size_t bone = 0; bone < model.bones.size(); ++bone) {
-        if (descendsFrom(model, bone, yaw)) {
+        if (yaw >= 0 && descendsFrom(model, bone, yaw)) {
             rig.boneFlags[bone] |= kTurretYawBone;
         }
-        if (descendsFrom(model, bone, pitch)) {
+        if (pitch >= 0 && descendsFrom(model, bone, pitch)) {
             rig.boneFlags[bone] |= kTurretPitchBone;
         }
         if (pitch2 >= 0 && descendsFrom(model, bone, pitch2)) {
             rig.boneFlags[bone] |= kTurretPitch2Bone | kTurretYaw2Bone;
         }
     }
-    const ModelBone& yawBone = model.bones[static_cast<std::size_t>(yaw)];
-    const ModelBone& pitchBone = model.bones[static_cast<std::size_t>(pitch)];
-    rig.yawPivot = yawBone.globalOffset;
-    rig.yawAxis = normalise(rotateByQuaternion(yawBone.globalRotation, {{0.0f, 1.0f, 0.0f}}));
-    rig.pitchPivot = pitchBone.globalOffset;
-    rig.pitchAxis =
-        normalise(rotateByQuaternion(pitchBone.globalRotation, {{1.0f, 0.0f, 0.0f}}));
-    if (muzzle < 0) {
-        // No muzzle bone — the coarse-mesh case. Aim by the barrel's own
-        // forward through the trunnion: direction without position, which is
-        // all traverse needs. hasMuzzle stays false so callers know flashes
-        // fall back to the fine offset.
-        rig.aimPoint = add(rig.pitchPivot,
-                           rotateByQuaternion(pitchBone.globalRotation, {{0.0f, 0.0f, 1.0f}}));
-        rig.aimDir = subtract(rig.aimPoint, rig.pitchPivot);
-    } else {
+    if (yaw >= 0) {
+        const ModelBone& yawBone = model.bones[static_cast<std::size_t>(yaw)];
+        rig.yawPivot = yawBone.globalOffset;
+        rig.yawAxis =
+            normalise(rotateByQuaternion(yawBone.globalRotation, {{0.0f, 1.0f, 0.0f}}));
+    }
+    if (pitch >= 0) {
+        const ModelBone& pitchBone = model.bones[static_cast<std::size_t>(pitch)];
+        rig.pitchPivot = pitchBone.globalOffset;
+        rig.pitchAxis =
+            normalise(rotateByQuaternion(pitchBone.globalRotation, {{1.0f, 0.0f, 0.0f}}));
+    }
+    if (muzzle >= 0 && pitch >= 0) {
         rig.hasMuzzle = true;
         const ModelBone& muzzleBone = model.bones[static_cast<std::size_t>(muzzle)];
         // The aim reference is the barrel's DIRECTION, hung on the yaw pivot —
@@ -236,6 +238,19 @@ BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec) {
                                normalise(subtract(muzzleBone.globalOffset, rig.pitchPivot)));
             rig.aimDir = subtract(muzzleBone.globalOffset, rig.pitchPivot);
         }
+    } else {
+        // No bore line — the mesh has no distinct muzzle, or no pitch bone to
+        // hang one on (the yaw-only coarse case). Aim by the best surviving
+        // bone's own rest forward through its pivot: direction without
+        // position, which is all traverse needs. hasMuzzle stays false so
+        // callers know flashes fall back to the fine offset.
+        const int forward = pitch >= 0 ? pitch : (muzzle >= 0 ? muzzle : yaw);
+        const ModelBone& forwardBone = model.bones[static_cast<std::size_t>(forward)];
+        const Vec3 pivot = pitch >= 0 ? rig.pitchPivot : rig.yawPivot;
+        rig.aimPoint =
+            add(pivot,
+                rotateByQuaternion(forwardBone.globalRotation, {{0.0f, 0.0f, 1.0f}}));
+        rig.aimDir = subtract(rig.aimPoint, pivot);
     }
     if (pitch2 >= 0) {
         const ModelBone& pitch2Bone = model.bones[static_cast<std::size_t>(pitch2)];
@@ -245,8 +260,9 @@ BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec) {
         rig.hasPitch2 = true;
         // One scalar elevates BOTH arms. A mirrored bone's axis turns its own
         // barrel the other way, so flip the axis until the two barrels' rest
-        // directions move together under the same rotation.
-        if (muzzle2 >= 0) {
+        // directions move together under the same rotation. Needs the primary
+        // barrel's direction as reference — a pitch-less rig skips the check.
+        if (muzzle2 >= 0 && pitch >= 0) {
             const Vec3 dir1 = rig.aimDir;
             const Vec3 dir2 = subtract(
                 model.bones[static_cast<std::size_t>(muzzle2)].globalOffset, rig.pitch2Pivot);
@@ -256,11 +272,13 @@ BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec) {
         }
     }
     // Already radians: the weapon states speeds that way and the caller converts the arc.
-    rig.yawMin = spec.yawMin;
-    rig.yawMax = spec.yawMax;
+    // A degree of freedom the mesh does not have clamps SHUT — builderAimAt then
+    // emits exactly rest for it instead of a solve around a pivot that is not there.
+    rig.yawMin = yaw >= 0 ? spec.yawMin : 0.0f;
+    rig.yawMax = yaw >= 0 ? spec.yawMax : 0.0f;
     rig.yawSlew = spec.yawSlew;
-    rig.pitchMin = spec.pitchMin;
-    rig.pitchMax = spec.pitchMax;
+    rig.pitchMin = pitch >= 0 ? spec.pitchMin : 0.0f;
+    rig.pitchMax = pitch >= 0 ? spec.pitchMax : 0.0f;
     rig.pitchSlew = spec.pitchSlew;
     return rig;
 }

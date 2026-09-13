@@ -85,6 +85,90 @@ TEST_CASE("the Titan's turret resolves from blueprint onto mesh", "[slice][turre
     CHECK(reaches(muzzle, yaw));
 }
 
+TEST_CASE("the Aurora's turret resolves despite a barrel-for-muzzle aim", "[slice][turret]") {
+    // UAL0201 warns "no turret bones" at runtime even though its mesh carries
+    // Turret/Turret_Barrel/Turret_Muzzle. Its TurretBoneMuzzle is the pitch bone
+    // itself — muzzle==pitch must still resolve a working rig.
+    const char* home = std::getenv("HOME");
+    const auto dir = home ? std::filesystem::path{home} / "projects/llm/input/faf/units/UAL0201"
+                          : std::filesystem::path{};
+    if (!std::filesystem::is_directory(dir)) SKIP("retail corpus unavailable");
+    const auto def = rm::unitbp::loadFile(dir / "UAL0201_unit.bp");
+    REQUIRE(def);
+    const auto model = rm::scm::loadFile(dir / "UAL0201_LOD0.scm");
+    REQUIRE(model.has_value());
+
+    const auto spec = rm::app::turretSpecFor(*def);
+    REQUIRE(spec.has_value());
+    const rm::unitdef::Weapon& gun = def->weapons[spec->second];
+    CHECK(gun.turreted);
+    CHECK(gun.turretYawBone == "Turret");
+    CHECK(gun.turretPitchBone == "Turret_Barrel");
+    CHECK(gun.muzzleBone == "Turret_Barrel");
+
+    const rm::app::TurretRig rig = rm::app::resolveTurretRig(*model, &*def);
+    CHECK(rig.rig.exists());
+}
+
+TEST_CASE("the Aeon's other land units keep their turret rigs at both LODs", "[slice][turret][lod]") {
+    // UAL0101 rides the same hierarchy — Turret ring, Turret_Barrel trunnion,
+    // Turret_Muzzle — and its coarse mesh keeps enough of the chain that both
+    // LODs must resolve without a "no turret bones" warning.
+    const char* home = std::getenv("HOME");
+    const auto dir = home ? std::filesystem::path{home} / "projects/llm/input/faf/units/UAL0101"
+                          : std::filesystem::path{};
+    if (!std::filesystem::is_directory(dir)) SKIP("retail corpus unavailable");
+    const auto def = rm::unitbp::loadFile(dir / "UAL0101_unit.bp");
+    REQUIRE(def);
+    REQUIRE(rm::app::turretSpecFor(*def).has_value());
+
+    const auto fine = rm::scm::loadFile(dir / "UAL0101_LOD0.scm");
+    const auto coarse = rm::scm::loadFile(dir / "UAL0101_lod1.scm");
+    REQUIRE(fine.has_value());
+    REQUIRE(coarse.has_value());
+    CHECK(rm::app::resolveTurretRig(*fine, &*def).rig.exists());
+    CHECK(rm::app::resolveTurretRig(*coarse, &*def).rig.exists());
+}
+
+TEST_CASE("the Aurora's coarse mesh keeps the yaw it has left", "[slice][turret][lod]") {
+    // UAL0201_lod1.scm merges Turret_Barrel away but keeps Turret — retail's
+    // per-bone rotations would still traverse the ring, so the rig must
+    // resolve yaw-only instead of warning "no turret bones" and freezing.
+    const char* home = std::getenv("HOME");
+    const auto dir = home ? std::filesystem::path{home} / "projects/llm/input/faf/units/UAL0201"
+                          : std::filesystem::path{};
+    if (!std::filesystem::is_directory(dir)) SKIP("retail corpus unavailable");
+    const auto def = rm::unitbp::loadFile(dir / "UAL0201_unit.bp");
+    REQUIRE(def);
+    const auto coarse = rm::scm::loadFile(dir / "UAL0201_lod1.scm");
+    REQUIRE(coarse.has_value());
+
+    const rm::app::TurretRig rig = rm::app::resolveTurretRig(*coarse, &*def);
+    REQUIRE(rig.rig.exists());
+    CHECK_FALSE(rig.rig.hasMuzzle);
+
+    // The surviving ring is flagged for yaw; nothing claims pitch, and the
+    // pitch arc is clamped shut so the solver emits exactly rest for the
+    // degree of freedom the mesh no longer has.
+    const auto boneIndex = [&](std::string_view name) {
+        for (std::size_t b = 0; b < coarse->bones.size(); ++b) {
+            if (coarse->bones[b].name == name) return static_cast<int>(b);
+        }
+        return -1;
+    };
+    const int yaw = boneIndex("Turret");
+    REQUIRE(yaw >= 0);
+    REQUIRE(rig.rig.boneFlags.size() == coarse->bones.size());
+    CHECK((rig.rig.boneFlags[static_cast<std::size_t>(yaw)] & rm::kTurretYawBone) != 0U);
+    for (std::uint32_t flags : rig.rig.boneFlags) {
+        CHECK((flags & rm::kTurretPitchBone) == 0U);
+    }
+    CHECK(rig.rig.pitchMin == 0.0f);
+    CHECK(rig.rig.pitchMax == 0.0f);
+    const rm::BuilderAimAngles aim = rm::builderAimAt(rig.rig, {{0.0f, 0.0f, 10.0f}});
+    CHECK(aim.pitch == 0.0f);
+}
+
 TEST_CASE("the Titan's coarse mesh aims without a muzzle", "[slice][turret][lod]") {
     const auto dir = titanDir();
     if (!std::filesystem::is_directory(dir)) SKIP("retail corpus unavailable");

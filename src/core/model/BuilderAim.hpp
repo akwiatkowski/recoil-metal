@@ -111,7 +111,9 @@ struct TurretAimSpec {
 };
 
 /// The turret twin of resolveBuilderAim: flags mark the ring and barrel subtrees, the
-/// aim point is the muzzle. An unresolvable bone yields a rig that does not exist.
+/// aim point is the muzzle. Each degree of freedom resolves independently — a coarse
+/// mesh that merged the trunnion away still gets its ring's yaw, with the missing
+/// side's arc clamped to rest. Only a mesh with NEITHER bone yields an empty rig.
 [[nodiscard]] BuilderAimRig resolveTurretAim(const Model& model, const TurretAimSpec& spec);
 
 /// The recoil subtree for one bone name: the bone and everything descending from

@@ -81,8 +81,20 @@ TEST_CASE("a turret slews toward its goal at the weapon's rates", "[turret]") {
 }
 
 TEST_CASE("a turret rig without named bones does not exist", "[turret]") {
+    // Losing only one bone is a PARTIAL rig — coarse meshes merge small bones
+    // away, and retail no-ops the missing bone's rotation rather than freezing
+    // the turret. The surviving ring still yaws; the dead side's arc clamps
+    // shut so its solve emits exactly rest.
     rm::TurretAimSpec spec = turretSpec();
     spec.pitchBone = {.name = "NoSuchBone"};
+    const rm::BuilderAimRig partial = rm::resolveTurretAim(tankModel(), spec);
+    REQUIRE(partial.exists());
+    CHECK((partial.boneFlags[1] & rm::kTurretYawBone) != 0U);
+    CHECK((partial.boneFlags[2] & rm::kTurretPitchBone) == 0U);
+    CHECK(partial.pitchMin == 0.0f);
+    CHECK(partial.pitchMax == 0.0f);
+    // Neither bone resolving is still a dead rig.
+    spec.yawBone = {.name = "NoSuchBoneEither"};
     CHECK_FALSE(rm::resolveTurretAim(tankModel(), spec).exists());
 }
 
