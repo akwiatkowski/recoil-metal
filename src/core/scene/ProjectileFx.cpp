@@ -84,6 +84,9 @@ void appendProjectiles(std::vector<Particle>& into, std::span<const sim::Project
                      kTracer[2] * (1.0f - 0.25f * static_cast<float>(sample)), 0.0f},
                     size * (1.0f - 0.2f * static_cast<float>(sample)));
             }
+            // The head's halo — the same wider, dimmer glow the muzzle flash and
+            // the beam chain wear; the cores alone are sparks, the halo is the shot.
+            dot(into, at, {0.5f, 0.45f, 0.25f, 0.0f}, size * 1.8f);
             break;
         }
         case unitdef::BallisticArc::Low:

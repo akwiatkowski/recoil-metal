@@ -23,15 +23,21 @@ TEST_CASE("a shot earns an additive flash at the muzzle and recoil smoke behind 
     rm::emitCombatEffects(out, {&fired, 1});
 
     // The flash is additive light at the POSED muzzle — `at2`, where the projectile
-    // spawned — not a constant height over the hull.
-    REQUIRE(out.size() == 2);
+    // spawned — not a constant height over the hull — with a wider, dimmer halo,
+    // the same core-plus-glow pairing the beam chain gets.
+    REQUIRE(out.size() == 3);
     CHECK(out[0].colour[3] == 0.0f);
     CHECK(out[0].origin == std::array{104.0f, 24.0f, 300.0f});
+    CHECK(out[1].colour[3] == 0.0f);
+    CHECK(out[1].origin == out[0].origin);
+    CHECK(out[1].lifetime == out[0].lifetime);
+    CHECK(out[1].size > out[0].size);
+    CHECK(out[1].colour[0] < out[0].colour[0]);
     // The recoil smoke blends, drifts back along the shot line and rises.
-    CHECK(out[1].colour[3] > 0.0f);
-    CHECK(out[1].velocity[0] < 0.0f);
-    CHECK(out[1].velocity[1] > 0.0f);
-    CHECK(out[1].lifetime > out[0].lifetime);
+    CHECK(out[2].colour[3] > 0.0f);
+    CHECK(out[2].velocity[0] < 0.0f);
+    CHECK(out[2].velocity[1] > 0.0f);
+    CHECK(out[2].lifetime > out[0].lifetime);
 }
 
 TEST_CASE("shot class changes the fallback flash and smoke", "[effects]") {

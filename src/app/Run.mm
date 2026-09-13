@@ -708,6 +708,40 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                     std::printf("weapon gallery: %s, %zu layers\n", examples[i].second,
                         units.weaponVisuals.find(examples[i].second).size());
                 }
+                if (hasFlag(argc, argv, "--impact-gallery")) {
+                    // A seventh row: the FALLBACK vocabulary — what a shot whose weapon
+                    // authored no visuals still fires with. Flash plus halo at the
+                    // muzzle, the beam chain to the strike, a tracer in flight.
+                    const float z = centre.z + 3.5f*16.0f;
+                    const auto at = [&](float x) {
+                        return std::array<rm::sim::Fx,3>{rm::sim::fxFromFloat(x),
+                            rm::sim::fxFromFloat(centre.y), rm::sim::fxFromFloat(z)};
+                    };
+                    const std::array<rm::sim::Event,2> unauthored{{
+                        {.kind=rm::sim::EventKind::WeaponFired, .at2=at(centre.x-25),
+                         .visualId="none:NoWeapon",
+                         .visualDirection={rm::sim::Fx::fromInt(1),{}, {}}},
+                        {.kind=rm::sim::EventKind::BeamFired, .at=at(centre.x+25),
+                         .at2=at(centre.x-5), .visualId="none:NoBeam",
+                         .visualDirection={rm::sim::Fx::fromInt(1),{}, {}}},
+                    }};
+                    rm::CombatEffectState fallback;
+                    const auto first = shotParticles.size();
+                    rm::emitCombatEffects(shotParticles, unauthored, &units.weaponVisuals, &fallback);
+                    for (auto p=first; p<shotParticles.size(); ++p) shotParticles[p].age += 0.05f;
+                    rm::sim::Projectile flying;
+                    flying.position = at(centre.x+50);
+                    flying.velocity = {rm::sim::fxFromFloat(40.0f), {}, {}};
+                    flying.visualId = "none:NoTracer";
+                    rm::appendProjectiles(shotParticles, {&flying, 1}, 0.0f, 1.0f,
+                                          &units.weaponVisuals);
+                    const auto screen = rm::worldToScreen(renderer.camera(),
+                        simd_make_float3(centre.x-95.0f, centre.y, z),
+                        shotViewport.hudExtent().width, shotViewport.hudExtent().height);
+                    if (screen) (void)rm::text::appendText(hud.label, renderer.labelFont().glyphs,
+                        "unauthored (fallback)", (*screen)[0], (*screen)[1], {1,1,1,1});
+                    std::printf("impact gallery: unauthored weapon, beam and tracer\n");
+                }
                 // Exercise the scene-copy path using an original refracting emitter too.
                 const auto refract = std::ranges::find_if(units.weaponVisuals.materials,
                     [](const auto& material) { return material.blend == rm::EffectBlend::Refract; });

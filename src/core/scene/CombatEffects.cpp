@@ -103,6 +103,17 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
                 .colour = {1.0f, 0.85f, 0.45f, 0.0f},
                 .size = flashSize,
             });
+            // The halo the flash is the core of — wider and dimmer, the same pairing
+            // the beam chain wears below. The core alone reads as a spark; the halo
+            // is what reads as a gunshot at battle zoom.
+            into.push_back(Particle{
+                .origin = at,
+                .age = 0.0f,
+                .velocity = {0.0f, 0.0f, 0.0f},
+                .lifetime = kFlashLifetime,
+                .colour = {0.5f, 0.36f, 0.15f, 0.0f},
+                .size = flashSize * 2.4f,
+            });
             // The recoil smoke: premultiplied grey drifting BACK along the bore, the
             // direction the shot did not go. A missile's backblast is bigger and
             // slower to clear; a rifle's is a wisp; artillery rolls.

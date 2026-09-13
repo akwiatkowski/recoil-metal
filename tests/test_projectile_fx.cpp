@@ -31,15 +31,24 @@ TEST_CASE("the vocabulary is the arc's: a dash, a dot, and the amber artillery d
                            aShot(rm::unitdef::BallisticArc::High)};
     rm::appendProjectiles(out, shots, 0.0f, 0.1f);
 
-    // Three tracer samples, one lob dot, one artillery dot — all additive (alpha zero).
-    REQUIRE(out.size() == 5);
+    // Three tracer samples plus the head's halo, one lob dot, one artillery dot —
+    // all additive (alpha zero).
+    REQUIRE(out.size() == 6);
     for (const rm::Particle& particle : out) {
         CHECK(particle.colour[3] == 0.0f);
     }
 
-    // The artillery dot is the largest thing here, and amber rather than white.
+    // The tracer's halo sits on the head: wider than its core and dimmer — the
+    // glow the spark is the core of, same pairing the beam chain gets.
+    const rm::Particle& halo = out[3];
+    CHECK(halo.origin == out[0].origin);
+    CHECK(halo.size > out[0].size);
+    CHECK(halo.colour[0] < out[0].colour[0]);
+
+    // The artillery dot is the largest CORE here — a halo is dim glow, not the dot.
     const rm::Particle& artillery = out.back();
     for (std::size_t i = 0; i + 1 < out.size(); ++i) {
+        if (i == 3) continue;
         CHECK(artillery.size >= out[i].size);
     }
     CHECK(artillery.colour[1] < artillery.colour[0]);  // warmer than white
