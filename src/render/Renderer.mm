@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <mutex>
@@ -126,6 +127,10 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // excess the tone map would clip.
     thresholdPipeline_ = makePipeline(device_, library, "screenVertex", "thresholdFragment",
                                       BlendMode::Opaque, MTL::PixelFormatInvalid, kHdrFormat);
+    // The occlusion pass writes a single channel of "how buried is this pixel".
+    aoPipeline_ = makePipeline(device_, library, "screenVertex", "aoFragment",
+                               BlendMode::Opaque, MTL::PixelFormatInvalid,
+                               MTL::PixelFormatR8Unorm);
     composePipeline_ = makePipeline(device_, library, "screenVertex", "compositeFragment",
                                     BlendMode::Opaque);
     glassPipeline_ = makePipeline(device_, library, "textVertex", "glassFragment",
@@ -433,6 +438,7 @@ Renderer::~Renderer() {
     if (minimapFogPipeline_ != nullptr) minimapFogPipeline_->release();
     if (glassPipeline_ != nullptr) glassPipeline_->release();
     if (composePipeline_ != nullptr) composePipeline_->release();
+    if (aoPipeline_ != nullptr) aoPipeline_->release();
     if (thresholdPipeline_ != nullptr) thresholdPipeline_->release();
     if (downsamplePipeline_ != nullptr) downsamplePipeline_->release();
     if (minimapTexture_ != nullptr) minimapTexture_->release();
@@ -443,6 +449,8 @@ Renderer::~Renderer() {
     if (uiBuffer_ != nullptr) uiBuffer_->release();
     if (decalPipeline_ != nullptr) decalPipeline_->release();
     if (sceneColour_ != nullptr) sceneColour_->release();
+    if (aoB_ != nullptr) aoB_->release();
+    if (aoA_ != nullptr) aoA_->release();
     if (bloomB_ != nullptr) bloomB_->release();
     if (bloomA_ != nullptr) bloomA_->release();
     if (blurB_ != nullptr) blurB_->release();
@@ -677,7 +685,8 @@ void Renderer::ensureDepthTexture(unsigned int width, unsigned int height) noexc
     // (drawFrame's) owns it.
     MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
         kDepthFormat, width, height, /*mipmapped=*/false);
-    descriptor->setUsage(MTL::TextureUsageRenderTarget);
+    // ShaderRead as well: the AO pass samples it after the world pass has finished.
+    descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead);
     // Private: the depth buffer is never read back by the CPU, so it does not
     // need to live in shared memory.
     descriptor->setStorageMode(MTL::StorageModePrivate);
@@ -828,15 +837,20 @@ void Renderer::ensureBackdropTextures(unsigned int width, unsigned int height) n
     if (worldColour_ != nullptr && worldColour_->width() == width
         && worldColour_->height() == height && blurA_ != nullptr
         && blurA_->width() == blurWidth && blurA_->height() == blurHeight
-        && blurB_ != nullptr && bloomA_ != nullptr && bloomB_ != nullptr) {
+        && blurB_ != nullptr && bloomA_ != nullptr && bloomB_ != nullptr
+        && aoA_ != nullptr && aoB_ != nullptr) {
         return;
     }
 
+    if (aoB_ != nullptr) aoB_->release();
+    if (aoA_ != nullptr) aoA_->release();
     if (bloomB_ != nullptr) bloomB_->release();
     if (bloomA_ != nullptr) bloomA_->release();
     if (blurB_ != nullptr) blurB_->release();
     if (blurA_ != nullptr) blurA_->release();
     if (worldColour_ != nullptr) worldColour_->release();
+    aoB_ = nullptr;
+    aoA_ = nullptr;
     bloomB_ = nullptr;
     bloomA_ = nullptr;
     blurB_ = nullptr;
@@ -862,6 +876,12 @@ void Renderer::ensureBackdropTextures(unsigned int width, unsigned int height) n
     // radius, and the MPS blur reuses the glass kernel unchanged.
     bloomA_ = device_->newTexture(descriptor);
     bloomB_ = device_->newTexture(descriptor);
+
+    // One channel is all occlusion needs. Quarter res again: the AO kernel samples
+    // a full-res depth buffer and wants the smaller pass for its own sake.
+    descriptor->setPixelFormat(MTL::PixelFormatR8Unorm);
+    aoA_ = device_->newTexture(descriptor);
+    aoB_ = device_->newTexture(descriptor);
 }
 
 void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDescriptor* pass,
@@ -885,9 +905,54 @@ void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     auto* worldDepth = worldPass->depthAttachment();
     worldDepth->setTexture(depthTexture_);
     worldDepth->setLoadAction(MTL::LoadAction::LoadActionClear);
-    worldDepth->setStoreAction(MTL::StoreAction::StoreActionDontCare);
+    // Store, not DontCare: the AO pass below samples this buffer.
+    worldDepth->setStoreAction(MTL::StoreAction::StoreActionStore);
     worldDepth->setClearDepth(1.0);
     encodeScene(commandBuffer, worldPass, width, height, nullptr, false);
+
+    // Screen-space AO over the depth the world pass just wrote: a small sphere
+    // of taps per quarter-res pixel, then the shared blur. Skipped entirely at
+    // map-view zooms — at 2500 elmos the four-elmo radius is already a pixel or
+    // two, so the pass would spend GPU to return "unoccluded" everywhere.
+    const bool aoRan = camera_.distance <= 2500.0f && depthTexture_ != nullptr
+                       && aoA_ != nullptr && aoB_ != nullptr && fullBlur_ != nullptr;
+    if (aoRan) {
+        const float nearZ = camera_.nearZ;
+        const float farZ = camera_.farZ;
+        const float tanHalf = std::tan(camera_.fovY * 0.5f);
+        const float aspect = static_cast<float>(width) / static_cast<float>(height);
+        // Field order must match shaders/Ui.hpp's AoParams.
+        const float aoParams[] = {
+            farZ / (farZ - nearZ),                    // depthA
+            farZ * nearZ / (farZ - nearZ),            // depthB
+            aspect * tanHalf, tanHalf,                // projScale
+            4.0f,                                     // radius, elmos
+            0.6f,                                     // intensity
+            0.2f,                                     // bias, elmos
+            // Extra bias per elmo of depth: the depth-texel footprint in elmos,
+            // doubled for margin. tanHalf*2/height is one pixel's world height
+            // per unit of viewZ.
+            static_cast<float>(tanHalf * 2.0 / height * 4.0),
+            300.0f,                                   // fadeStart, viewZ elmos
+            900.0f,                                   // fadeEnd
+        };
+        MTL::RenderPassDescriptor* aoPass = MTL::RenderPassDescriptor::alloc()->init();
+        auto* aoColor = aoPass->colorAttachments()->object(0);
+        aoColor->setTexture(aoA_);
+        aoColor->setLoadAction(MTL::LoadAction::LoadActionDontCare);
+        aoColor->setStoreAction(MTL::StoreAction::StoreActionStore);
+        MTL::RenderCommandEncoder* ao = commandBuffer->renderCommandEncoder(aoPass);
+        ao->setRenderPipelineState(aoPipeline_);
+        ao->setFragmentTexture(depthTexture_, NS::UInteger{0});
+        ao->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
+        ao->setFragmentBytes(aoParams, sizeof(aoParams), NS::UInteger{0});
+        ao->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle,
+                           NS::UInteger{0}, NS::UInteger{3});
+        ao->endEncoding();
+        aoPass->release();
+
+        mps::encodeGaussianBlur(fullBlur_, commandBuffer, aoA_, aoB_);
+    }
 
     // The glass blur only runs when panels need it; the composite below runs
     // always. PanelSurface samples the shared blur, so without glass the
@@ -946,7 +1011,13 @@ void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     composite->setRenderPipelineState(composePipeline_);
     composite->setFragmentTexture(worldColour_, NS::UInteger{0});
     composite->setFragmentTexture(bloomB_, NS::UInteger{1});
-    composite->setFragmentBytes(&environment_.bloom, sizeof(float), NS::UInteger{0});
+    composite->setFragmentTexture(aoB_, NS::UInteger{2});
+    // Field order must match shaders/Ui.hpp's CompositeParams.
+    const float compositeParams[] = {
+        environment_.bloom,
+        aoRan ? 1.0f : 0.0f,
+    };
+    composite->setFragmentBytes(compositeParams, sizeof(compositeParams), NS::UInteger{0});
     composite->setFragmentSamplerState(fontSampler_, NS::UInteger{0});
     composite->drawPrimitives(MTL::PrimitiveType::PrimitiveTypeTriangle, NS::UInteger{0},
                               NS::UInteger{3});

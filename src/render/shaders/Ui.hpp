@@ -139,22 +139,117 @@ fragment float4 thresholdFragment(ScreenOut in [[stage_in]],
     return float4(max(colour - float3(0.8), float3(0.0)), 1.0);
 }
 
+// Screen-space ambient occlusion. The world pass already pays for a full-res depth
+// buffer; this pass reads it back at quarter res and asks, for each pixel, how much
+// of a small sphere around the reconstructed view position is blocked by geometry
+// in front of it. There is no G-buffer, so there are no normals to gate a
+// hemisphere — the sphere-with-range-check version is what the depth alone can
+// honestly answer, and at RTS pitch it is exactly the ground-contact shadow the
+// effect exists for. Depth is Metal's [0,1] perspective clip, so every sample
+// re-inverts the projection: near/far/fov come in through `AoParams` rather than
+// being constants, because the camera owns them.
+struct AoParams {
+    float depthA;     // far / (far - near)
+    float depthB;     // far * near / (far - near)
+    float2 projScale; // (aspect * tan(fov/2), tan(fov/2)) — ndc = view.xy / (projScale * viewZ)
+    float radius;     // sample sphere, elmos
+    float intensity;  // how dark full occlusion goes
+    float bias;       // elmos of depth gap before a sample counts as occluded
+    float biasScale;  // extra bias per elmo of view depth — one depth texel is many
+                      // elmos wide at range, and a slope inside it reads as an occluder
+    float fadeStart;  // viewZ where occlusion starts thinning out
+    float fadeEnd;    // viewZ where it is gone entirely
+};
+
+fragment float aoFragment(ScreenOut in [[stage_in]],
+                          depth2d<float> depth [[texture(0)]],
+                          sampler depthSampler [[sampler(0)]],
+                          constant AoParams& p [[buffer(0)]]) {
+    const float2 uvToNdc = float2(2.0, -2.0);
+    const float2 uvBiasNdc = float2(-1.0, 1.0);
+    const auto viewAt = [&](float2 uv) {
+        const float d = depth.sample(depthSampler, uv);
+        const float viewZ = p.depthB / (p.depthA - d);
+        const float2 ndc = uv * uvToNdc + uvBiasNdc;
+        return float3(ndc * p.projScale * viewZ, -viewZ);
+    };
+    const float3 view = viewAt(in.uv);
+
+    // The surface normal, reconstructed from the depth buffer itself: there is no
+    // G-buffer, and without it the sample sphere dips under any rising slope and
+    // the whole terrain reports itself buried. Finite differences one texel over —
+    // the FULL-resolution depth's texel, not the AO target's, or the normal smears
+    // four pixels wide.
+    const float2 texel = float2(1.0 / float(depth.get_width()),
+                                1.0 / float(depth.get_height()));
+    const float3 viewX = viewAt(in.uv + float2(texel.x, 0.0));
+    const float3 viewY = viewAt(in.uv + float2(0.0, texel.y));
+    float3 normal = normalize(cross(viewX - view, viewY - view));
+    // Face it toward the camera, which sits at the view-space origin looking
+    // down -Z: a surface's normal opposes the direction to the eye.
+    if (dot(normal, -view) < 0.0) {
+        normal = -normal;
+    }
+
+    float occluded = 0.0;
+    float counted = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        // A deterministic spiral over the sphere, jittered by pixel so the eight
+        // taps do not line up into rings. The blur pass smears the rest.
+        const float fi = float(i);
+        const float angle = fi * 2.3999632 + in.uv.x * 17.0 + in.uv.y * 13.0;
+        const float3 offset =
+            float3(cos(angle), sin(angle), fract(fi * 0.6180339) * 2.0 - 1.0) * p.radius;
+        // Hemisphere, not sphere: samples under the surface occlude nothing real,
+        // they only report the slope they are inside.
+        if (dot(offset, normal) <= 0.0) {
+            continue;
+        }
+        counted += 1.0;
+        const float3 sample3 = view + offset;
+        const float sampleZ = -sample3.z;
+        if (sampleZ <= 0.0) {
+            continue;
+        }
+        const float2 sampleNdc = sample3.xy / (p.projScale * sampleZ);
+        const float2 sampleUv = sampleNdc * float2(0.5, -0.5) + 0.5;
+        const float sceneZ = p.depthB / (p.depthA - depth.sample(depthSampler, sampleUv));
+        const float gap = sampleZ - sceneZ;
+        const float bias = p.bias + sceneZ * p.biasScale;
+        occluded += step(bias, gap) * (1.0 - saturate(gap / p.radius));
+    }
+    // The effect is a near-field contact cue: beyond the fade band a four-elmo
+    // sphere is sub-texel noise, and distant slopes false-positive on depth
+    // aliasing before the bias can save them.
+    const float fade = 1.0 - saturate((-view.z - p.fadeStart) / (p.fadeEnd - p.fadeStart));
+    return saturate(1.0 - occluded / max(counted, 1.0) * p.intensity * fade);
+}
+
 // The final composite: linear HDR world to display. ACES-approximated filmic
 // curve (Narkowicz) so fire rolls off instead of clipping, then sRGB encode.
 // Exposure is 1.0 — the maps' authored light already balances the frame, and a
 // knob arrives when a map proves it needs one. Only the composite uses this;
 // the downsample keeps screenFragment so the blur works in linear.
 //
-// The blurred bright pass folds back in BEFORE the curve, scaled by the map's own
-// `bloom` gain — adding it after tone-mapping would halo already-gamma-encoded
-// colour and double-encode it.
+// The AO multiplies the world FIRST — it is a property of the surfaces, so it
+// dims them before the bloom adds light on top — and the blurred bright pass
+// folds back in BEFORE the curve, scaled by the map's own `bloom` gain: adding
+// it after tone-mapping would halo already-gamma-encoded colour and
+// double-encode it.
+struct CompositeParams {
+    float bloomGain;
+    float aoStrength;  // 0 binds AO out — for frames whose AO pass did not run
+};
+
 fragment float4 compositeFragment(ScreenOut in [[stage_in]],
                                   texture2d<float> image [[texture(0)]],
                                   texture2d<float> bloom [[texture(1)]],
+                                  texture2d<float> ao [[texture(2)]],
                                   sampler imageSampler [[sampler(0)]],
-                                  constant float& bloomGain [[buffer(0)]]) {
-    float3 colour = image.sample(imageSampler, in.uv).rgb
-                  + bloom.sample(imageSampler, in.uv).rgb * bloomGain;
+                                  constant CompositeParams& params [[buffer(0)]]) {
+    const float occlusion = mix(1.0, ao.sample(imageSampler, in.uv).r, params.aoStrength);
+    float3 colour = image.sample(imageSampler, in.uv).rgb * occlusion
+                  + bloom.sample(imageSampler, in.uv).rgb * params.bloomGain;
     const float3 x = colour;
     colour = x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14);
     return float4(pow(saturate(colour), float3(1.0 / 2.2)), 1.0);

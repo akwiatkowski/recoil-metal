@@ -650,8 +650,13 @@ private:
     // because both run in the same frame and would overwrite each other.
     MTL::Texture* bloomA_ = nullptr;       // owned, quarter resolution
     MTL::Texture* bloomB_ = nullptr;       // owned, quarter resolution
+    // The SSAO pair — R8 at quarter res. The first holds the raw occlusion, the
+    // second the blurred result the composite multiplies by.
+    MTL::Texture* aoA_ = nullptr;          // owned, quarter resolution
+    MTL::Texture* aoB_ = nullptr;          // owned, quarter resolution
     MTL::RenderPipelineState* downsamplePipeline_ = nullptr; // owned, no depth attachment
     MTL::RenderPipelineState* thresholdPipeline_ = nullptr;  // owned, no depth attachment
+    MTL::RenderPipelineState* aoPipeline_ = nullptr;         // owned, no depth attachment
     MTL::RenderPipelineState* composePipeline_ = nullptr;    // owned, with depth attachment
     MTL::RenderPipelineState* glassPipeline_ = nullptr;      // owned
     void* fullBlur_ = nullptr;                               // retained MPSImageGaussianBlur
