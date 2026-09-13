@@ -56,6 +56,13 @@ struct MoveDef {
     /// Whether this class routes over connected surface water. Kept separate from submarines:
     /// sharing a grid would silently pretend depth and surfacing do not exist.
     bool usesSurfaceWaterGrid = false;
+
+    /// The water the hull needs under its keel, in elmos — the surface-water grid's
+    /// `minDepthElmos`. Draft is per-UNIT, not per-class: a destroyer's hull rides
+    /// `Physics.Elevation` below the waterline and a naval structure states
+    /// `Footprint.MinWaterDepth` outright, so this is filled by `moveDefFor(def)`,
+    /// not the class table.
+    float minWaterDepthElmos = 0.0f;
 };
 
 /// The MoveDef for a motion class.

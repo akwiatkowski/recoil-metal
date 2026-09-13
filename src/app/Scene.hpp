@@ -1247,19 +1247,28 @@ public:
             if (!hasWater_) {
                 return empty_;
             }
-            if (!surfaceWater_) {
-                surfaceWater_ = rm::sim::buildSurfaceWaterPassability(*field_, waterLevel_);
-                std::printf("passability: %d x %d cells of %.0f elmos, %zu%% navigable water\n",
-                            surfaceWater_->cellsX, surfaceWater_->cellsZ,
-                            static_cast<double>(rm::sim::fxToFloat(surfaceWater_->elmosPerCell)),
-                            surfaceWater_->passable.empty()
+            // One grid per DRAFT: a hull's keel rides `Physics.Elevation` below the
+            // waterline, so a destroyer and a hovercraft answer different questions on
+            // the same sea. Memoised on the depth — the corpus keeps the distinct
+            // drafts to a handful.
+            auto [entry, fresh] =
+                surfaceWater_.try_emplace(move.minWaterDepthElmos, rm::sim::PassabilityGrid{});
+            if (fresh) {
+                entry->second = rm::sim::buildSurfaceWaterPassability(*field_, waterLevel_,
+                                                                      move.minWaterDepthElmos);
+                std::printf("passability: %d x %d cells of %.0f elmos, %zu%% navigable water"
+                            " (draft %.0f elmos)\n",
+                            entry->second.cellsX, entry->second.cellsZ,
+                            static_cast<double>(rm::sim::fxToFloat(entry->second.elmosPerCell)),
+                            entry->second.passable.empty()
                                 ? 0u
                                 : 100u * static_cast<std::size_t>(std::count(
-                                                surfaceWater_->passable.begin(),
-                                                surfaceWater_->passable.end(), std::uint8_t{1}))
-                                      / surfaceWater_->passable.size());
+                                                entry->second.passable.begin(),
+                                                entry->second.passable.end(), std::uint8_t{1}))
+                                      / entry->second.passable.size(),
+                            static_cast<double>(move.minWaterDepthElmos));
             }
-            return *surfaceWater_;
+            return entry->second;
         }
         if (!move.usesGroundGrid) {
             return empty_;
@@ -1289,7 +1298,7 @@ private:
     bool hasWater_;
     float waterLevel_;
     std::map<std::pair<float, float>, rm::sim::PassabilityGrid> grids_;
-    std::optional<rm::sim::PassabilityGrid> surfaceWater_;
+    std::map<float, rm::sim::PassabilityGrid> surfaceWater_;
     rm::sim::PassabilityGrid empty_;
 };
 

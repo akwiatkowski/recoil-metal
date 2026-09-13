@@ -237,6 +237,14 @@ struct UnitDef {
     /// behaviour — a silent default that changes nothing rather than a guess.
     float sizeYElmos = 0.0f;
 
+    /// The least water the unit needs under its keel, in elmos — `Footprint.MinWaterDepth`,
+    /// stated by naval structures (48 of the corpus; XSB0203's 1.5 ogrids is 12 elmos).
+    ///
+    /// A mobile hull's draft lives in `Physics.Elevation` instead — this field is the
+    /// STRUCTURE's way to state the same constraint, and `moveDefFor` takes the larger of
+    /// the two when building a surface-water MoveDef. Zero means "any water at all".
+    float minWaterDepthElmos = 0.0f;
+
     /// How tall the unit LOOKS, in elmos — `Physics.MeshExtentsY`, or the collision height when
     /// the blueprint states no extents.
     ///

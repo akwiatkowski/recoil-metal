@@ -490,6 +490,13 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     };
     def.footprintSquaresX = footprintOrSize("SizeX", sizeX);
     def.footprintSquaresZ = footprintOrSize("SizeZ", sizeZ);
+    // `Footprint.MinWaterDepth` — the naval structure's authored draft, in ogrids
+    // like the rest of the block. Mobile hulls state theirs as `Physics.Elevation`
+    // instead; `moveDefFor` takes the larger of the two.
+    if (footprint != nullptr) {
+        def.minWaterDepthElmos =
+            numberOr(*footprint, "MinWaterDepth", 0.0f) * scmap::kElmosPerOgrid;
+    }
 
     // Retail then raises an omitted or undersized skirt to the footprint and turns its
     // lower-corner offset into a rectangle centre. Keeping the derived centre means the sim

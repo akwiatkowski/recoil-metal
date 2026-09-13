@@ -162,3 +162,35 @@ TEST_CASE("all four commanders are amphibious, which makes it a fixed cost") {
         CHECK(rm::data::canCrossWater(*def));
     }
 }
+
+TEST_CASE("a water hull's draft is its authored elevation; a naval structure's is Footprint.MinWaterDepth") {
+    // FA-NAVY's depth-aware navigation: `Physics.Elevation`, negative under the
+    // waterline, is where the hull sits — a UES0203 destroyer states -1.5 ogrids
+    // (12 elmos) and a UES0401 Atlantis -3.6 (29). The same figure bounds where
+    // it can sail: a keel cannot pass through the seabed.
+    UnitDef ship = unitOf(MotionType::Water, 0.0f, 0.0f);
+    ship.elevationElmos = -1.5f * 8.0f;  // ogrids to elmos, as the loader writes it
+    const MoveDef shipMove = moveDefFor(ship);
+    CHECK(shipMove.usesSurfaceWaterGrid);
+    CHECK(shipMove.minWaterDepthElmos == 12.0f);
+
+    // A SurfacingSub drafts the same way — its hull is under the waterline even
+    // surfaced, so it keeps the deep-water grid in either layer.
+    UnitDef sub = unitOf(MotionType::SurfacingSub, 0.0f, 0.0f);
+    sub.elevationElmos = -1.5f * 8.0f;
+    CHECK(moveDefFor(sub).minWaterDepthElmos == 12.0f);
+
+    // A hovercraft rides the surface, not in it — positive elevation is no draft.
+    UnitDef hover = unitOf(MotionType::Hover, 0.0f, 0.0f);
+    hover.elevationElmos = 1.0f * 8.0f;
+    CHECK_FALSE(moveDefFor(hover).usesSurfaceWaterGrid);
+
+    // A naval STRUCTURE's draft is stated outright: Footprint.MinWaterDepth
+    // (XSB0203's 1.5 ogrids). It beats a shallower Elevation line.
+    UnitDef yard = unitOf(MotionType::None, 0.0f, 0.0f);
+    yard.categories = {"FACTORY", "NAVAL", "STRUCTURE"};
+    yard.minWaterDepthElmos = 1.5f * 8.0f;
+    const MoveDef yardMove = moveDefFor(yard);
+    CHECK(yardMove.usesSurfaceWaterGrid);
+    CHECK(yardMove.minWaterDepthElmos == 12.0f);
+}

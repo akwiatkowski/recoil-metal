@@ -50,7 +50,8 @@ MoveDef moveDefFor(unitdef::MotionType motion) noexcept {
     case MotionType::SurfacingSub:
         // Surface ships use the inverse domain: every square under a path cell must be below
         // the waterline. They do not care about seabed slope because they float above it.
-        // ponytail: SurfacingSub shares this grid until layer-specific depth footprints exist.
+        // The draft that separates a shelf-skimmer from a deep hull is per-unit —
+        // `moveDefFor(def)` fills `minWaterDepthElmos` from the blueprint.
         return MoveDef{.maxSlopeDegrees = 0.0f, .maxWaterDepthElmos = 0.0f,
                         .usesGroundGrid = false, .usesSurfaceWaterGrid = true};
 
@@ -64,14 +65,24 @@ MoveDef moveDefFor(const unitdef::UnitDef& def) noexcept {
     // Naval factories are immobile in the blueprint, but their foundation is the same water
     // domain their products use. Treating MotionType::None literally here leaves placement with
     // no grid and lets an amphibious builder found the yard on land.
-    if (def.motion == unitdef::MotionType::None && def.hasCategory("NAVAL")
-        && def.hasCategory("FACTORY")) {
-        return moveDefFor(unitdef::MotionType::Water);
-    }
+    MoveDef move = moveDefFor(def.motion == unitdef::MotionType::None
+                                  && def.hasCategory("NAVAL") && def.hasCategory("FACTORY")
+                              ? unitdef::MotionType::Water
+                              : def.motion);
     // THE CORRECTION. The unit's own `maxSlopeDegrees` and `maxWaterDepthElmos` are not read —
     // they govern building placement (`01 §3.2`), and reading them for routing was asking a
     // question about foundations and using the answer for legs.
-    return moveDefFor(def.motion);
+    //
+    // DRAFT IS THE OTHER QUESTION, and it IS per-unit (FA-NAVY): a hull's keel rides
+    // `Physics.Elevation` below the waterline — UES0203's -1.5 ogrids is 12 elmos of
+    // water under the keel — while a naval structure states `Footprint.MinWaterDepth`
+    // outright. The larger of the two is what the surface-water grid demands, so a
+    // deep hull can no longer sail across a shelf it would ground on.
+    if (move.usesSurfaceWaterGrid) {
+        move.minWaterDepthElmos =
+            std::max(def.minWaterDepthElmos, -std::min(0.0f, def.elevationElmos));
+    }
+    return move;
 }
 
 bool canCrossWater(const unitdef::UnitDef& def) noexcept {

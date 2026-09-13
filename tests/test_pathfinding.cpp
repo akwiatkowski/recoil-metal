@@ -399,3 +399,34 @@ TEST_CASE("an empty grid refuses every site") {
     CHECK_FALSE(rm::sim::sitePlaceable(empty, rm::sim::Fx{}, rm::sim::Fx{},
                                        rm::sim::fxFromFloat(4.0f)));
 }
+
+TEST_CASE("a hull's draft decides which water it can sail") {
+    // Depth-aware naval nav (FA-NAVY): a ship's keel rides its authored
+    // `Elevation` below the waterline, so a hull with 12 elmos of draft cannot
+    // cross a shelf only 4 deep — while a floating gun on the same plane can.
+    // The minDepth parameter was already the grid's question; the unit's draft
+    // is finally what answers it.
+    HeightField field = flatField(64, -20.0f);
+    // A 4-elmos-deep shelf strip across the whole sea (raw 16 above the -20 base).
+    setCorners(field, 31, 0, 33, field.verticesZ() - 1, 16);
+
+    const PassabilityGrid anyDraft = rm::sim::buildSurfaceWaterPassability(field, 0.0f, 0.0f);
+    const PassabilityGrid deepHull = rm::sim::buildSurfaceWaterPassability(field, 0.0f, 12.0f);
+
+    const int shelfCell = deepHull.cellAtWorld(rm::test::fx(32.0f * rm::kSquareSize));
+    const int midZ = deepHull.cellAtWorld(rm::test::fx(32.0f * rm::kSquareSize));
+    CHECK(anyDraft.passableAt(shelfCell, midZ));   // a flat-bottomed hover passes
+    CHECK_FALSE(deepHull.passableAt(shelfCell, midZ));  // a destroyer grounds
+
+    // The shelf spans the sea: deep water either side, no crossing for the hull.
+    CHECK(rm::sim::findPath(deepHull, rm::test::fx(8.0f * rm::kSquareSize),
+                            rm::test::fx(32.0f * rm::kSquareSize),
+                            rm::test::fx(56.0f * rm::kSquareSize),
+                            rm::test::fx(32.0f * rm::kSquareSize))
+              .empty());
+    CHECK_FALSE(rm::sim::findPath(anyDraft, rm::test::fx(8.0f * rm::kSquareSize),
+                                  rm::test::fx(32.0f * rm::kSquareSize),
+                                  rm::test::fx(56.0f * rm::kSquareSize),
+                                  rm::test::fx(32.0f * rm::kSquareSize))
+                    .empty());
+}
