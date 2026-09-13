@@ -171,6 +171,7 @@ add_library(rm_core STATIC
     src/core/scene/ProjectileTrails.cpp
     src/core/scene/WeaponVisuals.cpp
     src/core/scene/OrderTimes.cpp
+    src/core/scene/ReclaimFields.cpp
     src/core/sim/Army.cpp
     src/core/sim/Command.cpp
     src/core/sim/Events.cpp

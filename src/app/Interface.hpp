@@ -393,6 +393,15 @@ std::size_t appendConstructionBars(rm::ui::Geometry& out, const UnitScene& scene
     const rm::HeightField& field, const rm::text::Font& font,
     const rm::ui::UiViewport& viewport, rm::UnitIndex slot);
 
+/// FAF's reclaim overlay: while a builder is selected, every cluster of reclaimable
+/// wrecks wears its total — the mass over the field it would pay, in the resource's
+/// own colour. `rm::reclaimFields` does the clustering; this only hangs the numbers
+/// where a camera can see them. Returns the labels drawn, for headless assertion.
+[[nodiscard]] std::size_t appendReclaimLabels(
+    rm::ui::Geometry& out, const UnitScene& scene, const rm::OrbitCamera& camera,
+    const rm::HeightField& field, const rm::text::Font& font,
+    const rm::ui::UiViewport& viewport);
+
 [[nodiscard]] std::optional<rm::sim::UnitId> pickAnyBatch(const rm::Ray& ray,
                                                           const UnitScene& scene);
 

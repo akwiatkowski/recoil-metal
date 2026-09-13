@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include "core/scene/ReclaimFields.hpp"
 #include "core/sim/Command.hpp"
 #include "core/sim/FeatureStore.hpp"
 #include "core/sim/Reclaim.hpp"
@@ -888,4 +889,35 @@ TEST_CASE("a patrol helper does no service while its combat target is active") {
     CHECK(rm::test::asFloat(f.roster.health(ally).current) == 50.0f);
     REQUIRE(f.features.find(wreck) != nullptr);
     CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 90.0f);
+}
+
+TEST_CASE("reclaim fields cluster the wrecks a label can price", "[scene][reclaim]") {
+    // One artillery barrage's corpses read as one number: wrecks inside a cell merge,
+    // a field a cell away keeps its own label, and a bare scorch prices nothing.
+    Fixture f;
+    (void)f.wreckAt(100.0f, 100.0f, /*mass=*/90.0f);
+    (void)f.wreckAt(110.0f, 105.0f, /*mass=*/90.0f);   // same cell — merges
+    (void)f.wreckAt(300.0f, 300.0f, /*mass=*/50.0f);   // far away — its own field
+    (void)f.wreckAt(105.0f, 110.0f, /*mass=*/0.0f);    // bare scorch — ignored
+
+    const std::vector<rm::ReclaimField> fields = rm::reclaimFields(f.features);
+    REQUIRE(fields.size() == 2);
+    const auto& near = fields[0];
+    CHECK(rm::sim::magToFloat(near.mass) == Approx(180.0f));
+    CHECK(near.wrecks == 2);
+    // Mass-weighted centroid of (100,100) and (110,105) at equal mass: (105, 102.5).
+    CHECK(rm::sim::fxToFloat(near.x) == Approx(105.0f).margin(0.5f));
+    CHECK(rm::sim::fxToFloat(near.z) == Approx(102.5f).margin(0.5f));
+    const auto& far = fields[1];
+    CHECK(rm::sim::magToFloat(far.mass) == Approx(50.0f));
+    CHECK(far.wrecks == 1);
+    CHECK(rm::sim::fxToFloat(far.x) == Approx(300.0f).margin(0.5f));
+
+    // A wreck that reclaimed to nothing leaves the label's total.
+    const FeatureId last = f.features.idAt(2);
+    f.features.findMutable(last)->massRemaining = rm::sim::Mag{};
+    f.features.findMutable(last)->energyRemaining = rm::sim::Mag{};
+    const std::vector<rm::ReclaimField> after = rm::reclaimFields(f.features);
+    REQUIRE(after.size() == 1);
+    CHECK(rm::sim::magToFloat(after[0].mass) == Approx(180.0f));
 }

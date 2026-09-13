@@ -549,6 +549,29 @@ rm::ui::EffectsPreference parseUiEffects(int argc, const char* argv[]) {
     return {};
 }
 
+[[nodiscard]] std::vector<StagedWreck> parseWrecks(int argc, const char* argv[]) {
+    std::vector<StagedWreck> wrecks;
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string_view{argv[i]} != "--wreck") {
+            continue;
+        }
+        // `x,z,mass[,energy]` — one argument so it cannot be split across a later flag.
+        StagedWreck staged;
+        char* end = nullptr;
+        staged.x = std::strtof(argv[i + 1], &end);
+        if (end == argv[i + 1] || *end != ',') continue;
+        staged.z = std::strtof(end + 1, &end);
+        if (*end != ',') continue;
+        staged.mass = std::strtof(end + 1, &end);
+        if (*end == ',') {
+            staged.energy = std::strtof(end + 1, &end);
+        }
+        if (*end != '\0') continue;
+        wrecks.push_back(staged);
+    }
+    return wrecks;
+}
+
 [[nodiscard]] std::string_view parseTrial(int argc, const char* argv[]) {
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::string_view{argv[i]} == "--trial"

@@ -342,6 +342,35 @@ int main(int argc, const char* argv[]) {
             std::fprintf(stderr, "weapon visuals: %s\n", units.weaponVisuals.unavailable[i].c_str());
         std::vector<rm::Particle> marchDust;
 
+        // `--wreck x,z,mass[,energy]` stages corpses before the run starts — the only
+        // way a headless capture sees a reclaimable field, since a scripted skirmish
+        // would have to kill something first. The fields a real death fills that the
+        // label does not read (work totals, reclaim rates) take the corpus defaults:
+        // worth 10 per build-rate, work set to the richer resource.
+        const std::vector<rm::app::StagedWreck> stagedWrecks =
+            rm::app::parseWrecks(argc, argv);
+        if (!stagedWrecks.empty()) {
+            std::printf("staged %zu wreck(s)\n", stagedWrecks.size());
+        }
+        for (const rm::app::StagedWreck& staged : stagedWrecks) {
+            const rm::sim::Mag mass = rm::sim::magFromFloat(staged.mass);
+            const rm::sim::Mag energy = rm::sim::magFromFloat(staged.energy);
+            (void)units.features.add(rm::sim::Feature{
+                .at = {rm::sim::fxFromFloat(staged.x),
+                       rm::sim::fxFromFloat(map->field.heightAtWorld(staged.x, staged.z)),
+                       rm::sim::fxFromFloat(staged.z)},
+                .radiusElmos = rm::sim::fxFromFloat(4.0f),
+                .armyIndex = rm::sim::kNoArmy,
+                .maximumMassReclaim = mass,
+                .maximumEnergyReclaim = energy,
+                .massRemaining = mass,
+                .energyRemaining = energy,
+                .reclaimWorkRemaining = mass > energy ? mass : energy,
+                .reclaimWorkTotal = mass > energy ? mass : energy,
+                .maximumReclaimPerBuildRate = rm::sim::fxFromFloat(10.0f),
+                .reclaimPerBuildRate = rm::sim::fxFromFloat(10.0f)});
+        }
+
         const MarchOptions marchOptions = parseMarch(argc, argv);
         if (marchOptions.enabled) {
             march(units, map->field, passability, marchOptions, props.ambient, marchDust,

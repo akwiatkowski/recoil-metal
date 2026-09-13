@@ -228,6 +228,19 @@ orderArchivesForMount(std::vector<std::filesystem::path> archives);
 /// Empty when the flag is absent.
 [[nodiscard]] std::string_view parseTrial(int argc, const char* argv[]);
 
+/// One staged wreck from a `--wreck x,z,mass[,energy]` argument — a corpse placed on
+/// the scene before the run starts, so a headless capture can exercise the reclaim
+/// overlay and the wreck decals without waiting for a match to kill something.
+struct StagedWreck {
+    float x = 0.0f;
+    float z = 0.0f;
+    float mass = 0.0f;
+    float energy = 0.0f;
+};
+
+/// Every `--wreck` on the command line, in order. See `StagedWreck`.
+[[nodiscard]] std::vector<StagedWreck> parseWrecks(int argc, const char* argv[]);
+
 /// Whether `flag` appears at all.
 [[nodiscard]] bool hasFlag(int argc, const char* argv[], std::string_view flag);
 

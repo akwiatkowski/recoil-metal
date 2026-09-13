@@ -565,6 +565,25 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                 std::printf("  order-times: %zu\n", shotOrderTimes);
             }
 
+            // The reclaim overlay stands in for a builder under the cursor: a capture
+            // cannot arm one, so a staged `--wreck` beside a `--select`-ed builder
+            // wears the same field totals the live overlay draws.
+            if (std::any_of(capturedSelection.begin(), capturedSelection.end(),
+                            [&](rm::sim::UnitId id) {
+                                const rm::unitdef::UnitDef* def =
+                                    units.store.alive(id)
+                                        ? units.catalog.def(units.store.typeAt(id.index))
+                                        : nullptr;
+                                return def != nullptr && def->isBuilder();
+                            })) {
+                const std::size_t reclaimLabels = rm::app::appendReclaimLabels(
+                    hud, units, renderer.camera(), map->field,
+                    renderer.labelFont(), shotViewport);
+                if (reclaimLabels > 0) {
+                    std::printf("  reclaim labels: %zu\n", reclaimLabels);
+                }
+            }
+
             // THE CONSTRUCTION SITES IN A CAPTURE TOO, for the reason the HUD is here: a
             // screenshot is how this project verifies anything, and an effect only visible in
             // a live window cannot be checked at all. The upload afterwards is not optional —
@@ -3254,6 +3273,26 @@ int runWindowed(const Session& session) {
                                                     viewport, at);
                 }
                 }
+
+            // RECLAIM PAYS WHERE THE WRECKS ARE. While a builder is selected (or the
+            // reclaim order armed), every reclaimable field wears its total — the
+            // same read FAF's overlay gives, drawn from the features the click path
+            // already prices.
+            {
+                const bool builderSelected =
+                    armedCommand == rm::sim::CommandKind::Reclaim
+                    || std::any_of(selected.begin(), selected.end(), [&](rm::sim::UnitId id) {
+                           const rm::unitdef::UnitDef* def =
+                               units.store.alive(id)
+                                   ? units.catalog.def(units.store.typeAt(id.index))
+                                   : nullptr;
+                           return def != nullptr && def->isBuilder();
+                       });
+                if (builderSelected) {
+                    (void)rm::app::appendReclaimLabels(hudScratch, units,
+                        window.camera(), map->field, window.labelFont(), viewport);
+                }
+            }
 
             // THE CURSOR SAYS WHAT THE NEXT CLICK MEANS. An armed order command
             // (attack-move, patrol, ...) is a crosshair — the next click is a

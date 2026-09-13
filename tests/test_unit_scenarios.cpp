@@ -1104,6 +1104,44 @@ TEST_CASE("a spread move gives each unit its own destination off the click",
     CHECK(head(a).second == Catch::Approx(600.0f).margin(2.0f));
 }
 
+TEST_CASE("a selected builder's reclaim fields wear their totals", "[ui][reclaim]") {
+    // The overlay's regression net: a field of two merged wrecks must put one label in
+    // the label channel; ground with nothing reclaimable puts none.
+    Scenario scenario;
+    rm::unitdef::UnitDef def;
+    def.name = "test_engineer";
+    def.speedElmosPerSecond = 5.0f;
+    const auto engineer = scenario.spawn(def, 200, 200);
+    (void)engineer;
+    const auto wreck = [&](float x, float z, float mass) {
+        return scenario.scene.features.add(rm::sim::Feature{
+            .at = {rm::sim::fxFromFloat(x), rm::sim::Fx{}, rm::sim::fxFromFloat(z)},
+            .radiusElmos = rm::sim::fxFromFloat(4.0f),
+            .massRemaining = rm::sim::magFromFloat(mass)});
+    };
+    (void)wreck(300.0f, 200.0f, 90.0f);
+    (void)wreck(310.0f, 204.0f, 90.0f);   // same cell: one label, priced 180
+    (void)wreck(700.0f, 700.0f, 0.0f);    // a bare scorch prices nothing
+
+    rm::OrbitCamera camera;
+    camera.target = simd_make_float3(300, 0, 200);
+    camera.distance = 400;
+    std::vector<rm::text::Glyph> glyphs(rm::text::kGlyphCount);
+    for (rm::text::Glyph& glyph : glyphs) {
+        glyph.advance = 8.0f;
+        glyph.width = 6.0f;
+        glyph.height = 10.0f;
+    }
+    const rm::text::Font font{.glyphs = glyphs, .lineHeight = 18,
+        .solidUv = {0.5f, 0.5f, 0.6f, 0.6f}};
+    const auto viewport = rm::ui::UiViewport::authored(1600, 900);
+
+    rm::ui::Geometry geometry;
+    CHECK(rm::app::appendReclaimLabels(geometry, scenario.scene, camera,
+        scenario.field, font, viewport) == 1);
+    CHECK(!geometry.label.empty());
+}
+
 TEST_CASE("factory panel clicks control the real production queue", "[corpus][ui][production]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus at " + root.string());

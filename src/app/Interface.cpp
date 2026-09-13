@@ -5,6 +5,7 @@
 #include "core/model/Pose.hpp"
 #include "core/scene/BuildEffects.hpp"
 #include "core/scene/OrderTimes.hpp"
+#include "core/scene/ReclaimFields.hpp"
 #include "core/ui/IconAtlas.hpp"
 #include "core/ui/CommandPanel.hpp"
 #include "core/unit/Role.hpp"
@@ -1316,6 +1317,58 @@ std::size_t appendOrderTimes(
         rm::text::appendText(out.label, font.glyphs, buffer,
                              (*screen)[0] - width * 0.5f, (*screen)[1] - 18.0f,
                              rm::ui::Colour{{node[0], node[1], node[2], 1.0f}});
+        ++drawn;
+    }
+    return drawn;
+}
+
+std::size_t appendReclaimLabels(
+    rm::ui::Geometry& out, const UnitScene& scene, const rm::OrbitCamera& camera,
+    const rm::HeightField& field, const rm::text::Font& font,
+    const rm::ui::UiViewport& viewport) {
+    const std::vector<rm::ReclaimField> fields = rm::reclaimFields(scene.features);
+    const rm::ui::Extent extent = viewport.hudExtent();
+    if (fields.empty() || !font.usable() || extent.width <= 0 || extent.height <= 0) {
+        return 0;
+    }
+    const auto battlefield = rm::ui::frameLayout(viewport).battlefield;
+    std::size_t drawn = 0;
+    for (const rm::ReclaimField& cluster : fields) {
+        if (!scene.visibleToViewer(cluster.x, cluster.z)) {
+            continue;  // fog keeps its secrets — a label is not reconnaissance
+        }
+        const float x = rm::sim::fxToFloat(cluster.x);
+        const float z = rm::sim::fxToFloat(cluster.z);
+        const auto screen = rm::worldToScreen(camera,
+            simd_make_float3(x, field.heightAtWorld(x, z), z),
+            extent.width, extent.height);
+        if (!screen || !battlefield.contains((*screen)[0], (*screen)[1])) {
+            continue;
+        }
+        // The FAF format: a bare mass number, and "+N" in energy amber only when the
+        // field pays both. A wreck field's worth is what an engineer asks about it.
+        char mass[16];
+        std::snprintf(mass, sizeof mass, "%.0f",
+                      static_cast<double>(rm::sim::magToFloat(cluster.mass)));
+        char energy[16] = {};
+        const bool hasEnergy = cluster.energy > rm::sim::Mag{};
+        if (hasEnergy) {
+            std::snprintf(energy, sizeof energy, "+%.0f",
+                          static_cast<double>(rm::sim::magToFloat(cluster.energy)));
+        }
+        const float massWidth = rm::text::measureText(font.glyphs, mass);
+        const float energyWidth =
+            hasEnergy ? rm::text::measureText(font.glyphs, energy) : 0.0f;
+        float pen = (*screen)[0] - (massWidth + energyWidth) * 0.5f;
+        const float baseline = (*screen)[1] - 18.0f;
+        if (cluster.mass > rm::sim::Mag{} || !hasEnergy) {
+            pen = rm::text::appendText(out.label, font.glyphs, mass, pen, baseline,
+                                     rm::ui::kMass);
+        }
+        if (hasEnergy) {
+            (void)rm::text::appendText(out.label, font.glyphs, energy, pen, baseline,
+                                       rm::ui::kEnergy);
+        }
         ++drawn;
     }
     return drawn;
