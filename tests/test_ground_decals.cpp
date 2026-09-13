@@ -521,3 +521,84 @@ TEST_CASE("a chamfered square cuts its corners at 45 degrees", "[selection-squar
     }
     CHECK(cutIsDrawn);
 }
+
+// --- The queue's per-order palette ---------------------------------------------------
+//
+// One colour per command family, so a drawn queue reads as the orders it holds rather
+// than as one indifferent chain. The mapping is the vocabulary the interface already
+// speaks: green for go, red for hurt, cyan for "not yet in the world".
+
+TEST_CASE("a move queue keeps the queue's own green", "[queue-colours]") {
+    const rm::app::QueueRouteColours move =
+        rm::app::queueRouteColours(rm::sim::CommandKind::Move);
+    CHECK(move.line == rm::app::kQueueLineColour);
+    CHECK(move.node == rm::app::kQueueNodeColour);
+}
+
+TEST_CASE("each order family draws in its own hue", "[queue-colours]") {
+    using rm::sim::CommandKind;
+    const rm::app::QueueRouteColours move =
+        rm::app::queueRouteColours(CommandKind::Move);
+    const rm::app::QueueRouteColours attackMove =
+        rm::app::queueRouteColours(CommandKind::AttackMove);
+    const rm::app::QueueRouteColours patrol =
+        rm::app::queueRouteColours(CommandKind::Patrol);
+    const rm::app::QueueRouteColours attack =
+        rm::app::queueRouteColours(CommandKind::Attack);
+    const rm::app::QueueRouteColours build =
+        rm::app::queueRouteColours(CommandKind::Build);
+    const rm::app::QueueRouteColours assist =
+        rm::app::queueRouteColours(CommandKind::Assist);
+    const rm::app::QueueRouteColours reclaim =
+        rm::app::queueRouteColours(CommandKind::Reclaim);
+
+    // Aggression ramps green → amber → red: an attack-move is a move that fights,
+    // an attack is only the fight, and the hues must not collide with each other
+    // or with move on the same ground.
+    CHECK(attack.line[0] > 0.9f);
+    CHECK(attack.line[1] < 0.45f);
+    CHECK(attack.line != attackMove.line);
+    CHECK(attackMove.line != move.line);
+    CHECK(patrol.line != move.line);
+    CHECK(patrol.line != attackMove.line);
+
+    // Build borrows the ghost's cyan — both are "where a structure will stand".
+    CHECK(build.node == rm::app::kBuildGhostColour);
+
+    // Assist and guard are the same standing family: a unit watching another.
+    CHECK(assist.line == rm::app::queueRouteColours(CommandKind::Guard).line);
+    CHECK(assist.line == rm::app::queueRouteColours(CommandKind::Repair).line);
+    CHECK(assist.line != move.line);
+
+    // Reclaim gets a sand of its own — it ends with something taken, but taken for
+    // parts rather than destroyed, so it does not wear the attack's red.
+    CHECK(reclaim.line == rm::app::queueRouteColours(CommandKind::ReclaimUnit).line);
+    CHECK(reclaim.line != move.line);
+    CHECK(reclaim.line != attack.line);
+    CHECK(rm::app::queueRouteColours(CommandKind::Overcharge).line == attack.line);
+    CHECK(rm::app::queueRouteColours(CommandKind::Capture).line == attack.line);
+}
+
+TEST_CASE("kinds without a drawn destination keep the plain queue colour",
+          "[queue-colours]") {
+    using rm::sim::CommandKind;
+    for (const CommandKind kind :
+         {CommandKind::Stop, CommandKind::Script, CommandKind::ToggleFactoryRepeat,
+          CommandKind::CancelFactoryBuild, CommandKind::Dive}) {
+        CHECK(rm::app::queueRouteColours(kind).line == rm::app::kQueueLineColour);
+    }
+}
+
+TEST_CASE("a queue node is always the louder half of its segment", "[queue-colours]") {
+    for (const rm::sim::CommandKind kind :
+         {rm::sim::CommandKind::Move, rm::sim::CommandKind::Attack,
+          rm::sim::CommandKind::Patrol, rm::sim::CommandKind::Build}) {
+        const rm::app::QueueRouteColours colours = rm::app::queueRouteColours(kind);
+        // The node is the decision; the line only connects. Whatever the family,
+        // the node's alpha outshouts the line's and the hues match.
+        CHECK(colours.node[3] > colours.line[3]);
+        CHECK(colours.node[0] == Approx(colours.line[0]));
+        CHECK(colours.node[1] == Approx(colours.line[1]));
+        CHECK(colours.node[2] == Approx(colours.line[2]));
+    }
+}

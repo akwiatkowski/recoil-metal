@@ -17,6 +17,7 @@
 
 #include <memory>
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <span>
 
@@ -57,6 +58,13 @@ struct MouseModifiers {
     /// pair still arrives as 1 and is handled normally — a double-click refines what the
     /// single click did, which is exactly how select-then-select-all-of-type should feel.
     int clicks = 1;
+};
+
+/// The cursor shapes the interface can ask for. A semantic choice, not an image —
+/// which AppKit cursor stands for it is the platform's business.
+enum class CursorStyle : std::uint8_t {
+    Arrow,      // pointing at the world — the ordinary state
+    Crosshair,  // an order is armed and the next click gives it a destination
 };
 
 // Owns the NSWindow, its CAMetalLayer, the vsync display link, and the
@@ -171,6 +179,12 @@ public:
     /// AppKit content view and every hit test misses — which is the correct answer, and the
     /// reason this does not need to be an optional.
     [[nodiscard]] std::array<float, 2> cursor() const;
+
+    /// Which cursor to show. A PER-FRAME SETTER for the same reason `cursor()` is a poll:
+    /// the interface is rebuilt every frame, so what the cursor means is a per-frame fact —
+    /// an armed order asks for a crosshair and disarming puts the arrow back, with no state
+    /// for an event stream to leave stale. The platform caches; calling every frame is free.
+    void setCursorStyle(CursorStyle style);
 
     /// The planar reflection quality setting. See Renderer::setReflections.
     void setReflections(bool enabled);

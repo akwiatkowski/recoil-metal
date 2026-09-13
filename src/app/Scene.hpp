@@ -1366,6 +1366,68 @@ inline constexpr std::array<float, 4> kBuildGhostColour{{0.35f, 0.85f, 1.0f, 0.7
 /// vision alone, which is the same reasoning the order marker's cross records.
 inline constexpr std::array<float, 4> kBuildGhostBlockedColour{{1.0f, 0.30f, 0.25f, 0.85f}};
 
+/// One queue segment's pair of colours: the line that connects two orders and the
+/// node that IS the order. The node always outshouts its line — same hue, more alpha.
+struct QueueRouteColours {
+    std::array<float, 4> line;
+    std::array<float, 4> node;
+};
+
+/// The colour of one queued order's segment, by kind.
+///
+/// ONE COLOUR PER ORDER FAMILY, because a drawn queue is read back as "what did I
+/// tell it to do" — with a single hue every chain looks like the same order repeated,
+/// and a shift-queued attack hiding among moves is exactly the order a player wants
+/// to spot. The hues extend the interface's existing vocabulary rather than inventing
+/// a new one:
+///
+/// - MOVE and the kindless engine orders keep the queue's own green — "go here".
+/// - ATTACK, OVERCHARGE and CAPTURE wear the hostile red — they end with something
+///   on the ground being taken.
+/// - ATTACK-MOVE sits between them in the order marker's amber: a move that fights.
+/// - PATROL is yellow — a loop, distinct from every one-shot destination.
+/// - BUILD borrows the ghost's cyan: the node is where a structure will stand.
+/// - ASSIST, GUARD and REPAIR share a watchful blue — one unit attending another.
+/// - RECLAIM is sand — taken, but for parts, which is not the attack's red.
+[[nodiscard]] constexpr QueueRouteColours queueRouteColours(
+    rm::sim::CommandKind kind) noexcept {
+    constexpr std::array<float, 4> attack{{1.00f, 0.35f, 0.28f, 0.30f}};
+    constexpr std::array<float, 4> attackNode{{1.00f, 0.35f, 0.28f, 0.75f}};
+    constexpr std::array<float, 4> attackMove{{1.00f, 0.72f, 0.20f, 0.30f}};
+    constexpr std::array<float, 4> attackMoveNode{{1.00f, 0.72f, 0.20f, 0.75f}};
+    constexpr std::array<float, 4> patrol{{1.00f, 0.95f, 0.25f, 0.30f}};
+    constexpr std::array<float, 4> patrolNode{{1.00f, 0.95f, 0.25f, 0.75f}};
+    constexpr std::array<float, 4> assist{{0.45f, 0.70f, 1.00f, 0.30f}};
+    constexpr std::array<float, 4> assistNode{{0.45f, 0.70f, 1.00f, 0.75f}};
+    constexpr std::array<float, 4> reclaim{{0.75f, 0.60f, 0.35f, 0.30f}};
+    constexpr std::array<float, 4> reclaimNode{{0.75f, 0.60f, 0.35f, 0.75f}};
+    constexpr QueueRouteColours build{
+        .line = {{kBuildGhostColour[0], kBuildGhostColour[1], kBuildGhostColour[2],
+                  0.30f}},
+        .node = kBuildGhostColour};
+    switch (kind) {
+        case rm::sim::CommandKind::Attack:
+        case rm::sim::CommandKind::Overcharge:
+        case rm::sim::CommandKind::Capture:
+            return {.line = attack, .node = attackNode};
+        case rm::sim::CommandKind::AttackMove:
+            return {.line = attackMove, .node = attackMoveNode};
+        case rm::sim::CommandKind::Patrol:
+            return {.line = patrol, .node = patrolNode};
+        case rm::sim::CommandKind::Build:
+            return build;
+        case rm::sim::CommandKind::Assist:
+        case rm::sim::CommandKind::Guard:
+        case rm::sim::CommandKind::Repair:
+            return {.line = assist, .node = assistNode};
+        case rm::sim::CommandKind::Reclaim:
+        case rm::sim::CommandKind::ReclaimUnit:
+            return {.line = reclaim, .node = reclaimNode};
+        default:
+            return {.line = kQueueLineColour, .node = kQueueNodeColour};
+    }
+}
+
 // --- What the scene layer does ------------------------------------------------------------
 
 void setAppTickRate(std::uint32_t ticksPerSecond);

@@ -2961,12 +2961,13 @@ int runWindowed(const Session& session) {
                     }
                     const std::array<float, 2> to{rm::sim::fxToFloat(order.targetX()),
                                                   rm::sim::fxToFloat(order.targetZ())};
-                    appendGroundSegment(out, field, from, to, kQueueLineColour,
+                    // One colour per order family — the chain reads as the orders
+                    // it holds, not as one indifferent string of waypoints.
+                    const rm::app::QueueRouteColours colours =
+                        rm::app::queueRouteColours(order.kind());
+                    appendGroundSegment(out, field, from, to, colours.line,
                                         kQueueLineWidthElmos);
-                    appendGroundNode(out, field, to,
-                                     order.kind() == rm::sim::CommandKind::Build
-                                         ? kBuildGhostColour
-                                         : kQueueNodeColour,
+                    appendGroundNode(out, field, to, colours.node,
                                      kQueueNodeHalfElmos);
                     from = to;
                 }
@@ -3011,9 +3012,9 @@ int runWindowed(const Session& session) {
                 appendRallyLine(decalVertices, map->field, units, sel.index);
 
                 // THE ORDER QUEUE, drawn in the world for a selected unit: a line from the
-                // unit through every queued destination, a diamond at each node — and the
-                // build orders' nodes in the ghost's cyan, because that node will become a
-                // building and its colour should say so before the fact.
+                // unit through every queued destination, a diamond at each node — each
+                // segment in its order family's hue, so a patrol loop, a queued attack and
+                // a build site read as three different intentions rather than one chain.
                 drawOrderQueue(decalVertices, map->field, units, sel.index, ground);
             }
             // SHIFT HOLDS EVERY QUEUE UP, not just the selection's. Queuing is aimed at
@@ -3038,6 +3039,15 @@ int runWindowed(const Session& session) {
                                     rm::sim::fxToFloat(mat.z)});
                 }
                 }
+
+            // THE CURSOR SAYS WHAT THE NEXT CLICK MEANS. An armed order command
+            // (attack-move, patrol, ...) is a crosshair — the next click is a
+            // destination, not a selection — and an armed build cell is one too,
+            // on top of the ghost itself. Everything else points. Restated every
+            // frame so no event stream can leave it stale.
+            window.setCursorStyle(armedCommand || armedOption
+                                      ? rm::CursorStyle::Crosshair
+                                      : rm::CursorStyle::Arrow);
 
             // Build previews are composed after the decal buffer is cleared. Every
             // silhouette reads the same snapped sites used by the release submission.

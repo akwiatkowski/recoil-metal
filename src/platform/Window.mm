@@ -94,6 +94,8 @@ namespace {
 @property(nonatomic, assign) float simulatedBacking;
 /// Only the explicit test helper opts into click-through while the app is inactive.
 @property(nonatomic, assign) BOOL injectingMouseClick;
+/// The app's per-frame cursor choice. resetCursorRects turns it into an AppKit rect.
+@property(nonatomic, assign) rm::CursorStyle cursorStyle;
 
 /// Re-derives the layer's drawableSize from bounds x contentsScale.
 - (void)rmSyncDrawableSize;
@@ -128,6 +130,16 @@ namespace {
 
 - (BOOL)acceptsFirstResponder {
     return YES;
+}
+
+/// The view covers the whole window, so ONE cursor rect over the bounds is the whole
+/// answer — AppKit re-invokes this on resize and whenever setCursorStyle invalidates.
+- (void)resetCursorRects {
+    [super resetCursorRects];
+    [self addCursorRect:self.bounds
+                 cursor:self.cursorStyle == rm::CursorStyle::Crosshair
+                            ? NSCursor.crosshairCursor
+                            : NSCursor.arrowCursor];
 }
 
 - (BOOL)acceptsFirstMouse:(NSEvent*)event {
@@ -676,6 +688,22 @@ std::array<float, 2> Window::cursor() const {
     // LOGICAL POINTS, not authored HUD space: screenRay consumes these directly and UiViewport
     // converts the same point for hit tests.
     return viewPointIn(impl_->view, window.mouseLocationOutsideOfEventStream);
+}
+
+void Window::setCursorStyle(CursorStyle style) {
+    if (impl_->view.cursorStyle == style) {
+        return;  // the rect already holds it — nothing to invalidate
+    }
+    impl_->view.cursorStyle = style;
+    // Invalidate the rect so AppKit picks the right cursor on entry and on the next
+    // update pass, AND push the image directly: a rect change alone only takes
+    // effect when the pointer next crosses a boundary, and the armed→disarmed flip
+    // has to be visible while the pointer sits still over the map.
+    [impl_->view.window invalidateCursorRectsForView:impl_->view];
+    NSCursor* cursor = style == CursorStyle::Crosshair
+        ? NSCursor.crosshairCursor
+        : NSCursor.arrowCursor;
+    [cursor set];
 }
 
 void Window::setReflections(bool enabled) {
