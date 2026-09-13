@@ -87,7 +87,7 @@ namespace {
 // Runs before the waypoint logic so a takeoff or landing commit takes effect the same tick
 // the order (or its absence) arrives. The altitude reference slews inside the beat, where
 // the look-ahead that feeds it is computed.
-void tickAirState(MoveState& state) noexcept {
+void tickAirState(Transform& unit, MoveState& state) noexcept {
     using AirState = MoveState::AirState;
     // Recharge while grounded runs at the drain rate — its exact rate is open, and with
     // no native consequence at zero either choice is behaviourally identical today.
@@ -114,10 +114,18 @@ void tickAirState(MoveState& state) noexcept {
         if (++state.idleTicks >= state.idleLandThreshold) {
             state.airState = AirState::Down;
             state.idleTicks = 0;
+            // Auto-land descends where it loitered: whatever `destination` still
+            // holds is a retired order's site, not a landing pad. Without this a
+            // never-ordered flyer glides to (0,0) on the way down.
+            state.destinationX = unit.x;
+            state.destinationZ = unit.z;
         }
     } else if (state.airState == AirState::Up) {
-        // An order cancelled mid-climb comes back down rather than idling Up.
+        // An order cancelled mid-climb comes back down rather than idling Up —
+        // and comes down where it is, not at the cancelled order's site.
         state.airState = AirState::Down;
+        state.destinationX = unit.x;
+        state.destinationZ = unit.z;
     }
     // Fuel drains whenever off the ground and the clamp is the whole native story
     // (`C-223`): no speed penalty, no crash, every consequence Lua.
@@ -413,7 +421,7 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         // aircraft recharges (`C-223`) and a fresh order commits it to takeoff, both
         // before the idle skip below would otherwise pass it over.
         if (state.canFly && !state.attached) {
-            tickAirState(state);
+            tickAirState(transforms[i], state);
         }
         // A flyer off the ground stays in the tick after its orders end: it must land,
         // hold, or keep flying on its velocity rather than freeze mid-air.

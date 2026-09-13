@@ -1516,6 +1516,23 @@ TEST_CASE("an idle flyer auto-lands after its auto-land interval") {
     }
     rm::sim::tick(units, motion, terrain);
     CHECK(motion[0].airState == MoveState::AirState::Down);
+
+    // Auto-land drops where the flyer loitered — its own position becomes the
+    // landing site, not a retired order's destination (which for a never-ordered
+    // unit is the default (0,0), a glide to the map's corner).
+    CHECK(motion[0].destinationX == rm::sim::Fx::fromInt(100));
+    CHECK(motion[0].destinationZ == rm::sim::Fx::fromInt(100));
+    for (int tick = 0; tick < 1000; ++tick) {
+        rm::sim::tick(units, motion, terrain);
+        if (motion[0].airState == MoveState::AirState::Bottom) break;
+    }
+    CHECK(motion[0].airState == MoveState::AirState::Bottom);
+    CHECK_FALSE(motion[0].airborne);
+    CHECK(units[0].y == rm::sim::Fx{});
+    CHECK(units[0].x > rm::sim::Fx::fromInt(90));
+    CHECK(units[0].x < rm::sim::Fx::fromInt(110));
+    CHECK(units[0].z > rm::sim::Fx::fromInt(90));
+    CHECK(units[0].z < rm::sim::Fx::fromInt(110));
 }
 
 TEST_CASE("a parked flyer recharges fuel while it waits") {

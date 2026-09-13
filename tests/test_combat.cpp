@@ -1034,6 +1034,29 @@ TEST_CASE("a weapon acquires targets only on its allowed movement layer") {
           == nearSurface);
 }
 
+TEST_CASE("a landed aircraft is surface to the guns that could not touch it airborne") {
+    // `C-222`'s other half: `airborne` clears the tick a flyer touches down, and
+    // `canTarget` reads that flag as the Surface/Air split — a parked aircraft is
+    // exactly as shootable as the tank beside it.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    UnitDef aircraft = targetDef();
+    aircraft.name = "landed_flyer";
+    aircraft.motion = rm::unitdef::MotionType::Air;
+    const UnitId parked = roster.add(roster.addType(aircraft), 0.0f, 50.0f, 1, 100.0f);
+    REQUIRE(roster.motion(parked).airborne);   // spawns flying, like every fresh Air unit
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
+                    .has_value());
+
+    roster.motion(parked).airborne = false;    // the tick it touched down
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
+          == parked);
+}
+
 TEST_CASE("hull aiming does not combine one weapon's range with another's target layer") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;
