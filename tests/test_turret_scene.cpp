@@ -164,21 +164,29 @@ TEST_CASE("a turreted unit aims its drawn turret at its live target", "[turret]"
     struct RestoreLogging {
         ~RestoreLogging() { (void)rm::log::configure({}); }
     } restoreLogging;
-    scene.trialAlignmentShots.push_back(rm::sim::Event{
-        .kind = rm::sim::EventKind::WeaponFired, .unit = shooter,
-        .visualId = "test_turret_tank:test turret gun",
-        .launchVelocity = {rm::sim::Fx{}, rm::sim::Fx{}, rm::sim::Fx::fromInt(1)}});
+    // The metric reads the bore and the launch off the EVENT now — no drawn
+    // frame required — so a test shot states both explicitly: a barrel on +X
+    // against a +Z launch is a right angle by construction.
+    scene.trialAlignmentShots.emplace_back(
+        rm::sim::Event{
+            .kind = rm::sim::EventKind::WeaponFired, .unit = shooter,
+            .visualId = "test_turret_tank:test turret gun",
+            .launchVelocity = {rm::sim::Fx{}, rm::sim::Fx{}, rm::sim::Fx::fromInt(1)},
+            .visualBarrel = {rm::sim::Fx::fromInt(1), rm::sim::Fx{}, rm::sim::Fx{}}},
+        rm::TickIndex{7});
     scene.gatherForDrawing(1.0f, nullptr, {}, 1.0f / 60.0f);
     CHECK(scene.trialAlignmentShots.empty());
     // A deliberately sideways launch must print 90, not a success flag.
     std::ifstream logInput(logPath);
     const std::string logged{std::istreambuf_iterator<char>{logInput}, {}};
     CHECK(logged.find("[trial-aim]") != std::string::npos);
-    // The barrel aims at the LIVE target, not exactly ±X, so the sideways
-    // launch lands a few degrees off the literal 90 — parse, don't grep.
+    // Exactly ninety degrees: perpendicular by construction. And the tick the
+    // record carried is the one the log names — the attribution the headless
+    // pre-run used to flatten to zero.
     const auto degreePos = logged.find("error_deg=");
     REQUIRE(degreePos != std::string::npos);
-    CHECK(std::strtof(logged.c_str() + degreePos + 10, nullptr) > 45.0f);
+    CHECK(std::strtof(logged.c_str() + degreePos + 10, nullptr) > 89.0f);
+    CHECK(logged.find("draw_tick=7") != std::string::npos);
     CHECK(logged.find("weapon=test_turret_tank:test turret gun") != std::string::npos);
     CHECK(logged.find('\033') == std::string::npos);
     std::filesystem::remove(logPath);

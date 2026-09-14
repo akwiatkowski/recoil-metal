@@ -161,6 +161,11 @@ struct Event {
     /// WeaponFired diagnostic: actual initial velocity in elmos/tick, before
     /// gravity or guidance. Kept separate from the authored effect direction.
     std::array<Fx,3> launchVelocity{};
+    /// WeaponFired diagnostic: the bore line at fire — posed trunnion to
+    /// muzzle, world elmos — so the trial-aim metric can compare the barrel
+    /// with the launch WITHOUT a drawn frame (the headless `--play` pre-run
+    /// poses no instances). Zero for an unmuzzled weapon, which has no bore.
+    std::array<Fx,3> visualBarrel{};
 };
 
 [[nodiscard]] bool operator==(const Event& a, const Event& b) noexcept;

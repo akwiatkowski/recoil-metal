@@ -4,7 +4,9 @@
 #include "core/log/Log.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <numbers>
 
 namespace rm::app {
 
@@ -13,77 +15,41 @@ rm::sim::TickRate gAppTickRate{rm::sim::kDefaultTicksPerSecond};
 bool gInterpolate = true;
 
 void UnitScene::logTrialAlignment() {
-    for (const auto& shot : trialAlignmentShots) {
-        std::optional<float> error;
-        // Use the exact gathered instance (including hull slope and visible slew).
-        // The authored pitch-bone +Z supplies an axis independently of aimDir.
-        if (store.alive(shot.unit)) {
-            const auto* def = catalog.def(store.typeAt(shot.unit.index));
-            for (std::size_t bi = 0; def && bi < drawSlotOf.size(); ++bi) {
-                const auto slot = std::ranges::find(drawSlotOf[bi], shot.unit.index);
-                if (slot == drawSlotOf[bi].end()) continue;
-                const auto& batch = batches[bi];
-                if (!batch.model || !batch.turretAim.exists()
-                    || batch.turretWeapon >= def->weapons.size()) continue;
-                const auto& weapon = def->weapons[batch.turretWeapon];
-                if (def->name + ":" + weapon.label != shot.visualId) continue;
-                // Which barrel fired? `at2` is the exact muzzle the shot left —
-                // the sim wrote it at fire time. A dual manipulator's barrels
-                // sit elmos apart, so the nearer posed muzzle names the arm;
-                // measuring the WRONG one reads its splay as an aim error.
-                std::size_t arm = 0;
-                if (weapon.turretDualManipulators
-                    && !weapon.turretDualMuzzleBone.empty()) {
-                    const auto muzzle0 = weaponMuzzle(shot.unit, shot.visualId, 0);
-                    const auto muzzle1 = weaponMuzzle(shot.unit, shot.visualId, 1);
-                    if (muzzle0 && muzzle1) {
-                        const auto distance2 = [&shot](const std::array<float,3>& p) {
-                            float d = 0.0f;
-                            for (std::size_t axis = 0; axis < 3; ++axis) {
-                                const float delta =
-                                    p[axis] - rm::sim::fxToFloat(shot.at2[axis]);
-                                d += delta * delta;
-                            }
-                            return d;
-                        };
-                        if (distance2(*muzzle1) < distance2(*muzzle0)) {
-                            arm = 1;
-                        }
-                    }
-                }
-                // Measure the bore line — trunnion to muzzle — not the pitch
-                // bone's rest +Z. The solver aims the MUZZLE, and on a splayed
-                // arm the muzzle sits degrees off the bone's own axis: the
-                // bone axis then reads the compensation as an aim error that
-                // does not exist (the Titan reads ~7 degrees per arm).
-                const std::string& muzzleBoneName =
-                    arm == 1 ? weapon.turretDualMuzzleBone : weapon.muzzleBone;
-                const std::array<float, 3> pivot =
-                    arm == 1 ? batch.turretAim.pitch2Pivot
-                             : batch.turretAim.pitchPivot;
-                for (std::size_t bone = 0; bone < batch.model->bones.size(); ++bone) {
-                    const auto& muzzleBone = batch.model->bones[bone];
-                    if (rm::foldedVisualKey(muzzleBone.name)
-                        != rm::foldedVisualKey(muzzleBoneName)) continue;
-                    const auto index = static_cast<std::size_t>(slot - drawSlotOf[bi].begin());
-                    error = batch.instances[index].barrelAlignmentErrorDegrees(
-                        batch.turretAim, bone, pivot, muzzleBone.globalOffset,
-                        {rm::sim::fxToFloat(shot.launchVelocity[0]),
-                         rm::sim::fxToFloat(shot.launchVelocity[1]),
-                         rm::sim::fxToFloat(shot.launchVelocity[2])});
-                    break;
-                }
-                break;
-            }
-        }
-        if (error) {
+    for (const auto& [shot, fireTick] : trialAlignmentShots) {
+        // The bore the sim posed at fire time against the velocity it gave the
+        // shell — read off the EVENT, so the number means the same thing in a
+        // rendered frame and in the headless `--play` pre-run, where no
+        // instance is ever posed. The read this replaced sampled whatever
+        // frame happened to be current at flush, which in the pre-run measured
+        // every shot against ONE pose and reported the hull's whole traverse
+        // as an aim error.
+        const std::array<float, 3> bore{rm::sim::fxToFloat(shot.visualBarrel[0]),
+                                        rm::sim::fxToFloat(shot.visualBarrel[1]),
+                                        rm::sim::fxToFloat(shot.visualBarrel[2])};
+        const std::array<float, 3> launch{rm::sim::fxToFloat(shot.launchVelocity[0]),
+                                          rm::sim::fxToFloat(shot.launchVelocity[1]),
+                                          rm::sim::fxToFloat(shot.launchVelocity[2])};
+        const auto length = [](const std::array<float, 3>& v) {
+            return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        };
+        const float boreLen = length(bore);
+        const float launchLen = length(launch);
+        if (boreLen > 1e-6f && launchLen > 1e-6f) {
+            const float dot = bore[0] * launch[0] + bore[1] * launch[1]
+                              + bore[2] * launch[2];
+            // Clamp: acos(NaN) on a 1.0000001 ratio would read as a failure on
+            // a perfect alignment.
+            const float cosine = std::clamp(dot / (boreLen * launchLen), -1.0f, 1.0f);
+            const float degrees = std::acos(cosine) * 180.0f / std::numbers::pi_v<float>;
             rm::log::writef(rm::log::Level::Info, "trial-aim",
                 "unit=%u:%u weapon=%s metric=rig_vs_launch error_deg=%.3f draw_tick=%llu",
                 shot.unit.index, shot.unit.generation, shot.visualId.c_str(),
-                static_cast<double>(*error), static_cast<unsigned long long>(snapshotCurrent.tick));
+                static_cast<double>(degrees), static_cast<unsigned long long>(fireTick));
         } else {
+            // Zero bore: an unmuzzled weapon has no barrel to pose (and a beam
+            // carries no launch velocity), so there is nothing to measure.
             rm::log::writef(rm::log::Level::Info, "trial-aim",
-                "unit=%u:%u weapon=%s error_deg=unavailable (no drawn primary barrel or invalid direction)",
+                "unit=%u:%u weapon=%s error_deg=unavailable (no muzzled bore on the event)",
                 shot.unit.index, shot.unit.generation, shot.visualId.c_str());
         }
     }

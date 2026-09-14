@@ -98,10 +98,12 @@ struct UnitScene {
     rm::CombatEffectState combatEffectState;
     rm::ProjectileTrails projectileTrails;
 
-    /// Trial-only diagnostics, consumed once by the next draw gather. These
-    /// compare launch velocity to the next frame's rig pose, not GPU pixels.
+    /// Trial-only diagnostics, consumed once by the next draw gather. Each
+    /// record pairs the fire event with the tick it left on: the bore line
+    /// the sim wrote onto the event is compared with the launch velocity, so
+    /// the number needs no drawn frame at all.
     bool trialAlignmentDebug = false;
-    std::vector<rm::sim::Event> trialAlignmentShots;
+    std::vector<std::pair<rm::sim::Event, rm::TickIndex>> trialAlignmentShots;
     void logTrialAlignment();
 
     /// The posed tip of one weapon's muzzle — `muzzleIndex` 1 names the dual

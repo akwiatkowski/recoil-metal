@@ -1,6 +1,7 @@
 #include "core/sim/Combat.hpp"
 #include "core/sim/Reclaim.hpp"
 #include "core/TaskPool.hpp"
+#include "core/log/Log.hpp"
 
 #include "core/unit/BuildTree.hpp"
 
@@ -1278,6 +1279,22 @@ bool canFireAt(const unitdef::Weapon& weapon, Brad yaw, Brad bearing) noexcept {
         fxBearing(fx3Dot(axis, fx3Cross(flatFrom, flatTo)), fx3Dot(flatFrom, flatTo)));
 }
 
+/// The UNSIGNED angle between two directions, in binary radians — atan2 of
+/// the cross magnitude over the dot, so no axis is needed when the sign does
+/// not matter. Zero-length input reads as zero angle rather than NaN, the
+/// same convention `signedAngleBrads` keeps.
+[[nodiscard]] std::int32_t angleBetweenBrads(const std::array<Fx, 3>& a,
+                                             const std::array<Fx, 3>& b) noexcept {
+    const std::array<Fx, 3> na = fx3Normalise(a);
+    const std::array<Fx, 3> nb = fx3Normalise(b);
+    if (na == std::array<Fx, 3>{} || nb == std::array<Fx, 3>{}) {
+        return 0;
+    }
+    const std::array<Fx, 3> across = fx3Cross(na, nb);
+    const Fx sinTerm = fxHypot(fxHypot(across[0], across[2]), across[1]);
+    return static_cast<std::int16_t>(fxBearing(sinTerm, fx3Dot(na, nb)));
+}
+
 /// Undoes `unitOrient`'s roll/pitch/yaw so a world-space vector lands in model
 /// space — the transform a turret aim solve runs in.
 [[nodiscard]] std::array<Fx, 3> modelFromHull(const std::array<Fx, 3>& v,
@@ -1416,6 +1433,19 @@ mountSolveDual(const UnitCatalog::TurretMount& mount, const Transform& self,
     return fx3Add(hullFromModel(tip, self), positionOf(self));
 }
 
+/// The trunnion's world position under the CURRENT slew — the bore line's
+/// other end. The pivot rides only the ring: rotating it about itself by its
+/// own two angles leaves it still, which is what makes the arm's trunnion the
+/// ring-posed `pitchPivot2` and no more.
+[[nodiscard]] std::array<Fx, 3> mountTrunnionWorld(const UnitCatalog::TurretMount& mount,
+                                                   const Transform& self,
+                                                   const MoveState& state,
+                                                   bool second) noexcept {
+    std::array<Fx, 3> pivot = second ? mount.pitchPivot2 : mount.pitchPivot;
+    pivot = fxRotateAround(pivot, mount.yawPivot, mount.yawAxis, state.turretYaw);
+    return fx3Add(hullFromModel(pivot, self), positionOf(self));
+}
+
 /// One slew step toward the goal at the authored per-tick rate, shortest way
 /// round — the same wraparound subtraction `headingError` uses. A mount with no
 /// authored rate snaps: an unstated slew speed is an instant traverse, not a
@@ -1436,22 +1466,28 @@ mountSolveDual(const UnitCatalog::TurretMount& mount, const Transform& self,
 }
 
 /// Whether the barrel has arrived — the turret's half of `canFireAt`, which for a
-/// turreted weapon asks "is the RING aimed" rather than "is the hull aimed". The
-/// per-tick rate floors the tolerance so a target the turret can still chase does
-/// not hold fire forever when the chase never quite lands.
+/// turreted weapon asks "is the BORE on the launch line" rather than "is the hull
+/// aimed". One composed check on the firing barrel rather than a per-angle one:
+/// a ring allowed one slew step short AND an arm allowed one step short stack
+/// into several steps of bore error on a retarget (the Titan read 12.9 degrees
+/// on a target switch, 2026-09-14). The floor is the largest per-tick slew
+/// rate, so a target the mount still out-runs does not hold fire forever, and
+/// a converged barrel fires within a step — the steady state the per-angle
+/// gate produced, without the stacking.
 [[nodiscard]] bool turretOnTarget(const UnitCatalog::TurretMount& mount,
                                   const Transform& self, const MoveState& state,
                                   const std::array<Fx, 3>& worldTarget,
                                   const unitdef::Weapon& weapon,
-                                  const UnitCatalog::WeaponRates& rates) noexcept {
-    const auto [wantYaw, wantPitch] = mountSolve(mount, self, worldTarget);
-    const std::int32_t yawErr = std::abs(static_cast<std::int32_t>(static_cast<std::int16_t>(
-        static_cast<std::uint16_t>(wantYaw) - static_cast<std::uint16_t>(state.turretYaw))));
-    const std::int32_t pitchErr = std::abs(static_cast<std::int32_t>(static_cast<std::int16_t>(
-        static_cast<std::uint16_t>(wantPitch)
-        - static_cast<std::uint16_t>(state.turretPitch))));
-    return yawErr <= std::max(weapon.firingToleranceBrads, rates.turretYawPerTick)
-           && pitchErr <= std::max(weapon.firingToleranceBrads, rates.turretPitchPerTick);
+                                  const UnitCatalog::WeaponRates& rates,
+                                  bool second) noexcept {
+    const std::array<Fx, 3> muzzle = mountMuzzleWorld(mount, self, state, second);
+    const std::array<Fx, 3> bore =
+        fx3Sub(muzzle, mountTrunnionWorld(mount, self, state, second));
+    const std::int32_t error =
+        angleBetweenBrads(bore, fx3Sub(worldTarget, muzzle));
+    return error
+           <= std::max({weapon.firingToleranceBrads, rates.turretYawPerTick,
+                        rates.turretPitchPerTick});
 }
 
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
@@ -1724,6 +1760,20 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                         slewBrad(own.turretYaw, wantYaw, trackRates.turretYawPerTick);
                     own.turretPitch =
                         slewBrad(own.turretPitch, wantPitch, trackRates.turretPitchPerTick);
+                    // The arm closes its arc here too, not just on fire
+                    // ticks: a manipulator that only slewed when the breach
+                    // was open would spend whole volleys still traversing —
+                    // on the Titan's slow arm that is one slew step per
+                    // volley, ninety degrees of catch-up across a minute.
+                    if (mount.dual) {
+                        const auto [wantYaw2, wantPitch2] = mountSolveDual(
+                            mount, transforms[slot],
+                            positionOf(transforms[tracked.index]), own.turretYaw);
+                        own.turretYaw2 = slewBrad(own.turretYaw2, wantYaw2,
+                                                  trackRates.turretYawPerTick);
+                        own.turretPitch2 = slewBrad(own.turretPitch2, wantPitch2,
+                                                    trackRates.turretPitchPerTick);
+                    }
                 }
             }
 
@@ -1774,7 +1824,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                             slewBrad(own.turretPitch2, wantPitch2, rates.turretPitchPerTick);
                     }
                     if (!turretOnTarget(mount, transforms[slot], own, targetPosition,
-                                        weapon, rates)) {
+                                        weapon, rates,
+                                        mount.dual && own.turretMuzzlePhase != 0)) {
                         continue;
                     }
                 } else if (!canFireAt(weapon, transforms[slot].heading,
@@ -1789,9 +1840,13 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 }
                 const int volley = weapon.bursts() ? 1 : rates.burstSize;
                 const bool muzzled = mounted && slot < motions.size();
+                // The event below describes the volley's LAST shot: remember
+                // which barrel that was, so its bore line can ride along.
+                bool lastSecond = false;
                 for (int shot = 0; shot < volley; ++shot) {
                     const bool second =
                         muzzled && mount.dual && motions[slot].turretMuzzlePhase != 0;
+                    lastSecond = second;
                     projectiles.push_back(
                         launch(from, targetPosition, weapon, army, rate,
                                rates.muzzlePerTick, rates.damage, store.idAt(slot), true, {},
@@ -1813,7 +1868,12 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                  .at2 = projectiles.back().position,
                                  .visualId = def->name + ":" + weapon.label,
                                  .visualDirection = {targetPosition[0]-from[0], targetPosition[1]-from[1], targetPosition[2]-from[2]},
-                                 .launchVelocity = projectiles.back().velocity,
+                                .launchVelocity = projectiles.back().velocity,
+                                .visualBarrel = muzzled
+                                    ? fx3Sub(projectiles.back().position,
+                                             mountTrunnionWorld(mount, transforms[slot],
+                                                                motions[slot], lastSecond))
+                                    : std::array<Fx, 3>{},
                              });
                 ++fired;
                 if (weapon.bursts()) {
@@ -1893,8 +1953,39 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     own.turretPitch2 =
                         slewBrad(own.turretPitch2, wantPitch2, rates.turretPitchPerTick);
                 }
-                if (!turretOnTarget(mount, transforms[slot], own, aimTo, weapon, rates)) {
+                if (!turretOnTarget(mount, transforms[slot], own, aimTo, weapon, rates,
+                                    mount.dual && own.turretMuzzlePhase != 0)) {
                     continue;
+                }
+                // TEMP-DIAG: one line per fired shot for dual mounts, decomposing
+                // the bore-vs-launch error into its four slew legs.
+                if (mount.dual) {
+                    const bool second = own.turretMuzzlePhase != 0;
+                    const auto [wYaw, wPitch] = mountSolve(mount, transforms[slot], aimTo);
+                    const auto [wYaw2, wPitch2] =
+                        mountSolveDual(mount, transforms[slot], aimTo, own.turretYaw);
+                    const auto leg = [](std::int32_t want, Brad have) {
+                        return std::abs(static_cast<std::int32_t>(static_cast<std::int16_t>(
+                            static_cast<std::uint16_t>(static_cast<Brad>(want))
+                            - static_cast<std::uint16_t>(have))));
+                    };
+                    const std::array<Fx, 3> mz =
+                        mountMuzzleWorld(mount, transforms[slot], own, second);
+                    const std::array<Fx, 3> bore =
+                        fx3Sub(mz, mountTrunnionWorld(mount, transforms[slot], own, second));
+                    const std::int32_t boreErr =
+                        angleBetweenBrads(bore, fx3Sub(aimTo, mz));
+                    rm::log::writef(rm::log::Level::Info, "aim-dbg",
+                        "tick=%d slot=%u yaw=%d/%d pitch=%d/%d yaw2=%d pitch2=%d bore=%d tol=%d",
+                        static_cast<int>(tick), static_cast<unsigned>(slot),
+                        static_cast<int>(leg(wYaw, own.turretYaw)),
+                        static_cast<int>(rates.turretYawPerTick),
+                        static_cast<int>(leg(wPitch, own.turretPitch)),
+                        static_cast<int>(rates.turretPitchPerTick),
+                        static_cast<int>(leg(wYaw2, own.turretYaw2)),
+                        static_cast<int>(leg(wPitch2, own.turretPitch2)),
+                        static_cast<int>(boreErr),
+                        static_cast<int>(weapon.firingToleranceBrads));
                 }
             } else if (!canFireAt(weapon, transforms[slot].heading, bearingTo(from, to))) {
                 continue;
@@ -1948,12 +2039,16 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     continue;
                 }
                 const int volley = weapon.bursts() ? 1 : rates.burstSize;
+                // As in the projectile-target branch: the event describes the
+                // volley's last shot, so remember which barrel that was.
+                bool lastSecond = false;
                 for (int shot = 0; shot < volley; ++shot) {
                     // The shot leaves the barrel that is on the trigger: the posed
                     // primary muzzle, or the dual manipulator's when the phase bit
                     // has walked there — the Titan's two arms firing in turn.
                     const bool second =
                         muzzled && mount.dual && motions[slot].turretMuzzlePhase != 0;
+                    lastSecond = second;
                     projectiles.push_back(
                         launch(from, to, weapon, army, rate, rates.muzzlePerTick,
                                rates.damage, store.idAt(slot), false, *target,
@@ -1977,8 +2072,41 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                  .at2 = projectiles.back().position,
                                  .visualId = def->name + ":" + weapon.label,
                                  .visualDirection = {to[0]-from[0], to[1]-from[1], to[2]-from[2]},
-                                 .launchVelocity = projectiles.back().velocity,
+                                .launchVelocity = projectiles.back().velocity,
+                                .visualBarrel = muzzled
+                                    ? fx3Sub(projectiles.back().position,
+                                             mountTrunnionWorld(mount, transforms[slot],
+                                                                motions[slot], lastSecond))
+                                    : std::array<Fx, 3>{},
                              });
+                // TEMP-DIAG: the event's own numbers, decomposed — the bore
+                // angle the metric will compute, the launch line's agreement
+                // with the aim point, all for the barrel that actually fired.
+                if (muzzled && mount.dual) {
+                    const std::array<Fx, 3> evtBore =
+                        fx3Sub(projectiles.back().position,
+                               mountTrunnionWorld(mount, transforms[slot], motions[slot],
+                                                  lastSecond));
+                    const std::int32_t evtErr =
+                        angleBetweenBrads(evtBore, projectiles.back().velocity);
+                    const std::int32_t velErr =
+                        angleBetweenBrads(projectiles.back().velocity,
+                                          fx3Sub(aimTo, projectiles.back().position));
+                    const std::array<Fx, 3> mz2 =
+                        mountMuzzleWorld(mount, transforms[slot], motions[slot], lastSecond);
+                    const std::int32_t posGap =
+                        angleBetweenBrads(fx3Sub(projectiles.back().position, mz2),
+                                          std::array<Fx, 3>{Fx{}, Fx{}, Fx::fromInt(1)});
+                    rm::log::writef(rm::log::Level::Info, "aim-dbg2",
+                        "tick=%d slot=%u second=%d evt=%d vel=%d posgap=%d pos=%d,%d,%d mz=%d,%d,%d",
+                        static_cast<int>(tick), static_cast<unsigned>(slot),
+                        lastSecond ? 1 : 0, static_cast<int>(evtErr),
+                        static_cast<int>(velErr), static_cast<int>(posGap),
+                        projectiles.back().position[0].floorToInt(),
+                        projectiles.back().position[1].floorToInt(),
+                        projectiles.back().position[2].floorToInt(),
+                        mz2[0].floorToInt(), mz2[1].floorToInt(), mz2[2].floorToInt());
+                }
             }
             ++fired;
 

@@ -2833,12 +2833,98 @@ TEST_CASE("a dual manipulator alternates its two posed muzzles", "[turret]") {
     };
     // The first shot may leave one slew step short — the gate floors the firing
     // tolerance at the per-tick rate (2.86 degrees here). Once the ring has
-    // converged, though, BOTH barrels must sit on their shots to sub-degree:
-    // that is the property the splayed second arm used to break by ~17 degrees.
+    // converged, though, BOTH barrels must sit on their shots: that is the
+    // property the splayed second arm used to break by ~17 degrees. The
+    // residual is the solve's two passes over the muzzle parallax plus the
+    // half-muzzle centre-mass lift the launch now shares with the solve —
+    // ~1.2 degrees at this geometry, not the sub-degree the flat `to` gave.
     CHECK(angleDegrees(shots[0], {0.0f, 1.0f, 0.0f}) < 3.0f);
-    CHECK(angleDegrees(shots[1], {0.0f, 1.0f, 1.0f}) < 0.5f);
+    CHECK(angleDegrees(shots[1], {0.0f, 1.0f, 1.0f}) < 1.5f);
     if (shots.size() >= 3) {
-        CHECK(angleDegrees(shots[2], {0.0f, 1.0f, 0.0f}) < 0.5f);
+        CHECK(angleDegrees(shots[2], {0.0f, 1.0f, 0.0f}) < 1.5f);
+    }
+}
+
+TEST_CASE("a dual manipulator holds fire until its ARM is on the target", "[turret]") {
+    // The trial-aim ramp (UEL0303, 2026-09-14: 101 of 109 rig_vs_launch
+    // samples above four degrees, worst 93.6): a target near the barrel's rest
+    // bearing lets the RING pass its gate immediately, firing starts at once,
+    // and the arm — which pre-fix only took a slew step on fire ticks, never
+    // while the reload counted down — lagged every shot by its unclosed
+    // splay. The gate now asks the arm as well as the ring, and the reload
+    // lays the arm too, so no shot may leave with the barrel still crossing.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    Weapon gun = directFire(10.0f, 300.0f);
+    gun.turreted = true;
+    // A twentieth of a radian a second at ten ticks: one slew step is 0.29
+    // degrees, so the arm's ~9.5-degree splay needs ~30 tracking ticks — far
+    // more than the ten-tick reload that pre-fix gated the first shot.
+    gun.turretYawSpeedRadPerSecond = 0.05f;
+    gun.turretPitchSpeedRadPerSecond = 0.05f;
+    gun.firingToleranceBrads = rm::unitdef::firingToleranceBradsFromDegrees(1.0f);
+
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(gunnerDef(gun));
+    (void)roster.add(type, 0.0f, 0.0f, 0, 100.0f);
+    // Dead ahead on the rest bearing (+Z): the ring's want is zero from the
+    // first tick, so ONLY the arm's close can hold the trigger.
+    (void)roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
+
+    // The same rig as the alternation test above: ring and trunnion at
+    // (0,1,0), muzzle three elmos forward, and a second arm whose trunnion
+    // sits one elmo left of the ring axis — a ~9.5-degree splay its own aim
+    // controller must close.
+    rm::sim::UnitCatalog::TurretMountSpec mount;
+    mount.weapon = 0;
+    mount.muzzle = {0.0f, 1.0f, 3.0f};
+    mount.yawPivot = {0.0f, 1.0f, 0.0f};
+    mount.pitchPivot = {0.0f, 1.0f, 0.0f};
+    mount.restDir = {0.0f, 0.0f, 3.0f};
+    mount.dual = true;
+    mount.muzzle2 = {-0.5f, 1.0f, 3.0f};
+    mount.pitchPivot2 = {-1.0f, 1.0f, 0.0f};
+    roster.catalog.setTurretMount(type, mount);
+
+    std::vector<Projectile> shots;
+    for (int tick = 0; tick < 80; ++tick) {
+        (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                   roster.rate, nullptr, nullptr, nullptr,
+                                   static_cast<rm::TickIndex>(tick));
+    }
+    // The arm needs ~30 ticks of tracking on top of the ten-tick reload, so
+    // the first shot leaves around tick 40 and the phase bit then walks the
+    // barrels — both must have fired for the check below to mean anything.
+    REQUIRE(shots.size() >= 2);
+
+    // Every shot, whichever barrel left it: the posed trunnion→muzzle line
+    // agrees with the velocity to within the gate's floor (one degree) plus
+    // the two-pass solve's parallax residual (~1.2 here). Pre-fix the first
+    // ARM shot — the odd indices — read ~9 degrees. The ring stays at its
+    // zero want, so both pivots hold their rest positions.
+    const auto angleDegrees = [](const Projectile& shot, std::array<float, 3> pivot) {
+        const auto axis = [&](std::size_t i) {
+            return rm::sim::fxToFloat(shot.visualOrigin[i]) - pivot[i];
+        };
+        const std::array<float, 3> barrel{axis(0), axis(1), axis(2)};
+        const std::array<float, 3> launch{rm::sim::fxToFloat(shot.velocity[0]),
+                                          rm::sim::fxToFloat(shot.velocity[1]),
+                                          rm::sim::fxToFloat(shot.velocity[2])};
+        const auto dot = barrel[0] * launch[0] + barrel[1] * launch[1]
+                         + barrel[2] * launch[2];
+        const auto len = [](const std::array<float, 3>& v) {
+            return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        };
+        // Clamp: acos(NaN) on a 1.0000001 ratio would read as a failure on a
+        // perfect alignment.
+        const float cosine = std::clamp(dot / (len(barrel) * len(launch)), -1.0f, 1.0f);
+        return std::acos(cosine) * 180.0f / std::numbers::pi_v<float>;
+    };
+    for (std::size_t shot = 0; shot < shots.size(); ++shot) {
+        const bool armBarrel = shot % 2 == 1;
+        CHECK(angleDegrees(shots[shot], armBarrel ? std::array<float, 3>{-1.0f, 1.0f, 0.0f}
+                                                  : std::array<float, 3>{0.0f, 1.0f, 0.0f})
+              < 3.0f);
     }
 }
 
