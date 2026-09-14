@@ -537,13 +537,18 @@ TEST_CASE("a mid-ferry transport round-trips through save state", "[transport]")
 // click, then ferries itself back to where it waited.
 
 /// A flat field with a cliff down the middle: the two halves have no land route
-/// between them, while the air above the wall is open.
+/// between them, while the air above the wall is open. The cliff is a saw-tooth
+/// ridge a cell wide — every square of cell 6 holds a steep face, so the cell
+/// is wholly unwalkable. A plateau would not do: its flat top is walkable, and
+/// a thinner wall only costs speed under P10.4 either way.
 [[nodiscard]] rm::HeightField walledField() {
     rm::HeightField field = flatField();
     for (int z = 0; z < field.verticesZ(); ++z) {
-        field.raw[static_cast<std::size_t>(z)
-                      * static_cast<std::size_t>(field.verticesX())
-                  + 50] = 4000;
+        for (int x = 49; x <= 56; x += 2) {
+            field.raw[static_cast<std::size_t>(z)
+                          * static_cast<std::size_t>(field.verticesX())
+                      + static_cast<std::size_t>(x)] = 4000;
+        }
     }
     return field;
 }

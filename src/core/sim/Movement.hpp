@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Types.hpp"  // UnitTypeIndex
 #include "core/map/HeightField.hpp"
 #include "core/sim/Army.hpp"  // kNoArmy
 #include "core/sim/Fx.hpp"
@@ -550,9 +551,16 @@ void placeOnMotionLayer(Transform& transform, const MoveState& state,
 /// The two spans are parallel: instance i is driven by motion i. A short motion
 /// span leaves the trailing instances alone rather than reading past its end.
 ///
+/// `gridForType` and `types` are the P10.4 speed divisor's inputs, parallel to
+/// the first two spans and to `MatchContext::passability`: a ground mover pays
+/// its current cell's divisor while it crosses it. Both default to empty —
+/// a crowd with no grids strides undivided, exactly as before.
+///
 /// noexcept and allocation-free: this runs inside the frame loop.
 void tick(std::span<Transform> transforms, std::span<MoveState> motion,
-          const Terrain& terrain) noexcept;
+          const Terrain& terrain,
+          std::span<const PassabilityGrid* const> gridForType = {},
+          std::span<const UnitTypeIndex> types = {}) noexcept;
 
 /// A `MoveState` with the authored default speed and turn rate, converted for this clock.
 ///

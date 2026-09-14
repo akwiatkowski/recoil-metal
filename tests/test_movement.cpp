@@ -315,7 +315,7 @@ TEST_CASE("collision separation does not push a surface ship into a blocked wate
     water.cellsX = 3;
     water.cellsZ = 1;
     water.elmosPerCell = rm::sim::Fx::fromInt(64);
-    water.passable = {1, 1, 0};
+    water.divisor = {1, 1, 0};
     const std::array<const rm::sim::PassabilityGrid*, 1> grids{{&water}};
 
     rm::sim::resolveCollisions(crowd.store, terrain, grids);
@@ -337,7 +337,7 @@ TEST_CASE("collision separation does not push a land unit into a blocked cell") 
     land.cellsX = 3;
     land.cellsZ = 1;
     land.elmosPerCell = rm::sim::Fx::fromInt(64);
-    land.passable = {1, 1, 0};
+    land.divisor = {1, 1, 0};
     const std::array<const rm::sim::PassabilityGrid*, 1> grids{{&land}};
 
     rm::sim::resolveCollisions(crowd.store, rm::sim::Terrain{field}, grids);
@@ -346,6 +346,42 @@ TEST_CASE("collision separation does not push a land unit into a blocked cell") 
         CHECK(rm::sim::sitePlaceable(land, crowd.at(i).x, crowd.at(i).z,
                                      crowd.motionAt(i).radiusElmos));
     }
+}
+
+TEST_CASE("a mover pays its cell's speed divisor while crossing it", "[P10.4]") {
+    // The byte the route paid for is a real divisor on the stride: a unit
+    // inside a costly cell crosses it at cost-divided speed.
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    Crowd crowd;
+    crowd.add(96.0f, 32.0f);                                   // inside cell (1,0)
+    crowd.at(0).heading = rm::sim::bradFromRadians(kPi / 2.0f);  // facing +X
+    rm::sim::orderTo(crowd.store.motion()[0], terrain,
+                     rm::test::fx(700.0f), rm::test::fx(32.0f));
+
+    rm::sim::PassabilityGrid land;
+    land.cellsX = 12;
+    land.cellsZ = 12;
+    land.elmosPerCell = rm::sim::Fx::fromInt(64);
+    land.divisor.assign(static_cast<std::size_t>(12 * 12), std::uint8_t{1});
+    land.divisor[1] = 4;                                       // cell (1,0): quarter speed
+    const std::array<const rm::sim::PassabilityGrid*, 1> grids{{&land}};
+
+    const rm::sim::Fx full = crowd.store.motion()[0].speedPerTick;
+    rm::sim::tick(crowd.store.transforms(), crowd.store.motion(), terrain, grids,
+                  crowd.store.types());
+
+    CHECK(rm::sim::fxToFloat(crowd.store.motion()[0].stepX)
+          == Approx(rm::sim::fxToFloat(full / rm::sim::Fx::fromInt(4))));
+    // Once it leaves the costly cell the full stride returns.
+    for (int i = 0; i < 400 && crowd.at(0).x < rm::test::fx(128.0f); ++i) {
+        rm::sim::tick(crowd.store.transforms(), crowd.store.motion(), terrain, grids,
+                      crowd.store.types());
+    }
+    rm::sim::tick(crowd.store.transforms(), crowd.store.motion(), terrain, grids,
+                  crowd.store.types());
+    CHECK(rm::sim::fxToFloat(crowd.store.motion()[0].stepX)
+          == Approx(rm::sim::fxToFloat(full)));
 }
 
 /// Distance between a unit and its destination, on the ground plane.

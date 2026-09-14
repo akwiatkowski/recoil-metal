@@ -512,7 +512,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    view built to hand every batch to the collision pass at once — because two units
     //    of different models had to be able to see each other. With one flat array that
     //    problem does not arise.
-    tick(store.transforms(), store.motion(), terrain);
+    tick(store.transforms(), store.motion(), terrain, match.passability, store.types());
     store.propagateAttachments();
 
     //    THE SPATIAL INDEX IS REBUILT TWICE, and both points are load-bearing (§7 P5.2).

@@ -31,6 +31,20 @@ using rm::sim::Fx;
 /// One elmo, the sample distance for the terrain gradient.
 inline constexpr Fx kOneElmo = Fx::fromInt(1);
 
+/// The P10.4 speed divisor one unit pays where it stands: its type's grid
+/// answers the cell under its feet. No grid, no divisor — and a 0 answers
+/// "impassable" rather than "stopped", because the field gates routes, never
+/// the stride's permission to move.
+[[nodiscard]] std::uint8_t speedDivisorAt(
+    std::span<const rm::sim::PassabilityGrid* const> gridForType, std::size_t type, Fx x,
+    Fx z) noexcept {
+    if (type >= gridForType.size() || gridForType[type] == nullptr) {
+        return 0;
+    }
+    const rm::sim::PassabilityGrid& grid = *gridForType[type];
+    return grid.divisorAt(grid.cellAtWorld(x), grid.cellAtWorld(z));
+}
+
 } // namespace
 
 namespace rm::sim {
@@ -405,7 +419,9 @@ Fx wingedLift(Fx need, Fx speedRatio, Fx liftFactor, Fx heightAbove, Fx elevatio
 /// unit's post-move position is what its own alignment reads, exactly as the
 /// serial two-loop version produced.
 void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
-               const Terrain& terrain, std::size_t first,
+               const Terrain& terrain,
+               std::span<const PassabilityGrid* const> gridForType,
+               std::span<const UnitTypeIndex> types, std::size_t first,
                std::size_t last) noexcept {
     const Fx width = Fx::fromInt(terrain.field().squaresX * kSquareSize);
     const Fx depth = Fx::fromInt(terrain.field().squaresZ * kSquareSize);
@@ -473,7 +489,19 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
         const bool onFinalWaypoint = state.pathIndex + 1 >= state.path.size();
         const Fx radius = onFinalWaypoint ? std::max(halfSquare, state.speedPerTick)
                                           : kWaypointRadius;
-        const Fx travel = state.speedPerTick;
+
+        // P10.4's other half: the byte the route paid for is a real divisor on
+        // the stride — a ground mover crosses a costly cell at cost-divided
+        // speed. Gridless types pay nothing, and a divisor of 0 slows nothing:
+        // a unit scattered somewhere unwalkable still walks out.
+        Fx travel = state.speedPerTick;
+        if (i < types.size()) {
+            const std::uint8_t divisor = speedDivisorAt(
+                gridForType, static_cast<std::size_t>(types[i]), unit.x, unit.z);
+            if (divisor > 1) {
+                travel = travel / Fx::fromInt(divisor);
+            }
+        }
 
         // Whether this tick completes a journey, as opposed to loitering where a previous
         // one ended: only a fresh arrival commits a flyer to landing (`C-222`).
@@ -667,10 +695,11 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
 }
 
 void tick(std::span<Transform> transforms, std::span<MoveState> motion,
-          const Terrain& terrain) noexcept {
+          const Terrain& terrain, std::span<const PassabilityGrid* const> gridForType,
+          std::span<const UnitTypeIndex> types) noexcept {
     const std::size_t count = std::min(transforms.size(), motion.size());
     rm::parallelFor(count, [&](std::size_t first, std::size_t last) {
-        tickRange(transforms, motion, terrain, first, last);
+        tickRange(transforms, motion, terrain, gridForType, types, first, last);
     });
 }
 
@@ -995,10 +1024,19 @@ void resolveCongestion(UnitStore& store, const Terrain& terrain,
         }
         const Fx progress = state.lastGoalDistance - distance;
         state.lastGoalDistance = distance;
+        // The expected step is the DIVIDED one (P10.4): a unit crossing a
+        // costly cell is slow by terrain, not stalled by traffic, and measuring
+        // it against full speed would report a jam that does not exist.
+        const std::uint8_t divisor = speedDivisorAt(
+            gridForType,
+            static_cast<std::size_t>(store.typeAt(static_cast<UnitIndex>(i))),
+            transforms[i].x, transforms[i].z);
+        const Fx expected = divisor > 1 ? state.speedPerTick / Fx::fromInt(divisor)
+                                        : state.speedPerTick;
         // Saturating rather than wrapping keeps a permanently jammed unit on
         // the tenth-beat cadence instead of ticking over to an immediate retry.
         state.blockedTicks =
-            progress < state.speedPerTick * kBlockedStepFraction
+            progress < expected * kBlockedStepFraction
                 ? static_cast<std::uint16_t>(
                       std::min<std::uint32_t>(state.blockedTicks + 1, 0xFFFF))
                 : std::uint16_t{0};

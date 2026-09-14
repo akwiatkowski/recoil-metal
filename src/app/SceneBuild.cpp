@@ -1538,10 +1538,10 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
     const rm::sim::PassabilityGrid grid =
         rm::sim::buildSurfaceWaterPassability(field, waterLevelElmos);
     std::vector<std::size_t> cells;
-    for (std::size_t cell = 0; cell < grid.passable.size(); ++cell) {
+    for (std::size_t cell = 0; cell < grid.divisor.size(); ++cell) {
         const int x = static_cast<int>(cell % static_cast<std::size_t>(grid.cellsX));
         const int z = static_cast<int>(cell / static_cast<std::size_t>(grid.cellsX));
-        if (grid.passable[cell] != 0
+        if (grid.divisor[cell] != 0
             && (grid.passableAt(x - 1, z) || grid.passableAt(x + 1, z)
                 || grid.passableAt(x, z - 1) || grid.passableAt(x, z + 1))) {
             cells.push_back(cell);  // never seed a ship in a one-cell puddle

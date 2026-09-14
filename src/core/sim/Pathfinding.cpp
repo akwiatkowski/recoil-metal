@@ -88,13 +88,17 @@ float maxSlopeFromDegrees(float degrees) noexcept {
     return 1.0f - std::cos(scaled * kDegreesToRadians);
 }
 
-bool PassabilityGrid::passableAt(int x, int z) const noexcept {
+std::uint8_t PassabilityGrid::divisorAt(int x, int z) const noexcept {
     if (x < 0 || z < 0 || x >= cellsX || z >= cellsZ) {
-        return false;
+        return 0;
     }
     const auto index = static_cast<std::size_t>(z) * static_cast<std::size_t>(cellsX)
                      + static_cast<std::size_t>(x);
-    return index < passable.size() && passable[index] != 0;
+    return index < divisor.size() ? divisor[index] : std::uint8_t{0};
+}
+
+bool PassabilityGrid::passableAt(int x, int z) const noexcept {
+    return divisorAt(x, z) != 0;
 }
 
 int PassabilityGrid::cellAtWorld(Fx elmos) const noexcept {
@@ -138,8 +142,9 @@ bool sitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos) noex
 
     for (int cz = minZ; cz <= maxZ; ++cz) {
         for (int cx = minX; cx <= maxX; ++cx) {
-            if (!grid.passableAt(cx, cz)) {
-                return false;  // one blocked cell under the footprint is enough
+            if (grid.divisorAt(cx, cz) != 1) {
+                return false;  // a building needs every square: divisor 1 is PRISTINE,
+                               // and a unit may route through what a factory may not sit on
             }
         }
     }
@@ -165,28 +170,33 @@ PassabilityGrid buildPassability(const HeightField& field, float waterLevelElmos
 
     const float maxSlope = maxSlopeFromDegrees(maxSlopeDegrees);
     const float lowestStandableHeight = waterLevelElmos - maxWaterDepthElmos;
+    constexpr int squares = kPathCellSquares * kPathCellSquares;
 
-    grid.passable.assign(static_cast<std::size_t>(grid.cellsX)
-                             * static_cast<std::size_t>(grid.cellsZ),
-                         std::uint8_t{1});
+    grid.divisor.assign(static_cast<std::size_t>(grid.cellsX)
+                            * static_cast<std::size_t>(grid.cellsZ),
+                        std::uint8_t{0});
 
     for (int cz = 0; cz < grid.cellsZ; ++cz) {
         for (int cx = 0; cx < grid.cellsX; ++cx) {
-            bool walkable = true;
+            int walkable = 0;
 
-            for (int z = cz * kPathCellSquares; z < (cz + 1) * kPathCellSquares && walkable; ++z) {
+            for (int z = cz * kPathCellSquares; z < (cz + 1) * kPathCellSquares; ++z) {
                 for (int x = cx * kPathCellSquares; x < (cx + 1) * kPathCellSquares; ++x) {
-                    if (squareSlope(field, x, z) > maxSlope
-                        || squareMinHeight(field, x, z) < lowestStandableHeight) {
-                        walkable = false;
-                        break;
+                    if (squareSlope(field, x, z) <= maxSlope
+                        && squareMinHeight(field, x, z) >= lowestStandableHeight) {
+                        ++walkable;
                     }
                 }
             }
 
-            grid.passable[static_cast<std::size_t>(cz) * static_cast<std::size_t>(grid.cellsX)
-                          + static_cast<std::size_t>(cx)] = walkable ? std::uint8_t{1}
-                                                                     : std::uint8_t{0};
+            // ceil(squares / walkable): the whole cell over its walkable share.
+            // A fully clear cell divides by 1; ANY blocked square costs at
+            // least 2, which is what keeps `sitePlaceable` honest — 1 means
+            // pristine, not merely "mostly there".
+            grid.divisor[static_cast<std::size_t>(cz) * static_cast<std::size_t>(grid.cellsX)
+                         + static_cast<std::size_t>(cx)] =
+                walkable == 0 ? std::uint8_t{0}
+                              : static_cast<std::uint8_t>((squares + walkable - 1) / walkable);
         }
     }
 
@@ -210,25 +220,27 @@ PassabilityGrid buildSurfaceWaterPassability(const HeightField& field, float wat
     }
 
     const float highestNavigableHeight = waterLevelElmos - std::max(0.0f, minDepthElmos);
-    grid.passable.assign(static_cast<std::size_t>(grid.cellsX)
-                             * static_cast<std::size_t>(grid.cellsZ),
-                         std::uint8_t{1});
+    constexpr int squares = kPathCellSquares * kPathCellSquares;
+    grid.divisor.assign(static_cast<std::size_t>(grid.cellsX)
+                            * static_cast<std::size_t>(grid.cellsZ),
+                        std::uint8_t{0});
 
     for (int cz = 0; cz < grid.cellsZ; ++cz) {
         for (int cx = 0; cx < grid.cellsX; ++cx) {
-            bool navigable = true;
-            for (int z = cz * kPathCellSquares;
-                 z < (cz + 1) * kPathCellSquares && navigable; ++z) {
+            int navigable = 0;
+            for (int z = cz * kPathCellSquares; z < (cz + 1) * kPathCellSquares; ++z) {
                 for (int x = cx * kPathCellSquares; x < (cx + 1) * kPathCellSquares; ++x) {
-                    if (squareMaxHeight(field, x, z) >= highestNavigableHeight) {
-                        navigable = false;
-                        break;
+                    if (squareMaxHeight(field, x, z) < highestNavigableHeight) {
+                        ++navigable;
                     }
                 }
             }
-            grid.passable[static_cast<std::size_t>(cz) * static_cast<std::size_t>(grid.cellsX)
-                          + static_cast<std::size_t>(cx)] = navigable ? std::uint8_t{1}
-                                                                      : std::uint8_t{0};
+            // Same divisor rule as the land grid: a partly shallow cell slows a
+            // hull rather than grounding it outright.
+            grid.divisor[static_cast<std::size_t>(cz) * static_cast<std::size_t>(grid.cellsX)
+                         + static_cast<std::size_t>(cx)] =
+                navigable == 0 ? std::uint8_t{0}
+                               : static_cast<std::uint8_t>((squares + navigable - 1) / navigable);
         }
     }
     return grid;
@@ -348,7 +360,11 @@ void PathSearch::step(std::size_t budget) {
             if (closed_[next] != 0) {
                 continue;
             }
-            const Fx candidate = costs_[current] + (diagonal ? kDiagonalCost : kFxOne);
+            // The entered cell's divisor prices the step: a route through rough
+            // cells exists now, and pays for them.
+            const Fx candidate = costs_[current]
+                               + (diagonal ? kDiagonalCost : kFxOne)
+                                     * Fx::fromInt(grid_->divisorAt(nx, nz));
             if (candidate >= costs_[next]) {
                 continue;
             }
@@ -372,7 +388,7 @@ std::uint64_t fingerprintOf(const PassabilityGrid& grid) noexcept {
     mix(static_cast<std::uint64_t>(grid.cellsX));
     mix(static_cast<std::uint64_t>(grid.cellsZ));
     mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(grid.elmosPerCell.raw())));
-    for (const std::uint8_t cell : grid.passable) {
+    for (const std::uint8_t cell : grid.divisor) {
         mix(cell);
     }
     return hash;
@@ -403,7 +419,7 @@ bool FlowField::standable(int x, int z) const noexcept {
         return false;
     }
     // The overlay answers the same question as the grid — a cell a building
-    // claims is out — while leaving `passable` itself untouched.
+    // claims is out — while leaving `divisor` itself untouched.
     return blocked_.empty()
            || blocked_[static_cast<std::size_t>(z) * static_cast<std::size_t>(grid_->cellsX)
                        + static_cast<std::size_t>(x)] == 0;
@@ -458,7 +474,9 @@ void FlowField::stepUntil(std::span<const int> until, std::size_t budget) {
             }
             // No heuristic: the frontier must stay honest in EVERY direction, since
             // the requester it next serves can stand anywhere.
-            const Fx candidate = costs_[current] + (diagonal ? kDiagonalCost : kFxOne);
+            const Fx candidate = costs_[current]
+                               + (diagonal ? kDiagonalCost : kFxOne)
+                                     * Fx::fromInt(grid_->divisorAt(nx, nz));
             if (candidate >= costs_[next]) {
                 continue;
             }
@@ -663,7 +681,8 @@ std::vector<std::array<Fx, 2>> findPath(const PassabilityGrid& grid, Fx fromX, F
                 continue;
             }
 
-            const Fx stepCost = diagonal ? kDiagonalCost : kFxOne;
+            const Fx stepCost = (diagonal ? kDiagonalCost : kFxOne)
+                              * Fx::fromInt(grid.divisorAt(nx, nz));
             const Fx candidate = costToReach[current] + stepCost;
             if (candidate >= costToReach[next]) {
                 continue;

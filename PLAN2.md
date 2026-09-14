@@ -1275,11 +1275,14 @@ fewer of those today than there will ever be again.
       detonates above its target. *Manual:* the state hash still walks a `Projectile` with no
       visitor — if it needs one, D13 has been broken.
 
-- [ ] **P10.4 A cost field, not binary passability** (`ADR-035` layer 1, D14). One byte per
-      cell per motion class; 0 impassable, otherwise a speed divisor. Fixes the current rule
-      on its own: `buildPassability` marks a 64-elmo cell impassable if *any* of its 64
-      squares is. *Test:* a route through a gap that the binary grid refuses. *Manual:* a
-      unit crosses a bridge one square wide.
+- [x] **P10.4 A cost field, not binary passability** (`ADR-035` layer 1, D14) —
+      **done 2026-09-14**. One byte per cell per motion class; 0 impassable, otherwise a
+      speed divisor — `ceil(64 / walkableSquares)`, so a partly blocked cell is expensive
+      instead of out. A*, flow fields and `reachablePointToward` price the entered cell;
+      the movement stride is divided by the cell under the mover's feet (0 gates routes,
+      not escape); congestion measures against the slowed stride; `sitePlaceable` still
+      demands pristine (divisor 1). *Test:* a route crosses a gap the binary grid refused
+      (`[P10.4]`). *Manual:* a unit crosses a bridge one square wide.
 
 - [x] **P10.5 Shared flow fields and a dynamic blocking overlay** (`ADR-035` layers 2-3) —
       **done 2026-09-14** (`f41f06c`). A `FlowField` is a resumable reverse Dijkstra from one

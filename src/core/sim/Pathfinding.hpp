@@ -68,11 +68,18 @@ inline constexpr float kDefaultMaxWaterDepthElmos = 12.0f;
 /// cleaner scale: every number in the content is authored against this one.
 [[nodiscard]] float maxSlopeFromDegrees(float degrees) noexcept;
 
-// A coarse map of where a ground unit may stand.
+// A coarse map of where a ground unit may stand, and at what price.
 //
 // One byte per cell rather than a bitset: the grid is small (16 KB for a
 // 1024-square map), it is read far more than it is built, and a bitset would
 // trade that for shifting on every A* neighbour test.
+//
+// THE BYTE IS A SPEED DIVISOR (ADR-035 layer 1, P10.4), not a flag: 0 is
+// impassable, 1 is fully clear, and anything larger divides a mover's speed —
+// and multiplies a route's cost — while it crosses the cell. `buildPassability`
+// sets it to the cell's square count over its walkable count rounded up, so a
+// partly blocked cell is expensive instead of refused and 1 still means every
+// square is clean, which is what `sitePlaceable` charges a footprint for.
 struct PassabilityGrid {
     int cellsX = 0;
     int cellsZ = 0;
@@ -80,12 +87,16 @@ struct PassabilityGrid {
     /// world position into a cell has to be integer. Set at construction from the float the
     /// map states, which is load time and therefore the legitimate boundary.
     Fx elmosPerCell{};
-    std::vector<std::uint8_t> passable;  ///< row-major, 1 = a unit may stand here
+    std::vector<std::uint8_t> divisor;  ///< row-major, 0 = impassable, else speed divisor
 
-    /// Whether a cell may be stood on. Out-of-range cells are impassable rather
+    /// Whether a cell may be stood on AT ALL. Out-of-range cells are impassable rather
     /// than an error, so callers can test a neighbour without checking bounds
     /// first — which is what the A* inner loop wants.
     [[nodiscard]] bool passableAt(int x, int z) const noexcept;
+
+    /// The cell's speed divisor: 0 impassable, 1 clean, larger the more of the
+    /// cell is blocked. Same out-of-range contract as `passableAt`.
+    [[nodiscard]] std::uint8_t divisorAt(int x, int z) const noexcept;
 
     /// The cell containing a world coordinate, clamped onto the grid.
     [[nodiscard]] int cellAtWorld(Fx elmos) const noexcept;
@@ -146,9 +157,9 @@ private:
 ///
 /// Requests snapshot their grid by COPY, so pointer identity cannot key the
 /// flow-field cache — two movers on the same terrain arrive holding different
-/// shared_ptrs to equal contents. FNV-1a over the dimensions and the passable
+/// shared_ptrs to equal contents. FNV-1a over the dimensions and the divisor
 /// bytes: cheap enough to run per request, and a grid mutated in place (the
-/// C-177 re-request path edits `passable` directly) earns a new fingerprint,
+/// C-177 re-request path edits `divisor` directly) earns a new fingerprint,
 /// which is exactly the invalidation that path needs.
 [[nodiscard]] std::uint64_t fingerprintOf(const PassabilityGrid& grid) noexcept;
 
@@ -254,24 +265,25 @@ private:
 /// dedicated build map exists, but the target-domain distinction prevents a commander that can
 /// cross water from founding a naval yard on land.
 ///
-/// P10.4 makes this better rather than different: a cost field replaces the binary answer, and
-/// `buildPassability`'s "one blocked square blocks the cell" — which at 64 elmos is very coarse
-/// for a 4-elmo extractor — stops being the conservative lie it is today.
+/// P10.4 sharpened rather than relaxed this: the test is now "every footprint cell PRISTINE"
+/// (divisor 1), so a partly blocked cell a unit may now route through still refuses a
+/// building — a factory cannot sit with a corner in the cliff it would path around.
 [[nodiscard]] bool sitePlaceable(const PassabilityGrid& grid, Fx x, Fx z,
                                  Fx radiusElmos) noexcept;
 
 /// Builds the passability grid for a map.
 ///
-/// A cell is passable when every square in it is walkable, which is the
-/// conservative reading — one cliff face in a cell blocks the cell. That errs
-/// toward routing around things rather than through them, which is the right
-/// direction to be wrong in when the cells are this coarse.
+/// A cell's divisor is its square count over its WALKABLE square count, rounded
+/// up: fully clear is 1, fully blocked is 0, and a partly blocked cell costs
+/// more the more of it is missing — the P10.4 fix for the old all-or-nothing
+/// rule that let one cliff face refuse a whole 64-elmo cell.
 ///
-/// Two rules, both the engine's. **Slope**: the steepest face in the cell must
-/// be no steeper than the limit, where a face's slope is `1 - normal.y` (the
-/// same quantity Recoil's slope map holds, ReadMap.cpp:778). **Depth**: ground
-/// under more than `maxWaterDepth` elmos of water is out, because Recoil's rule
-/// is a depth limit and not a water line — a unit fords shallows.
+/// Two rules, both the engine's. **Slope**: a square is unwalkable when its
+/// steepest face exceeds the limit, where a face's slope is `1 - normal.y` (the
+/// same quantity Recoil's slope map holds, ReadMap.cpp:778). **Depth**: a
+/// square is unwalkable when its lowest corner sits under more than
+/// `maxWaterDepth` elmos of water, because Recoil's rule is a depth limit and
+/// not a water line — a unit fords shallows.
 [[nodiscard]] PassabilityGrid buildPassability(
     const HeightField& field, float waterLevelElmos,
     float maxSlopeDegrees = kDefaultMaxSlopeDegrees,

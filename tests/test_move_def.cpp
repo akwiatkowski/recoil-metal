@@ -25,7 +25,9 @@ namespace {
 /// A bay: flat land at y = 20, with a channel of water down the middle.
 ///
 /// `waterLevel` is 10 elmos, so the channel floor at y = 0 is 10 elmos deep — passable to
-/// something that wades or hovers and not to something that does not.
+/// something that wades or hovers and not to something that does not. The channel is a
+/// whole pathfinding cell wide: a narrower one would only cost a land unit speed (P10.4),
+/// and the test wants the mid-channel cell outright out.
 [[nodiscard]] rm::HeightField bayField() {
     rm::HeightField field;
     field.squaresX = 64;
@@ -34,7 +36,7 @@ namespace {
     field.heightScale = 1.0f;
     field.raw.assign(field.sampleCount(), std::uint16_t{20});
     for (int z = 0; z <= field.squaresZ; ++z) {
-        for (int x = 28; x <= 36; ++x) {
+        for (int x = 28; x <= 43; ++x) {
             field.raw[static_cast<std::size_t>(z) * static_cast<std::size_t>(field.verticesX())
                       + static_cast<std::size_t>(x)] = 0;
         }

@@ -2211,7 +2211,7 @@ int FafOpponent::scoutRouteBinding(lua_State* lua) {
                 if (found != threat.end()) total += found->second;
             }
             // ScoutingAI's authored AntiSurface threshold (platoon.lua:1216).
-            if (total > 400) grid.passable[static_cast<std::size_t>(gz * grid.cellsX + gx)] = 0;
+            if (total > 400) grid.divisor[static_cast<std::size_t>(gz * grid.cellsX + gx)] = 0;
         }
         const auto& at = scene.store.transforms()[id.index];
         route = rm::sim::findPath(grid, at.x, at.z, x, z);

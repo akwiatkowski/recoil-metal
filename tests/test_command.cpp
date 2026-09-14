@@ -590,7 +590,7 @@ TEST_CASE("a published route retries a newly blocked final cell on its due pass"
 
     const int finalX = fix.grid.cellAtWorld(rm::test::fx(900.0f));
     const int finalZ = fix.grid.cellAtWorld(rm::test::fx(32.0f));
-    fix.grid.passable[static_cast<std::size_t>(finalZ * fix.grid.cellsX + finalX)] = 0;
+    fix.grid.divisor[static_cast<std::size_t>(finalZ * fix.grid.cellsX + finalX)] = 0;
 
     // A pass not selected by the existing phase gate leaves the published route alone.
     REQUIRE_FALSE(rm::sim::pathPhaseDue(0, 0, fix.grid.cellsX, 2));
@@ -796,7 +796,7 @@ TEST_CASE("a build command refuses a blocked target footprint") {
     const rm::UnitTypeIndex structureType = fix.roster.addType(structureDef);
 
     const UnitId engineer = fix.roster.add(engineerType, 300.0f, 300.0f, 0, 500.0f);
-    std::fill(fix.grid.passable.begin(), fix.grid.passable.end(), std::uint8_t{0});
+    std::fill(fix.grid.divisor.begin(), fix.grid.divisor.end(), std::uint8_t{0});
 
     const Command build{.tick = 0,
                         .player = 0,

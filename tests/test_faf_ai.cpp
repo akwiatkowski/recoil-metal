@@ -2263,8 +2263,11 @@ TEST_CASE("FAF opening surveys native resources and preserves selected queued si
     field.baseHeight=-2.0e6f;
     field.heightScale=1.0e6f;
     std::fill(field.raw.begin(),field.raw.end(),2);
+    // The trench spans a whole pathfinding cell: a narrower one is a speed cost
+    // under P10.4, and this fixture needs the far markers unreachable.
     for (int z=0; z<field.verticesZ(); ++z)
-        field.raw[static_cast<std::size_t>(z*field.verticesX()+40)]=0;
+        for (int x=40; x<=47; ++x)
+            field.raw[static_cast<std::size_t>(z*field.verticesX()+x)]=0;
     const bool blocked=ai.eval(R"(
         local sites=__rm_faf_opening_survey(__rm_faf.brains[0].snap.units[1].h)
         assert(#sites.close==1 and #sites.distant==0 and not sites.hydro,

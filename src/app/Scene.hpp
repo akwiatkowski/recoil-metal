@@ -1253,12 +1253,15 @@ public:
                     " (maxslope %.0f deg, maxwaterdepth %.0f)\n",
                     grid.cellsX, grid.cellsZ,
                     static_cast<double>(rm::sim::fxToFloat(grid.elmosPerCell)),
-                    grid.passable.empty()
+                    grid.divisor.empty()
                         ? 0u
-                        : 100u * static_cast<std::size_t>(std::count(grid.passable.begin(),
-                                                                     grid.passable.end(),
-                                                                     std::uint8_t{1}))
-                              / grid.passable.size(),
+                        : 100u * static_cast<std::size_t>(std::count_if(
+                                                                     grid.divisor.begin(),
+                                                                     grid.divisor.end(),
+                                                                     [](std::uint8_t d) {
+                                                                         return d != 0;
+                                                                     }))
+                              / grid.divisor.size(),
                     static_cast<double>(slopeDegrees), static_cast<double>(depthElmos));
 
         return grids_.emplace(key, std::move(grid)).first->second;
@@ -1293,12 +1296,13 @@ public:
                             " (draft %.0f elmos)\n",
                             entry->second.cellsX, entry->second.cellsZ,
                             static_cast<double>(rm::sim::fxToFloat(entry->second.elmosPerCell)),
-                            entry->second.passable.empty()
+                            entry->second.divisor.empty()
                                 ? 0u
-                                : 100u * static_cast<std::size_t>(std::count(
-                                                entry->second.passable.begin(),
-                                                entry->second.passable.end(), std::uint8_t{1}))
-                                      / entry->second.passable.size(),
+                                : 100u * static_cast<std::size_t>(std::count_if(
+                                                entry->second.divisor.begin(),
+                                                entry->second.divisor.end(),
+                                                [](std::uint8_t d) { return d != 0; }))
+                                      / entry->second.divisor.size(),
                             static_cast<double>(move.minWaterDepthElmos));
             }
             return entry->second;

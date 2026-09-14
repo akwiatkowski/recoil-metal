@@ -35,6 +35,19 @@ constexpr float kCell =
     return field;
 }
 
+/// Raises every OTHER corner column of a rectangle — a saw-tooth ridge, not a
+/// plateau. An impassable wall has to be built this way: a solid raised band's
+/// flat top is walkable, so only a ridge where every square holds a cliff face
+/// makes a whole cell unwalkable rather than merely costly.
+void sawWall(HeightField& field, int x0, int z0, int x1, int z1, std::uint16_t raw) {
+    for (int z = z0; z <= z1 && z < field.verticesZ(); ++z) {
+        for (int x = x0; x <= x1 && x < field.verticesX(); x += 2) {
+            field.raw[static_cast<std::size_t>(z) * static_cast<std::size_t>(field.verticesX())
+                      + static_cast<std::size_t>(x)] = raw;
+        }
+    }
+}
+
 /// Sets a rectangle of heightmap CORNERS to a raw value.
 void setCorners(HeightField& field, int x0, int z0, int x1, int z1, std::uint16_t raw) {
     for (int z = z0; z <= z1 && z < field.verticesZ(); ++z) {
@@ -100,8 +113,9 @@ TEST_CASE("a surface ship routes through connected water") {
 
 TEST_CASE("a water objective stays in the ship's connected sea") {
     HeightField field = flatField(64, -20.0f);
-    // A dry strip divides the map into two disconnected seas.
-    setCorners(field, 31, 0, 33, field.verticesZ() - 1, 40);
+    // A dry strip divides the map into two disconnected seas. It spans a whole
+    // cell column — a narrower one is only a cost under P10.4, not a barrier.
+    setCorners(field, 25, 0, 32, field.verticesZ() - 1, 40);
     const PassabilityGrid water = rm::sim::buildSurfaceWaterPassability(field, 0.0f);
 
     const auto objective = rm::sim::reachablePointToward(
@@ -130,10 +144,10 @@ TEST_CASE("a slope steeper than the limit is impassable") {
     const HeightField flat = flatField(64);
     REQUIRE(rm::sim::buildPassability(flat, -1000.0f).passableAt(2, 2));
 
-    // A wall: one column of corners raised far above its neighbours, which puts
-    // a near-vertical face inside the cells that contain it.
+    // A wall: a saw-tooth ridge whose every square holds a near-vertical face,
+    // wide enough that cell 2 has no walkable square left.
     HeightField wall = flatField(64);
-    setCorners(wall, 20, 0, 20, wall.verticesZ() - 1, 4000);
+    sawWall(wall, 17, 0, 24, wall.verticesZ() - 1, 4000);
 
     const PassabilityGrid grid = rm::sim::buildPassability(wall, -1000.0f);
     const int wallCell = 20 / rm::sim::kPathCellSquares;
@@ -199,8 +213,10 @@ TEST_CASE("a path across open ground is found and runs end to end") {
 
 TEST_CASE("a path goes around a wall rather than through it") {
     HeightField field = flatField(64);
-    // A wall spanning most of the map, with a gap at the far +Z edge.
-    setCorners(field, 32, 0, 32, 40, 4000);
+    // A wall spanning most of the map, with a gap at the far +Z edge. A cell
+    // wide and unwalkable throughout, so the route cannot pay its way through
+    // and must find the gap.
+    sawWall(field, 33, 0, 40, 40, 4000);
 
     const PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
     const auto path = rm::sim::findPath(grid, rm::test::fx(60.0f), rm::test::fx(60.0f), rm::test::fx(440.0f),
@@ -225,8 +241,8 @@ TEST_CASE("a path goes around a wall rather than through it") {
 
 TEST_CASE("an unreachable destination yields no path rather than a wrong one") {
     HeightField field = flatField(64);
-    // A wall clean across the map: nothing can cross it.
-    setCorners(field, 32, 0, 32, field.verticesZ() - 1, 4000);
+    // A wall clean across the map and a cell wide: nothing can cross it.
+    sawWall(field, 33, 0, 40, field.verticesZ() - 1, 4000);
 
     const PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
     const auto path = rm::sim::findPath(grid, rm::test::fx(60.0f), rm::test::fx(200.0f), rm::test::fx(440.0f),
@@ -237,7 +253,7 @@ TEST_CASE("an unreachable destination yields no path rather than a wrong one") {
 
 TEST_CASE("a destination on impassable ground yields no path") {
     HeightField field = flatField(64);
-    setCorners(field, 32, 0, 32, field.verticesZ() - 1, 4000);
+    sawWall(field, 33, 0, 40, field.verticesZ() - 1, 4000);
     const PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
 
     const float wallWorld = 32.0f * static_cast<float>(rm::kSquareSize);
@@ -340,8 +356,8 @@ TEST_CASE("one flow field serves every start it has settled") {
 
 TEST_CASE("a flow field reports a start it can never reach") {
     HeightField field = flatField(64);
-    // A wall clean across the map: nothing can cross it.
-    setCorners(field, 32, 0, 32, field.verticesZ() - 1, 4000);
+    // A wall clean across the map and a cell wide: nothing can cross it.
+    sawWall(field, 33, 0, 40, field.verticesZ() - 1, 4000);
     const auto grid =
         std::make_shared<PassabilityGrid>(rm::sim::buildPassability(field, -1000.0f));
 
@@ -477,9 +493,11 @@ TEST_CASE("a footprint reaching into a cliff is refused, though its centre is cl
     // half of a factory inside rock, which looks fine right up until it finishes.
     HeightField field = flatField(64);
     // A wall down one column of cells, tall enough that its slope is impassable.
-    const int wallCorner = rm::sim::kPathCellSquares * 3;
-    setCorners(field, wallCorner, 0, wallCorner + rm::sim::kPathCellSquares,
-               field.verticesZ() - 1, std::uint16_t{40000});
+    // The ridge starts one corner into the cell so the squares it blocks are
+    // exactly cell 3's — the neighbour the test aims at stays pristine.
+    const int wallCorner = rm::sim::kPathCellSquares * 3 + 1;
+    sawWall(field, wallCorner, 0, wallCorner + rm::sim::kPathCellSquares,
+            field.verticesZ() - 1, std::uint16_t{40000});
     const PassabilityGrid grid = rm::sim::buildPassability(field, -1000.0f);
 
     // A cell whose neighbour is the wall. Its own centre is clear.
@@ -532,6 +550,48 @@ TEST_CASE("an empty grid refuses every site") {
                                        rm::sim::fxFromFloat(4.0f)));
 }
 
+TEST_CASE("a partly blocked cell is a speed divisor, not a wall", "[P10.4]") {
+    // The rule P10.4 replaces: a 64-elmo cell went impassable when ANY of its
+    // 64 squares was. Now the byte is a speed divisor — 0 impassable, 1 fully
+    // clear, larger the more of the cell is blocked.
+    HeightField field = flatField(64, -40.0f);   // deep water everywhere
+    // Raise every corner except column 12: the squares touching it (11 and 12)
+    // stay deep, so the one cell holding them is partly blocked.
+    setCorners(field, 0, 0, 11, field.verticesZ() - 1, 90);
+    setCorners(field, 13, 0, field.verticesX() - 1, field.verticesZ() - 1, 90);
+    const PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+
+    const int band = 11 / rm::sim::kPathCellSquares;  // the cell holding both squares
+    CHECK(grid.passableAt(band, 3));                  // the old grid refused this outright
+    CHECK(grid.divisorAt(band, 3) == 2);              // 16 of 64 squares deep: ceil(64/48)
+    CHECK(grid.divisorAt(band - 1, 3) == 1);          // fully clear stays full speed
+
+    // A building still needs every square under its footprint: a partly blocked
+    // cell refuses a site exactly as a blocked one did.
+    CHECK_FALSE(rm::sim::sitePlaceable(grid, grid.worldAtCellCentre(band),
+                                       grid.worldAtCellCentre(3), rm::test::fx(2.0f)));
+}
+
+TEST_CASE("a route crosses a costly gap the binary grid refused", "[P10.4]") {
+    // A wall of PARTIALLY blocked cells across the whole map — the binary
+    // answer was "no route"; the cost field pays the wall and crosses.
+    HeightField field = flatField(64, -40.0f);
+    setCorners(field, 0, 0, 31, field.verticesZ() - 1, 90);
+    setCorners(field, 34, 0, field.verticesX() - 1, field.verticesZ() - 1, 90);
+    const PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+
+    const auto path = rm::sim::findPath(grid, rm::test::fx(64.0f), rm::test::fx(256.0f),
+                                        rm::test::fx(448.0f), rm::test::fx(256.0f));
+    REQUIRE_FALSE(path.empty());
+    // Cells 3 and 4 hold the deep squares — the only way across.
+    bool paidTheWall = false;
+    for (const auto& point : path) {
+        const int cell = grid.cellAtWorld(point[0]);
+        paidTheWall = paidTheWall || cell == 3 || cell == 4;
+    }
+    CHECK(paidTheWall);
+}
+
 TEST_CASE("a hull's draft decides which water it can sail") {
     // Depth-aware naval nav (FA-NAVY): a ship's keel rides its authored
     // `Elevation` below the waterline, so a hull with 12 elmos of draft cannot
@@ -539,8 +599,9 @@ TEST_CASE("a hull's draft decides which water it can sail") {
     // The minDepth parameter was already the grid's question; the unit's draft
     // is finally what answers it.
     HeightField field = flatField(64, -20.0f);
-    // A 4-elmos-deep shelf strip across the whole sea (raw 16 above the -20 base).
-    setCorners(field, 31, 0, 33, field.verticesZ() - 1, 16);
+    // A 4-elmos-deep shelf strip across the whole sea (raw 16 above the -20
+    // base), a cell wide so the hull's grid reads it as out rather than costly.
+    setCorners(field, 33, 0, 40, field.verticesZ() - 1, 16);
 
     const PassabilityGrid anyDraft = rm::sim::buildSurfaceWaterPassability(field, 0.0f, 0.0f);
     const PassabilityGrid deepHull = rm::sim::buildSurfaceWaterPassability(field, 0.0f, 12.0f);

@@ -1221,7 +1221,7 @@ TEST_CASE("attack-move resumes its waypoint when a target retreats out of reach"
     const rm::sim::Terrain terrain{field};
     rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
     for (int z = 0; z < grid.cellsZ; ++z) {
-        grid.passable[static_cast<std::size_t>(z * grid.cellsX + 4)] = 0;
+        grid.divisor[static_cast<std::size_t>(z * grid.cellsX + 4)] = 0;
     }
 
     rm::test::Roster roster;
