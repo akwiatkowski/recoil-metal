@@ -263,8 +263,11 @@ add_executable(recoil-metal
     src/main.mm
     # The three run modes. Objective-C++ because one owns an NSApplication and one an ImageIO
     # destination — the only part of the app layer that genuinely needs Objective-C, which is
-    # why everything that did not was moved into rm_app first (PLAN2.md §7 P7.5).
+    # why everything that did not was moved into rm_app first (PLAN2.md §7 P7.5). Run.mm is the
+    # two headless modes; WindowedSession.mm is the interactive game, split the same way
+    # Command.cpp was — the file is the pipeline stage.
     src/app/Run.mm
+    src/app/WindowedSession.mm
     src/platform/Audio.mm
     src/platform/Window.mm
     src/render/Renderer.mm

@@ -1,0 +1,3550 @@
+#include "app/RunShared.hpp"
+
+#include "core/log/Log.hpp"
+
+#include "core/audio/CueEvents.hpp"
+#include "core/audio/Xwb.hpp"
+#include "core/audio/Cues.hpp"
+#include "platform/Audio.hpp"
+
+#import <AppKit/AppKit.h>
+
+#include "core/sim/Adjacency.hpp"
+#include "core/sim/Replay.hpp"
+#include "core/sim/StateHash.hpp"
+#include "core/ui/CommandPanel.hpp"
+#include "core/ui/PanelPages.hpp"
+
+#include <algorithm>
+#include <bit>
+#include <cctype>
+#include <cmath>
+#include <cstdio>
+#include <fstream>
+#include <limits>
+
+// Quits the process when the last window closes. Without a delegate the app
+// lingers windowless in the Dock, which is endlessly confusing in a terminal
+// workflow. (Objective-C declarations must be at global scope — the RM
+// prefix is the namespacing mechanism, per Cocoa convention.)
+@interface RMAppDelegate : NSObject <NSApplicationDelegate>
+@end
+
+@implementation RMAppDelegate
+- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
+    return YES;
+}
+@end
+
+// Polls the renderer and quits once the benchmark has collected enough frames.
+// A timer rather than a counter inside drawFrame: the display link owns the
+// frame loop, and terminating from inside its callback is asking for trouble.
+@interface RMBenchWatcher : NSObject
+@property(nonatomic, assign) rm::Window* window;
+@property(nonatomic, assign) NSUInteger targetFrames;
+@property(nonatomic, copy) NSString* csvPath;
+@end
+
+@implementation RMBenchWatcher
+
+- (void)tick:(NSTimer*)timer {
+    if (self.window->recordedFrames() < self.targetFrames) {
+        return;
+    }
+    [timer invalidate];
+
+    const rm::bench::FrameRecorder recorder = self.window->benchmarkSnapshot();
+    const rm::ui::UiViewport viewport = self.window->uiViewport();
+    const rm::ui::Extent extent = viewport.logicalExtent;
+    std::printf("%s\n", recorder.summaryLine("recoil-metal").c_str());
+    std::printf("  measured viewport: %.0f x %.0f points at %.2fx backing\n",
+                static_cast<double>(extent.width), static_cast<double>(extent.height),
+                static_cast<double>(viewport.backingScale));
+    std::printf("  note: cpu ms is display-paced by CAMetalDisplayLink; gpu ms is the\n"
+                "        renderer's own cost and is the number worth comparing.\n");
+
+    if (self.csvPath.length > 0) {
+        const std::string csv = recorder.toCsv();
+        std::ofstream out{self.csvPath.UTF8String, std::ios::binary};
+        if (out) {
+            out << csv;
+            std::printf("  wrote %s (%zu frames)\n", self.csvPath.UTF8String,
+                        recorder.recorded());
+        } else {
+            rm::log::writef(rm::log::Level::Error, "benchmark", "could not write %s",
+                            self.csvPath.UTF8String);
+        }
+    }
+
+    [NSApp terminate:nil];
+}
+
+@end
+
+namespace rm::app {
+
+namespace {
+
+/// The roster's tile list as one number: FNV-1a 64-bit over each tile's blueprint id.
+///
+/// This is the icon atlas's repack key for the selection panel, and it has to answer "is
+/// this the same GROUP OF TYPES the atlas was packed for" — which the tile count cannot,
+/// because two selections of different units group into equal-length lists. Ids are what
+/// the atlas actually drew; counts and health are per-frame state no icon depends on.
+[[nodiscard]] std::uint64_t rosterKeyFor(const std::vector<rm::ui::RosterTile>& tiles) {
+    constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
+    constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+    std::uint64_t key = kFnvOffset;
+    for (const rm::ui::RosterTile& tile : tiles) {
+        for (const char c : tile.id) {
+            key = (key ^ static_cast<std::uint8_t>(c)) * kFnvPrime;
+        }
+        key = (key ^ static_cast<std::uint8_t>('/')) * kFnvPrime;  // tile separator
+    }
+    return key;
+}
+
+} // namespace
+
+int runWindowed(const Session& session) {
+    RM_UNPACK_SESSION(session)
+        NSApplication* app = [NSApplication sharedApplication];
+        // Regular = real Dock icon and keyboard focus; without this a
+        // terminal-launched app is a background agent that can't take focus.
+        [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+        [app setDelegate:[[RMAppDelegate alloc] init]];
+        [app finishLaunching];
+
+        rm::Window window{static_cast<int>(session.window.width),
+                          static_cast<int>(session.window.height),
+                          "recoil-metal — m8: movable units", session.window.fullscreen};
+        window.setWeaponMaterials(units.weaponVisuals.materials);
+        const bool inputAcceptance = !session.window.inputAcceptancePath.empty();
+        if (inputAcceptance) {
+            window.setSimulatedBacking(session.window.simulatedBacking);
+        }
+        const bool systemReducesTransparency =
+            [NSWorkspace sharedWorkspace].accessibilityDisplayShouldReduceTransparency;
+        const rm::ui::EffectsLevel uiEffects =
+            rm::ui::resolveEffects(session.uiEffects, systemReducesTransparency);
+        window.setUiEffects(uiEffects);
+        std::printf("interface effects: %.*s%s\n",
+                    static_cast<int>(rm::ui::effectsLevelName(uiEffects).size()),
+                    rm::ui::effectsLevelName(uiEffects).data(),
+                    systemReducesTransparency && !session.uiEffects.explicitOverride
+                      ? " (macOS Reduced Transparency)"
+                      : "");
+
+        // SOUND, windowed only: the headless paths are captures and a capture is silent.
+        // The mixer lives on the stack beside the window; the output pulls from it on the
+        // audio thread and a machine with no device just plays the match mute — the same
+        // degradation `--mute` asks for on purpose.
+        rm::audio::Mixer mixer;
+        rm::audio::Output audioOutput;
+        if (hasFlag(session.argc, session.argv, "--mute")) {
+            mixer.setMasterGain(0.0f);
+        } else {
+            // `--volume 0..100`: the master gain, for tuning the mix by ear without a
+            // rebuild. Absent means the mixer's own default.
+            if (const std::size_t volume = parseCount(session.argc, session.argv, "--volume");
+                volume > 0) {
+                mixer.setMasterGain(static_cast<float>(std::min<std::size_t>(volume, 100))
+                                    / 100.0f);
+            }
+            (void)audioOutput.start(mixer);
+        }
+
+        // The game's own booms: FA ships its audio as loose wave banks beside gamedata
+        // (`<install>/sounds`), all plain PCM (see core/audio/Xwb.hpp). Absent — a
+        // procedural map, a missing drive — the synthesised cues carry on.
+        std::optional<rm::audio::WaveBank> explosionBank;
+        std::optional<rm::audio::WaveBank> impactBank;
+        std::optional<rm::audio::WeaponSounds> weaponSounds;
+        for (int i = 1; i + 1 < session.argc; ++i) {
+            if (std::string_view{session.argv[i]} == "--gamedata") {
+                const std::filesystem::path sounds =
+                    std::filesystem::path{session.argv[i + 1]}.parent_path() / "sounds";
+                explosionBank = rm::audio::loadWaveBank(sounds / "Explosions.xwb");
+                impactBank = rm::audio::loadWaveBank(sounds / "Impacts.xwb");
+                // Weapon fire by the blueprint's own cue: the bank pairs load as the catalog
+                // names them, so a type registered mid-match brings its sound along.
+                weaponSounds.emplace(sounds);
+                // The authored mix the banks assume (SupCom.xgs): per-category instance
+                // limits, and the LodCutoff distance beyond which a cue is silence anyway.
+                if (const rm::audio::GlobalSettings* xgs = weaponSounds->globalSettings()) {
+                    for (std::size_t c = 0; c < xgs->categories.size(); ++c) {
+                        if (xgs->categories[c].maxInstances != rm::audio::kUnlimitedInstances) {
+                            mixer.setCategoryLimit(static_cast<std::uint16_t>(c),
+                                                   xgs->categories[c].maxInstances);
+                        }
+                    }
+                    if (const float cutoff = xgs->cutoffElmos(); cutoff > 0.0f) {
+                        mixer.setCutoffElmos(cutoff);
+                        std::printf("audio: %zu categories, cutoff %.0f elmos from"
+                                    " SupCom.xgs\n",
+                                    xgs->categories.size(), cutoff);
+                    }
+                }
+                if (explosionBank) {
+                    std::printf("audio: %zu explosion(s), %zu impact(s) from the game's own"
+                                " banks\n",
+                                explosionBank->entries.size(),
+                                impactBank ? impactBank->entries.size() : 0);
+                }
+                break;
+            }
+        }
+        window.setTerrain(mesh);
+        applyGround(window, *map);
+        window.setProps(props.textures.all(), props.textures.srgbFlags(), props.batches);
+
+        // Only the windowed path steps the sim, so only it can pace a walk
+        // cycle by distance. The headless paths — screenshots and benchmarks —
+        // stay on the renderer's clock, which is what makes `--time` mean
+        // something there and keeps a captured frame reproducible.
+        for (rm::UnitBatch& batch : units.batches) {
+            batch.animationDrivenByInstance = true;
+        }
+        window.setUnits(units.textures.all(), units.textures.srgbFlags(), units.batches);
+        if (focus > 0.0f) {
+            focusOnFirstUnit(window, units, focus);
+        }
+
+        // The planar reflection is half the frame for something Fresnel largely
+        // hides at this camera angle, so it is a setting rather than a fact.
+        // `r` flips it live, which is the only way to judge whether it is worth
+        // its cost — a side-by-side of two runs cannot show the difference
+        // moving.
+        // The player's requested multiplier on automatic magnification, before the first frame
+        // lays anything out — the faces are rasterised for the resulting fit-capped scale.
+        window.setUserHudScale(session.uiScale);
+        const rm::ui::UiViewport openingViewport = window.uiViewport();
+        const rm::ui::Extent openingHud = openingViewport.hudExtent();
+        std::printf("interface: %.2fx (%.0f x %.0f points of layout in a %u x %u window)\n",
+                    static_cast<double>(openingViewport.hudScale()),
+                    static_cast<double>(openingHud.width), static_cast<double>(openingHud.height),
+                    window.width(), window.height());
+
+        window.setReflections(settings.reflections);
+        window.setStratumNormals(settings.stratumNormals);
+        window.setRefraction(settings.refraction);
+        // --- Click to move -------------------------------------------------
+        // Left selects the unit under the cursor, right orders the selection to
+        // the ground under it. Both arrive as a world ray; what it hit is
+        // decided here, where the map and the units are.
+        //
+        // Captured by reference: everything named outlives the window, which is
+        // destroyed at the end of this scope before any of them.
+        // Which units the user has selected. Shift- or Command-click adds or
+        // removes one; a plain click replaces the set with the unit under the
+        // cursor. Right-click orders every selected unit to the ground under it.
+        //
+        // Identity only — nothing about a selected unit is drawn differently, so
+        // there is nothing per-unit to remember and put back. The rings are
+        // rebuilt from this list every frame.
+        // Handles, not (batch, instance) pairs: a selection has to survive a unit dying
+        // and the gather renumbering what is drawn. Converted to `SelectionEntry` at draw
+        // time, which is the only place the pair means anything.
+        std::vector<rm::sim::UnitId> selected;
+        std::vector<rm::SelectionEntry> selectionScratch;
+        rm::sim::TickClock clock;
+
+        // CONTROL GROUPS: ten saved selections. Ctrl+digit files the current selection under
+        // that digit; a bare digit recalls it, pruned of the dead at recall rather than
+        // eagerly — a group is a note about intent, and the note outliving some of its units
+        // is normal. An empty recall is a no-op rather than a deselect: fat-fingering '4'
+        // must not throw away the army under the cursor.
+        std::array<std::vector<rm::sim::UnitId>, 10> controlGroups;
+        std::optional<rm::sim::CommandKind> armedCommand;
+
+        // The overhead view the camera returns to when space is released. Captured at the start,
+        // when `OrbitCamera::frame` has fitted the whole map.
+        const float restPitch = window.camera().pitch;
+        const float restYaw = window.camera().yaw;
+
+        // Set once the match runner exists below. Key handling is installed here so every
+        // binding lives in one place; the runner arrives later because the window (and its
+        // callbacks) must exist before the match it drives.
+        MatchRunner* runnerForKeys = nullptr;
+        /// Array-drag spacing as a multiple of the armed structure's touching pitch, tuned
+        /// by the wheel mid-drag; that pitch in elmos, as the last drag frame measured it,
+        /// so the wheel's ceiling is the absolute `kArraySpacingMaxElmos` rather than a
+        /// multiple; and whether the current frame is inside such a drag, for the wheel
+        /// handler. Beside the callbacks, because all three are polled across frames.
+        float arraySpacingScale = 1.0f;
+        float arrayTouchingElmos = 0.0f;
+        bool arrayDragging = false;
+        // Jump-to-alarm cursor: counts back from the newest alarm, wrapping.
+        // Beside the callbacks because presses arrive across frames.
+        std::size_t alertCursor = 0;
+        // CAMERA TRACKING (T): the snapshot of the selection the camera follows each
+        // frame — and, while one is in flight, the slow shot a tracked shooter fired
+        // (a nuke's arc, a TML missile, an artillery shell). Empty is off; any manual
+        // camera move takes the view back.
+        std::vector<rm::sim::UnitId> tracking;
+        bool cancelledLeftGesture = false;
+        std::optional<std::size_t> armedOption;
+        std::optional<std::array<float, 2>> arrayDragAnchor;
+        window.onKey([&window, &selected, &controlGroups, &units, &armedCommand, restPitch,
+                      restYaw, &runnerForKeys, &armedOption, &arrayDragging,
+                      &cancelledLeftGesture, &arrayDragAnchor, &alertCursor,
+                      &tracking, &map](rm::KeyEvent event) {
+            if (event.phase == rm::KeyPhase::Release) {
+                if (event.key == rm::Key::Space) {
+                    // A held-space glance never costs the player their overhead bearings.
+                    rm::OrbitCamera& camera = window.camera();
+                    camera.pitch = restPitch;
+                    camera.yaw = restYaw;
+                }
+                return;
+            }
+
+            if (event.key == rm::Key::Escape) {
+                cancelledLeftGesture = window.leftMouseHeld();
+                tracking.clear();
+                armedOption.reset();
+                armedCommand.reset();
+                arrayDragging = false;
+                arrayDragAnchor.reset();
+                window.clearGhost();
+                window.setBuildGrid(false);
+            } else if (event.key == rm::Key::R) {
+                const bool enabled = !window.reflectionsEnabled();
+                window.setReflections(enabled);
+                std::printf("reflections %s\n", enabled ? "on" : "off");
+                std::fflush(stdout);
+            } else if (event.key == rm::Key::N) {
+                const bool enabled = !window.stratumNormalsEnabled();
+                window.setStratumNormals(enabled);
+                std::printf("stratum normals %s\n", enabled ? "on" : "off");
+                std::fflush(stdout);
+            } else if (event.key == rm::Key::F) {
+                const bool enabled = !window.refractionEnabled();
+                window.setRefraction(enabled);
+                std::printf("water refraction %s\n", enabled ? "on" : "off");
+                std::fflush(stdout);
+            } else if (event.key == rm::Key::O) {
+                const bool visible = !window.propsVisible();
+                window.setPropsVisible(visible);
+                std::printf("props %s\n", visible ? "on" : "off");
+                std::fflush(stdout);
+            } else if (event.key == rm::Key::A && event.modifiers.shift) {
+                armedCommand = rm::sim::CommandKind::AttackMove;
+                std::printf("attack-move armed: right-click a destination\n");
+            } else if (event.key == rm::Key::T && !event.repeat) {
+                // TRACK. With a selection the camera rides it; with tracking already
+                // on — or nothing selected — the same key gives the camera back.
+                if (!tracking.empty() || selected.empty()) {
+                    tracking.clear();
+                    std::printf("tracking off\n");
+                } else {
+                    tracking.clear();
+                    for (const rm::sim::UnitId id : selected) {
+                        if (units.store.alive(id)) {
+                            tracking.push_back(id);
+                        }
+                    }
+                    std::printf("tracking %zu unit(s) — any camera move releases\n",
+                                tracking.size());
+                }
+                std::fflush(stdout);
+            } else if (event.key == rm::Key::P) {
+                armedCommand = rm::sim::CommandKind::Patrol;
+                std::printf("patrol armed: right-click a destination\n");
+            } else if (event.key == rm::Key::U && !event.repeat) {
+                // UNLOAD — armed like patrol: the next right-click is where the
+                // selected transports set their cargo down.
+                armedCommand = rm::sim::CommandKind::UnloadTransport;
+                std::printf("unload armed: right-click where the cargo lands\n");
+            } else if (event.key == rm::Key::Y && !event.repeat) {
+                // FERRY — armed like patrol: the next right-click is the drop
+                // point; each selected transport starts a standing route back
+                // to where it is standing now.
+                armedCommand = rm::sim::CommandKind::Ferry;
+                std::printf("ferry armed: right-click the drop point — the beacon is where the transport stands\n");
+            } else if (event.key == rm::Key::E) {
+                // AUTO MEX standing order on the selected field engineers — the rack cell
+                // without the click. Silent unless something was eligible to toggle.
+                if (runnerForKeys != nullptr) {
+                    if (const auto on = submitAutoExpandKey(*runnerForKeys, selected)) {
+                        std::printf("auto-expand %s for the selection\n", *on ? "on" : "off");
+                        std::fflush(stdout);
+                    }
+                }
+            } else if ((event.key == rm::Key::I || event.key == rm::Key::C) && !event.repeat) {
+                // The idle selectors, whole-map: I finds the field engineers standing idle,
+                // C the combat units — the keys exist for units the player cannot see, so
+                // there is no on-screen limit here the way there is for a double-click.
+                // Shift adds them to the current selection rather than replacing it, the
+                // same modifier rule the click and the box use.
+                std::vector<rm::sim::UnitId> idle = event.key == rm::Key::I
+                    ? rm::app::idleFieldEngineers(units) : rm::app::idleMobileCombatUnits(units);
+                const char* kind = event.key == rm::Key::I ? "engineer" : "combat unit";
+                if (idle.empty()) {
+                    std::printf("no idle %ss\n", kind);
+                } else if (event.modifiers.shift) {
+                    std::size_t added = 0;
+                    for (const rm::sim::UnitId id : idle) {
+                        if (std::find(selected.begin(), selected.end(), id) == selected.end()) {
+                            selected.push_back(id);
+                            ++added;
+                        }
+                    }
+                    std::printf("idle: %zu %s(s) added to the selection\n", added, kind);
+                } else {
+                    selected = std::move(idle);
+                    std::printf("idle: selected %zu %s(s)\n", selected.size(), kind);
+                }
+                std::fflush(stdout);
+            } else if (event.key == rm::Key::G && !event.repeat) {
+                // Jump to alarms, newest first, wrapping past the oldest: each
+                // press counts one further back, and running out restarts at
+                // the newest. The camera keeps its height and angle — only the
+                // ground under it changes.
+                std::optional<rm::app::UnitScene::Alert> alarm =
+                    units.alertNewest(alertCursor);
+                if (!alarm) {
+                    alertCursor = 0;
+                    alarm = units.alertNewest(alertCursor);
+                }
+                if (!alarm) {
+                    std::printf("no alarms\n");
+                } else {
+                    tracking.clear();
+                    rm::OrbitCamera& camera = window.camera();
+                    camera.target = simd_make_float3(
+                        alarm->x, map->field.heightAtWorld(alarm->x, alarm->z), alarm->z);
+                    std::printf("alarm %zu/%zu: %s at (%.0f, %.0f)\n", alertCursor + 1,
+                                units.alerts.size(),
+                                alarm->kind == rm::app::UnitScene::AlertKind::UnderAttack
+                                    ? "under attack"
+                                    : "big explosion",
+                                static_cast<double>(alarm->x), static_cast<double>(alarm->z));
+                    ++alertCursor;
+                }
+                std::fflush(stdout);
+            } else if (event.key == rm::Key::L && !event.repeat) {
+                // REPEAT loops every selected factory's queue, rebuilding each
+                // product as it finishes. Submitted as an order, not poked into
+                // the store — the sim gates it to factories and logs it for
+                // replay, the same command the production panel's toggle sends.
+                // Stamped with the runner's own tick: this handler has the runner
+                // but no frame scope.
+                if (runnerForKeys != nullptr) {
+                    std::size_t factories = 0;
+                    for (const rm::sim::UnitId id : selected) {
+                        const rm::unitdef::UnitDef* def =
+                            units.store.alive(id)
+                                ? units.catalog.def(units.store.typeAt(id.index))
+                                : nullptr;
+                        if (def != nullptr && def->hasCategory("FACTORY")) ++factories;
+                    }
+                    (void)submitCommand(units, rm::sim::CommandIssue{
+                        .tick = runnerForKeys->tick,
+                        .phase = rm::sim::CommandPhase::PreTick,
+                        .source = static_cast<rm::CommandSource>(
+                            playerDriving(units, units.playerArmy)),
+                        .player = playerDriving(units, units.playerArmy),
+                        .kind = rm::sim::CommandKind::ToggleFactoryRepeat,
+                        .units = selected,
+                    });
+                    if (factories > 0) {
+                        std::printf("repeat: toggled on %zu factorie(s)\n", factories);
+                    }
+                    std::fflush(stdout);
+                }
+            } else if (event.key == rm::Key::B && !event.repeat && !selected.empty()) {
+                // BUILD PRIORITY — Normal → High → Low on the producers in the
+                // selection; a stalled bank pays High before Normal before Low.
+                // The production panel's own cell sends the same command for one
+                // factory. Silent unless something eligible took it.
+                if (runnerForKeys != nullptr
+                    && cycleBuildPriority(units, selected,
+                                          playerDriving(units, units.playerArmy),
+                                          runnerForKeys->tick)) {
+                    for (const rm::sim::UnitId id : selected) {
+                        const rm::unitdef::UnitDef* def = units.store.alive(id)
+                            ? units.catalog.def(units.store.typeAt(id.index)) : nullptr;
+                        if (def != nullptr
+                            && (def->isBuilder() || def->hasCategory("FACTORY"))) {
+                            constexpr std::array<const char*, 3> names{"low", "normal", "high"};
+                            std::printf("build priority: %s\n",
+                                names[static_cast<std::size_t>(units.store.buildPriority(id))]);
+                            break;
+                        }
+                    }
+                    std::fflush(stdout);
+                }
+            } else if (event.key == rm::Key::V && !event.repeat && !selected.empty()) {
+                // RETREAT AT HP — Off → Low → Medium → High on the mobile units in the
+                // selection. Below the mark a hull abandons its queue for the nearest
+                // friendly mechanic and walks back when whole. Silent unless something
+                // eligible took it.
+                if (runnerForKeys != nullptr
+                    && cycleRetreatThreshold(units, selected,
+                                             playerDriving(units, units.playerArmy),
+                                             runnerForKeys->tick)) {
+                    for (const rm::sim::UnitId id : selected) {
+                        const rm::unitdef::UnitDef* def = units.store.alive(id)
+                            ? units.catalog.def(units.store.typeAt(id.index)) : nullptr;
+                        if (def != nullptr && def->isMobile()) {
+                            constexpr std::array<const char*, 4> names{
+                                "off", "low", "medium", "high"};
+                            std::printf("retreat: %s\n",
+                                names[static_cast<std::size_t>(
+                                    units.store.retreatThreshold(id))]);
+                            break;
+                        }
+                    }
+                    std::fflush(stdout);
+                }
+            } else if (event.key == rm::Key::X && !event.repeat && !selected.empty()) {
+                // TARGET FOCUS — Default → Snipe → AirOnly → EconomyOnly on the
+                // armed units in the selection. The order rack is full, so the
+                // setting lives on a key the way the retreat threshold does.
+                // Silent unless something eligible took it.
+                if (runnerForKeys != nullptr
+                    && cycleTargetFocus(units, selected,
+                                        playerDriving(units, units.playerArmy),
+                                        runnerForKeys->tick)) {
+                    for (const rm::sim::UnitId id : selected) {
+                        if (units.store.alive(id)) {
+                            constexpr std::array<const char*, 4> names{
+                                "default", "snipe", "air-only", "economy-only"};
+                            std::printf("target focus: %s\n",
+                                names[static_cast<std::size_t>(
+                                    units.store.targetFocus(id))]);
+                            break;
+                        }
+                    }
+                    std::fflush(stdout);
+                }
+            } else if (const std::optional<std::size_t> digit = rm::digitForKey(event.key)) {
+                auto& group = controlGroups[*digit];
+                if (event.modifiers.control) {
+                    group = selected;
+                    std::printf("group %zu: %zu unit(s) set\n", *digit, group.size());
+                } else {
+                    std::erase_if(group, [&units](rm::sim::UnitId id) {
+                        return !units.store.alive(id);
+                    });
+                    if (!group.empty()) {
+                        selected = group;
+                    }
+                }
+            }
+        });
+
+        // The wheel spends itself on array spacing mid-drag and zooms otherwise. Reads
+        // last frame's drag state: events land between frames, and 60 Hz staleness is
+        // nothing next to a finger already on the wheel.
+        window.onScroll([&arrayDragging, &arraySpacingScale,
+                         &arrayTouchingElmos](float scrollingDeltaY) {
+            if (!arrayDragging) {
+                return false;
+            }
+            arraySpacingScale = rm::ui::arraySpacingScaleStep(arraySpacingScale,
+                scrollingDeltaY, rm::ui::arraySpacingMaxScale(arrayTouchingElmos));
+            return true;
+        });
+
+        // An armed build owns every left-drag — shift included, since shift is
+        // what keeps the placement going — so the trackpad's shift-drag pan
+        // stands down until the tray is disarmed.
+        window.onLeftDragClaim([&armedOption] { return armedOption.has_value(); });
+
+        // THE BUILD PANEL (BAR-styled, `core/ui/BuildPanel.hpp`). Scratch kept outside the loop
+        // for the same reason every other scratch here is: a frame should not allocate.
+        //
+        // DECLARED UP HERE, above `onClick`, rather than beside the frame callback that fills
+        // it, because BOTH need it: the frame draws the panel and the click has to know whether
+        // it landed on one. What a click hits is the panel as last DRAWN, which is what the
+        // player was looking at when they pressed the button — so the two reading one vector is
+        // the correct coupling rather than a shortcut.
+        std::vector<rm::ui::BuildOption> buildOptions;
+        /// The whole menu before the tier tab filters it — `buildOptions` is the visible
+        /// slice of this. Both persist across frames because clicks address the list that
+        /// was last DRAWN, not the one being gathered.
+        std::vector<rm::ui::BuildOption> buildMenuAll;
+        /// `buildTiersPresent` over `buildMenuAll`, gated to zero when it holds a single
+        /// tier — the strip exists only when there is a choice to make. The click handler
+        /// and the draw call read this same member, so a drawn tab and a hittable tab are
+        /// the same tab.
+        std::uint32_t buildTierMask = 0;
+        /// The active tab's tier; `0` shows everything. Re-seated when the builder or the
+        /// menu changes — see the frame block.
+        int buildTier = 0;
+        rm::app::BuildSelection buildWho;
+        std::vector<rm::sim::UnitId> builderCandidates;
+        rm::sim::UnitId activeBuilder{};
+
+        // WHAT THE PLAYER PICKED OFF THE TRAY, if anything — an index into `buildOptions`.
+        //
+        // ARMED RATHER THAN IMMEDIATE, which is how both reference games do it and is not
+        // merely convention: a structure needs a PLACE, and the panel cannot know one. So a
+        // cell click arms, the next ground click places, and right-click or Escape disarms.
+        // Declared above with the keyboard state so Escape can disarm it. Cleared when
+        // options change: an index into a rebuilt list can name a different building.
+        rm::ui::PanelPages panelPages;
+        std::size_t productionPage = 0;
+        rm::ui::CommandAvailability commandAvailable{};
+        rm::ui::CommandPage commandPage{};
+        /// Standing orders that are ON for the whole selection, lit on the rack.
+        rm::ui::CommandAvailability commandEngaged{};
+        std::vector<const rm::unitdef::UnitDef*> commandSelection;
+        // Pause flags aligned with `commandSelection` — the production toggle's cell
+        // lighting and inspector card read them; rebuilt each frame beside it.
+        std::vector<std::uint8_t> productionPaused;
+
+        // WHOSE MENU THE ICON ATLAS WAS PACKED FOR. Keyed on the builder rather than on the
+        // option list, because the list is rebuilt every frame and compares equal every frame —
+        // packing on inequality would mean packing never, and packing unconditionally would
+        // mean 15 VFS reads and a 512x512 upload per frame for a picture that has not changed.
+        // A different builder is the only thing that changes the set.
+        rm::sim::UnitId iconsPackedFor{};
+
+        /// The slot each option's icon went into, kept because `gatherBuildOptions` REBUILDS
+        /// the option list every frame and a fresh `BuildOption` has no slot. Repacking to
+        /// recover them would be 15 archive reads a frame for pictures that have not moved, so
+        /// the answer is cached and reapplied instead.
+        std::vector<std::optional<std::size_t>> iconSlots;
+
+        /// The selection, grouped by type — Track 0's UI-2. Rebuilt every frame from the store,
+        /// so a unit dying leaves its tile's count one lower without anything having to notice.
+        std::vector<rm::ui::RosterTile> rosterTiles;
+        std::vector<std::optional<std::size_t>> rosterSlots;
+
+        /// WHAT THE ROSTER'S ICONS WERE PACKED FOR: an FNV-1a over the tiles' blueprint ids,
+        /// from `rosterKeyFor` below. It used to be the tile COUNT, which is not an identity:
+        /// two selections of different unit types group into equal-length tile lists, and the
+        /// positional slot reapplication then showed the previous selection's icon until some
+        /// count happened to change. Ids are what the atlas actually drew.
+        std::uint64_t rosterPackedKey = 0;
+        std::size_t buildPagePacked = static_cast<std::size_t>(-1);
+        int buildTierPacked = -1;
+        std::size_t rosterPagePacked = static_cast<std::size_t>(-1);
+
+        // The strategic layer's per-type icon table, rebuilt with every pack — the slots
+        // move with the tray's and roster's counts. `typesPackedFor` starts impossible so
+        // the FIRST frame packs: unlike the tray, the strategic icons exist with nothing
+        // selected at all.
+        std::vector<std::optional<rm::app::StrategicIconRef>> strategicRefs;
+        std::size_t typesPackedFor = static_cast<std::size_t>(-1);
+        rm::ui::PanelSkin interfaceSkin;
+
+        // The caller-side tick, the same one `march()` drives. Built here rather than in
+        // the frame callback because a match is decided on one tick and stays decided, and
+        // the opponents remember what they have already started.
+        MatchRunner runner =
+            makeMatchRunner(units, map->field, passability, content, starts, map->markers,
+                            rm::sim::PlayableRect{
+                                .minX = {},
+                                .maxX = rm::sim::fxFromFloat(map->field.widthElmos()),
+                                .minZ = {},
+                                .maxZ = rm::sim::fxFromFloat(map->field.depthElmos()),
+                            });
+        runnerForKeys = &runner;
+        // Acceptance fixtures keep normal economy, construction, movement and roll-off ticks;
+        // opponents are silent so an unrelated attack cannot destroy the controls under test.
+        if (inputAcceptance) runner.scripts.clear();
+        // Match time in TICKS, for pacing the opponents' decisions. Counted rather than
+        // read off `matchSeconds`, so a dropped frame cannot skip a decision or run one
+        // twice.
+        //
+        // Seeded from the pre-run, because `--play` simulates N seconds headless before
+        // the window opens and the window then continues the SAME match: an opponent
+        // announcing its attack at 0.0s in a match already 500 seconds old reads as a bug
+        // in the opponent. Only the logging sees this number — the sim counts its own
+        // ticks.
+        int matchTicks =
+            marchOptions.enabled
+                ? static_cast<int>(gAppTickRate.ticks(rm::sim::seconds(marchOptions.seconds)))
+                : 0;
+
+        // A player order should show the first completed movement tick immediately instead of
+        // spending another 100 ms blending toward it. Keep each unit current until the following
+        // tick, where normal interpolation starts exactly at that first position and cannot snap
+        // backwards. This is presentation state only; commands and snapshots remain unchanged.
+        std::vector<rm::CurrentUnitProjection> responsiveDraws;
+        std::vector<rm::sim::UnitId> responsiveDrawScratch;
+
+        // Where the last few orders landed, and when. Markers expire on their own
+        // (GroundDecals.hpp), so this only ever grows to the number of orders
+        // given inside kOrderMarkerSecondsToLive — a handful at a click a second,
+        // and bounded below by nothing needing to be cleaned up on a schedule.
+        struct OrderMark {
+            std::array<float, 3> position{};
+            float age = 0.0f;
+        };
+        std::vector<OrderMark> orderMarks;
+
+        // Refusals, one per unit that reported no route — the red cross the printf used to
+        // be. Same aging discipline as the order marks; drawn beside them each frame.
+        std::vector<OrderMark> noRouteMarks;
+
+        // Dust. Particles live across frames — that is the point of them — so
+        // this list persists and is aged rather than rebuilt, unlike the decals.
+        // The emitter list IS rebuilt each frame, because it is a view of where
+        // the units are now.
+        std::vector<rm::Particle> particles;
+        std::vector<rm::DustEmitter> dustEmitters;
+        std::vector<rm::sim::Event> visibleEvents;
+        std::vector<rm::sim::Projectile> visibleProjectiles;
+        float dustDebt = 0.0f;
+        float ambientDebt = 0.0f;
+        // A fixed seed, so a scene is the same every run: the same reason the unit
+        // scatter takes one.
+        std::uint32_t dustSeed = 0x51ED27u;
+
+        // Reused across frames so that rebuilding the rings costs no
+        // allocation — the capacity settles after the first large selection.
+        std::vector<rm::DecalVertex> decalVertices;
+
+        // The radius a build ghost is drawn at, and the footprint `sitePlaceable` checks.
+        //
+        // FROM THE BLUEPRINT once the type is registered — a factory is not an extractor — and
+        // this is only the fallback for the moment before it resolves.
+        constexpr float kGhostFallbackRadiusElmos = 4.0f;
+
+        /// The armed option's blueprint path, or empty. Derived from the id rather than carried
+        /// alongside it, so the two cannot disagree — `RosterEntry::path` is the one place the
+        /// corpus's `/units/<ID>/<ID>_unit.bp` layout is written down.
+        const auto armedPath = [&]() -> std::string {
+            if (!armedOption || *armedOption >= buildOptions.size()) {
+                return {};
+            }
+            return rm::data::RosterEntry{.id = buildOptions[*armedOption].id}.path();
+        };
+
+        /// The armed option's collision radius, for the ghost and the footprint test.
+        const auto armedRadius = [&]() -> float {
+            const std::string path = armedPath();
+            if (path.empty()) {
+                return kGhostFallbackRadiusElmos;
+            }
+            const std::optional<rm::UnitTypeIndex> type =
+                resolveBuildable(units, content, path);
+            const rm::unitdef::UnitDef* def = type ? units.catalog.def(*type) : nullptr;
+            return def != nullptr && def->collisionRadiusElmos > 0.0f
+                       ? def->collisionRadiusElmos
+                       : kGhostFallbackRadiusElmos;
+        };
+
+        /// Whether the armed build may stand at a world point — the ghost's colour, and the
+        /// same question the click asks before it orders anything.
+        const auto armedPlaceable = [&](std::array<float, 2> at) -> bool {
+            if (!armedOption) {
+                return false;
+            }
+            const std::string path = armedPath();
+            const std::optional<rm::UnitTypeIndex> targetType =
+                path.empty() ? std::nullopt : resolveBuildable(units, content, path);
+            if (!targetType) {
+                return false;
+            }
+            return buildSitePlaceableFor(units, map->field, passability, buildWho.builder,
+                                         *targetType, at, armedRadius());
+        };
+
+        /// Shift appends work and keeps placement armed for another site.
+        const auto placeArmedBuild = [&](simd_float3 at, bool queued) {
+            const std::string path = armedPath();
+            const std::optional<rm::UnitTypeIndex> type =
+                path.empty() ? std::nullopt : resolveBuildable(units, content, path);
+            if (!type || !units.store.alive(buildWho.builder)) {
+                armedOption.reset();
+                return;
+            }
+            const auto snapped = snapBuildSite(units, *type, {at.x, at.z});
+            at.x = snapped[0];
+            at.z = snapped[1];
+            // THE PLACEMENT REPORTS EITHER WAY. Until construction has a body in the world
+            // (nothing exists at the site until the work completes) this line is the ONLY
+            // sign a build was ordered at all — so a refusal being silent meant a player
+            // could not tell "the site is bad" from "the button does nothing".
+            const std::string& id = buildOptions[*armedOption].id;
+            const std::string& what =
+                buildOptions[*armedOption].name.empty() ? id : buildOptions[*armedOption].name;
+            if (!armedPlaceable({at.x, at.z})) {
+                std::printf("build refused: %s does not fit at (%.0f, %.0f)\n", what.c_str(),
+                            static_cast<double>(at.x), static_cast<double>(at.z));
+            } else if (issueBuild(units, buildWho.builder,
+                                  playerDriving(units, units.playerArmy),
+                                  static_cast<rm::TickIndex>(matchTicks), *type,
+                                  rm::sim::fxFromFloat(at.x), rm::sim::fxFromFloat(at.z), queued)) {
+                std::printf("build: %s %s at (%.0f, %.0f)\n", what.c_str(),
+                            queued ? "queued" : "ordered",
+                            static_cast<double>(at.x), static_cast<double>(at.z));
+            } else {
+                std::printf("build refused: %s was not accepted at (%.0f, %.0f)\n",
+                            what.c_str(), static_cast<double>(at.x),
+                            static_cast<double>(at.z));
+            }
+            std::fflush(stdout);
+            if (!queued) armedOption.reset();
+        };
+
+        window.onClick([&](const rm::Ray& ray, rm::MouseButton button,
+                           rm::MouseModifiers mods) {
+            if (cancelledLeftGesture && button == rm::MouseButton::Left) return;
+            const rm::ui::UiViewport clickViewport = window.uiViewport();
+            const std::array<float, 2> hudPoint =
+                clickViewport.toHud({mods.pointX, mods.pointY});
+            // THE MINIMAP FIRST, because it is in front of the world (§7 P7.4). A click on the
+            // panel is about the panel; without this check the ray under it would also select
+            // whatever unit happens to be behind the minimap, which is the single most
+            // irritating bug an overlay can have.
+            // Orders the whole selection to a world point — the right button's meaning,
+            // whether the point came from a ray into the world or a click on the minimap.
+            // One lambda so the two entrances cannot drift; the marker, the per-unit grids
+            // and the queue reporting are the same statements they were.
+            const auto orderSelectionTo = [&](simd_float3 ground, bool queue,
+                                               std::optional<rm::sim::UnitId> target =
+                                                   std::nullopt,
+                                               rm::sim::CommandKind groundKind =
+                                                   rm::sim::CommandKind::Move) {
+                orderMarks.push_back(OrderMark{
+                    .position = {ground.x, ground.y, ground.z},
+                    .age = 0.0f,
+                });
+
+                std::vector<rm::sim::UnitId> ordinary;
+                std::vector<rm::sim::UnitId> overcharging;
+                float shotCost = 0.0f;
+                for (const rm::sim::UnitId sel : selected) {
+                    if (!units.store.alive(sel)) {
+                        continue;  // selected, then killed before the order was given
+                    }
+                    // ⌘-RIGHT-CLICK ON AN ENEMY IS AN OVERCHARGE, for the units that carry
+                    // a manual weapon; the rest of the selection attacks as it would have.
+                    // The escort keeps escorting while the commander spends the store.
+                    const rm::unitdef::UnitDef* selDef =
+                        units.catalog.def(units.store.typeAt(sel.index));
+                    float unitShotCost = 0.0f;
+                    if (selDef != nullptr) {
+                        for (const rm::unitdef::Weapon& weapon : selDef->weapons) {
+                            if (weapon.manuallyFired()) {
+                                unitShotCost = rm::sim::magToFloat(weapon.energyRequired);
+                                break;
+                            }
+                        }
+                    }
+                    if (target && mods.command && unitShotCost > 0.0f) {
+                        overcharging.push_back(sel);
+                        shotCost = unitShotCost;
+                    } else {
+                        ordinary.push_back(sel);
+                    }
+                }
+                const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                std::size_t submitted = 0;
+                if (!overcharging.empty()
+                    && issueOvercharge(units, overcharging, player, tick, *target,
+                                       rm::sim::fxFromFloat(ground.x),
+                                       rm::sim::fxFromFloat(ground.z), queue)) {
+                    submitted += overcharging.size();
+                }
+                // OPTION-RIGHT-CLICK IS THE SPREAD MOVE: same destination gesture, but
+                // every unit lands its scaled offset from the click instead of all of
+                // them piling onto it — the anti-AoE order. Only a plain move spreads;
+                // an armed kind or a target keeps its own meaning.
+                const bool spread = !target && mods.option
+                    && groundKind == rm::sim::CommandKind::Move;
+                const bool ordinarySubmitted = ordinary.empty()
+                    || (target
+                            ? issueAttack(units, ordinary, player, tick, *target,
+                                          rm::sim::fxFromFloat(ground.x),
+                                          rm::sim::fxFromFloat(ground.z), queue)
+                            : spread
+                                ? issueSpreadMove(units, ordinary, player, tick,
+                                                  rm::sim::fxFromFloat(ground.x),
+                                                  rm::sim::fxFromFloat(ground.z), queue)
+                                : issueMove(units, ordinary, player, tick,
+                                            rm::sim::fxFromFloat(ground.x),
+                                            rm::sim::fxFromFloat(ground.z), queue,
+                                            groundKind));
+                if (ordinarySubmitted) {
+                    submitted += ordinary.size();
+                }
+                if (!overcharging.empty() && units.playerArmy >= 0
+                    && static_cast<std::size_t>(units.playerArmy) < units.economies.size()) {
+                    const float banked = rm::sim::magToFloat(
+                        units.economies[static_cast<std::size_t>(units.playerArmy)].stored.energy);
+                    if (banked >= shotCost) {
+                        std::printf("overcharge: submitted (%.0f energy banked)\n",
+                                    static_cast<double>(banked));
+                    } else {
+                        std::printf("overcharge: submitted (%.0f of %.0f energy)\n",
+                                    static_cast<double>(banked), static_cast<double>(shotCost));
+                    }
+                }
+                // EVERY ORDER SAYS WHAT HAPPENED, not only the ones that went wrong. The old
+                // version printed on a refusal and stayed silent on success, which is exactly
+                // backwards for the question a player actually asks — "did that click do
+                // anything at all?" — because silence is also what a click that never reached
+                // this lambda produces. One line per order makes the two distinguishable from
+                // the console alone, which is the only instrument a windowed session has.
+                std::printf("order: %s%s — %zu of %zu unit(s) submitted at (%.0f, %.0f)\n",
+                            target ? "attack"
+                                : spread ? "spread-move"
+                                : rm::sim::commandKindName(groundKind),
+                            queue ? " (queued)" : "", submitted, selected.size(),
+                            static_cast<double>(ground.x), static_cast<double>(ground.z));
+                std::fflush(stdout);
+            };
+
+            // A CLICK THE INTERFACE ATE SAYS SO. The deck spans most of the screen's bottom
+            // edge at every profile, and a right-click landing on it is swallowed by design:
+            // the world behind a panel is not what the player aimed at. What was NOT by
+            // design is that it was swallowed in SILENCE — which is indistinguishable from an
+            // order that was refused, an order that never arrived, and a unit that is merely
+            // pivoting on the spot before setting off. One line tells the three apart.
+            const auto swallowedByPanel = [&](const char* panel) {
+                if (button == rm::MouseButton::Right && !selected.empty()) {
+                    std::printf("order ignored: that click was on the %s panel, not the "
+                                "world\n",
+                                panel);
+                    std::fflush(stdout);
+                }
+            };
+
+            // Convert AppKit's logical click exactly once, beside the hit tests that consume it.
+            const rm::ui::FrameLayout frame = rm::ui::frameLayout(clickViewport);
+            const rm::ui::MinimapLayout minimap = rm::ui::minimapLayout(frame);
+            if (rm::ui::insideMinimap(minimap, hudPoint[0], hudPoint[1])) {
+                if (armedCommand && *armedCommand != rm::sim::CommandKind::Move
+                    && *armedCommand != rm::sim::CommandKind::AttackMove
+                    && *armedCommand != rm::sim::CommandKind::Patrol
+                    && *armedCommand != rm::sim::CommandKind::UnloadTransport
+                    && *armedCommand != rm::sim::CommandKind::Ferry) {
+                    rm::log::write(rm::log::Level::Info, "orders",
+                                   "targeted command needs a world unit, not the minimap");
+                    return;
+                }
+                const std::optional<std::array<float, 2>> where =
+                    rm::ui::minimapToWorld(minimap, map->field.widthElmos(),
+                                           map->field.depthElmos(), hudPoint[0], hudPoint[1]);
+                if (!where) {
+                    return;  // panel letterbox: swallowed, but not clamped onto the map edge
+                }
+                const simd_float3 ground = simd_make_float3(
+                    (*where)[0], map->field.heightAtWorld((*where)[0], (*where)[1]), (*where)[1]);
+
+                // THE RIGHT BUTTON MEANS THE SAME THING ON THE MAP AS IN THE WORLD: go
+                // there. Ordering across the map without swinging the camera off the fight
+                // is most of what a minimap order is for.
+                if (button == rm::MouseButton::Right) {
+                    if (!selected.empty()) {
+                        orderSelectionTo(ground, mods.shift, std::nullopt,
+                                         armedCommand.value_or(
+                                             rm::sim::CommandKind::Move));
+                        armedCommand.reset();
+                    }
+                    return;
+                }
+
+                // Left: jump, keeping the camera's distance and angles — a minimap click
+                // moves where you are looking, not how. Height sampled from the terrain so
+                // the target sits on the ground rather than at y = 0.
+                tracking.clear();
+                window.camera().target = ground;
+                return;
+            }
+
+            const auto production = gatherProduction(units, activeBuilder);
+            const auto productionRect = rm::ui::productionPanelRect(frame);
+            if (production && productionRect.contains(hudPoint[0], hudPoint[1])) {
+                if (button == rm::MouseButton::Left) {
+                    if (const auto step = rm::ui::productionPageStepAt(
+                            productionRect, *production, hudPoint[0], hudPoint[1], productionPage)) {
+                        if (*step < 0) --productionPage;
+                        else ++productionPage;
+                    } else {
+                        // SHIFT QUEUES FIVE (§7 P4.1): the same modifier that appends
+                        // to an order queue multiplies a tray click — five separate
+                        // build orders, so each is its own queue entry to cancel.
+                        const int times = mods.shift ? 5 : 1;
+                        for (int i = 0; i < times; ++i) {
+                            (void)submitProductionControl(units, activeBuilder,
+                                playerDriving(units, units.playerArmy),
+                                static_cast<rm::TickIndex>(matchTicks), frame,
+                                hudPoint[0], hudPoint[1], productionPage);
+                        }
+                    }
+                }
+                armedCommand.reset();
+                armedOption.reset();
+                swallowedByPanel("production");
+                return;
+            }
+
+            // The command rack owns the complete bottom-right rectangle. Implemented commands
+            // keep stable FA positions; disabled and unimplemented cells still swallow input so
+            // a miss on the instrument never becomes an order to the world behind it.
+            const rm::ui::CommandRackLayout commandRack =
+                rm::ui::commandRackLayout(frame, !selected.empty());
+            if (rm::ui::insideCommandRack(commandRack, hudPoint[0], hudPoint[1])) {
+                const std::optional<std::size_t> slot =
+                    rm::ui::commandSlotAt(commandRack, hudPoint[0], hudPoint[1]);
+                if (button == rm::MouseButton::Right) {
+                    armedCommand.reset();
+                } else if (const auto on = submitAutoExpandControl(
+                               runner, selected, frame, hudPoint[0], hudPoint[1])) {
+                    // A STANDING ORDER, toggled: the selection's field builders go on (or
+                    // come off) auto-expand at once; nothing to target.
+                    std::printf("auto-expand %s for the selection\n", *on ? "on" : "off");
+                    std::fflush(stdout);
+                    armedCommand.reset();
+                } else if (slot && commandPage[*slot].enabled && commandPage[*slot].toggle
+                           && rm::ui::kToggleDescriptors[*commandPage[*slot].toggle].cap
+                                  == "RULEUTC_ProductionToggle") {
+                    // The one backed toggle: pause/resume production on the selection's
+                    // producers, through the same semantic issue the log replays.
+                    (void)submitCommand(units, rm::sim::CommandIssue{
+                        .tick = static_cast<rm::TickIndex>(matchTicks),
+                        .phase = rm::sim::CommandPhase::PreTick,
+                        .source = static_cast<rm::CommandSource>(
+                            playerDriving(units, units.playerArmy)),
+                        .player = playerDriving(units, units.playerArmy),
+                        .kind = rm::sim::CommandKind::ToggleProduction,
+                        .units = selected,
+                    });
+                    armedCommand.reset();
+                } else if (slot && commandPage[*slot].enabled
+                           && !commandPage[*slot].toggle
+                           && (commandPage[*slot].order
+                               || rm::ui::kCommandDescriptors[*slot].kind)) {
+                    // The page's cell decides, not the descriptor under it: a substituted
+                    // cell — the silo's LAUNCH on Reclaim's dead slot — issues its own kind.
+                    const rm::sim::CommandKind kind =
+                        commandPage[*slot].order.value_or(
+                            *rm::ui::kCommandDescriptors[*slot].kind);
+                    if (kind == rm::sim::CommandKind::Stop || kind == rm::sim::CommandKind::Dive) {
+                        (void)submitCommand(units, rm::sim::CommandIssue{
+                            .tick = static_cast<rm::TickIndex>(matchTicks),
+                            .phase = rm::sim::CommandPhase::PreTick,
+                            .source = static_cast<rm::CommandSource>(
+                                playerDriving(units, units.playerArmy)),
+                            .player = playerDriving(units, units.playerArmy),
+                            .kind = kind,
+                            .units = selected,
+                        });
+                        armedCommand.reset();
+                    } else {
+                        armedCommand = kind;
+                    }
+                }
+                swallowedByPanel("command");
+                return;
+            }
+
+            // THE BUILD PANEL, for the minimap's reason above and with a sharper edge to it.
+            // The panel appears only while a builder is selected, so a click falling through it
+            // reached the ground, cleared the selection, and took the panel away with it — the
+            // button vanished under the cursor that pressed it. An overlay that punishes you for
+            // aiming at it is worse than no overlay.
+            //
+            // SWALLOWED WHETHER OR NOT IT HIT A CELL: the gutters and the header are part of the
+            // panel, and a click landing in one is still a click on the interface rather than on
+            // the world behind it.
+            //
+            // What it does not yet do is ACT on the cell. That needs the build path routed
+            // through `applyCommand` — a behaviour change, not a guard — so the two are separate
+            // jobs and this is the one that stops the bleeding.
+            if (!buildOptions.empty()) {
+                std::size_t& buildPage =
+                    panelPages.build(units.store.typeAt(buildWho.builder.index));
+                const rm::ui::BuildPanelLayout panel =
+                    rm::ui::buildPanelLayout(frame, buildOptions.size(), buildPage);
+                if (rm::ui::insideBuildPanel(panel, hudPoint[0], hudPoint[1])) {
+                    // A cell ARMS the build; the gutters and header swallow and do nothing.
+                    // Right-click anywhere on the panel disarms, so the way out is where the
+                    // way in was.
+                    const std::optional<std::size_t> cell = rm::ui::buildOptionAt(
+                        panel, buildOptions.size(), hudPoint[0], hudPoint[1]);
+                    if (button == rm::MouseButton::Right) {
+                        if (!armedOption) {
+                            swallowedByPanel("build");  // nothing to disarm: it was just eaten
+                        }
+                        armedOption.reset();
+                    } else if (const std::optional<int> tier = rm::ui::buildTabAt(
+                                   panel, buildTierMask, hudPoint[0], hudPoint[1])) {
+                        // A tab pick is a header control, checked before the arrows because
+                        // the strip owns the header's right edge. The visible list changes
+                        // next frame, so the armed cell — an index into the old one — drops.
+                        buildTier = *tier;
+                        buildPage = 0;
+                        armedOption.reset();
+                    } else if (const std::optional<int> step = rm::ui::buildPageStepAt(
+                                   panel, buildTierMask, hudPoint[0], hudPoint[1])) {
+                        if (*step < 0 && buildPage > 0) {
+                            --buildPage;
+                        } else if (*step > 0 && buildPage + 1 < panel.pages) {
+                            ++buildPage;
+                        }
+                    } else if (cell
+                               && rm::ui::buildOptionAction(buildOptions[*cell], buildWho.role)
+                                      == rm::ui::BuildOptionAction::SubmitAtBuilder) {
+                        // BUILT AT ONCE, with no site to pick, for two different reasons that
+                        // reach the same place. A FACTORY is the place — arming a ghost for its
+                        // products would be a step with no decision in it. An UPGRADE has no
+                        // site at all: `startCommand` overrides whatever the order says with
+                        // the builder's own position, because a factory does not upgrade into
+                        // a field.
+                        const auto& option = buildOptions[*cell];
+                        const auto& what = option.name.empty() ? option.id : option.name;
+                        if (submitBuildOption(units, content, buildWho.builder,
+                                playerDriving(units, units.playerArmy),
+                                static_cast<rm::TickIndex>(matchTicks), option, mods.shift)) {
+                            std::printf("%s: %s\n", option.upgrade
+                                ? (option.queuedUpgrade ? "upgrade queued" : "upgrade started")
+                                : "factory queued", what.c_str());
+                        } else {
+                            std::printf("build refused: %s\n", what.c_str());
+                        }
+                        std::fflush(stdout);
+                    } else if (cell) {
+                        armedOption = cell;
+                        arraySpacingScale = 1.0f;  // a new arming starts at touching pitch
+                        arrayDragAnchor.reset();
+                    }
+                    return;
+                }
+            }
+
+            // THE ROSTER, for the build panel's reason: it is in front of the world, and a
+            // click that fell through would order the very units the roster is describing to
+            // walk to wherever happens to be behind it.
+            //
+            // AND IT IS A CONTROL, not only a readout: clicking a tile filters the selection
+            // to that type — the composition panel becomes the way to peel the engineers out
+            // of a battle group — and a modifier inverts it, dropping the type instead. Both
+            // reference games bind tile clicks this way. The gutters and header still just
+            // swallow: a miss near a button must not become the wrong button.
+            if (!rosterTiles.empty()) {
+                std::size_t& rosterPage = panelPages.roster();
+                const rm::ui::RosterLayout roster =
+                    rm::ui::rosterLayout(frame, rosterTiles.size(), rosterPage);
+                if (rm::ui::insideRoster(roster, hudPoint[0], hudPoint[1])) {
+                    const std::optional<std::size_t> tile =
+                        rm::ui::rosterTileAt(roster, hudPoint[0], hudPoint[1]);
+                    if (button == rm::MouseButton::Left) {
+                        if (const std::optional<int> step = rm::ui::rosterPageStepAt(
+                                roster, hudPoint[0], hudPoint[1])) {
+                            if (*step < 0 && rosterPage > 0) {
+                                --rosterPage;
+                            } else if (*step > 0 && rosterPage + 1 < roster.pages) {
+                                ++rosterPage;
+                            }
+                            return;
+                        }
+                    }
+                    if (tile && button == rm::MouseButton::Left) {
+                        const std::string& id = rosterTiles[*tile].id;
+                        const bool drop = mods.shift || mods.command || mods.control;
+                        std::erase_if(selected, [&](rm::sim::UnitId unit) {
+                            if (!units.store.alive(unit)) {
+                                return true;  // housekeeping the next gather would do anyway
+                            }
+                            const rm::unitdef::UnitDef* def =
+                                units.catalog.def(units.store.typeAt(unit.index));
+                            const bool matches = def != nullptr && def->name == id;
+                            return drop ? matches : !matches;
+                        });
+                    }
+                    swallowedByPanel("selection");
+                    return;
+                }
+            }
+
+            // A GROUND CLICK WHILE ARMED PLACES, and nothing else happens — it does not also
+            // select, which is the same reasoning as the panel guard above: the click had a
+            // meaning and it was not "pick a unit".
+            if (armedOption && button == rm::MouseButton::Left) {
+                const std::optional<simd_float3> at = rm::pickGround(ray, map->field);
+                if (!at) {
+                    return;  // the sky, or past the edge — the order simply does not happen
+                }
+                placeArmedBuild(*at, mods.shift);
+                return;
+            }
+            if (armedOption && button == rm::MouseButton::Right) {
+                armedOption.reset();  // right-click cancels, as it cancels everything else
+                arrayDragAnchor.reset();
+                return;
+            }
+
+            if (button == rm::MouseButton::Left) {
+                // What the click MEANS is decided in core/scene/Selection.hpp,
+                // where it can be tested. Nothing is left to do here: the units
+                // themselves are not repainted, and the rings are rebuilt from
+                // this list by the frame callback.
+                const bool addToSet = mods.shift || mods.command || mods.control;
+                std::optional<rm::sim::UnitId> pick = pickAcrossBatches(ray, units);
+
+                // A FACTORY STILL RISING IS CLICKABLE, the way it is in retail: a
+                // construction site has no unit to pick (the factory unit is spawned at
+                // completion), so the click lands on the founder and the build tray offers
+                // the rising factory's products through it. Only the player's own sites —
+                // clicking an enemy's half-built factory is scouting, not selecting.
+                if (!pick) {
+                    const std::optional<simd_float3> ground = rm::pickGround(ray, map->field);
+                    if (ground) {
+                        const rm::sim::Fx gx = rm::sim::fxFromFloat((*ground)[0]);
+                        const rm::sim::Fx gz = rm::sim::fxFromFloat((*ground)[2]);
+                        const rm::sim::Construction* nearest = nullptr;
+                        rm::sim::Fx nearestDistance{};
+                        for (const rm::sim::Construction& work : units.building) {
+                            if (work.finished() || work.isUpgrade()
+                                || work.armyIndex != units.playerArmy
+                                || !units.store.alive(work.builder)) {
+                                continue;
+                            }
+                            const rm::unitdef::UnitDef* def =
+                                units.catalog.def(static_cast<rm::UnitTypeIndex>(
+                                    work.blueprintIndex));
+                            if (def == nullptr) {
+                                continue;
+                            }
+                            const float dx = rm::sim::fxToFloat(gx - work.position[0]);
+                            const float dz = rm::sim::fxToFloat(gz - work.position[2]);
+                            const float distance = std::hypot(dx, dz);
+                            const float reach =
+                                std::max(def->collisionRadiusElmos, 4.0f);
+                            if (distance > reach) {
+                                continue;
+                            }
+                            if (nearest == nullptr
+                                || rm::sim::fxFromFloat(distance) < nearestDistance) {
+                                nearest = &work;
+                                nearestDistance = rm::sim::fxFromFloat(distance);
+                            }
+                        }
+                        if (nearest != nullptr) {
+                            pick = nearest->builder;
+                        }
+                    }
+                }
+
+                // DOUBLE-CLICK WIDENS TO THE TYPE, on screen: every one of the player's
+                // units of the clicked type whose position projects into the viewport.
+                // On screen rather than map-wide because that is what both reference games
+                // do, and because "everything like this, everywhere" silently commits units
+                // the player cannot see. The first click of the pair selected the unit
+                // normally; this refines it, so a double-click on empty ground still means
+                // what a single click there meant.
+                //
+                // CONTROL-CLICK widens the same way but always ADDS — BAR's "select all of
+                // this type on screen, on top of what I have". `addToSet` is already true
+                // under control, so the band's additive rule does the appending, and a
+                // re-clicked type is NOT toggled out: a widening click aims at a type, not
+                // at a unit.
+                if (pick && (mods.clicks >= 2 || mods.control)) {
+                    const rm::UnitTypeIndex wanted = units.store.typeAt(pick->index);
+                    const float w = clickViewport.logicalExtent.width;
+                    const float h = clickViewport.logicalExtent.height;
+                    std::vector<rm::sim::UnitId> ofType;
+                    for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                        if (!units.store.slotAlive(slot)
+                            || units.store.typeAt(slot) != wanted
+                            || units.armyOf(slot) != units.playerArmy) {
+                            continue;
+                        }
+                        const rm::sim::Transform& at = units.store.transforms()[slot];
+                        const auto screen = rm::worldToScreen(
+                            window.camera(),
+                            simd_make_float3(rm::sim::fxToFloat(at.x),
+                                             rm::sim::fxToFloat(at.y),
+                                             rm::sim::fxToFloat(at.z)),
+                            w, h);
+                        if (screen && (*screen)[0] >= 0.0f && (*screen)[0] <= w
+                            && (*screen)[1] >= 0.0f && (*screen)[1] <= h) {
+                            ofType.push_back(units.store.idAt(slot));
+                        }
+                    }
+                    selected = rm::applyBand<rm::sim::UnitId>(selected, ofType, addToSet);
+                    return;
+                }
+
+                selected = rm::applyClick<rm::sim::UnitId>(selected, pick, addToSet);
+                return;
+            }
+
+            if (selected.empty()) {
+                // Not an error, and worth saying anyway: "nothing selected" and "the order
+                // was refused" look identical from the far side of the screen.
+                std::printf("order ignored: nothing is selected\n");
+                std::fflush(stdout);
+                return;
+            }
+
+            // AN ATTACK OR A MOVE, decided by what the right button landed on. Picking is
+            // done WITHOUT the army filter that selection uses — the point here is to find
+            // an enemy, which is exactly what selection excludes.
+            //
+            // What this is not: a tracked attack order. The selection is sent to where the
+            // target IS, and the automatic targeting does the shooting once in range. A
+            // target that walks away is therefore not chased, which is the honest
+            // difference between "attack move" and "attack that unit", and the next thing
+            // here.
+            std::optional<simd_float3> ground;
+            const std::optional<rm::sim::UnitId> hit = pickAnyBatch(ray, units);
+            const bool isAttack = hit && units.playerArmy != rm::sim::kNoArmy
+                                && hostileTo(units, units.playerArmy, *hit);
+            // An ALLIED hit needs the click ON the unit, not near it. The pick above
+            // uses selection's 40-elmo grace, which turns a move order beside a builder
+            // into an assist — a follow that reads as a guard. Hostiles keep the grace:
+            // a generous attack click is standard, and missing one must stay hard.
+            std::optional<rm::sim::UnitId> allyHit = hit;
+            if (allyHit && !isAttack && units.playerArmy != rm::sim::kNoArmy
+                && units.store.alive(*allyHit)) {
+                const rm::sim::Transform& mat = units.store.transforms()[allyHit->index];
+                const float body = rm::sim::fxToFloat(
+                    units.store.motion()[allyHit->index].radiusElmos);
+                if (!orderHitConfirmed(ray,
+                                       {rm::sim::fxToFloat(mat.x), rm::sim::fxToFloat(mat.y),
+                                        rm::sim::fxToFloat(mat.z)},
+                                       body)) {
+                    allyHit = std::nullopt;
+                }
+            }
+
+            if (isAttack) {
+                const rm::sim::Transform& at = units.store.transforms()[hit->index];
+                ground = simd_make_float3(rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                                          rm::sim::fxToFloat(at.z));
+            } else {
+                ground = rm::pickGround(ray, map->field);
+            }
+            if (!ground) {
+                // The sky, or past the edge of the map. Silence here reads as a broken
+                // button, because the click did land somewhere as far as the player is
+                // concerned — the horizon looks like ground until you are told it is not.
+                std::printf("order ignored: that ray missed the map\n");
+                std::fflush(stdout);
+                return;
+            }
+
+            // Commands armed from the rack make the next right-click explicit. They reuse the
+            // same submission helpers as contextual right-clicks; the rack changes intent, not
+            // the simulation path.
+            if (armedCommand == rm::sim::CommandKind::Attack
+                || armedCommand == rm::sim::CommandKind::Overcharge) {
+                if (!isAttack || !hit) {
+                    rm::log::write(rm::log::Level::Info, "orders",
+                                   "attack command needs a hostile unit target");
+                    return;
+                }
+                const rm::sim::Transform& at = units.store.transforms()[hit->index];
+                const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                if (*armedCommand == rm::sim::CommandKind::Overcharge) {
+                    std::vector<rm::sim::UnitId> manual;
+                    for (const rm::sim::UnitId id : selected) {
+                        if (!units.store.alive(id)) {
+                            continue;
+                        }
+                        const rm::unitdef::UnitDef* def =
+                            units.catalog.def(units.store.typeAt(id.index));
+                        if (def != nullptr
+                            && std::ranges::any_of(
+                                def->weapons, [](const rm::unitdef::Weapon& weapon) {
+                                    return weapon.manuallyFired()
+                                        && weapon.energyRequired > rm::sim::Mag{};
+                                })) {
+                            manual.push_back(id);
+                        }
+                    }
+                    (void)issueOvercharge(units, manual, player, tick, *hit, at.x, at.z,
+                                          mods.shift);
+                } else {
+                    (void)issueAttack(units, selected, player, tick, *hit, at.x, at.z,
+                                      mods.shift);
+                }
+                armedCommand.reset();
+                return;
+            }
+
+            // A SILO'S ARMED CLICK: a hostile unit is aimed at, anything else is ground
+            // zero — the one order that takes both, because a nuke at a position is the
+            // ordinary case and a nuke at a unit is just a better-informed one.
+            if (armedCommand == rm::sim::CommandKind::MissileLaunch) {
+                std::vector<rm::sim::UnitId> launchers;
+                for (const rm::sim::UnitId id : selected) {
+                    if (!units.store.alive(id)) {
+                        continue;
+                    }
+                    const rm::unitdef::UnitDef* def =
+                        units.catalog.def(units.store.typeAt(id.index));
+                    if (def != nullptr
+                        && std::ranges::any_of(
+                            def->weapons, [](const rm::unitdef::Weapon& weapon) {
+                                return weapon.siloLaunched();
+                            })) {
+                        launchers.push_back(id);
+                    }
+                }
+                // A hostile unit under the cursor is aimed at and pursued; anything
+                // else is ground zero. A non-hostile hit with no ground under it is no
+                // order at all — do not let an ally's centre become a missile's target.
+                const bool aimedAtUnit = isAttack && hit.has_value();
+                if (!aimedAtUnit && !ground) {
+                    rm::log::write(rm::log::Level::Info, "orders",
+                                   "missile launch needs a hostile unit or ground");
+                    return;
+                }
+                const rm::sim::UnitId aim = aimedAtUnit ? *hit : rm::sim::UnitId{};
+                const rm::sim::Fx aimX =
+                    aimedAtUnit ? units.store.transforms()[hit->index].x
+                                : rm::sim::fxFromFloat(ground->x);
+                const rm::sim::Fx aimZ =
+                    aimedAtUnit ? units.store.transforms()[hit->index].z
+                                : rm::sim::fxFromFloat(ground->z);
+                if (!launchers.empty()
+                    && issueMissileLaunch(units, launchers,
+                                          playerDriving(units, units.playerArmy),
+                                          static_cast<rm::TickIndex>(matchTicks), aim,
+                                          aimX, aimZ, mods.shift)) {
+                    std::printf("missile launch: %zu silo(s) ordered at (%.0f, %.0f)\n",
+                                launchers.size(),
+                                static_cast<double>(rm::sim::fxToFloat(aimX)),
+                                static_cast<double>(rm::sim::fxToFloat(aimZ)));
+                    std::fflush(stdout);
+                }
+                armedCommand.reset();
+                return;
+            }
+
+            // A RIGHT-CLICK ON A DAMAGED ALLY IS REPAIR. Builders receive the targeted repair
+            // order; the rest of a mixed selection moves there. This precedes Assist because a
+            // damaged builder is still a repair target, not an instruction to guard it — UNLESS
+            // that builder is in the middle of a construction. A scratched factory turning out
+            // tanks, or an extractor mid-upgrade, is what a player right-clicks an engineer onto
+            // to make it go faster; repair stays a click away on the rack. The link is the one
+            // the production panel and the assist scan both use: the construction's builder.
+            const bool hitIsBuilding = allyHit && units.store.alive(*allyHit)
+                && std::ranges::any_of(units.building, [&](const rm::sim::Construction& work) {
+                       return work.builder == *allyHit && !work.finished();
+                   });
+            if (armedCommand == rm::sim::CommandKind::Guard) {
+                if (!allyHit || !units.store.alive(*allyHit)
+                    || !alliedTo(units, units.playerArmy, *allyHit)) {
+                    rm::log::write(rm::log::Level::Info, "orders", "guard needs a living allied unit");
+                    return;
+                }
+                std::vector<rm::sim::UnitId> guards;
+                for (const auto id : selected) {
+                    if (!units.store.alive(id) || id == *allyHit) continue;
+                    const rm::unitdef::UnitDef* def = units.catalog.def(units.store.typeAt(id.index));
+                    const std::array<const rm::unitdef::UnitDef*, 1> one{def};
+                    if (rm::ui::commandAvailability(one)[5]) guards.push_back(id);
+                }
+                if (!guards.empty()) {
+                    (void)issueGuard(units, guards, playerDriving(units, units.playerArmy),
+                                     static_cast<rm::TickIndex>(matchTicks), *allyHit, mods.shift);
+                    armedCommand.reset();
+                }
+                return;
+            }
+            // A RIGHT-CLICK ON YOUR OWN TRANSPORT IS "GET IN": the transportable members
+            // of the selection walk over and sling aboard (`core/sim/Transport.cpp`) and
+            // an airborne carrier lands to take them. Everyone else — other transports,
+            // units too big for the class table — gets an ordinary move to it. This beats
+            // repair: engineers are cargo class 1, so a builder clicking a transport boards
+            // it, and repair stays a click away on the rack.
+            if (!isAttack && !armedCommand && allyHit
+                && units.playerArmy != rm::sim::kNoArmy
+                && units.armyOf(allyHit->index) == units.playerArmy) {
+                const rm::unitdef::UnitDef* targetDef =
+                    units.catalog.def(units.store.typeAt(allyHit->index));
+                if (targetDef != nullptr && targetDef->isTransport()) {
+                    std::vector<rm::sim::UnitId> boarders;
+                    std::vector<rm::sim::UnitId> movers;
+                    for (const rm::sim::UnitId sel : selected) {
+                        if (!units.store.alive(sel) || sel == *allyHit) {
+                            continue;
+                        }
+                        const rm::unitdef::UnitDef* def =
+                            units.catalog.def(units.store.typeAt(sel.index));
+                        (def != nullptr && def->transportable() ? boarders : movers)
+                            .push_back(sel);
+                    }
+                    const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                    const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                    const rm::sim::Transform& at = units.store.transforms()[allyHit->index];
+                    const bool boarding = boarders.empty()
+                        || issueLoadTransport(units, boarders, player, tick, *allyHit,
+                                              mods.shift);
+                    (void)(movers.empty()
+                               || issueMove(units, movers, player, tick, at.x, at.z,
+                                            mods.shift));
+                    if (boarding && !boarders.empty()) {
+                        std::printf("load: %zu unit(s) boarding %s\n", boarders.size(),
+                                    targetDef->name.c_str());
+                    }
+                    return;
+                }
+            }
+
+            const bool explicitRepair = armedCommand == rm::sim::CommandKind::Repair;
+            if (!isAttack && (!armedCommand || explicitRepair) && allyHit
+                && units.playerArmy != rm::sim::kNoArmy
+                && alliedTo(units, units.playerArmy, *allyHit)
+                && (explicitRepair || (!hitIsBuilding
+                                       && units.store.health()[allyHit->index].current
+                                              < units.store.health()[allyHit->index].maximum))) {
+                std::vector<rm::sim::UnitId> builders;
+                std::vector<rm::sim::UnitId> movers;
+                for (const rm::sim::UnitId sel : selected) {
+                    if (!units.store.alive(sel) || sel == *allyHit) {
+                        continue;
+                    }
+                    const rm::unitdef::UnitDef* def =
+                        units.catalog.def(units.store.typeAt(sel.index));
+                    (def != nullptr && def->isBuilder() ? builders : movers).push_back(sel);
+                }
+                const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                const rm::sim::Transform& at = units.store.transforms()[allyHit->index];
+                const bool repairing = builders.empty()
+                    || issueRepair(units, builders, player, tick, *allyHit, mods.shift);
+                (void)(movers.empty()
+                           || issueMove(units, movers, player, tick, at.x, at.z, mods.shift));
+                if (repairing && !builders.empty()) {
+                    std::printf("repair: %zu builder(s) submitted\n", builders.size());
+                }
+                if (explicitRepair) {
+                    armedCommand.reset();
+                }
+                return;
+            }
+
+            // A RIGHT-CLICK ON YOUR OWN BUILDER IS AN ASSIST — the guard order. Field builders
+            // lend rate; immobile factories mirror compatible queued production; everyone else
+            // just walks over. Beaten by an enemy under the click (that is an attack) and
+            // beating a wreck and plain ground.
+            const bool explicitAssist = armedCommand == rm::sim::CommandKind::Assist;
+            if (!isAttack && (!armedCommand || explicitAssist) && allyHit
+                && units.playerArmy != rm::sim::kNoArmy
+                && units.armyOf(allyHit->index) == units.playerArmy) {
+                const rm::unitdef::UnitDef* targetDef =
+                    units.catalog.def(units.store.typeAt(allyHit->index));
+                if (targetDef != nullptr && targetDef->isBuilder()) {
+                    std::vector<rm::sim::UnitId> builders;
+                    std::vector<rm::sim::UnitId> movers;
+                    for (const rm::sim::UnitId sel : selected) {
+                        if (!units.store.alive(sel) || sel == *allyHit) {
+                            continue;  // a unit cannot assist itself
+                        }
+                        const rm::unitdef::UnitDef* def =
+                            units.catalog.def(units.store.typeAt(sel.index));
+                        (def != nullptr && def->isBuilder() ? builders : movers).push_back(sel);
+                    }
+                    const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                    const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                    const rm::sim::Transform& at = units.store.transforms()[allyHit->index];
+                    const bool assisting = builders.empty()
+                        || issueAssist(units, builders, player, tick, *allyHit, mods.shift);
+                    (void)(movers.empty()
+                               || issueMove(units, movers, player, tick, at.x, at.z, mods.shift));
+                    if (assisting && !builders.empty()) {
+                        std::printf("assist: %zu builder(s) submitted for %s\n", builders.size(),
+                                    targetDef->name.c_str());
+                    }
+                    if (explicitAssist) {
+                        armedCommand.reset();
+                    }
+                    return;
+                }
+            }
+            // A RIGHT-CLICK ON RISING SCAFFOLD IS AN ASSIST — the structure does not
+            // exist as a unit until its work completes, so there is no hit to retarget
+            // and the click reads as plain ground. Builders in the selection lend rate
+            // through the site's founder (the link the assist scan already resolves);
+            // everyone else walks there. A dead founder leaves plain ground — assistance
+            // keys off the living builder, and that rule lives in the sim, not here.
+            if (!isAttack && !allyHit && (!armedCommand || explicitAssist)
+                && units.playerArmy != rm::sim::kNoArmy && ground) {
+                if (const auto founder = siteAssistFounder(
+                        units, (*ground).x, (*ground).z, units.playerArmy)) {
+                    std::vector<rm::sim::UnitId> builders;
+                    std::vector<rm::sim::UnitId> movers;
+                    for (const rm::sim::UnitId sel : selected) {
+                        if (!units.store.alive(sel) || sel == *founder) {
+                            continue;
+                        }
+                        const rm::unitdef::UnitDef* def =
+                            units.catalog.def(units.store.typeAt(sel.index));
+                        (def != nullptr && def->isBuilder() ? builders : movers).push_back(sel);
+                    }
+                    if (!builders.empty()) {
+                        const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                        const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                        if (issueAssist(units, builders, player, tick, *founder,
+                                        mods.shift)) {
+                            std::printf("assist: %zu builder(s) joined the site\n",
+                                        builders.size());
+                        }
+                        (void)(movers.empty()
+                                   || issueMove(units, movers, player, tick,
+                                                rm::sim::fxFromFloat((*ground).x),
+                                                rm::sim::fxFromFloat((*ground).z), mods.shift));
+                        if (explicitAssist) {
+                            armedCommand.reset();
+                        }
+                        return;
+                    }
+                }
+            }
+            if (explicitAssist) {
+                // The rack button was pressed and the click landed on something that cannot
+                // take help: say so and keep the button armed, as every targeted order does.
+                rm::log::write(rm::log::Level::Info, "orders",
+                               "assist needs one of your own builders under the click");
+                return;
+            }
+
+            // A WRECK UNDER THE CLICK MAKES IT A RECLAIM — for the builders in the
+            // selection; everyone else walks there. An enemy unit beats a wreck (the pick
+            // above already decided that), and a wreck beats plain ground. The hit disc is
+            // the mark the player can actually SEE — the decal's radius, not the sim's —
+            // with a floor so a tiny unit's wreck is still clickable.
+            const bool explicitReclaim = armedCommand == rm::sim::CommandKind::Reclaim;
+            if (!isAttack && (!armedCommand || explicitReclaim)) {
+                std::optional<rm::sim::FeatureId> wreck;
+                float wreckGap = 0.0f;
+                for (rm::UnitIndex slot = 0; slot < units.features.size(); ++slot) {
+                    if (!units.features.slotAlive(slot)) {
+                        continue;
+                    }
+                    const rm::sim::Feature& candidate = units.features.all()[slot];
+                    if (!units.visibleToViewer(candidate.at[0], candidate.at[2])) {
+                        continue;  // an unseen wreck cannot turn a blind move into an oracle
+                    }
+                    if (candidate.massRemaining <= rm::sim::Mag{}
+                        && candidate.energyRemaining <= rm::sim::Mag{}) {
+                        continue;  // a bare scorch is not an order target
+                    }
+                    const float dx = ground->x - rm::sim::fxToFloat(candidate.at[0]);
+                    const float dz = ground->z - rm::sim::fxToFloat(candidate.at[2]);
+                    const float gap = std::sqrt(dx * dx + dz * dz);
+                    const float disc =
+                        std::max(6.0f, rm::sim::fxToFloat(candidate.radiusElmos)
+                                           * rm::kWreckMarkRadiusFactor);
+                    if (gap <= disc && (!wreck || gap < wreckGap)) {
+                        wreck = units.features.idAt(slot);
+                        wreckGap = gap;
+                    }
+                }
+                if (wreck) {
+                    const rm::sim::Feature* found = units.features.find(*wreck);
+                    orderMarks.push_back(OrderMark{
+                        .position = {rm::sim::fxToFloat(found->at[0]),
+                                     rm::sim::fxToFloat(found->at[1]),
+                                     rm::sim::fxToFloat(found->at[2])},
+                        .age = 0.0f,
+                    });
+                    std::vector<rm::sim::UnitId> builders;
+                    std::vector<rm::sim::UnitId> movers;
+                    for (const rm::sim::UnitId sel : selected) {
+                        if (!units.store.alive(sel)) {
+                            continue;
+                        }
+                        const rm::unitdef::UnitDef* def =
+                            units.catalog.def(units.store.typeAt(sel.index));
+                        (def != nullptr && def->isBuilder() ? builders : movers).push_back(sel);
+                    }
+                    const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
+                    const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
+                    const bool reclaiming = builders.empty()
+                        || issueReclaim(units, builders, player, tick, *wreck, mods.shift);
+                    (void)(movers.empty()
+                               || issueMove(units, movers, player, tick, found->at[0], found->at[2],
+                                            mods.shift));
+                    if (reclaiming && !builders.empty()) {
+                        std::printf("reclaim: %zu builder(s) submitted (%.0f mass)\n",
+                                    builders.size(),
+                                    static_cast<double>(
+                                        rm::sim::magToFloat(found->massRemaining)));
+                    }
+                    if (explicitReclaim) {
+                        armedCommand.reset();
+                    }
+                    return;
+                }
+            }
+
+            if (armedCommand == rm::sim::CommandKind::Repair
+                || armedCommand == rm::sim::CommandKind::Guard
+                || armedCommand == rm::sim::CommandKind::Assist
+                || armedCommand == rm::sim::CommandKind::Reclaim) {
+                rm::log::write(rm::log::Level::Info, "orders",
+                               "the armed command cannot use that target");
+                return;
+            }
+
+            // A lone factory takes no move orders — its right click is a RALLY
+            // POINT, where its products walk on completion. Retail behaviour:
+            // the order mark still lands (the click did), the rally line redraws.
+            if (!isAttack && !armedCommand && selected.size() == 1
+                && units.store.alive(selected[0])) {
+                const rm::unitdef::UnitDef* selDef = units.catalog.def(
+                    units.store.typeAt(selected[0].index));
+                if (selDef != nullptr && selDef->hasCategory("FACTORY")) {
+                    units.rallyPoints[selected[0].index] = {(*ground).x, (*ground).z};
+                    orderMarks.push_back(OrderMark{
+                        .position = {(*ground).x, (*ground).y, (*ground).z},
+                        .age = 0.0f,
+                    });
+                    armedCommand.reset();
+                    return;
+                }
+            }
+            // Marked before the routing is attempted (inside orderSelectionTo), and
+            // deliberately: the mark answers "did that click land, and where", which is
+            // true even if every unit then reports no route. SHIFT QUEUES IT (§7 P4.1) —
+            // the same modifier adds to the selection on the left button and appends to
+            // the order queue on the right, as every RTS this engine reads content from.
+            //
+            // An attack carries the TARGET'S HANDLE, which is what makes it a pursuit
+            // rather than a walk to where the target used to be (`advanceOrders`' chase).
+            orderSelectionTo(*ground, mods.shift,
+                             isAttack && !armedCommand
+                                 ? hit
+                                 : std::optional<rm::sim::UnitId>{},
+                             armedCommand.value_or(rm::sim::CommandKind::Move));
+            armedCommand.reset();
+        });
+
+        // Scratch for the icon pass, held outside the frame callback so a frame costs no
+        // allocation — the same reason the dust emitters are.
+        std::vector<rm::Particle> iconScratch;
+        rm::ui::Geometry hudScratch;
+
+        // The minimap's per-frame scratch, kept out here so a frame allocates nothing.
+        std::vector<rm::ui::MinimapPip> minimapPips;
+        std::vector<std::array<float, 2>> minimapView;
+        float matchSeconds = 0.0f;
+
+        // The left button's state LAST frame, for the band-select's falling edge — the
+        // release is detected by polling, the same way the drag itself is.
+        bool leftWasHeld = false;
+        std::vector<rm::sim::UnitId> bandScratch;
+
+        // Raw drag march and snapped ghost sites, kept across frames for the same
+        // reason: an array drag paints every frame it is held.
+        std::vector<std::array<float, 2>> arraySitesScratch;
+        std::vector<rm::Renderer::GhostDraw> ghostScratch;
+
+        // HOW MANY BATCHES THE RENDERER HAS BEEN GIVEN — held ACROSS frames, which is the
+        // whole point. This was a local captured at the top of each frame and compared at the
+        // bottom, so a batch created LATER in the frame than that comparison — which is
+        // exactly when the build ghost creates one, since it resolves its model at draw
+        // time — was never uploaded at all: the next frame's "before" already counted it, so
+        // the growth it represented had silently happened between two equal numbers. The
+        // silhouette therefore drew nothing for any blueprint the player had not already
+        // built, which is most of the tray.
+        // This frame's construction sites, rebuilt each frame like every other draw list.
+        std::vector<rm::Renderer::ConstructionDraw> constructionDraws;
+
+        std::size_t uploadedBatches = 0;
+        const auto uploadNewBatches = [&] {
+            if (units.batches.size() == uploadedBatches) {
+                return;
+            }
+            for (std::size_t b = uploadedBatches; b < units.batches.size(); ++b) {
+                units.batches[b].animationDrivenByInstance = true;
+            }
+            window.setUnits(units.textures.all(), units.textures.srgbFlags(), units.batches);
+            uploadedBatches = units.batches.size();
+        };
+
+        std::size_t acceptanceFrames = 0;
+        bool acceptanceFastForward = false;
+        int acceptanceResult = inputAcceptance ? 1 : 0;
+        window.onFrame([&](float elapsed) {
+            if (inputAcceptance) {
+                // Only wall-clock pacing changes; every simulated beat still uses advanceMatch.
+                elapsed = gAppTickRate.secondsPerTick() * (acceptanceFastForward ? 20.0f : 1.0f);
+            }
+            // WASD pans the map, every frame rather than per keypress: a pan driven by
+            // key EVENTS moves in jerks the length of the auto-repeat interval, and stops
+            // dead the moment the repeat lapses.
+            //
+            // The step is scaled by the frustum's width at the target, the same quantity a
+            // mouse pan uses, so the speed feels the same zoomed in as out — there is no
+            // sensitivity constant here to get wrong. A second and a half to cross the
+            // visible width.
+            {
+                const float across =
+                    window.camera().elmosPerPoint(kPanReferenceHeightPoints)
+                    * kPanReferenceHeightPoints;
+                const float step = across * elapsed / kSecondsToCrossTheView;
+
+                float right = 0.0f;
+                float forward = 0.0f;
+                if (window.keyHeld(rm::Key::A)) { right -= step; }
+                if (window.keyHeld(rm::Key::D)) { right += step; }
+                if (window.keyHeld(rm::Key::W)) { forward += step; }
+                if (window.keyHeld(rm::Key::S)) { forward -= step; }
+                if (right != 0.0f || forward != 0.0f) {
+                    // Tracking holds the camera only until the player steers it.
+                    tracking.clear();
+                    window.camera().pan(right, forward);
+                }
+            }
+
+            // T's FOLLOW, applied where the pan just was: the tracked group's
+            // centroid — or the slow shot one of them has in the air, which is the
+            // nuke-on-the-way view the key exists for. Dead members drop out of the
+            // snapshot; the last one dying lets the camera rest where it fell.
+            if (!tracking.empty()) {
+                std::erase_if(tracking, [&](rm::sim::UnitId id) {
+                    return !units.store.alive(id);
+                });
+                if (!tracking.empty()) {
+                    const auto tracked = [&](rm::sim::UnitId id) {
+                        return std::find(tracking.begin(), tracking.end(), id)
+                               != tracking.end();
+                    };
+                    const rm::sim::Projectile* shot = nullptr;
+                    for (const rm::sim::Projectile& p : units.projectiles) {
+                        if (!tracked(p.firedBy)) {
+                            continue;
+                        }
+                        // Slow enough to be worth watching: a missile, or an arced
+                        // shell. Direct fire is over before the eye arrives.
+                        const bool slow = p.arc != rm::unitdef::BallisticArc::None
+                            || std::find(p.categories.begin(), p.categories.end(),
+                                         "MISSILE") != p.categories.end();
+                        if (slow) {
+                            shot = &p;  // appended at launch — the last match is newest
+                        }
+                    }
+                    if (shot != nullptr) {
+                        window.camera().target = simd_make_float3(
+                            rm::sim::fxToFloat(shot->position[0]),
+                            rm::sim::fxToFloat(shot->position[1]),
+                            rm::sim::fxToFloat(shot->position[2]));
+                    } else {
+                        float cx = 0.0f, cz = 0.0f;
+                        for (const rm::sim::UnitId id : tracking) {
+                            const rm::sim::Transform& at =
+                                units.store.transforms()[id.index];
+                            cx += rm::sim::fxToFloat(at.x);
+                            cz += rm::sim::fxToFloat(at.z);
+                        }
+                        cx /= static_cast<float>(tracking.size());
+                        cz /= static_cast<float>(tracking.size());
+                        window.camera().target = simd_make_float3(
+                            cx, map->field.heightAtWorld(cx, cz), cz);
+                    }
+                }
+            }
+
+            matchSeconds += elapsed;
+            const int pacedTicks = clock.advance(elapsed);
+            const int ticks = inputAcceptance ? (acceptanceFastForward ? 20 : 1) : pacedTicks;
+
+            // THE SAME TICK the headless pre-run makes. This loop used to call
+            // `sim::tick` and `resolveCollisions` and nothing else, so a unit in the
+            // interactive game moved perfectly and never fired a shot — while the whole
+            // suite stayed green, because every rule was tested and the assembly of them
+            // was not. Both callers now go through `advanceMatch`, which is what makes
+            // "the same game" checkable rather than remembered.
+            for (int i = 0; i < ticks; ++i) {
+                const rm::sim::TickReport report =
+                    advanceMatch(runner, matchTicks, static_cast<float>(matchTicks)
+                                                         * gAppTickRate.secondsPerTick());
+                followUpgradeSelection(units, selected);
+                ++matchTicks;
+
+                // The tick's combat, as particles — read HERE because an event is a
+                // per-tick notification (Events.hpp): the next advanceMatch clears the
+                // queue, so this tick's shots are visible now or never.
+                gatherVisibleEvents(visibleEvents, units);
+                units.updateCombatAttachments();
+                rm::emitCombatEffects(particles, visibleEvents, &units.weaponVisuals,
+                    &units.combatEffectState, gAppTickRate.secondsPerTick(),
+                    [&units](rm::sim::UnitId id) {
+                        if (id.index < units.store.slotCount()
+                            && units.store.idAt(id.index).generation == id.generation) {
+                            return rm::sim::fxToFloat(
+                                units.store.motion()[id.index].radiusElmos);
+                        }
+                        return 2.0f;
+                    },
+                    [&units](rm::sim::UnitId id, std::string_view key) {
+                        return rm::app::shotClassOf(units, id, key);
+                    });
+
+                // ...and as SOUND, from the same per-tick queue for the same reason. The
+                // listener rides the camera every tick, so panning follows the view.
+                mixer.setListener(window.camera().target.x, window.camera().target.z,
+                                  window.camera().distance);
+                if (weaponSounds) {
+                    weaponSounds->learn(units.catalog);
+                }
+                rm::audio::playForEvents(mixer, visibleEvents,
+                                         explosionBank ? &*explosionBank : nullptr,
+                                         impactBank ? &*impactBank : nullptr,
+                                         weaponSounds ? &*weaponSounds : nullptr);
+
+                // ...and the arcs' smoke, one puff per shell per tick — the emission rate
+                // is the sim's own, so the trail spacing is a tick of travel (ProjectileFx).
+                gatherVisibleProjectiles(visibleProjectiles, units);
+                rm::emitProjectileTrails(particles, visibleProjectiles, &units.weaponVisuals,
+                    gAppTickRate.secondsPerTick());
+                // ...and the ribbons' path record, over ALL shots: visibility is applied when
+                // they are drawn, so a shot that leaves the fog brings its history with it.
+                units.projectileTrails.update(units.projectiles, units.weaponVisuals,
+                    gAppTickRate.secondsPerTick(),
+                    [&](rm::sim::UnitId id, std::string_view key) {
+                        return units.trailOrigin(id, key);
+                    });
+
+                // The match, announced once. The frame loop draws the fight rather than
+                // narrating it, so this is the one thing worth saying out loud — and only
+                // when there is a match to decide, the same guard the pre-run uses.
+                if (report.matchEnded && !units.armies.empty()) {
+                    if (report.winner) {
+                        std::printf("team %d WINS\n", *report.winner);
+                    } else {
+                        std::printf("a DRAW: every army lost its commander\n");
+                    }
+                    std::fflush(stdout);
+                }
+            }
+
+            // The gather builds every instance from the last two SNAPSHOTS, blended by how far
+            // into the next tick the clock's banked time reaches (§7 P7.2). That fraction was
+            // already being computed — `TickClock::advance` banks the remainder — so exposing
+            // it as `alpha()` is what lets a 10 Hz sim draw continuously at 120 Hz rather than
+            // teleporting twelve times a step.
+            //
+            // Walk-cycle phase included, and interpolated too: a leg that stepped at the tick
+            // rate would slide as badly as a body that did.
+            const simd_float3 cameraEye = window.camera().eye();
+            const std::array<float, 3> lodEye{cameraEye.x, cameraEye.y, cameraEye.z};
+            std::erase_if(responsiveDraws, [&](const rm::CurrentUnitProjection& draw) {
+                return draw.throughTick < units.snapshotCurrent.tick
+                       || !units.store.alive(draw.id);
+            });
+            responsiveDrawScratch.clear();
+            for (const rm::CurrentUnitProjection& draw : responsiveDraws) {
+                if (draw.activeAt(units.snapshotCurrent.tick)) {
+                    responsiveDrawScratch.push_back(draw.id);
+                }
+            }
+            units.gatherForDrawing(clock.alpha(), &lodEye, responsiveDrawScratch, elapsed);
+
+            // WHAT IS BEING BUILT, as something to look at. Before the upload below, because
+            // this is where a blueprint's model comes into existence: a construction is the
+            // first moment a type needs DRAWING rather than merely simulating, and the batch
+            // it creates has to reach the GPU in the same frame — which is the bug the ghost
+            // spent its whole life on.
+            rm::app::gatherConstructions(units, content, map->field, constructionDraws);
+            window.setConstructions(constructionDraws);
+            window.setConstructionTime(matchSeconds);
+
+            // Re-upload when the match built something new. Only on growth, which is a
+            // handful of times in a whole match — this walks every model and texture, so
+            // doing it per frame would cost what it costs to load the scene.
+            //
+            // AFTER the gather, and that ordering is load-bearing: `setUnits` sizes each
+            // batch's instance buffer from what its span holds, and a batch created this
+            // tick holds nothing until the gather fills it. Uploading first gives the new
+            // model a capacity of one — which `setInstances` now grows rather than clips,
+            // so the ordering is a nicety here and a correctness rule for the poses.
+            uploadNewBatches();
+
+            for (std::size_t batch = 0; batch < units.drawScratch.size(); ++batch) {
+                window.setInstances(batch, units.drawScratch[batch]);
+            }
+
+            // The fog, from the same grid that decided which of those instances exist.
+            units.applyFog(window);
+
+            // Dust behind whatever is moving. After the sim, so a puff is born
+            // where the unit has got to rather than where it started the frame.
+            //
+            // The emitters are gathered from the motion state the sim just wrote,
+            // which is also where the speed threshold gets its answer — a unit
+            // being jostled by a crowd is moving in position but not in speed, and
+            // should not smoke.
+            dustEmitters.clear();
+            for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                if (!units.store.slotAlive(slot)) {
+                    continue;  // a wreck does not kick up dust
+                }
+                if (!units.visibleToViewer(units.store.idAt(slot))) {
+                    continue;
+                }
+                const rm::sim::MoveState& motion = units.store.motion()[slot];
+                const rm::sim::Transform& at = units.store.transforms()[slot];
+                dustEmitters.push_back(rm::DustEmitter{
+                    .position = {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                                 rm::sim::fxToFloat(at.z)},
+                    .moving = motion.moving,
+                    // The dust threshold is stated per second, so the per-tick speed converts
+                    // back — a display concern reading a sim value, which is what
+                    // `secondsPerTick` exists for.
+                    .topSpeedElmosPerSecond =
+                        rm::sim::fxToFloat(motion.speedPerTick)
+                        * static_cast<float>(gAppTickRate.ticksPerSecond()),
+                    .radiusElmos = rm::sim::fxToFloat(motion.radiusElmos),
+                });
+            }
+            rm::advanceParticles(particles, elapsed);
+            rm::emitDust(particles, dustEmitters, map->field, elapsed, dustDebt, dustSeed);
+            // ...and the map's own ambient effects, which run whether anything moves
+            // or not: a map's lava does not stop steaming because nobody is looking.
+            rm::emitAmbient(particles, props.ambient, elapsed, ambientDebt, dustSeed);
+
+            // ICONS for whatever has shrunk past reading. Appended to the particle list
+            // rather than drawn by a pass of their own, because an icon IS a stationary
+            // camera-facing quad and that is what the particle pipeline already draws
+            // (core/scene/UnitIcons.hpp). Built into a scratch copy so the icons do not
+            // accumulate in the list the dust ages through.
+            iconScratch.clear();
+            appendVisibleParticles(iconScratch, particles, units);
+            // With LAST pack's refs: the types the strategic layer draws keep their squares
+            // out of the particle list. One frame after a fresh type appears, both tables
+            // agree; in between it shows the square, which is the fallback anyway.
+            appendSceneIcons(iconScratch, units, window.camera(), strategicRefs);
+            // The shots in flight, extrapolated by the frame's tick fraction — rebuilt per
+            // frame like the icons, into the same scratch, aging never.
+            gatherVisibleProjectiles(visibleProjectiles, units, clock.alpha());
+            rm::appendProjectiles(iconScratch, visibleProjectiles, clock.alpha(),
+                                  window.camera().elmosPerPoint(
+                                      rm::kIconReferenceHeightPoints), &units.weaponVisuals);
+            units.projectileTrails.append(iconScratch, units.weaponVisuals, clock.alpha(),
+                window.camera().elmosPerPoint(rm::kIconReferenceHeightPoints),
+                [&](const std::array<float, 3>& at) {
+                    return units.visibleToViewer(rm::sim::fxFromFloat(at[0]),
+                                                 rm::sim::fxFromFloat(at[2]));
+                });
+            window.setParticles(iconScratch);
+
+            hudScratch.clear();
+            // EVERY VERTEX BELOW IS IN THE HUD'S DESIGN SPACE, chrome and world-projected
+            // overlays alike. They share one vertex stream and therefore one viewport, so
+            // mixing the window's real size in here would place the health bars and strategic
+            // icons a scale factor away from the units they belong to.
+            const rm::ui::UiViewport viewport = window.uiViewport();
+            const rm::ui::Extent hudExtent = viewport.hudExtent();
+            const rm::ui::FrameLayout frame = rm::ui::frameLayout(viewport);
+            const std::array<float, 2> logicalCursor = window.cursor();
+            const std::array<float, 2> hudCursor = viewport.toHud(logicalCursor);
+            const rm::ui::Theme baseTheme = hudThemeFor(units, session.uiProfile);
+
+            // Health over the units that need it: damaged, and close enough to be units
+            // rather than icons. Absence is what "fine" looks like (Interface.hpp).
+            appendHealthBars(hudScratch, units, window.camera(), window.labelFont(), viewport);
+            appendConstructionBars(hudScratch, units, window.camera(), map->field,
+                window.labelFont(), viewport, selected, hudCursor);
+
+            // The strategic layer: the game's own glyphs where units are too small to read,
+            // in the army's colour, under all the chrome (Geometry::worldOverlay).
+            appendStrategicIcons(hudScratch, units, window.camera(), viewport, strategicRefs);
+            appendContactBlips(hudScratch, units, window.camera(), map->field,
+                               window.labelFont(), viewport);
+
+            // THE MINIMAP (§7 P7.4), appended to the same geometry the HUD builds — it is
+            // rectangles in screen space, which is what `text::appendRect` already draws, so it
+            // needs no pipeline of its own. That is the other half of "nearly free".
+            appendMinimapPips(minimapPips, units);
+            appendViewFootprint(minimapView, window.camera(), map->field, viewport);
+            const rm::ui::MinimapLayout minimap = rm::ui::minimapLayout(frame);
+            const rm::ui::MinimapProjection minimapProjection =
+                rm::ui::minimapProjection(minimap, map->field.widthElmos(),
+                                           map->field.depthElmos());
+            // The preview under the panel, inset by the border so the chrome frames it. The
+            // panel then draws everything BUT its own fill, so the picture shows through.
+            const bool hasPreview = map->preview.width > 0;
+            if (hasPreview) {
+                const rm::ui::Rect& contentRect = minimapProjection.content;
+                window.setMinimapRect(contentRect.x, contentRect.y, contentRect.width,
+                                      contentRect.height);
+            }
+            // What the selection can build, above the minimap — the bottom-left control block
+            // Beyond All Reason arranges the same way. Absent entirely when nothing selected
+            // builds, rather than an empty frame asking to be explained.
+            rm::app::gatherBuilderCandidates(units, selected, builderCandidates);
+            const auto previousBuilder = activeBuilder;
+            activeBuilder = rm::app::activeBuilderFor(builderCandidates, activeBuilder);
+            if (activeBuilder != previousBuilder) productionPage = 0;
+            rm::app::gatherBuildOptions(units, activeBuilder, baseTheme, buildMenuAll, buildWho);
+            // THE TIER STRIP. The mask is gated to "more than one tier" — a menu that spans
+            // one tier has no choice to offer and shows no strip. The active tab defaults
+            // to the builder's own tier (a T2 factory opens on T2, the way retail's tabs
+            // do), or the lowest present when the menu skips it, and re-seats whenever the
+            // builder changes or the tier it was on leaves the menu.
+            buildTierMask = rm::ui::buildTiersPresent(buildMenuAll);
+            if ((buildTierMask & (buildTierMask - 1u)) == 0) {
+                buildTierMask = 0;
+            }
+            if (buildTierMask == 0) {
+                buildTier = 0;
+            } else {
+                int builderTech = 0;
+                if (const rm::unitdef::UnitDef* builderDef = units.catalog.def(
+                        units.store.typeAt(buildWho.builder.index))) {
+                    builderTech = rm::unitdef::techOf(*builderDef);
+                }
+                const int defaultTier =
+                    builderTech >= 1 && (buildTierMask & (1u << builderTech)) != 0
+                        ? builderTech
+                        : std::countr_zero(buildTierMask);
+                if (activeBuilder != previousBuilder || buildTier < 1
+                    || (buildTierMask & (1u << buildTier)) == 0) {
+                    buildTier = defaultTier;
+                }
+            }
+            buildOptions = buildTier != 0
+                               ? rm::ui::buildOptionsForTier(buildMenuAll, buildTier)
+                               : buildMenuAll;
+            // AN INDEX INTO A LIST THAT HAS BEEN REBUILT IS A DIFFERENT BUILDING. Deselecting,
+            // or selecting a different builder, must not leave cell 4 armed and meaning
+            // something else — so the arming is dropped whenever the list it points into can no
+            // longer be trusted to be the same list.
+            if (armedOption && *armedOption >= buildOptions.size()) {
+                armedOption.reset();
+            }
+            if (buildWho.builder != iconsPackedFor) {
+                armedOption.reset();
+            }
+
+            rm::app::gatherRoster(units, selected, rosterTiles);
+            commandSelection.clear();
+            for (const rm::sim::UnitId id : selected) {
+                if (units.store.alive(id)) {
+                    commandSelection.push_back(
+                        units.catalog.def(units.store.typeAt(id.index)));
+                }
+            }
+            commandAvailable = rm::ui::commandAvailability(commandSelection);
+            commandPage = rm::ui::commandPage(commandSelection);
+            // Per-selection pause flags, aligned with `commandSelection`: the production
+            // toggle's lit cell and its inspector card both read them.
+            productionPaused.clear();
+            for (const rm::sim::UnitId id : selected) {
+                productionPaused.push_back(static_cast<std::uint8_t>(
+                    units.store.alive(id) && units.store.productionPaused(id)));
+            }
+            // Auto-expand is lit when every field builder in the selection is on it.
+            commandEngaged = {};
+            {
+                std::size_t fieldBuilders = 0, expanding = 0;
+                for (const rm::sim::UnitId id : selected) {
+                    if (!units.store.alive(id)) continue;
+                    const rm::unitdef::UnitDef* def = units.catalog.def(units.store.typeAt(id.index));
+                    if (def == nullptr || !def->isBuilder() || !def->isMobile()) continue;
+                    ++fieldBuilders;
+                    if (autoExpanding(runner, id)) ++expanding;
+                }
+                commandEngaged[rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand)] =
+                    fieldBuilders > 0 && expanding == fieldBuilders;
+            }
+            // The production toggle is lit when every producer in the selection is held —
+            // the all-paused state, matching how auto-expand lights only on full agreement.
+            for (std::size_t rackSlot = 0; rackSlot < commandPage.size(); ++rackSlot) {
+                const auto& cell = commandPage[rackSlot];
+                if (!cell.toggle
+                    || rm::ui::kToggleDescriptors[*cell.toggle].cap
+                           != "RULEUTC_ProductionToggle") {
+                    continue;
+                }
+                std::size_t producers = 0, held = 0;
+                for (std::size_t i = 0; i < commandSelection.size(); ++i) {
+                    const rm::unitdef::UnitDef* def = commandSelection[i];
+                    if (def == nullptr || !rm::sim::canPauseProduction(*def)) continue;
+                    ++producers;
+                    if (i < productionPaused.size() && productionPaused[i]) ++held;
+                }
+                commandEngaged[rackSlot] = producers > 0 && held == producers;
+            }
+            // Advance page ownership with the tiles, not with input. A control-group key can
+            // change `selected` between display callbacks; until this rebuild, clicks must keep
+            // addressing the roster that is still visible rather than page zero of a future one.
+            panelPages.showRoster(selected);
+            rm::ui::BuildPanelLayout buildPanel;
+            if (!buildOptions.empty()) {
+                std::size_t& buildPage =
+                    panelPages.build(units.store.typeAt(buildWho.builder.index));
+                buildPanel = rm::ui::buildPanelLayout(frame, buildOptions.size(), buildPage);
+                buildPage = buildPanel.page;
+            }
+            std::size_t& visibleRosterPage = panelPages.roster();
+            const rm::ui::RosterLayout roster =
+                rm::ui::rosterLayout(frame, rosterTiles.size(), visibleRosterPage);
+            visibleRosterPage = roster.page;
+
+            // The icons for BOTH panels, in one atlas: packed when either set changes, and
+            // reapplied from the cache otherwise. Reapplied rather than repacked because the
+            // option list and the tile list are rebuilt every frame and a fresh entry has no
+            // slot — repacking to recover them would be two dozen archive reads a frame for
+            // pictures that have not moved.
+            if (buildWho.builder != iconsPackedFor || rosterPackedKey != rosterKeyFor(rosterTiles)
+                || units.catalog.size() != typesPackedFor || buildPagePacked != buildPanel.page
+                || buildTierPacked != buildTier || rosterPagePacked != roster.page) {
+                iconsPackedFor = buildWho.builder;
+                rosterPackedKey = rosterKeyFor(rosterTiles);
+                typesPackedFor = units.catalog.size();
+                buildPagePacked = buildPanel.page;
+                buildTierPacked = buildTier;
+                rosterPagePacked = roster.page;
+                // Any glyph a newly registered type names is fetched before the pack, so a
+                // unit type first seen this frame gets its icon in this atlas rather than
+                // a square until the next selection change.
+                rm::app::ensureStrategicIconArt(units, content);
+                std::size_t strategicBase = 0;
+                rm::app::PackedInterfaceAtlas packed = rm::app::packInterfaceIcons(
+                    content, buildOptions, rosterTiles,
+                    {.first = buildPanel.first, .count = buildPanel.shown},
+                    {.first = roster.first, .count = roster.shown}, session.uiProfile,
+                    units.strategicIconArt, &strategicBase);
+                window.setIconAtlas(packed.texture);
+                interfaceSkin = packed.skin;
+                rm::app::buildStrategicIconRefs(units, strategicBase, strategicRefs);
+                iconSlots.clear();
+                for (const rm::ui::BuildOption& option : buildOptions) {
+                    iconSlots.push_back(option.iconSlot);
+                }
+                rosterSlots.clear();
+                for (const rm::ui::RosterTile& tile : rosterTiles) {
+                    rosterSlots.push_back(tile.iconSlot);
+                }
+            } else {
+                for (std::size_t i = 0; i < buildOptions.size() && i < iconSlots.size(); ++i) {
+                    buildOptions[i].iconSlot = iconSlots[i];
+                }
+                for (std::size_t i = 0; i < rosterTiles.size() && i < rosterSlots.size(); ++i) {
+                    rosterTiles[i].iconSlot = rosterSlots[i];
+                }
+            }
+            const rm::ui::Theme theme =
+                hudThemeFor(units, session.uiProfile, interfaceSkin);
+            rm::ui::build(hudScratch, window.labelFont(), window.readoutFont(), theme,
+                          hudStateFrom(units, matchSeconds, session.uiProfile), frame);
+            rm::ui::appendMinimap(hudScratch, window.labelFont(), theme, minimap,
+                                  map->field.widthElmos(), map->field.depthElmos(), minimapPips,
+                                  minimapView, !hasPreview);
+            std::optional<std::size_t> overBuild;
+            if (!buildOptions.empty()) {
+                // The lit cell under the cursor, which is most of what makes a grid of squares
+                // read as BUTTONS rather than as a readout. Polled once here rather than
+                // tracked through a mouseMoved handler — see `Window::cursor`.
+                overBuild = rm::ui::buildOptionAt(buildPanel, buildOptions.size(), hudCursor[0],
+                                                  hudCursor[1]);
+                // THE ARMED CELL STAYS LIT while the cursor is out over the map, which is
+                // exactly when the player needs to be told what they are about to place. A
+                // hover wins over it, so moving back onto the tray reads normally.
+                std::optional<std::size_t> lit = overBuild;
+                if (!lit && armedOption) {
+                    lit = armedOption;
+                }
+
+                rm::ui::appendBuildPanel(hudScratch, window.labelFont(), window.readoutFont(),
+                                         theme, buildPanel, buildOptions, lit,
+                                         buildWho.name, buildWho.role, buildTierMask,
+                                         buildTier);
+            }
+
+            const rm::ui::CommandRackLayout commandRack =
+                rm::ui::commandRackLayout(frame, !selected.empty());
+            const std::optional<std::size_t> overCommand =
+                rm::ui::commandSlotAt(commandRack, hudCursor[0], hudCursor[1]);
+            rm::ui::appendCommandRack(hudScratch, window.labelFont(), window.readoutFont(),
+                                      theme, commandRack, commandPage, overCommand,
+                                      armedCommand, commandEngaged);
+
+            const auto production = gatherProduction(units, activeBuilder);
+            const auto productionRect = rm::ui::productionPanelRect(frame);
+            if (production) {
+                productionPage = rm::ui::productionPage(
+                    productionRect, production->queue.size(), productionPage).page;
+                rm::ui::appendProductionPanel(hudScratch, window.labelFont(), window.readoutFont(),
+                    theme, productionRect, *production, productionPage);
+            }
+
+            // The roster, bottom centre. After the tray so both are in one buffer; they do not
+            // overlap, so the order between them is arbitrary and stated only to be stable.
+            if (!rosterTiles.empty()) {
+                const std::optional<std::size_t> overTile =
+                    rm::ui::rosterTileAt(roster, hudCursor[0], hudCursor[1]);
+
+                rm::ui::InfoCard inspector;
+                if (armedOption && *armedOption < buildOptions.size()) {
+                    inspector =
+                        rm::ui::buildOptionCard(buildOptions[*armedOption], session.uiProfile);
+                } else if (armedCommand) {
+                    // A substituted cell carries its own kind — the silo's LAUNCH lives
+                    // on Reclaim's dead slot — so the page is consulted before the
+                    // descriptor table, which has no MissileLaunch row.
+                    const auto substituted = std::ranges::find_if(
+                        commandPage, [&](const rm::ui::CommandPageCell& cell) {
+                            return cell.order == armedCommand;
+                        });
+                    if (substituted != commandPage.end()) {
+                        inspector = rm::ui::commandInspector(commandPage,
+                            static_cast<std::size_t>(substituted - commandPage.begin()),
+                            commandSelection, true);
+                    } else if (const auto found = std::ranges::find_if(
+                                   rm::ui::kCommandDescriptors,
+                                   [&](const rm::ui::CommandDescriptor& descriptor) {
+                                       return descriptor.kind == armedCommand;
+                                   });
+                               found != rm::ui::kCommandDescriptors.end()) {
+                        inspector = rm::ui::commandCard(*found, commandSelection, true);
+                    }
+                } else if (overBuild && *overBuild < buildOptions.size()) {
+                    inspector =
+                        rm::ui::buildOptionCard(buildOptions[*overBuild], session.uiProfile);
+                } else if (overCommand && *overCommand < rm::ui::kCommandSlots) {
+                    // For a standing order the flag reads ON/OFF; a targeted command is not
+                    // being aimed while merely hovered, and `commandEngaged` is false for it.
+                    inspector = rm::ui::commandInspector(commandPage, *overCommand,
+                        commandSelection, commandEngaged[*overCommand],
+                        productionPaused);
+                } else if (overTile && *overTile < rosterTiles.size()) {
+                    inspector = selectedUnitCard(units, rosterTiles[*overTile], activeBuilder);
+                } else {
+                    inspector = selectedUnitCard(units, rosterTiles.front(), activeBuilder);
+                }
+                rm::ui::appendRoster(hudScratch, window.labelFont(), window.readoutFont(),
+                                     theme, roster, rosterTiles, overTile,
+                                     &inspector);
+            }
+
+            // --- The band box, and the minimap's drag-to-pan --------------------------
+            // Both are DERIVED FROM POLLED STATE — is the left button down, where did the
+            // press begin, where is the cursor now — rather than from drag events, because
+            // the interface is rebuilt per frame and a drag is a per-frame fact. The press
+            // origin decides which gesture this is: on the minimap it pans the view, on the
+            // world it draws a band, on a panel (or while a build is armed) it is neither.
+            {
+                // ALL OF THIS IS ONE SPACE, the HUD's. The box is drawn into the HUD's vertex
+                // stream, the panel tests read the HUD's rectangles, and the units are caught
+                // by projecting them into the same space — three things that must agree, and
+                // would not if the projection used the window's real size while the box used
+                // the design space the renderer magnifies.
+                const float w = hudExtent.width;
+                const float h = hudExtent.height;
+                const bool held = window.leftMouseHeld();
+                const std::array<float, 2> logicalOrigin = window.dragOrigin();
+                const std::array<float, 2> origin = viewport.toHud(logicalOrigin);
+                const std::array<float, 2> at = hudCursor;
+
+                // Strictly above the click slop (3 AppKit points) so a release can
+                // never be both a click and a band: between the two thresholds is a small
+                // dead zone, which is the safe side of the ambiguity. Measure before HUD
+                // conversion so --ui-scale cannot change the logical-point drag threshold.
+                constexpr float kBandSlopPoints = 8.0f;
+                const bool traveled =
+                    std::abs(logicalCursor[0] - logicalOrigin[0])
+                      + std::abs(logicalCursor[1] - logicalOrigin[1])
+                    > kBandSlopPoints;
+
+                const bool onMinimap = rm::ui::insideMinimap(minimap, origin[0], origin[1]);
+                const std::size_t buildPage =
+                    buildOptions.empty()
+                        ? 0
+                        : panelPages.build(units.store.typeAt(buildWho.builder.index));
+                const std::size_t rosterPage = panelPages.roster();
+                const bool onPanel =
+                    (production && productionRect.contains(origin[0], origin[1]))
+                    || (!buildOptions.empty()
+                      && rm::ui::insideBuildPanel(
+                          rm::ui::buildPanelLayout(frame, buildOptions.size(), buildPage), origin[0],
+                          origin[1]))
+                    || (!rosterTiles.empty()
+                        && rm::ui::insideRoster(
+                            rm::ui::rosterLayout(frame, rosterTiles.size(), rosterPage), origin[0],
+                            origin[1]))
+                    || rm::ui::insideCommandRack(
+                        rm::ui::commandRackLayout(frame, !selected.empty()), origin[0], origin[1]);
+
+                if (held && onMinimap) {
+                    // Drag-to-pan: the ground under the finger, continuously. The same
+                    // projection the click-jump uses, at frame rate. Letterbox space is not a
+                    // map coordinate, so dragging through it leaves the camera where it was.
+                    const std::optional<std::array<float, 2>> where = rm::ui::minimapToWorld(
+                        minimap, map->field.widthElmos(), map->field.depthElmos(), at[0],
+                        at[1]);
+                    if (where) {
+                        tracking.clear();
+                        window.camera().target = simd_make_float3(
+                            (*where)[0], map->field.heightAtWorld((*where)[0], (*where)[1]),
+                            (*where)[1]);
+                    }
+                }
+
+                const bool worldBand = !onMinimap && !onPanel && !armedOption && !armedCommand
+                                    && traveled && !cancelledLeftGesture;
+                if (held && worldBand) {
+                    // The box: a whisper of fill so the caught area reads, and a hairline
+                    // in the lit edge so the bounds are exact. Interface, not effect — the
+                    // same vocabulary as every panel border.
+                    const float left = std::min(origin[0], at[0]);
+                    const float top = std::min(origin[1], at[1]);
+                    const float wide = std::abs(at[0] - origin[0]);
+                    const float tall = std::abs(at[1] - origin[1]);
+                    rm::text::appendRect(hudScratch.worldOverlay.solid, window.labelFont(), left,
+                                         top,
+                                         wide, tall, rm::ui::fade(theme.edgeLit, 0.10f));
+                    rm::text::appendRect(hudScratch.worldOverlay.solid, window.labelFont(), left,
+                                         top,
+                                         wide, 1.0f, theme.edgeLit);
+                    rm::text::appendRect(hudScratch.worldOverlay.solid, window.labelFont(), left,
+                                         top + tall - 1.0f, wide, 1.0f, theme.edgeLit);
+                    rm::text::appendRect(hudScratch.worldOverlay.solid, window.labelFont(), left,
+                                         top,
+                                         1.0f, tall, theme.edgeLit);
+                    rm::text::appendRect(hudScratch.worldOverlay.solid, window.labelFont(),
+                                         left + wide - 1.0f, top, 1.0f, tall, theme.edgeLit);
+                }
+
+                if (leftWasHeld && !held && worldBand) {
+                    // Release: everything of the player's whose position projects into the
+                    // box. Position rather than silhouette — a unit is its instance's point
+                    // here, exactly as it is for a click's pick radius.
+                    const float left = std::min(origin[0], at[0]);
+                    const float right = std::max(origin[0], at[0]);
+                    const float top = std::min(origin[1], at[1]);
+                    const float bottom = std::max(origin[1], at[1]);
+                    bandScratch.clear();
+                    for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                        if (!units.store.slotAlive(slot)
+                            || units.armyOf(slot) != units.playerArmy) {
+                            continue;
+                        }
+                        const rm::sim::Transform& tr = units.store.transforms()[slot];
+                        const auto screen = rm::worldToScreen(
+                            window.camera(),
+                            simd_make_float3(rm::sim::fxToFloat(tr.x),
+                                             rm::sim::fxToFloat(tr.y),
+                                             rm::sim::fxToFloat(tr.z)),
+                            w, h);
+                        if (screen && (*screen)[0] >= left && (*screen)[0] <= right
+                            && (*screen)[1] >= top && (*screen)[1] <= bottom) {
+                            bandScratch.push_back(units.store.idAt(slot));
+                        }
+                    }
+                    // BAR's box rule, as the pure filter in core/scene/Selection.hpp: a box
+                    // that caught any mobile combat unit drops the engineers and buildings
+                    // caught with it; a box of nothing but workers keeps its workers.
+                    bandScratch = rm::preferMobileCombat<rm::sim::UnitId>(
+                        bandScratch, [&units](rm::sim::UnitId id) {
+                            const rm::unitdef::UnitDef* def =
+                                units.catalog.def(units.store.typeAt(id.index));
+                            return def != nullptr && rm::unitdef::isMobileCombat(*def);
+                        });
+                    selected = rm::applyBand<rm::sim::UnitId>(selected, bandScratch,
+                                                              window.shiftHeldNow());
+                }
+                // --- Array-build drag, while a cell is armed ------------------------
+                // The band's polled gesture pointed at construction: the press began on
+                // the world (not a panel) with a build armed, so the drag paints sites
+                // instead of selecting. Model silhouettes while held, queued builds on
+                // release; the arming stays, exactly like a shift-click's. A press that
+                // never travels still falls through to the click below, which is why a
+                // plain click keeps placing exactly one.
+                arrayDragging = false;
+                if (armedOption && !cancelledLeftGesture && (held || (leftWasHeld && !held)) && traveled
+                    && !onMinimap && !onPanel) {
+                    const auto groundAt = [&](std::array<float, 2> logical) {
+                        const rm::Ray ray = rm::screenRay(window.camera(), logical[0],
+                            viewport.logicalExtent.height - logical[1],
+                            viewport.logicalExtent.width, viewport.logicalExtent.height);
+                        const std::optional<simd_float3> hit = rm::pickGround(ray, map->field);
+                        if (!hit) return std::optional<std::array<float, 2>>{};
+                        return std::optional<std::array<float, 2>>{{hit->x, hit->z}};
+                    };
+                    std::optional<std::array<float, 2>> from = arrayDragAnchor;
+                    if (!from && held) {
+                        from = groundAt(logicalOrigin);
+                        if (from) {
+                            // Freeze the first world point when the drag begins. Camera
+                            // movement after this cannot move the first building.
+                            arrayDragAnchor = from;
+                        }
+                    }
+                    if (from) {
+                        if (const auto to = groundAt(logicalCursor)) {
+                            const std::string path = armedPath();
+                            if (const auto type = path.empty() ? std::nullopt
+                                    : resolveBuildable(units, content, path)) {
+                                arrayTouchingElmos = arrayBuildSitesInto(units, *type,
+                                    *from, *to, arraySpacingScale, arraySitesScratch);
+                                const std::vector<std::array<float, 2>>& sites =
+                                    arraySitesScratch;
+                                arrayDragging = held && !sites.empty();
+                                if (!held && !sites.empty()) {
+                                    const auto result = submitArrayBuilds(units, map->field,
+                                        passability, buildWho.builder, *type, sites,
+                                        playerDriving(units, units.playerArmy),
+                                        static_cast<rm::TickIndex>(matchTicks));
+                                    if (result.placed > 0 || result.refused > 0) {
+                                        const std::string& id =
+                                            buildOptions[*armedOption].id;
+                                        const std::string& what =
+                                            buildOptions[*armedOption].name.empty()
+                                                ? id
+                                                : buildOptions[*armedOption].name;
+                                        std::printf("build: %zu x %s array (%zu refused)\n",
+                                                    result.placed, what.c_str(),
+                                                    result.refused);
+                                        std::fflush(stdout);
+                                    }
+                                    arrayDragAnchor.reset();
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!held && leftWasHeld) arrayDragAnchor.reset();
+                leftWasHeld = held;
+                if (!held) cancelledLeftGesture = false;
+            }
+
+            // The HUD uploads after the ghost pass below: the build preview's adjacency
+            // labels are silkscreen too, and they only exist once the snapped site does.
+            // Rings under whatever is selected, rebuilt from scratch every
+            // frame. Cheap — a selection is tens of units and each ring is 192
+            // vertices of arithmetic — and it is the only way a ring can follow
+            // a unit that is walking, which is the whole point of drawing one.
+            //
+            // The buffer is reused rather than reallocated so that a frame
+            // costs no heap traffic; it is declared outside this lambda for
+            // exactly that reason.
+            // WRECKS FIRST, so the rings and markers a player is reading sit on top of the
+            // scorch rather than under it. They are copied in rather than rebuilt: a wreck
+            // is permanent and there is nothing to recompute.
+            decalVertices.clear();
+            appendVisibleWreckDecals(decalVertices, units);
+            appendResourceDeposits(decalVertices, units, map->field);
+            // One unit's order queue as ground decals, shared by the selection pass
+            // and the shift-held army pass below — one hand so the two cannot drift.
+            // Dead selections draw nothing rather than being pruned here: a frame is not
+            // where a selection changes, and a ring under a wreck is the bug this avoids.
+            for (const rm::sim::UnitId sel : selected) {
+                if (!units.store.alive(sel)) {
+                    continue;
+                }
+                const rm::sim::Transform& at = units.store.transforms()[sel.index];
+                const std::array<float, 3> ground{rm::sim::fxToFloat(at.x),
+                                                  rm::sim::fxToFloat(at.y),
+                                                  rm::sim::fxToFloat(at.z)};
+                appendUnitSelection(
+                    decalVertices, map->field, ground,
+                    rm::sim::fxToFloat(units.store.motion()[sel.index].radiusElmos)
+                        * kSelectionRingMargin,
+                    session.uiProfile);
+
+                // THE RANGE RING: the longest firing weapon's reach, only while selected.
+                // What a player is deciding with a selection is where to send it, and "from
+                // where can it hurt things" is the radius that decision is made against.
+                // The longest range rather than one ring per weapon: a triple-barrelled
+                // unit's rings differ by metres and draw as one smeared band.
+                const rm::unitdef::UnitDef* def =
+                    units.catalog.def(units.store.typeAt(sel.index));
+                if (def != nullptr) {
+                    rm::sim::Fx reach{};
+                    for (const rm::unitdef::Weapon& weapon : def->weapons) {
+                        if (weapon.fires() && weapon.maxRange > reach) {
+                            reach = weapon.maxRange;
+                        }
+                    }
+                    if (reach > rm::sim::Fx{}) {
+                        rm::appendSelectionRing(decalVertices, map->field, ground,
+                                                rm::sim::fxToFloat(reach), kRangeRingColour,
+                                                kRangeRingThicknessElmos);
+                    }
+                }
+                appendIntelRings(decalVertices, map->field, units, sel.index);
+                appendRallyLine(decalVertices, map->field, units, sel.index);
+
+                // THE ORDER QUEUE, drawn in the world for a selected unit: a line from the
+                // unit through every queued destination, a diamond at each node — each
+                // segment in its order family's hue, so a patrol loop, a queued attack and
+                // a build site read as three different intentions rather than one chain.
+                rm::app::appendOrderRoute(decalVertices, map->field, units,
+                                          sel.index, ground);
+                // SHIFT IS WHEN THE QUEUE EARNS ITS NUMBERS: the same modifier that
+                // writes the chain also asks "when", so each node wears the forecast
+                // the pure predictor priced it at — selected units too, since holding
+                // shift is how the whole army's queues come up.
+                if (window.shiftHeldNow()) {
+                    (void)rm::app::appendOrderTimes(hudScratch, units, window.camera(),
+                                                    map->field, window.labelFont(),
+                                                    viewport, sel.index);
+                }
+            }
+            // SHIFT HOLDS EVERY QUEUE UP, not just the selection's. Queuing is aimed at
+            // the whole army — a shift-click appends to any unit's orders — so the
+            // modifier that writes queues also reads them. Selection keeps its rings;
+            // everyone else lends only their queue, drawn by the same hand.
+            if (window.shiftHeldNow() && units.playerArmy != rm::sim::kNoArmy) {
+                const std::size_t slots = units.store.slotCount();
+                for (std::size_t slot = 0; slot < slots; ++slot) {
+                    const rm::UnitIndex at = static_cast<rm::UnitIndex>(slot);
+                    const rm::sim::UnitId id = units.store.idAt(at);
+                    if (!units.store.alive(id)
+                        || units.armyOf(at) != units.playerArmy) {
+                        continue;
+                    }
+                    if (std::find(selected.begin(), selected.end(), id) != selected.end()) {
+                        continue;  // already drawn above, with its rings
+                    }
+                    const rm::sim::Transform& mat = units.store.transforms()[at];
+                    rm::app::appendOrderRoute(decalVertices, map->field, units, at,
+                                   {rm::sim::fxToFloat(mat.x), rm::sim::fxToFloat(mat.y),
+                                    rm::sim::fxToFloat(mat.z)});
+                    (void)rm::app::appendOrderTimes(hudScratch, units, window.camera(),
+                                                    map->field, window.labelFont(),
+                                                    viewport, at);
+                }
+                }
+
+            // RECLAIM PAYS WHERE THE WRECKS ARE. While a builder is selected (or the
+            // reclaim order armed), every reclaimable field wears its total — the
+            // same read FAF's overlay gives, drawn from the features the click path
+            // already prices.
+            {
+                const bool builderSelected =
+                    armedCommand == rm::sim::CommandKind::Reclaim
+                    || std::any_of(selected.begin(), selected.end(), [&](rm::sim::UnitId id) {
+                           const rm::unitdef::UnitDef* def =
+                               units.store.alive(id)
+                                   ? units.catalog.def(units.store.typeAt(id.index))
+                                   : nullptr;
+                           return def != nullptr && def->isBuilder();
+                       });
+                if (builderSelected) {
+                    (void)rm::app::appendReclaimLabels(hudScratch, units,
+                        window.camera(), map->field, window.labelFont(), viewport);
+                }
+            }
+
+            // THE CURSOR SAYS WHAT THE NEXT CLICK MEANS. An armed order command
+            // (attack-move, patrol, ...) is a crosshair — the next click is a
+            // destination, not a selection — and an armed build cell is one too,
+            // on top of the ghost itself. Everything else points. Restated every
+            // frame so no event stream can leave it stale.
+            window.setCursorStyle(armedCommand || armedOption
+                                      ? rm::CursorStyle::Crosshair
+                                      : rm::CursorStyle::Arrow);
+
+            // Build previews are composed after the decal buffer is cleared. Every
+            // silhouette reads the same snapped sites used by the release submission.
+            window.setBuildGrid(armedOption.has_value());
+            ghostScratch.clear();
+            if (armedOption) {
+                const std::string path = armedPath();
+                const auto ghostType = path.empty() ? std::nullopt
+                    : ensureDrawableType(units, content, path);
+                uploadNewBatches();
+                const std::size_t ghostBatch = ghostType ? units.batchOf(*ghostType)
+                                                        : UnitScene::kNoBatch;
+                std::array<std::array<float, 2>, 1> cursorSite{};
+                std::span<const std::array<float, 2>> previewSites;
+                if (arrayDragging) {
+                    previewSites = arraySitesScratch;
+                } else {
+                    const auto cursor = window.cursor();
+                    const auto under = rm::screenRay(window.camera(), cursor[0],
+                        viewport.logicalExtent.height - cursor[1],
+                        viewport.logicalExtent.width, viewport.logicalExtent.height);
+                    if (const auto hit = rm::pickGround(under, map->field)) {
+                        cursorSite[0] = ghostType
+                            ? snapBuildSite(units, *ghostType, {hit->x, hit->z})
+                            : std::array<float, 2>{hit->x, hit->z};
+                        previewSites = cursorSite;
+                    }
+                }
+                for (const auto& site : previewSites) {
+                    const simd_float3 at = simd_make_float3(site[0],
+                        map->field.heightAtWorld(site[0], site[1]), site[1]);
+                    const bool ok = armedPlaceable(site);
+                    const auto tint = ok ? kBuildGhostColour : kBuildGhostBlockedColour;
+                    rm::appendSelectionRing(decalVertices, map->field, {at.x, at.y, at.z},
+                        armedRadius() * kSelectionRingMargin, tint);
+
+                    if (const auto armedType = ghostType) {
+                        // The same question the tick asks, answered for a building that
+                        // is not there yet: `appendAdjacencyPreview` draws the numbers
+                        // and returns the links, so every line drawn under a label is a
+                        // bonus this placement would actually pay — one evaluation
+                        // feeding both halves, which is what keeps them agreeing.
+                        const rm::sim::AdjacencyPreview preview =
+                            rm::app::appendAdjacencyPreview(
+                                hudScratch, units, window.camera(), map->field,
+                                window.labelFont(), viewport, *armedType,
+                                {{at.x, at.z}});
+                        for (const auto& link : preview.links) {
+                            const rm::sim::Transform& t =
+                                units.store.transforms()[link.slot];
+                            rm::appendGroundSegment(
+                                decalVertices, map->field, {at.x, at.z},
+                                {rm::sim::fxToFloat(t.x), rm::sim::fxToFloat(t.z)},
+                                kBuildGhostColour, 1.5f);
+                        }
+                    }
+
+                    if (ghostBatch != UnitScene::kNoBatch) {
+                        const auto typeIndex = static_cast<std::size_t>(*ghostType);
+                        ghostScratch.push_back({
+                            .batch = ghostBatch,
+                            .instance = {
+                                .position = {{at.x, at.y, at.z}},
+                                .rotationY = rm::sim::radiansFromBrad(structureFacing(
+                                    map->field, rm::sim::fxFromFloat(at.x),
+                                    rm::sim::fxFromFloat(at.z))),
+                                .scale = typeIndex < units.typeScale.size()
+                                    ? units.typeScale[typeIndex] : 1.0f,
+                            },
+                            .tint = tint,
+                        });
+                    }
+                }
+            }
+            window.setGhosts(ghostScratch);
+            window.setHud(hudScratch);
+
+            // ...and a marker wherever an order was given recently. Aged by the
+            // frame's own elapsed time rather than a wall clock, so a marker
+            // fades over the same span whatever the frame rate — and by the same
+            // reasoning that paces the walk cycles by distance covered.
+            for (OrderMark& mark : orderMarks) {
+                mark.age += elapsed;
+                rm::appendOrderMarker(decalVertices, map->field, mark.position,
+                                      kOrderMarkerColour, mark.age);
+            }
+            for (OrderMark& mark : noRouteMarks) {
+                mark.age += elapsed;
+                rm::appendNoRouteMarker(decalVertices, map->field, mark.position, mark.age);
+            }
+            // Dropped once they have nothing left to draw. The append above is
+            // silent past its lifetime, so this is housekeeping rather than
+            // correctness — without it the list grows for as long as the app runs.
+            std::erase_if(orderMarks, [](const OrderMark& mark) {
+                return mark.age >= rm::kOrderMarkerSecondsToLive;
+            });
+            std::erase_if(noRouteMarks, [](const OrderMark& mark) {
+                return mark.age >= rm::kOrderMarkerSecondsToLive;
+            });
+
+            // The pads under the sites and the streams feeding them. Into the SAME two lists
+            // the rest of the frame's effects use — a build stream is a line of motes and a pad
+            // is a ring, and both already have a pass.
+            //
+            // Before the shields for the reason the shields are last: if the fixed decal
+            // buffer fills, a pad marking work in progress is worth more than a distant dome.
+            rm::app::appendConstructionEffects(decalVertices, iconScratch, units, map->field,
+                                               matchSeconds);
+            window.setParticles(iconScratch);
+
+            // Preserve all gameplay UI when the renderer's fixed decal buffer fills. Domes are
+            // deliberately last: losing distant shield shells is preferable to losing a build
+            // ghost, selection ring, route, or refused-order marker.
+            decalVertices.insert(decalVertices.end(), units.shieldScratch.begin(),
+                                 units.shieldScratch.end());
+
+            window.setGroundDecals(decalVertices);
+            // ...and an outline around each selected unit, which is what a ring
+            // cannot do at a low camera angle where the units hide their own rings.
+            // The renderer wants (batch, instance) — where the unit ended up in THIS frame's
+            // gather. That is a projection of the selection, not the selection itself, which
+            // is why it is built here and not stored.
+            selectionScratch.clear();
+            for (const rm::sim::UnitId sel : selected) {
+                if (const std::optional<rm::SelectionEntry> where = units.drawnAt(sel)) {
+                    selectionScratch.push_back(*where);
+                }
+            }
+            window.setSelection(selectionScratch);
+            ++acceptanceFrames;
+        });
+
+        window.show(inputAcceptance);
+
+        // This driver lives at the application boundary because the assertion is specifically
+        // that AppKit selection and the DRAWN widgets reach the match. Calling issueBuild here
+        // would bypass exactly the integration this acceptance run must exercise.
+        int inputStage = session.window.buildPreviewAcceptance ? 100 : -1;
+        std::array<float, 2> previewFrom{}, previewTo{}, previewEndPixel{};
+        std::vector<std::array<float, 2>> expectedPreviewSites;
+        std::size_t packedPreviewCount = 0, previewLogStart = 0;
+        float previewCameraDistance = 0;
+        int stageStarted = matchTicks;
+        std::size_t observedFrame = 0;
+        std::size_t productIndex = 0;
+        std::vector<std::string> inputProducts;
+        rm::sim::UnitId inputFactory{}, inputProduct{}, inputAttackTarget{};
+        std::string inputGenerator;
+        rm::sim::UnitId inputAcu{};
+        std::string inputAcuName;
+        rm::sim::Transform acuMoveStarted{};
+        rm::sim::UnitId inputEngineer{};
+        std::string inputUpgrade, inputShipyard;
+        int inputUpgradeTier = 2;
+        std::array<float, 2> inputWaterSite{};
+        std::vector<rm::sim::UnitId> beforeWorkflow;
+        std::size_t expansionLogStart = 0;
+        rm::sim::Transform moveStarted{};
+        std::vector<rm::sim::UnitId> beforeProduct;
+        std::vector<rm::sim::UnitId> beforeGenerator;
+        std::size_t pageClicks = 0;
+        bool engineerPageProbe = false;
+        bool productionProbeDone = false;
+        std::size_t queuedProbeEntries = 0;
+        std::vector<rm::CommandId> productionProbeIds;
+        struct ExpectedInputCommand {
+            rm::sim::CommandKind kind;
+            rm::sim::UnitId unit;
+            bool queued;
+            std::size_t logStart;
+        };
+        std::optional<ExpectedInputCommand> expectedInputCommand;
+        const auto expectInputCommand = [&](rm::sim::CommandKind kind, rm::sim::UnitId unit,
+                                             bool queued = false) {
+            expectedInputCommand = ExpectedInputCommand{kind, unit, queued, units.commands.size()};
+        };
+        const auto uppercase = [](std::string value) {
+            for (char& c : value) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            return value;
+        };
+        const auto inputCheck = [](bool condition, const std::string& problem) {
+            if (!condition) throw std::runtime_error{problem};
+        };
+        const auto inputWorldClick = [&](rm::sim::Fx x, rm::sim::Fx z,
+                                         rm::MouseButton button, bool shift = false,
+                                         std::optional<float> height = {}) {
+            const float wx = rm::sim::fxToFloat(x), wz = rm::sim::fxToFloat(z);
+            const auto point = rm::worldToScreen(window.camera(),
+                simd_make_float3(wx, height.value_or(map->field.heightAtWorld(wx, wz)), wz),
+                static_cast<float>(window.width()), static_cast<float>(window.height()));
+            inputCheck(point.has_value(), "world target is behind the camera");
+            const auto viewport = window.uiViewport();
+            const auto hud = viewport.toHud(*point);
+            const auto frame = rm::ui::frameLayout(viewport);
+            inputCheck((*point)[0] > 0 && (*point)[0] < static_cast<float>(window.width())
+                && (*point)[1] > 0 && (*point)[1] < static_cast<float>(window.height())
+                && !frame.commands.contains(hud[0], hud[1])
+                && !frame.build.contains(hud[0], hud[1]), "world target overlaps HUD or window edge");
+            window.sendMouseClick((*point)[0], (*point)[1], button, shift);
+        };
+        std::optional<rm::sim::UnitId> pendingInputSelection;
+        const auto inputSelect = [&](rm::sim::UnitId id) {
+            inputCheck(units.store.alive(id), "selection target died");
+            // Already there: a redundant native click would TOGGLE the unit off under
+            // applyClick's membership rule, so establishing selection means no click.
+            // An upgrade leaves its replacement selected by following UnitFinished.
+            if (selected.size() == 1 && selected.front() == id) {
+                pendingInputSelection.reset();
+                return true;
+            }
+            const auto& at = units.store.transforms()[id.index];
+            if (pendingInputSelection != id) {
+                window.focusOn({rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                                rm::sim::fxToFloat(at.z)}, 420.0f);
+                pendingInputSelection = id;
+                return false; // Present the new camera and spawned unit before clicking it.
+            }
+            inputWorldClick(at.x, at.z, rm::MouseButton::Left, false, rm::sim::fxToFloat(at.y));
+            std::string picked = "none";
+            if (!selected.empty() && units.store.alive(selected.front())) {
+                const auto* definition = units.catalog.def(units.store.typeAt(selected.front().index));
+                picked = definition != nullptr ? definition->name : "unknown type";
+                picked += " slot " + std::to_string(selected.front().index);
+            }
+            inputCheck(selected.size() == 1 && selected.front() == id,
+                       "native world click did not select slot " + std::to_string(id.index)
+                           + "; picked " + picked);
+            pendingInputSelection.reset();
+            return true;
+        };
+        const auto inputHudClick = [&](float x, float y, rm::MouseButton button = rm::MouseButton::Left) {
+            const float scale = window.uiViewport().hudScale();
+            window.sendMouseClick(x * scale, y * scale, button);
+        };
+        const auto inputCommandClick = [&](std::size_t slot, rm::MouseButton button = rm::MouseButton::Left) {
+            const auto rack = rm::ui::commandRackLayout(rm::ui::frameLayout(window.uiViewport()), true);
+            const auto at = rm::ui::commandCellOrigin(rack, slot);
+            inputHudClick(at[0] + rack.cellWidth / 2, at[1] + rack.cellHeight / 2, button);
+        };
+        const auto inputBuildClick = [&](const std::string& name) {
+            const auto wanted = std::find_if(buildMenuAll.begin(), buildMenuAll.end(),
+                [&](const auto& option) { return uppercase(option.id) == name; });
+            inputCheck(wanted != buildMenuAll.end(), "missing build tray option " + name);
+            const auto frame = rm::ui::frameLayout(window.uiViewport());
+            if (buildTierMask != 0 && wanted->tech != buildTier) {
+                // The option lives behind another tab — select it and retry next beat,
+                // the same two steps a player's hand takes.
+                const auto panel = rm::ui::buildPanelLayout(frame, buildOptions.size(), 0);
+                const rm::ui::BuildTabs tabs = rm::ui::buildTabs(panel, buildTierMask);
+                for (std::size_t tab = 0; tab < tabs.count; ++tab) {
+                    if (tabs.tier[tab] == wanted->tech) {
+                        inputHudClick(tabs.x + static_cast<float>(tab) * rm::ui::kBuildTabWidth
+                                          + rm::ui::kBuildTabWidth / 2,
+                                      panel.y + rm::ui::kBuildPadding
+                                          + rm::ui::kBuildHeader / 2);
+                        return false;
+                    }
+                }
+            }
+            const auto wantedVisible = std::find_if(buildOptions.begin(), buildOptions.end(),
+                [&](const auto& option) { return uppercase(option.id) == name; });
+            if (wantedVisible == buildOptions.end()) return false;
+            const auto index = static_cast<std::size_t>(wantedVisible - buildOptions.begin());
+            const auto layout = rm::ui::buildPanelLayout(frame,
+                buildOptions.size(), panelPages.build(units.store.typeAt(buildWho.builder.index)));
+            if (index < layout.first || index >= layout.first + layout.shown) {
+                const float right = layout.x + layout.width - rm::ui::kBuildPadding
+                                  - rm::ui::buildTabs(layout, buildTierMask).width;
+                inputHudClick(right - (index < layout.first ? 33.0f : 11.0f),
+                              layout.y + rm::ui::kBuildHeader / 2);
+                ++pageClicks;
+                return false; // Wait until the changed page is drawn before its next click.
+            }
+            const auto cell = rm::ui::buildCellOrigin(layout, index - layout.first);
+            inputHudClick(cell[0] + layout.cellWidth / 2, cell[1] + layout.cellHeight / 2);
+            return true;
+        };
+        const auto inputLiveUnits = [&] {
+            std::vector<rm::sim::UnitId> ids;
+            for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                if (units.store.slotAlive(slot)) ids.push_back(units.store.idAt(slot));
+            }
+            return ids;
+        };
+        const auto inputFindSpawn = [&](const std::string& name,
+                                         std::span<const rm::sim::UnitId> before) {
+            // A completed build can reuse a dead slot. Compare the full handle, not slot count.
+            for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                if (!units.store.slotAlive(slot)) continue;
+                const auto id = units.store.idAt(slot);
+                if (std::ranges::find(before, id) != before.end()) continue;
+                const auto* def = units.catalog.def(units.store.typeAt(slot));
+                if (def && uppercase(def->name) == name) return id;
+            }
+            return rm::sim::UnitId{};
+        };
+        const auto nextInputStage = [&](int stage) {
+            inputStage = stage;
+            stageStarted = matchTicks;
+            acceptanceFastForward = stage == 2 || stage == 9 || stage == 34
+                || stage == 38 || stage == 40;
+        };
+        std::function<void(NSTimer*)> inputTick = [&](NSTimer* timer) {
+            if (acceptanceFrames == observedFrame) return;
+            observedFrame = acceptanceFrames;
+            try {
+                // Stage 0 waits for AppKit to grant deactivation, which needs another app
+                // willing to take focus; on an unattended desktop that can never happen, and
+                // the report should say so rather than look like a Cybran-specific stall.
+                // Long upgrades and shore approaches use ordinary income and authored rates.
+                const int stageLimit = inputStage >= 32 ? 60000 : 12000;
+                inputCheck(matchTicks - stageStarted < stageLimit && acceptanceFrames < 36000,
+                           "timeout at input stage " + std::to_string(inputStage)
+                               + (inputStage == 0 && app.isActive
+                                      ? " (the app never became inactive: no other app took focus)"
+                                      : ""));
+                if (expectedInputCommand) {
+                    const auto& expected = *expectedInputCommand;
+                    std::size_t accepted = 0;
+                    const auto log = units.commands.all();
+                    for (std::size_t i = expected.logStart; i < log.size(); ++i) {
+                        if (log[i].kind == expected.kind && log[i].queued == expected.queued
+                            && std::ranges::find(log[i].units, expected.unit) != log[i].units.end()) {
+                            ++accepted;
+                        }
+                    }
+                    inputCheck(accepted == 1, "native input did not dispatch exactly one accepted command");
+                    expectedInputCommand.reset();
+                }
+                if (inputStage == 100) {
+                    for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                        if (!units.store.slotAlive(slot) || units.armyOf(slot) != units.playerArmy) continue;
+                        const auto* def = units.catalog.def(units.store.typeAt(slot));
+                        if (def && def->buildRate > 0 && def->speedElmosPerSecond > 0) {
+                            inputEngineer = units.store.idAt(slot);
+                            break;
+                        }
+                    }
+                    inputCheck(units.store.alive(inputEngineer), "preview acceptance needs a player builder");
+                    if (!inputSelect(inputEngineer)) return;
+                    nextInputStage(101);
+                } else if (inputStage == 101) {
+                    if (!inputBuildClick("UEB2101")) return;
+                    inputCheck(armedOption.has_value(), "point defence did not arm");
+                    const auto type = resolveBuildable(units, content, armedPath());
+                    inputCheck(type.has_value(), "point defence type missing");
+                    const auto& builder = units.store.transforms()[inputEngineer.index];
+                    bool found = false;
+                    for (float z = -96; z <= 96 && !found; z += 32) {
+                        previewFrom = {rm::sim::fxToFloat(builder.x) + 40,
+                                       rm::sim::fxToFloat(builder.z) + z};
+                        previewTo = {previewFrom[0] + 128, previewFrom[1]};
+                        arrayBuildSitesInto(units, *type, previewFrom, previewTo, 1,
+                                            expectedPreviewSites);
+                        found = expectedPreviewSites.size() >= 4
+                            && std::ranges::all_of(expectedPreviewSites, armedPlaceable);
+                    }
+                    inputCheck(found, "no clear defence row near the builder");
+                    window.focusOn({(previewFrom[0] + previewTo[0]) / 2,
+                        map->field.heightAtWorld(previewFrom[0], previewFrom[1]), previewFrom[1]}, 300);
+                    nextInputStage(102);
+                } else if (inputStage == 102) {
+                    const auto project = [&](std::array<float, 2> site) {
+                        return rm::worldToScreen(window.camera(), simd_make_float3(site[0],
+                            map->field.heightAtWorld(site[0], site[1]), site[1]),
+                            float(window.width()), float(window.height()));
+                    };
+                    const auto from = project(previewFrom), to = project(previewTo);
+                    inputCheck(from && to, "preview row is outside the camera");
+                    previewEndPixel = *to;
+                    previewLogStart = units.commands.size();
+                    window.sendMouseDrag((*from)[0], (*from)[1]);
+                    nextInputStage(103);
+                } else if (inputStage == 103) {
+                    window.sendMouseDrag(previewEndPixel[0], previewEndPixel[1]);
+                    nextInputStage(104);
+                } else if (inputStage == 104) {
+                    inputCheck(arrayDragging && ghostScratch.size() >= 4,
+                               "held drag did not show multiple silhouettes");
+                    inputCheck(ghostScratch.size() == arraySitesScratch.size(), "preview count differs from sites");
+                    inputCheck(units.commands.size() == previewLogStart && units.commandInput.size() == 0,
+                               "holding the drag queued buildings prematurely");
+                    packedPreviewCount = ghostScratch.size();
+                    previewCameraDistance = window.camera().distance;
+                    inputCheck(writePng(session.window.inputAcceptancePath + ".packed.png", window.capture()),
+                               "packed preview capture failed");
+                    window.sendScroll(-20);
+                    nextInputStage(105);
+                } else if (inputStage == 105) {
+                    inputCheck(arrayDragging && ghostScratch.size() >= 2
+                        && ghostScratch.size() < packedPreviewCount, "wheel did not widen the held row");
+                    inputCheck(window.camera().distance == previewCameraDistance, "wheel zoomed during placement");
+                    inputCheck(units.commands.size() == previewLogStart && units.commandInput.size() == 0,
+                               "scrolling queued buildings prematurely");
+                    expectedPreviewSites = arraySitesScratch;
+                    for (std::size_t i = 0; i < ghostScratch.size(); ++i) {
+                        inputCheck(ghostScratch[i].instance.position[0] == expectedPreviewSites[i][0]
+                            && ghostScratch[i].instance.position[2] == expectedPreviewSites[i][1],
+                            "silhouette position differs from the planned site");
+                    }
+                    inputCheck(writePng(session.window.inputAcceptancePath, window.capture()),
+                               "spaced preview capture failed");
+                    window.sendMouseDrag(previewEndPixel[0], previewEndPixel[1], true);
+                    nextInputStage(106);
+                } else if (inputStage == 106) {
+                    inputCheck(!arrayDragging, "release left the array dragging");
+                    inputCheck(arraySitesScratch == expectedPreviewSites, "release changed preview positions");
+                    inputCheck(units.commandInput.size() == expectedPreviewSites.size(),
+                               "release did not queue exactly the visible sites");
+                    window.sendEscape();
+                    nextInputStage(107);
+                } else if (inputStage == 107) {
+                    inputCheck(!armedOption && ghostScratch.empty(), "Escape left build previews armed");
+                    if (!inputBuildClick("UEB2101")) return;
+                    inputCheck(arraySpacingScale == 1.0f, "new arming retained a spacing gap");
+                    previewLogStart = units.commands.size();
+                    window.sendMouseDrag(previewEndPixel[0] - 120, previewEndPixel[1]);
+                    nextInputStage(108);
+                } else if (inputStage == 108) {
+                    window.sendMouseDrag(previewEndPixel[0], previewEndPixel[1]);
+                    nextInputStage(109);
+                } else if (inputStage == 109) {
+                    inputCheck(arrayDragging && !ghostScratch.empty(), "second row did not start");
+                    window.sendEscape();
+                    nextInputStage(110);
+                } else if (inputStage == 110) {
+                    inputCheck(!armedOption && !arrayDragging && ghostScratch.empty(),
+                               "Escape did not cancel the held row");
+                    window.sendMouseDrag(previewEndPixel[0], previewEndPixel[1], true);
+                    nextInputStage(111);
+                } else if (inputStage == 111) {
+                    inputCheck(units.commandInput.size() == 0 && units.commands.size() == previewLogStart,
+                               "releasing an Escape-cancelled drag issued an order");
+                    inputCheck(writePng(session.window.inputAcceptancePath + ".cancelled.png", window.capture()),
+                               "cancelled preview capture failed");
+                    std::printf("build preview acceptance: PASS %zu packed, %zu spaced silhouettes; native wheel, release and Escape cancellation\n",
+                                packedPreviewCount, expectedPreviewSites.size());
+                    acceptanceResult = 0;
+                    [timer invalidate];
+                    window.stop();
+                } else if (inputStage == -1) {
+                    // Exercise the inactive-window path deliberately: switching to another
+                    // app previously made AppKit silently discard the helper's left clicks.
+                    [app deactivate];
+                    nextInputStage(0);
+                } else if (inputStage == 0) {
+                    // Launch activation can finish after the first display callback. Wait
+                    // for AppKit's state change before testing input, under the normal timeout.
+                    if (app.isActive) {
+                        [app deactivate];
+                        return;
+                    }
+                    for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                        if (!units.store.slotAlive(slot)) continue;
+                        const auto* def = units.catalog.def(units.store.typeAt(slot));
+                        if (!def) continue;
+                        const std::string factory = uppercase(def->name);
+                        if (factory != "UEB0101" && factory != "UAB0101"
+                            && factory != "URB0101" && factory != "XSB0101") continue;
+                        if (units.armyOf(slot) != units.playerArmy) continue;
+                        // --units seats fixtures at map starts, including the ACUs' starts.
+                        // Choose an unobstructed factory; a coincident ACU is a different click target.
+                        const auto& at = units.store.transforms()[slot];
+                        bool crowded = false;
+                        for (rm::UnitIndex other = 0; other < units.store.slotCount(); ++other) {
+                            if (other == slot || !units.store.slotAlive(other)) continue;
+                            const auto& neighbour = units.store.transforms()[other];
+                            if (rm::sim::fxHypot(at.x - neighbour.x, at.z - neighbour.z)
+                                < rm::sim::fxFromFloat(2 * rm::kDefaultPickRadiusElmos)) {
+                                crowded = true;
+                                break;
+                            }
+                        }
+                        if (crowded) continue;
+                        inputFactory = units.store.idAt(slot);
+                        const std::string prefix = factory.substr(0, 2) + "L";
+                        for (const char* suffix : {"0101", "0103", "0104", "0105"}) {
+                            inputProducts.push_back(prefix + suffix);
+                        }
+                        if (factory != "XSB0101") inputProducts.push_back(prefix + "0106");
+                        inputProducts.push_back(prefix + (factory == "URB0101" ? "0107" : "0201"));
+                        inputGenerator = factory.substr(0, 3) + "1101";
+                        break;
+                    }
+                    inputCheck(inputFactory.generation != 0, "supply a retail T1 land factory with --units");
+                    inputCheck(units.playerArmy >= 0 && !units.economies.empty(), "input acceptance requires --skirmish");
+                    const auto viewport = window.uiViewport();
+                    std::printf("input acceptance: %.0fx%.0f logical points, simulated %.1fx backing, %zu products\n",
+                        viewport.logicalExtent.width, viewport.logicalExtent.height,
+                        viewport.backingScale, inputProducts.size());
+                    nextInputStage(30);
+                } else if (inputStage == 30) {
+                    // The spawned commander's first order goes through the same native
+                    // path as every later one: a world click selects it, an ordinary
+                    // right-click moves it, and the run waits until it has visibly moved.
+                    if (inputAcu.generation == 0) {
+                        const auto* factoryDef =
+                            units.catalog.def(units.store.typeAt(inputFactory.index));
+                        inputCheck(factoryDef != nullptr, "acceptance factory lost its definition");
+                        inputAcuName = uppercase(factoryDef->name).substr(0, 2) + "L0001";
+                        for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                            if (!units.store.slotAlive(slot)) continue;
+                            const auto* def = units.catalog.def(units.store.typeAt(slot));
+                            if (def == nullptr || uppercase(def->name) != inputAcuName
+                                || units.armyOf(slot) != units.playerArmy) continue;
+                            inputAcu = units.store.idAt(slot);
+                            break;
+                        }
+                        inputCheck(inputAcu.generation != 0, "skirmish spawned no player ACU to order");
+                    }
+                    if (!inputSelect(inputAcu)) return;
+                    acuMoveStarted = units.store.transforms()[inputAcu.index];
+                    const auto before = units.commandInput.size();
+                    inputWorldClick(acuMoveStarted.x + rm::sim::Fx::fromInt(80), acuMoveStarted.z,
+                                    rm::MouseButton::Right);
+                    inputCheck(units.commandInput.size() == before + 1,
+                               "native right click did not move the spawned ACU");
+                    expectInputCommand(rm::sim::CommandKind::Move, inputAcu);
+                    nextInputStage(31);
+                } else if (inputStage == 31) {
+                    const auto& at = units.store.transforms()[inputAcu.index];
+                    if (rm::sim::fxHypot(at.x - acuMoveStarted.x, at.z - acuMoveStarted.z)
+                        < rm::sim::Fx::fromInt(12)) return;
+                    std::printf("input acceptance: %s selection and native right-click Move PASS\n",
+                                inputAcuName.c_str());
+                    nextInputStage(12);
+                } else if (inputStage == 1) {
+                    inputCheck(activeBuilder == inputFactory, "factory selection did not expose its build tray");
+                    beforeProduct = inputLiveUnits();
+                    const auto before = units.commandInput.size();
+                    if (inputBuildClick(inputProducts[productIndex])) {
+                        inputCheck(units.commandInput.size() == before + 1,
+                            "factory cell did not submit exactly one Build");
+                        expectInputCommand(rm::sim::CommandKind::Build, inputFactory, true);
+                        nextInputStage(2);
+                    }
+                } else if (inputStage == 2) {
+                    inputProduct = inputFindSpawn(inputProducts[productIndex], beforeProduct);
+                    if (inputProduct.generation == 0) return;
+                    if (!inputSelect(inputProduct)) return;
+                    nextInputStage(3);
+                } else if (inputStage == 3) {
+                    inputCheck(commandAvailable[1], "produced unit has no reachable Move control");
+                    moveStarted = units.store.transforms()[inputProduct.index];
+                    const auto before = units.commandInput.size();
+                    inputCommandClick(1);
+                    inputCheck(armedCommand == rm::sim::CommandKind::Move, "Move widget did not arm");
+                    inputWorldClick(moveStarted.x + rm::sim::Fx::fromInt(80), moveStarted.z,
+                                    rm::MouseButton::Right);
+                    inputCheck(units.commandInput.size() == before + 1,
+                        "native right click did not dispatch exactly one Move");
+                    expectInputCommand(rm::sim::CommandKind::Move, inputProduct);
+                    nextInputStage(4);
+                } else if (inputStage == 4) {
+                    const auto& at = units.store.transforms()[inputProduct.index];
+                    if (rm::sim::fxHypot(at.x - moveStarted.x, at.z - moveStarted.z)
+                        < rm::sim::Fx::fromInt(12)) return;
+                    const auto before = units.commandInput.size();
+                    inputWorldClick(moveStarted.x + rm::sim::Fx::fromInt(80),
+                                    moveStarted.z + rm::sim::Fx::fromInt(48), rm::MouseButton::Right, true);
+                    inputCheck(units.commandInput.size() == before + 1,
+                               "Shift-right did not append exactly one queued order on release");
+                    expectInputCommand(rm::sim::CommandKind::Move, inputProduct, true);
+                    nextInputStage(5);
+                } else if (inputStage == 5) {
+                    inputCheck(units.store.orders()[inputProduct.index].size() == 2,
+                               "Shift-right replaced the active route instead of appending a waypoint");
+                    const auto before = units.commandInput.size();
+                    inputCommandClick(6); // Unimplemented cell must swallow left and right input.
+                    inputCommandClick(6, rm::MouseButton::Right);
+                    inputCheck(units.commandInput.size() == before && selected.size() == 1
+                        && selected.front() == inputProduct, "disabled rack cell leaked input into world");
+                    inputCommandClick(4);
+                    inputCheck(units.commandInput.size() == before + 1,
+                        "Stop widget did not submit exactly one Stop; before=" + std::to_string(before)
+                        + " after=" + std::to_string(units.commandInput.size())
+                        + " tick=" + std::to_string(matchTicks));
+                    expectInputCommand(rm::sim::CommandKind::Stop, inputProduct);
+                    nextInputStage(6);
+                } else if (inputStage == 6) {
+                    inputCheck(units.store.alive(inputProduct), "produced unit died before the Guard check");
+                    inputCheck(!units.store.motion()[inputProduct.index].moving
+                        && units.store.orders()[inputProduct.index].active() == nullptr,
+                        "Stop did not clear movement and queued orders");
+                    inputCheck(commandAvailable[5], "produced unit has no reachable Guard control");
+                    inputCommandClick(5);
+                    inputCheck(armedCommand == rm::sim::CommandKind::Guard, "Guard widget did not arm");
+                    const auto& guarded = units.store.transforms()[inputFactory.index];
+                    inputWorldClick(guarded.x, guarded.z, rm::MouseButton::Right, false,
+                                    rm::sim::fxToFloat(guarded.y));
+                    expectInputCommand(rm::sim::CommandKind::Guard, inputProduct);
+                    nextInputStage(19);
+                } else if (inputStage == 19) {
+                    const auto* guard = units.store.orders()[inputProduct.index].active();
+                    inputCheck(guard != nullptr && guard->kind() == rm::sim::CommandKind::Guard
+                        && guard->target() == inputFactory, "native Guard did not retain the selected ally");
+                    inputCommandClick(4);
+                    expectInputCommand(rm::sim::CommandKind::Stop, inputProduct);
+                    nextInputStage(20);
+                } else if (inputStage == 20) {
+                    inputCheck(units.store.orders()[inputProduct.index].empty(), "Stop did not cancel Guard");
+                    std::printf("input acceptance: %s native Guard target and Stop PASS\n",
+                                inputProducts[productIndex].c_str());
+                    if (commandAvailable[2]) {
+                        const auto* def = units.catalog.def(units.store.typeAt(inputProduct.index));
+                        const bool targetsGround = std::ranges::any_of(def->weapons,
+                            [](const auto& weapon) { return weapon.fires() && weapon.canTarget(false); });
+                        const auto at = units.store.transforms()[inputProduct.index];
+                        // Fixture setup only: place an unarmed enemy in the weapon's target
+                        // layer. The test issues Attack exclusively through the drawn rack
+                        // and a native world click after the target has been rendered.
+                        const auto target = spawnUnit(units, content, map->field,
+                            targetsGround ? "/units/UEB1101/UEB1101_unit.bp"
+                                          : "/units/UEA0101/UEA0101_unit.bp",
+                            {rm::sim::fxToFloat(at.x) + 100, 0, rm::sim::fxToFloat(at.z) + 48},
+                            units.armies.at(1), 0);
+                        inputCheck(target.has_value(), "cannot spawn native Attack target fixture");
+                        inputAttackTarget = *target;
+                        nextInputStage(21);
+                    } else {
+                        const auto before = units.commandInput.size();
+                        const auto armedBefore = armedCommand;
+                        inputCommandClick(2);
+                        inputCheck(units.commandInput.size() == before && armedCommand == armedBefore,
+                                   "unavailable Attack widget accepted input");
+                        std::printf("input acceptance: %s native Attack unavailable PASS\n",
+                                    inputProducts[productIndex].c_str());
+                        nextInputStage(inputProducts[productIndex].ends_with("0105") ? 7 : 10);
+                    }
+                } else if (inputStage == 21) {
+                    inputCheck(units.store.alive(inputAttackTarget), "Attack fixture died before input");
+                    inputCommandClick(2);
+                    inputCheck(armedCommand == rm::sim::CommandKind::Attack, "Attack widget did not arm");
+                    const auto& at = units.store.transforms()[inputAttackTarget.index];
+                    inputWorldClick(at.x, at.z, rm::MouseButton::Right, false, rm::sim::fxToFloat(at.y));
+                    expectInputCommand(rm::sim::CommandKind::Attack, inputProduct);
+                    nextInputStage(22);
+                } else if (inputStage == 22) {
+                    const auto* attack = units.store.orders()[inputProduct.index].active();
+                    inputCheck(attack != nullptr && attack->kind() == rm::sim::CommandKind::Attack
+                        && attack->target() == inputAttackTarget,
+                        "native Attack did not retain the selected enemy handle");
+                    inputCheck(writePng(session.window.inputAcceptancePath + "."
+                        + inputProducts[productIndex] + ".attack.png", window.capture()),
+                        "Attack capture write failed");
+                    inputCommandClick(4);
+                    expectInputCommand(rm::sim::CommandKind::Stop, inputProduct);
+                    nextInputStage(23);
+                } else if (inputStage == 23) {
+                    inputCheck(units.store.orders()[inputProduct.index].empty(), "Stop did not cancel Attack");
+                    std::printf("input acceptance: %s native Attack target and Stop PASS\n",
+                                inputProducts[productIndex].c_str());
+                    // Remove the fixture so it cannot distract the next product's Guard
+                    // check or obstruct the engineer's placement. This is not combat proof.
+                    units.store.kill(inputAttackTarget);
+                    nextInputStage(inputProducts[productIndex].ends_with("0105") ? 7 : 10);
+                } else if (inputStage == 7) {
+                    inputEngineer = inputProduct;
+                    inputCheck(activeBuilder == inputProduct, "engineer selection did not expose construction tray");
+                    if (!engineerPageProbe) {
+                        engineerPageProbe = true;
+                        const auto panel = rm::ui::buildPanelLayout(rm::ui::frameLayout(window.uiViewport()),
+                            buildOptions.size(), panelPages.build(units.store.typeAt(inputProduct.index)));
+                        if (panel.pages > 1) {
+                            inputHudClick(panel.x + panel.width - rm::ui::kBuildPadding
+                                              - rm::ui::buildTabs(panel, buildTierMask).width - 11.0f,
+                                          panel.y + rm::ui::kBuildHeader / 2);
+                            ++pageClicks;
+                            return;
+                        }
+                    }
+                    if (inputBuildClick(inputGenerator)) {
+                        inputCheck(armedOption.has_value(), "generator build cell did not arm placement");
+                        nextInputStage(8);
+                    }
+                } else if (inputStage == 8) {
+                    const auto& at = units.store.transforms()[inputProduct.index];
+                    beforeGenerator = inputLiveUnits();
+                    bool placed = false;
+                    for (float dx : {48.0f, -48.0f, 72.0f, -72.0f}) {
+                        for (float dz : {0.0f, 48.0f, -48.0f}) {
+                            const float x = rm::sim::fxToFloat(at.x) + dx;
+                            const float z = rm::sim::fxToFloat(at.z) + dz;
+                            if (!armedPlaceable({x, z})) continue;
+                            const auto before = units.commandInput.size();
+                            inputWorldClick(rm::sim::fxFromFloat(x), rm::sim::fxFromFloat(z), rm::MouseButton::Left);
+                            inputCheck(units.commandInput.size() == before + 1,
+                                "world placement did not submit exactly one Build");
+                            expectInputCommand(rm::sim::CommandKind::Build, inputProduct);
+                            placed = true;
+                            break;
+                        }
+                        if (placed) break;
+                    }
+                    inputCheck(placed, "fixture has no visible placeable generator site");
+                    nextInputStage(9);
+                } else if (inputStage == 9) {
+                    if (inputFindSpawn(inputGenerator, beforeGenerator).generation == 0) return;
+                    std::printf("input acceptance: %s placed and completed %s\n",
+                                inputProducts[productIndex].c_str(), inputGenerator.c_str());
+                    nextInputStage(10);
+                } else if (inputStage == 10) {
+                    std::printf("input acceptance: %s production, selection, Move, Shift queue, Stop, input swallowing PASS\n",
+                                inputProducts[productIndex].c_str());
+                    if (++productIndex < inputProducts.size()) {
+                        nextInputStage(12);
+                    } else nextInputStage(32);
+                } else if (inputStage == 32) {
+                    if (!inputSelect(inputFactory)) return;
+                    const auto* def = units.catalog.def(units.store.typeAt(inputFactory.index));
+                    inputCheck(def != nullptr && !def->upgradesTo.empty(), "factory has no next upgrade tier");
+                    inputUpgrade = uppercase(def->upgradesTo);
+                    nextInputStage(33);
+                } else if (inputStage == 33) {
+                    const auto before = units.commandInput.size();
+                    if (!inputBuildClick(inputUpgrade)) return;
+                    inputCheck(units.commandInput.size() == before + 1, "upgrade cell submitted no Build");
+                    expectInputCommand(rm::sim::CommandKind::Build, inputFactory);
+                    nextInputStage(34);
+                } else if (inputStage == 34) {
+                    if (units.store.alive(inputFactory)) return;
+                    // The ordinary frame handler follows UnitFinished to the replacement handle.
+                    inputCheck(selected.size() == 1 && units.store.alive(selected.front()),
+                               "upgrade lost the selected factory");
+                    inputFactory = selected.front();
+                    const auto* def = units.catalog.def(units.store.typeAt(inputFactory.index));
+                    inputCheck(def != nullptr && uppercase(def->name) == inputUpgrade,
+                               "upgrade selection followed the wrong tier");
+                    std::printf("input acceptance: T%d factory native upgrade PASS\n", inputUpgradeTier);
+                    if (++inputUpgradeTier <= 3) nextInputStage(32);
+                    else nextInputStage(35);
+                } else if (inputStage == 35) {
+                    if (!inputSelect(inputEngineer)) return;
+                    const auto* def = units.catalog.def(units.store.typeAt(inputEngineer.index));
+                    inputCheck(def != nullptr, "engineer lost its definition");
+                    inputShipyard = uppercase(def->name).substr(0, 2) + "B0103";
+                    nextInputStage(36);
+                } else if (inputStage == 36) {
+                    if (!inputBuildClick(inputShipyard)) return;
+                    inputCheck(armedOption.has_value(), "shipyard cell did not arm placement");
+                    const auto type = resolveBuildable(units, content, armedPath());
+                    inputCheck(type.has_value(), "shipyard blueprint unavailable");
+                    const auto& at = units.store.transforms()[inputEngineer.index];
+                    const auto& approachGrid = passability.gridFor(units, units.store.typeAt(inputEngineer.index));
+                    float nearest = std::numeric_limits<float>::max();
+                    // Search the map deterministically, then focus before clicking. The normal
+                    // ghost validates snapped sites; no fixture teleports the engineer to water.
+                    for (float z = 64; z < map->field.depthElmos() - 64; z += 32) {
+                        for (float x = 64; x < map->field.widthElmos() - 64; x += 32) {
+                            const auto site = snapBuildSite(units, *type, {x, z});
+                            const float dx = site[0] - rm::sim::fxToFloat(at.x);
+                            const float dz = site[1] - rm::sim::fxToFloat(at.z);
+                            const float distance = dx * dx + dz * dz;
+                            if (distance >= nearest || !armedPlaceable(site)) continue;
+                            if (rm::sim::findPath(approachGrid, at.x, at.z,
+                                rm::sim::fxFromFloat(site[0]), rm::sim::fxFromFloat(site[1])).empty()) continue;
+                            nearest = distance;
+                            inputWaterSite = site;
+                        }
+                    }
+                    inputCheck(nearest < std::numeric_limits<float>::max(), "map has no placeable shipyard site");
+                    window.focusOn({inputWaterSite[0], map->field.heightAtWorld(inputWaterSite[0], inputWaterSite[1]),
+                                    inputWaterSite[1]}, 420.0f);
+                    beforeWorkflow = inputLiveUnits();
+                    nextInputStage(37);
+                } else if (inputStage == 37) {
+                    const auto before = units.commandInput.size();
+                    inputWorldClick(rm::sim::fxFromFloat(inputWaterSite[0]),
+                                    rm::sim::fxFromFloat(inputWaterSite[1]), rm::MouseButton::Left);
+                    inputCheck(units.commandInput.size() == before + 1, "water click submitted no Build");
+                    expectInputCommand(rm::sim::CommandKind::Build, inputEngineer);
+                    nextInputStage(38);
+                } else if (inputStage == 38) {
+                    if (inputFindSpawn(inputShipyard, beforeWorkflow).generation == 0) return;
+                    inputCheck(writePng(session.window.inputAcceptancePath + ".shipyard.png", window.capture()),
+                               "shipyard capture write failed");
+                    std::printf("input acceptance: naval-yard native placement and completion PASS\n");
+                    nextInputStage(39);
+                } else if (inputStage == 39) {
+                    if (!inputSelect(inputEngineer)) return;
+                    beforeWorkflow = inputLiveUnits();
+                    expansionLogStart = units.commands.size();
+                    inputCommandClick(rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand));
+                    inputCheck(autoExpanding(runner, inputEngineer), "AUTO MEX click did not enable expansion");
+                    nextInputStage(40);
+                } else if (inputStage == 40) {
+                    std::size_t completed = 0;
+                    for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                        if (!units.store.slotAlive(slot) || units.armyOf(slot) != units.playerArmy
+                            || std::ranges::find(beforeWorkflow, units.store.idAt(slot)) != beforeWorkflow.end()) continue;
+                        const auto* def = units.catalog.def(units.store.typeAt(slot));
+                        if (def != nullptr && def->buildRestriction != rm::unitdef::BuildRestriction::None) ++completed;
+                    }
+                    if (completed < 3) return;
+                    std::size_t builds = 0;
+                    const auto log = units.commands.all();
+                    for (std::size_t i = expansionLogStart; i < log.size(); ++i)
+                        if (log[i].kind == rm::sim::CommandKind::Build
+                            && std::ranges::find(log[i].units, inputEngineer) != log[i].units.end()) ++builds;
+                    inputCheck(builds >= 3, "AUTO MEX completions have no engineer command evidence");
+                    nextInputStage(41);
+                } else if (inputStage == 41) {
+                    if (!inputSelect(inputEngineer)) return;
+                    inputCommandClick(rm::ui::rackSlotFor(rm::ui::RackAction::AutoExpand));
+                    inputCheck(!autoExpanding(runner, inputEngineer), "AUTO MEX click did not disable expansion");
+                    std::printf("input acceptance: AUTO MEX native toggle and three completed deposits PASS\n");
+                    nextInputStage(11);
+                } else if (inputStage == 12) {
+                    if (inputSelect(inputFactory)) nextInputStage(productionProbeDone ? 1 : 13);
+                } else if (inputStage >= 13 && inputStage <= 18) {
+                    const auto rect = rm::ui::productionPanelRect(rm::ui::frameLayout(window.uiViewport()));
+                    const auto click = [&](const rm::ui::Rect& button) {
+                        inputHudClick(button.x + button.width / 2, button.y + button.height / 2);
+                    };
+                    const auto production = gatherProduction(units, inputFactory);
+                    inputCheck(production.has_value(), "factory production panel is missing");
+                    if (inputStage == 13) {
+                        // Fill two pages through real tray clicks before testing a pending row.
+                        if (queuedProbeEntries <= rm::ui::productionRowsFor(rect)) {
+                            if (inputBuildClick(inputProducts.back())) {
+                                ++queuedProbeEntries;
+                                expectInputCommand(rm::sim::CommandKind::Build, inputFactory, true);
+                            }
+                            return;
+                        }
+                        inputCheck(production->queue.size() == queuedProbeEntries,
+                                   "production entries merged or finished before the cancellation probe");
+                        for (const auto& row : production->queue) productionProbeIds.push_back(row.commandId);
+                        click(rm::ui::productionPageButtonRect(rect, true));
+                        nextInputStage(14);
+                    } else if (inputStage == 14) {
+                        const auto page = rm::ui::productionPage(rect, production->queue.size(), productionPage);
+                        inputCheck(page.page == 1 && page.shown == 1, "next-page widget did not expose the pending row");
+                        inputCheck(writePng(session.window.inputAcceptancePath + ".queue.png", window.capture()),
+                                   "queue capture write failed");
+                        click(rm::ui::productionCancelRect(rect, 0));
+                        expectInputCommand(rm::sim::CommandKind::CancelFactoryBuild, inputFactory);
+                        productionProbeIds.pop_back();
+                        nextInputStage(15);
+                    } else if (inputStage == 15 || inputStage == 17) {
+                        inputCheck(std::ranges::equal(production->queue, productionProbeIds, {},
+                            &rm::ui::ProductionEntry::commandId), "cancellation removed a different production entry");
+                        inputCheck(productionPage == 0, "production page did not clamp after deletion");
+                        if (inputStage == 15) {
+                            nextInputStage(16);
+                        } else {
+                            click(rm::ui::productionClearRect(rect));
+                            expectInputCommand(rm::sim::CommandKind::Stop, inputFactory);
+                            nextInputStage(18);
+                        }
+                    } else if (inputStage == 16) {
+                        click(rm::ui::productionCancelRect(rect, 0));
+                        expectInputCommand(rm::sim::CommandKind::CancelFactoryBuild, inputFactory);
+                        productionProbeIds.erase(productionProbeIds.begin());
+                        nextInputStage(17);
+                    } else {
+                        inputCheck(production->queue.empty() && !production->building,
+                                   "Clear Queue did not stop the remaining production");
+                        productionProbeDone = true;
+                        std::printf("input acceptance: production pagination, pending/active cancellation, Clear Queue PASS\n");
+                        nextInputStage(1);
+                    }
+                } else {
+                    inputCheck(writePng(session.window.inputAcceptancePath, window.capture()), "capture write failed");
+                    acceptanceResult = 0;
+                    std::printf("input acceptance: PASS %zu products, %zu page clicks, %d normal match ticks\n",
+                                inputProducts.size(), pageClicks, matchTicks);
+                    [timer invalidate];
+                    window.stop();
+                }
+            } catch (const std::exception& error) {
+                std::fprintf(stderr, "input acceptance: FAIL stage=%d: %s\n", inputStage, error.what());
+                if (!writePng(session.window.inputAcceptancePath, window.capture())) {
+                    std::fprintf(stderr, "input acceptance: failure capture could not be written\n");
+                }
+                [timer invalidate];
+                window.stop();
+            }
+            std::fflush(stdout);
+        };
+        if (inputAcceptance) {
+            [NSTimer scheduledTimerWithTimeInterval:0.01 repeats:YES block:^(NSTimer* timer) {
+                inputTick(timer);
+            }];
+        }
+
+        RMBenchWatcher* watcher = nil;
+        if (bench.enabled) {
+            std::printf("benchmarking %zu frames (discarding %zu warmup)\n  %s\n",
+                        bench.frames, bench.warmup,
+                        describeQuality(settings, propInstances, marchDust.size()).c_str());
+            window.beginBenchmark(bench.warmup);
+
+            watcher = [[RMBenchWatcher alloc] init];
+            watcher.window = &window;
+            watcher.targetFrames = bench.frames;
+            watcher.csvPath = bench.csvPath.empty()
+                                  ? @""
+                                  : [NSString stringWithUTF8String:bench.csvPath.c_str()];
+            [NSTimer scheduledTimerWithTimeInterval:0.1
+                                             target:watcher
+                                           selector:@selector(tick:)
+                                           userInfo:nil
+                                            repeats:YES];
+        }
+
+        if (!inputAcceptance) [app activateIgnoringOtherApps:YES];
+        [app run]; // never returns until the app quits
+    return acceptanceResult;
+}
+
+} // namespace rm::app
