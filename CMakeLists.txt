@@ -175,6 +175,10 @@ add_library(rm_core STATIC
     src/core/scene/ReclaimFields.cpp
     src/core/sim/Army.cpp
     src/core/sim/Command.cpp
+    src/core/sim/CommandBuffer.cpp
+    src/core/sim/CommandApply.cpp
+    src/core/sim/CommandAdvance.cpp
+    src/core/sim/CommandLog.cpp
     src/core/sim/Events.cpp
     src/core/sim/Adjacency.cpp
     src/core/sim/FeatureStore.cpp

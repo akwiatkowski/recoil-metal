@@ -15,9 +15,10 @@
 # is one convenient call away: `orderAlongPath(motion, path)` is a public function that does
 # most of what a move order does, minus the authorisation, minus the record, minus the queue.
 #
-# So: inside `src/`, only `core/sim/Command.cpp` may call the raw movement orders. Tests may
-# call them freely — `test_movement.cpp` exists to test exactly those functions, and forbidding
-# that would mean testing them only through three layers that have their own reasons to refuse.
+# So: inside `src/`, only the command family — `core/sim/Command*.cpp`, the pipeline that owns
+# admission and advancement — may call the raw movement orders. Tests may call them freely —
+# `test_movement.cpp` exists to test exactly those functions, and forbidding that would mean
+# testing them only through three layers that have their own reasons to refuse.
 #
 # AND CONSTRUCTION TOO, which this guard did not watch and said so. `app/Match.cpp` pushed a
 # `Construction` straight onto `scene.building` and raised `ConstructionStarted` itself, so a
@@ -37,7 +38,7 @@ pattern='orderTo\(|orderAlongPath\(|building\.push_back\(|building->push_back\('
 # Where they are allowed to be called from: their own definitions, the one function that is
 # the path, and `Transport.cpp` — which never admits an order but EXECUTES the legs of an
 # admitted LoadTransport/UnloadTransport/Ferry, the same role Command.cpp's chase plays.
-allowed='src/core/sim/Movement.cpp|src/core/sim/Movement.hpp|src/core/sim/Command.cpp|src/core/sim/Transport.cpp'
+allowed='src/core/sim/Movement.cpp|src/core/sim/Movement.hpp|src/core/sim/Command[A-Za-z]*\.cpp|src/core/sim/Transport.cpp'
 
 hits=$(grep -rnE "$pattern" "$root/src" 2>/dev/null \
     | grep -vE "$allowed" \
@@ -61,7 +62,7 @@ fi
 # append the authoritative log; otherwise one convenient helper can silently restore per-unit
 # application or record requested rather than accepted recipients.
 entry_pattern='applyCommand\(|commands\.record\('
-entry_allowed='src/core/sim/Command.cpp|src/core/sim/Command.hpp|src/app/SceneBuild.cpp'
+entry_allowed='src/core/sim/Command[A-Za-z]*\.cpp|src/core/sim/Command\.hpp|src/app/SceneBuild.cpp'
 entry_hits=$(grep -rnE "$entry_pattern" "$root/src" 2>/dev/null \
     | grep -vE "$entry_allowed" \
     | grep -vE ':[0-9]+:[[:space:]]*(//|\*|/\*)' \
