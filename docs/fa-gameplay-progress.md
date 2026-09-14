@@ -9,7 +9,24 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-09, main through `da80f5c`. Selectable FAF personalities,
+**Snapshot:** 2026-09-14, main through `8fa09ae`. 116 commits since the last
+snapshot. The transport stack is complete and now retail-validated: cargo
+load/unload, the ferry loop and auto-embark (`fef1913`, `5e9fbba`), staging-pad
+refuel for bingo guards (`9768d4f`), draft-based ship routing (`fd3c5a7`), and a
+shipped-blueprint capacity suite (`c538105`) — a real C-6 Courier's authored
+attach costs drive the tests, which also exposed and fixed a landed flyer
+stranded `Down` on a same-tick arrival. Pathfinding finished its P10 run:
+deterministic threading (`dabdd2d`, `11b7ea2`), a congestion pass (`b98fee0`),
+shared flow fields (`f41f06c`) and the per-cell speed divisor (`a85c690`, golden
+re-recorded after the intended tick-4322 route change). Weapons gained universal
+leading (`55c31de`, `06390d1`) and manual missile-launch orders (`8d33735`);
+a submerged sub routes on its own depth layer (`3d607cd`). Rendering added MSAA,
+map-authored bloom, SSAO, fresnel and per-shot-class muzzle effects; the sim-side
+god files are split — Command.cpp (`a3a2882`) and the windowed run mode out of
+Run.mm (`8fa09ae`, 4,450 → 853 lines). CTest passes all 1,783 entries; the
+7,000-tick golden replay matches.
+
+**Previous snapshot:** 2026-09-09, main through `da80f5c`. Selectable FAF personalities,
 persistent scouting routes, native enhancement tasks and builder management are
 committed. Fresh SCMP_009 duels are decisive with no AI errors: easy ends at
 14:08.8, turtle at 30:59.8 and tech at 31:23.8. The easy run independently matches
@@ -17,28 +34,6 @@ all 36,000 state hashes. An event-logged tech run records two isolated allied
 aircraft losses from authored bomber death blasts among 910 deaths, not the prior
 55-loss clustering chain. CTest passes all 1,554 entries with two optional skips;
 the unchanged 7,000-tick golden replay matches.
-
-**Previous snapshot:** 2026-09-08, main through `fc38762`. The 2026-09-07 batch added
-default structure grid snapping, engineer/station support, AUTO MEX standing
-orders, the FAF engineer-cap fix, production queued on unfinished factories,
-and authored weapon-cue pitch, instance limits and distance cutoffs. The ACU
-native selection/right-click acceptance is committed. Its full 24-case matrix
-passed on September 7; four Compact 1x retail faction cases passed again on
-September 8. CTest: 1,502 passed, two optional skips out of 1,504.
-
-The golden baseline was re-recorded in `afe2867` after the intentional economy,
-grid and reclaim changes; its second 7,000-tick replay matched. The September 7
-handoff records another MATCH after `add7372`. Reblessing is no longer a blocker.
-The September 8 working-tree follow-up adds factory-upgrade, naval-placement and
-AUTO MEX native stages, plus headless tests for their shared UI/simulation paths.
-Those tests exposed and fixed naval construction routing an engineer on its
-product's water-only grid (ADR-110), and verify the retail Kennel's authored rate.
-The stages have now run headed on SCMP_009 (UEF compact 1x, `300fae5`): T2 and T3
-factory upgrades, naval-yard placement and completion, and the AUTO MEX three-deposit
-toggle all PASS through real tray clicks and world picking. The run also fixed the
-driver re-selecting an already-selected upgrade replacement, which applyClick would
-otherwise toggle off. Whole-WP parity remains a separate gate. The full 24-case
-matrix (four factories, three profiles, two backings) remains open.
 
 **Historical snapshot:** 2026-09-06, main through `bf0ef56`. This day lands the skirmish
 economy correction, engineer construction tiers with per-tier upgrade cancellation
@@ -113,16 +108,21 @@ retail artifact `ART-E001`
 Equal-weight average across the 20 gameplay subsystem rows below; `FA-FOUND` is excluded:
 
 ```text
-Implemented       [############--------] about 60%
-Retail-validated  [######--------------] about 30%
+Implemented       [##############------] about 68%
+Retail-validated  [#######-------------] about 37%
 Retail-analyzed   [##############------] about 70%
 ```
 
-The row estimates average 59.05%, 29.25% and 68.75%, respectively. The 2026-09-06
-refreshes raised `FA-CMD` and `FA-ECON` implementation by 5, `FA-PRESENT` by 15
-(analyzed by 15), `FA-SIM` by 5, `FA-AI` by 5 and `FA-WEAPONS` by 1 (validated by 3)
-for the weapon-visuals, ribbon-trail, projectile-mesh, upgrade-cancellation,
-script-object-seam, reclaim-decision and unit-reclaim/C-157 slices.
+The row estimates average 68.05%, 37.25% and 69.75%, respectively. The 2026-09-14
+refresh restores the `FA-LUA`, `FA-AIR` and `FA-INTEL` rows the table had dropped
+(their detail sections never left; scores are estimated from those sections), and
+raises `FA-TRANSPORT` (45→85 implemented, 5→45 validated) on the landed cargo/ferry/
+auto-embark stack and its shipped-blueprint validation, `FA-NAVY` (45→60, 15→25)
+on depth-aware navigation, `FA-MISSILES` (60→70) on manual launch orders,
+`FA-WEAPONS` validated (80→85) on universal leading, `FA-LAND` (90→95) on the
+completed P10 pathfinding run, `FA-UI` (80→85) and `FA-PRESENT` (75→85) on the
+post-processing and interface batches, and `FA-PERSIST` validated (25→30) on the
+re-recorded golden.
 
 Only **1 of 45 work packages**, `WP-15` economy, currently passes the complete retail
 confirmation gate. The three percentages must never be combined: understanding absent behavior
@@ -133,10 +133,11 @@ and the 70% equal-subsystem estimate answer different questions and are shown to
 headline honest.
 
 **Current implementation critical path:**
-Finish factory-upgrade and naval-placement player workflow acceptance. The retail
-install is available and the golden rebaseline has landed. The remaining [`FA-CMD`](#fa-cmd---commands-controls-and-factories)
-implementation gaps include the earlier refuel/staging rungs of `C-183`; explicit
-combat Guard now reuses the tested assistance ladder without granting builder powers.
+the stated goal is a recorded full vivid AI skirmish end-to-end — every piece that makes
+one worth recording landed this week (transports, flow fields, universal leading,
+post-processing). Remaining [`FA-CMD`](#fa-cmd---commands-controls-and-factories)
+implementation gaps are the `C-183` ferry rung and multi-weapon guard arbitration;
+staging-pad refuel is in.
 **Current EXE-analysis action:**
 the capture increment semantic at `Unit+0x690`
 (`C-239`/`C-243`) plus `Sim::TransferUnit`'s native copy/reset inventory, and naming the third
@@ -169,21 +170,24 @@ excluded from the headline.
 | [`FA-FOUND`](#fa-found---retail-build-and-api-foundation) | Retail build and API foundation | `WP-00`-`02` | n/a | 80% | 85% | Steam depot/build manifest bound to `ART-E001` (depots 9421–9425, build 2845, IDs SteamDB-transcribed, UNCONFIRMED); promoting check is hashing `ART-E001` against depot 9421's file list. |
 | [`FA-SIM`](#fa-sim---simulation-kernel-and-object-lifecycle) | Simulation kernel and object lifecycle | `WP-03`-`04` | 75% | 50% | 90% | RNG family confirmed by MT19937 reference vector; seeded once, slot-order draws, state-hashed; retail checksum ring stays structurally unmatched (C-154). FAF proxies already use the script-object seam (`139d408`). |
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 70% | 40% | 60% | Retail SCD precedence traced: lua.scd shadows mohodata.scd (Unit.lua pair), mount order fixed and tested. |
-| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 90% | 75% | 75% | Bingo-fuel aircraft guards hold for auto-land refuel instead of pursuing (C-183 refuel rung); ferry and staging-directed RTB stay open. Guard is accepted on the retail map (`make test-guard-ui`). |
+| [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 35% | 15% | 40% | FAF AI Lua 5.4 hosted (111 modules, 256 names bound, probes green); retail unit/projectile gameplay scripts, scheduler and mod hooks unhosted. |
+| [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 90% | 75% | 75% | Staging pads now refuel bingo-fuel guards (`9768d4f`, C-183 rung 1); the ferry rung and exact multi-weapon guard arbitration stay open. Guard is accepted on the retail map (`make test-guard-ui`). |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 70% | 30% | 85% | All four retail victory modes in with selector mapping, Annihilation counts and Sandbox endlessness (tested); scenario Options wiring stays open, no synthetic setting. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 80% | 60% | 90% | Single-captor Capture slice is in (funded progress, transfer identity, cancellation, replay, save/load); concurrent captors and general transfer parity stay open. |
-| [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 90% | 35% | 95% | GrowthFormation fills front rows by retail category families (tested); rotation stays engine-native without a Lua source. |
-| [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 45% | 15% | 75% | Vision/radar skip submerged hulls, sonar hears naval only, torpedoes acquire sonar contacts at blips; depth-aware navigation stays open. |
-| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 99% | 80% | 90% | Capture is in with headless cover and save v20 (`CaptureWork`, funded progress, replacement transfer, C-157 claims); next is manual missile-launch orders. |
-| [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 45% | 5% | 95% | Parent/self bone indices with authored rest-bone composition in generic attachments (hashed, save v22, tested); capacity, load/unload, ferry stay open. |
-| [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 60% | 40% | 95% | Interceptor launches lead crossing missiles (two-iteration pursuit, max-speed cruise for homing) with headless cover; per-missile shooter caps deliberately absent (no retail source, launchers overkill). Next is the missile build queue and UI. |
+| [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 95% | 35% | 95% | P10 run complete: deterministic threading, congestion yield/reroute, shared flow fields and the per-cell speed divisor (golden re-recorded for the intended route change). Formation rotation stays engine-native without a Lua source. |
+| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Retail winged controller (C-221/222/223/244–247) with states 1–7, banking and staging-pad refuel; a takeoff committed to a sub-tick hop no longer strands `Down` on the deck (`c538105`). Three-axis solver, cargo inertia, bomb prediction, carrier docking stay open. |
+| [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 60% | 25% | 75% | Depth-aware navigation in (`3d607cd`): a submerged sub routes on its own layer — footprint MinWaterDepth vs surfaced draft — and ships route by draft (`fd3c5a7`). Underwater intel/targetability and attack-driven surfacing stay open. |
+| [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 99% | 85% | 90% | Universal leading in (`55c31de`, `06390d1`) — radar keeps its error; manual silo-launch orders landed under FA-MISSILES. Next is the C-157 engineer reclaim/capture target-exemption wiring. |
+| [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 85% | 45% | 95% | Full cargo stack in and retail-validated: capacity/attach-cost from shipped blueprints (UEA0107: 10 slots, class2=2, class3=4), load/unload, ferry, auto-embark, carrier-death (`c538105`). Next is attach-bone retail observation and the unload beacon's exact retail semantics. |
+| [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 70% | 45% | 95% | Manual missile-launch orders in with UI wiring and tests (`8d33735`); interceptor lead landed earlier. Next is the missile build queue and tactical/nuke UI. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 82% | 55% | 85% | PersonalBubble shelters owner-only (specified-from-name, corpus-pinned absent); TransportShield parses as ordinary pending cargo source. Next is transport cargo coverage. |
+| [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 45% | 30% | 60% | Depth-gated senses and sonar acquisition in (`2c00d76`); radar position error drives automatic targeting (`06390d1`). Temporal expiry, cloak, jamming, sonar memory stay open. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 45% | 30% | 40% | Enhancement removal uninstalls with health fallback (tested); next is the Lua-side contract (SetUpgradedTo, callbacks). |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 15% | 45% | Crater path traced: retail scorch is visual-only (splat/decal scale split, no height/type/pathing effect); next is non-lethal impact scorch records. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 50% | 10% | 30% | Must-scout requests, unknown-threat queues and continuous air flybys are in with headless cover; next is High/LowPriority interest lists. Current easy, turtle and tech duels are decisive. |
-| [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 80% | 5% | 15% | ToggleCaps + OrderOverrides drive the rack page (retail slots, unanimous merge, headed toggle scenario); toggle sim behaviors stay open. |
-| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 75% | 10% | 45% | Manipulator specs parse with corpus cover (turrets, recoil, anims); posing deferred, then dynamic music. |
-| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 75% | 25% | 90% | Wreck pool in save v23 with mid-reclaim continued-hash proof (tested); projectiles next, then intel/path. Golden rebaseline (`afe2867`) still predates SCD-mount/RNG drift. |
+| [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 85% | 5% | 15% | Queue timing under shift, adjacency pricing, build tier tabs, reclaim totals, per-order route colours, target focus and T-track camera all in; toggle sim behaviors stay open. |
+| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 85% | 10% | 45% | MSAA, map-authored bloom, SSAO, fresnel rim and per-shot-class muzzle/particle effects in; manipulator rigs resolve per degree of freedom. Posing deferred, then dynamic music. |
+| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 75% | 30% | 90% | Wreck pool in save v23 with mid-reclaim continued-hash proof (tested); golden re-recorded for the P10.4 route change and MATCHing (`a85c690`). Projectiles next, then intel/path. |
 
 ## Starting Work
 
@@ -314,14 +318,15 @@ Guard is accepted on the retail map: `make test-guard-ui` replays
 `tests/fixtures/hud-guard.commands` on SCMP_009 twice — a mortar guards a tank that walks
 250 elmos across the terrain — and requires matching pixels and hashes with the guard
 order still standing and the guard away from the factory (`hud-order:` line). Strict
-`make test-content` runs every `[corpus][guard]` case with no skips.
-Still absent: the earlier refuel/staging and ferry rungs and exact multi-weapon guard arbitration.
+`make test-content` runs every `[corpus][guard]` case with no skips. Staging pads now
+refuel bingo-fuel guards — the first `C-183` refuel rung (`9768d4f`, tested).
+Still absent: the ferry rung and exact multi-weapon guard arbitration.
 
 ```text
-/goal Specify the refuel/staging rung of C-183 from its retail callers and implement the
-smallest bounded slice that lets a guarded air unit refuel at a staging platform. Preserve
-authored capabilities and retained construction identity, and run make test and make verify
-before updating FA-CMD.
+/goal Advance FA-CMD by specifying the remaining C-183 ferry rung from its retail callers
+and implementing the smallest bounded slice that lets a guarded air unit ferry through a
+staging platform. Preserve authored capabilities and retained construction identity, and
+run make test and make verify before updating FA-CMD.
 ```
 
 ### FA-ECON - Economy, Construction, And Engineering
@@ -385,7 +390,11 @@ tail chase starts when target direction and both forward vectors agree inside th
 states 3/4/5, breakoff 6 and off-map recovery 7. Authored timers and match-owned
 MT19937 draws choose transitions; new entity attacks reset tactical counters.
 SaveState v16 and hashing preserve controller state, cached tuning and the random
-sequence. Real UEA0102 turn/recovery checkpoints continue with matching per-tick
+sequence. Idle aircraft now land where they loiter instead of descending on a
+retired order's site (`eaa2470`), staging pads refuel bingo-fuel guards
+(`9768d4f`), and a takeoff committed to a hop inside one tick's travel keeps
+flying through arrival instead of stranding `Down` on the deck (`c538105`).
+Real UEA0102 turn/recovery checkpoints continue with matching per-tick
 hashes; the inspected app pursuit replay matches 900 ticks. See ADR-091 for the
 planar controller boundary and [unit evidence](unit-capability-matrix.md).
 
@@ -411,8 +420,13 @@ committed layer, and changes that layer only at the depth endpoint. Depth follow
 sinusoidal rate and seabed clamp; `DiveSurfaceSpeed` uses `C-218`'s authored/default value.
 Water/Sub weapon source rows remain distinct, including Tigershark's surface-only plasma gun.
 SaveState v18 and state hashes preserve the transition. See ADR-111.
+Layer-specific depth footprints are in (`3d607cd`): the submerged layer admits by the
+footprint's own `MinWaterDepth` (unauthored on every shipped `SurfacingSub` → just wet)
+while the surfaced hull pays its `Elevation` draft, so a diving sub crosses shelves that
+ground it surfaced; the pick follows `MoveState::submerged` through orders, movement,
+congestion and the match's per-type grid tables. Ships route by draft (`fd3c5a7`).
 
-**Largest gap:** layer-specific depth footprints, underwater vision/sonar target acquisition,
+**Largest gap:** underwater vision/sonar target acquisition,
 projectile collision/splash layer parity, attack-driven auto-surfacing, experimental default
 spawn-layer rules and underwater presentation remain outside this bounded slice.
 
@@ -431,16 +445,26 @@ carry `C-195`'s parent/self bone indices with authored rest-bone composition (`C
 parent bone rides the carrier's heading, the child bone hangs off the child's own heading, the
 stored offset is captured bone-relative, and the record is hashed and saved at v22 with gated
 old-version reads. Attached children remain in the collision grid. Parent death detaches
-surviving children and clears their offsets and bones. This is deliberately not transport
-loading: capacity, load/unload, storage, ferry, and carrier death are still absent.
+surviving children and clears their offsets and bones.
+Transport loading is now the full loop (`fef1913`, `5e9fbba`): cargo walks or is flown to a
+grounded carrier and slings aboard at blueprint capacity (`TransportClass` slots with
+`Class2AttachSize`/`Class3AttachSize`/`ClassGenericUpTo` costs), `UnloadTransport` flies the
+hold to a drop point and sets it down, `Ferry` loops beacon→drop→beacon, an unreachable
+Move auto-embarks a transport, and attached cargo dies with its carrier. Shipped blueprint
+values drive the behavior end-to-end in tests (`c538105`): a real C-6 Courier (UEA0107,
+10 slots) fills on class-1/2/3 cargo including a UEF ACU at four slots, the overflow
+waits, and a loaded courier delivers. `CANTRANSPORTCOMMANDER` is deliberately unenforced —
+the attach-cost table already excludes every shipped carrier lacking the flag.
+
+**Largest gap:** the attach/unload beacon's exact retail semantics (where retail places the
+pickup ring and how it sequences multi-unit loads), attached-cargo bone placement versus
+the sling-row approximation, and transport shields' cargo coverage stay open.
 
 ```text
-/goal Advance FA-TRANSPORT by adding parent/self bone indices and authored rest-bone composition
-from C-195/C-196 to existing generic attachments without inventing transport capacity or load
-commands. Preserve deterministic parent-before-child order, attached motion suspension,
-collision-grid presence, and the existing post-movement/post-collision propagation points. Run make
-test and make verify, record the deferred transport controller behavior in WP-25, and refresh
-FA-TRANSPORT.
+/goal Advance FA-TRANSPORT by comparing the implemented load/unload sequence with retail
+observation of the pickup beacon: where the ring sits, how the carrier chooses a landing
+spot, and how multi-unit loads order their slots. Keep the shipped-capacity suite green,
+run make test and make verify, record divergences in WP-25, and refresh FA-TRANSPORT.
 ```
 
 ### FA-WEAPONS - Targeting, Weapons, And Projectiles
@@ -471,8 +495,9 @@ FA-WEAPONS.
 
 ### FA-MISSILES - Silos, Missiles, And Interception
 
-**Largest gap:** interception accounting now runs, but strategic-nuke silos, the counter/fire
-commands, flares, guidance, and the build queue are absent.
+**Largest gap:** interception accounting and manual launch orders now run (`8d33735`, with
+UI wiring and tests), but strategic-nuke silos, the counter command, guidance, and the
+build queue are absent.
 
 **Current slice:** `C-095` gives projectile-target weapons a separate nearest-hostile,
 in-range 2-D acquisition path with `max(MaxRadius, MaxRadius * TrackingRadius)` reach; it neither
@@ -501,10 +526,10 @@ unnamed; the returned missile cannot yet damage its source side (no friendly-fir
 the cooldown may be 10 or 11 ticks (`WaitSeconds` runs n·10+1).
 
 ```text
-/goal Advance FA-MISSILES by implementing interceptor guidance/lead and shooter caps, with exact
-ART-E001 locators and counterevidence. Write failing tests first (restriction, flare, and
-redirect behavior stay green), run make test and make verify, record the build queue and
-tactical/nuke UI as the next boundary in WP-29, and refresh FA-MISSILES.
+/goal Advance FA-MISSILES by implementing the missile build queue, with exact
+ART-E001 locators and counterevidence. Write failing tests first (interception, flare,
+redirect and manual-launch behavior stay green), run make test and make verify, record
+strategic-nuke silo and counter-command boundaries in WP-29, and refresh FA-MISSILES.
 ```
 
 ### FA-DAMAGE - Damage, Death, And Shields
