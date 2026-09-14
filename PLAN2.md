@@ -1281,14 +1281,26 @@ fewer of those today than there will ever be again.
       squares is. *Test:* a route through a gap that the binary grid refuses. *Manual:* a
       unit crosses a bridge one square wide.
 
-- [ ] **P10.5 Shared flow fields and a dynamic blocking overlay** (`ADR-035` layers 2-3).
-      Integer Dijkstra from the goal, goals snapped to a coarse cell so nearby clicks share
-      one field, LRU cached; static terrain cost and dynamic blocking kept as separate layers
-      so a placed building dirties only the fields whose region it touches. Removes the
-      per-unit stored path, and with it a variable-length run from the state hash.
-      *Test:* fifty units to one point compute **one** field, and a building placed across a
-      route makes the units go round rather than through. *Manual:* `--bench` — this should
-      show up as a drop, not a wash.
+- [x] **P10.5 Shared flow fields and a dynamic blocking overlay** (`ADR-035` layers 2-3) —
+      **done 2026-09-14** (`f41f06c`). A `FlowField` is a resumable reverse Dijkstra from one
+      goal cell; requesters to the same goal share it and the drain loop can publish several
+      routes in one beat. Fields are keyed on the goal cell and a content fingerprint of the
+      grid — requests carry grid COPIES, so pointer identity would never share — and LRU-capped
+      at eight. The blocking overlay marks cells under standing structures without touching
+      the terrain grid, and a placement retires only the cached fields whose explored region
+      it touched; a unit standing in a cell a building newly claims (a factory's product on
+      its own yard) escapes through its cheapest settled neighbour.
+
+      **ONE DELIBERATE DEVIATION:** the per-unit stored path stays. The plan wanted it gone
+      from the hash, but congestion detours, spread-move and save round-trips all read it —
+      removing it would rebuild those on the field, which is a second change, not this one's
+      side effect. In-flight field sessions are hashed exactly where the old per-request
+      searches were, so the variable-length run the plan wanted out of the hash is bounded the
+      same way. *Tests:* `test_pathfinding.cpp` (route off a settled start, multi-start
+      sharing, unreachable, overlay reroute, touched-region invalidation) and
+      `test_command.cpp` (one field for same-goal movers, a structure redirects a later move,
+      selective dirtying). Golden re-blessed at tick 682 — shared-field tie-breaks, same-beat
+      drain publication and the overlay's reroutes all move the match.
 
 - [x] **P10.6 Threading, path work first** (`ADR-036`, D15) — **done 2026-09-14**
       (`dabdd2d`, `11b7ea2`). `TaskPool` fixed-lane fork-join sized to performance cores;
