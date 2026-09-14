@@ -448,7 +448,10 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     // V30's target-focus bytes trail the retreat record: one count plus one byte
     // per slot, inside the units section ahead of the command state.
     constexpr std::size_t kV30FocusBytes = sizeof(std::uint32_t) + kSlots;
-    v7.resize(v7.size() - kV30FocusBytes - kV28RetreatBytes - kV27PriorityBytes - kV26ProductionPausedBytes - kV25DualPoseBytes - kV24TurretPoseBytes - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+    // V31 trails the congestion record at the very tail: one count plus the
+    // blocked-tick count, the yield flag and the goal anchor per motion slot.
+    constexpr std::size_t kV31CongestionBytes = sizeof(std::uint32_t) + kSlots * 7;
+    v7.resize(v7.size() - kV31CongestionBytes - kV30FocusBytes - kV28RetreatBytes - kV27PriorityBytes - kV26ProductionPausedBytes - kV25DualPoseBytes - kV24TurretPoseBytes - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));

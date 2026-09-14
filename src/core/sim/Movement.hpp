@@ -22,10 +22,9 @@ struct PassabilityGrid;
 // The first thing in this engine whose state changes between frames.
 //
 // Units follow a route (core/sim/Pathfinding.hpp), turn at a bounded rate, hug
-// the terrain, and push each other apart on arrival. What is still absent is
-// everything that makes a game of it: no combat, no economy, no orders beyond
-// "go there", and no reaction to being blocked — a unit whose route is occupied
-// leans on whoever is in the way rather than re-routing.
+// the terrain, and push each other apart on arrival. A unit whose route is
+// occupied gets help from `resolveCongestion` below: friendly idlers are asked
+// to step aside and hard blockers are routed around.
 
 /// The DEFAULT simulation rate, in ticks per second. **Not the rate** — that is `TickRate`,
 /// and it is configurable from 5 to 50 Hz (PLAN2.md §5.1, D2).
@@ -203,6 +202,23 @@ struct MoveState {
     int pathPhaseStartX = 0;
     int pathPhaseStartZ = 0;
     int pathPhaseCellsX = 0;
+
+    // --- congestion (`resolveCongestion`) --------------------------------------
+    //
+    // Detection state, not order state: `blockedTicks` counts consecutive ticks the unit
+    // wanted to move but got no closer to its destination — the mover leaning on whoever
+    // is in front of it. `lastGoalDistance` is the anchor that progress is measured from:
+    // the distance to the destination as the congestion pass last observed it, negative
+    // while unprimed (a new order primes on its first observation, so a fresh leg starts
+    // at zero rather than inheriting the old leg's stall). `yielding` marks the current
+    // leg as a sidestep issued by someone else's congestion check rather than an order of
+    // this unit's own, which is what keeps a second requester from re-issuing it while the
+    // first one is still being walked. All are execution state: hashed like the rest, and
+    // saved through the v31 sidecar so a save/load round trip continues the same jam
+    // instead of forgetting it.
+    std::uint16_t blockedTicks = 0;
+    bool yielding = false;
+    Fx lastGoalDistance = Fx::fromInt(-1);
 
     // --- winged flight (`C-221`) ------------------------------------------------
     //
@@ -424,6 +440,69 @@ void orderAlongPath(MoveState& state, std::span<const std::array<Fx, 2>> path);
 void resolveCollisions(
     UnitStore& store, const Terrain& terrain,
     std::span<const PassabilityGrid* const> gridForType = {});
+
+/// Beats of no progress before a mover acts on congestion, and how often it
+/// re-checks while it stays stuck.
+///
+/// Retail's own window (`C-176`, `C-177`): a blocked navigator stands TEN beats
+/// before it acts at all, and then it only re-requests the same unit-blind
+/// route. This engine acts instead — asks a friendly blocker to step aside or
+/// routes the mover around a hard one — but keeps retail's cadence, both
+/// because the wait is what separates "stuck" from "crossing traffic" and
+/// because acting every tick would make jams more expensive than open ground.
+inline constexpr std::uint16_t kCongestionBeats = 10;
+
+/// The fraction of a tick's travel below which a mover counts as held up.
+///
+/// The collision pass shoves a leaner back by roughly half its step, so the
+/// bound has to be under a half; a quarter leaves room for the small pushes a
+/// unit still takes while turning out of the way.
+inline constexpr Fx kBlockedStepFraction = Fx::fromRatio(1, 4);
+
+/// How far ahead of its own radius a stuck mover looks for who is holding it,
+/// in elmos. One pathfinding cell (`kPathCellSquares` squares): a jammed unit
+/// is pressed against its blocker, so anything within a cell is a suspect and
+/// anything farther away is not the cause of a full stall.
+inline constexpr Fx kCongestionLead = Fx::fromInt(64);
+
+/// Clearance added to the sum of radii when a yielder sidesteps or a mover
+/// detours, in elmos — enough that the resolved position sits outside the
+/// corridor rather than on its edge.
+inline constexpr Fx kSidestepMargin = Fx::fromInt(8);
+
+/// Clears congestion the collision pass cannot: asks friendly idlers blocking a
+/// stuck mover to sidestep, and routes the mover around whatever cannot move.
+///
+/// THE MISSING REACTION to dynamic blockage. The passability grids describe
+/// terrain, not units (`C-177` is explicit that retail's planner is blind to
+/// unit reservations too), so nothing upstream can route around a crowd — the
+/// response has to live where the crowd is visible. Retail's own answer is to
+/// stand still for ten beats and re-request the same unit-blind route; this
+/// pass spends the same wait and then acts.
+///
+/// A unit is CONGESTED when it has wanted to move for `kCongestionBeats` ticks
+/// while covering less than `kBlockedStepFraction` of its step — checked every
+/// tenth beat for as long as the stall lasts, retail's backoff shape. For each
+/// unit parked in the corridor ahead:
+///
+///   friendly, idle, mobile, unoccupied   -> a YIELD: a one-leg sidestep out of
+///                                           the corridor, on the side the
+///                                           blocker already leans to. The
+///                                           yield never touches the blocker's
+///                                           order queue — an idle unit has no
+///                                           route to corrupt.
+///   anything else                        -> a DETOUR: the mover's path gains
+///                                           one waypoint beside the nearest
+///                                           such blocker, on its far side.
+///
+/// Serial, in slot order, and run AFTER the collision pass: it reads where the
+/// push settled everyone and writes other units' motion — neither fits the
+/// movement tick's per-slot contract. An empty `armies` span reads as "all
+/// friendly", which is what lets a crowd with no match still un-jam itself.
+void resolveCongestion(
+    UnitStore& store, const Terrain& terrain,
+    std::span<const PassabilityGrid* const> gridForType = {},
+    std::span<const Army> armies = {});
 
 /// How close counts as reaching an intermediate waypoint, in elmos.
 ///

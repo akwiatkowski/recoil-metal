@@ -151,6 +151,15 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
         feed(h, waypoint);
     }
     feed(h, motion.pathIndex);
+    // Congestion detection is execution state, fed only once it exists — a unit
+    // walking freely carries a primed anchor and a zero count that say nothing
+    // the position does not, and leaving them unfed keeps a quiet match's
+    // digest exactly what it was before the pass existed.
+    if (motion.blockedTicks != 0 || motion.yielding) {
+        feed(h, motion.blockedTicks);
+        feed(h, motion.yielding);
+        feed(h, motion.lastGoalDistance);
+    }
     // The live turret pose. Fed always: a traversing ring is gameplay state
     // (fire gates on it), and zeros for the unturreted keep their digests
     // moving exactly as before only until the first traverse — after which a

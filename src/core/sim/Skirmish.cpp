@@ -482,6 +482,12 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     store.propagateAttachments();
     store.reindex(spatialCellSize(store));
 
+    //    The last movement pass: a unit that spent the wait leaning on a friendly
+    //    blocker gets it to step aside; a hard blocker gets a waypoint around it.
+    //    Runs on the post-push positions the second reindex just published, and
+    //    before the match-only early return so a crowd un-jams itself too.
+    resolveCongestion(store, terrain, match.passability, match.armies);
+
     // Everything below is a MATCH, and a scene with no armies is not one — a `--units`
     // crowd scattered for a screenshot has nothing to shoot at and nobody to pay.
     if (match.armies.empty()) {

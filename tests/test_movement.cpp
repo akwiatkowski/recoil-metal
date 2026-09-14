@@ -10,7 +10,9 @@
 #include "app/SceneBuild.hpp"  // motionFor — the one derivation both spawn paths use
 #include "core/map/HeightField.hpp"
 #include "core/scene/UnitPlacement.hpp"
+#include "core/sim/Army.hpp"
 #include "core/sim/Combat.hpp"  // headingError, for the angle assertions
+#include "core/sim/Command.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/RandomStream.hpp"
 #include "core/sim/Pathfinding.hpp"
@@ -89,10 +91,15 @@ const rm::sim::TickRate kRate{10};
 struct Crowd {
     rm::sim::UnitStore store;
 
-    void add(float x, float z, bool airborne = false, bool surfaceWater = false) {
+    void add(float x, float z, bool airborne = false, bool surfaceWater = false,
+             int army = 0, bool mobile = true) {
         MoveState motion = ordinary();
         motion.airborne = airborne;
         motion.surfaceWater = surfaceWater;
+        motion.armyIndex = army;
+        if (!mobile) {
+            motion.speedPerTick = rm::sim::Fx{};
+        }
         (void)store.spawn(rm::sim::UnitStore::Spawn{
             .transform = unitAt(x, z),
             .motion = motion,
@@ -111,6 +118,17 @@ struct Crowd {
     void separate(const HeightField& field) {
         store.reindex(rm::sim::Fx::fromInt(64));
         rm::sim::resolveCollisions(store, rm::sim::Terrain{field});
+    }
+
+    /// One beat of the match's movement stage, in `tickSkirmish` order: move,
+    /// index, separate, index, then congestion.
+    void step(const HeightField& field, std::span<const rm::sim::Army> armies = {}) {
+        const rm::sim::Terrain terrain{field};
+        rm::sim::tick(store.transforms(), store.motion(), terrain);
+        store.reindex(rm::sim::Fx::fromInt(64));
+        rm::sim::resolveCollisions(store, terrain);
+        store.reindex(rm::sim::Fx::fromInt(64));
+        rm::sim::resolveCongestion(store, terrain, {}, armies);
     }
 };
 
@@ -336,7 +354,132 @@ TEST_CASE("collision separation does not push a land unit into a blocked cell") 
     return rm::sim::fxHypot(state.destinationX - instance.x, state.destinationZ - instance.z);
 }
 
+/// A unit's distance from a fixed spot, on the ground plane.
+[[nodiscard]] rm::sim::Fx displacement(const rm::sim::Transform& instance, float x, float z) {
+    return rm::sim::fxHypot(instance.x - rm::test::fx(x), instance.z - rm::test::fx(z));
+}
+
 } // namespace
+
+TEST_CASE("a jammed mover gets an idle friend to step aside and routes around what cannot",
+          "[congestion]") {
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    Crowd crowd;
+    crowd.add(100.0f, 100.0f);                        // slot 0: the mover
+    crowd.add(100.0f, 140.0f);                        // slot 1: idle friend in the way
+    crowd.add(100.0f, 175.0f, false, false, 0, false);// slot 2: immobile backstop
+    rm::sim::orderTo(crowd.store.motion()[0], terrain,
+                     rm::test::fx(100.0f), rm::test::fx(300.0f));
+
+    for (int i = 0; i < 300 && crowd.motionAt(0).moving; ++i) {
+        crowd.step(field);
+    }
+
+    // The mover got there: past the yielded friend AND around the backstop.
+    CHECK(crowd.at(0).z > rm::test::fx(280.0f));
+    CHECK_FALSE(crowd.motionAt(0).moving);
+    // The friend was asked, not bulldozed: it stepped off the corridor and settled.
+    CHECK(displacement(crowd.at(1), 100.0f, 140.0f) > rm::sim::Fx::fromInt(15));
+    CHECK_FALSE(crowd.motionAt(1).moving);
+    CHECK_FALSE(crowd.motionAt(1).yielding);
+    // The backstop was never walked and never asked.
+    CHECK(crowd.at(2).x == rm::test::fx(100.0f));
+    CHECK(crowd.at(2).z == rm::test::fx(175.0f));
+    CHECK_FALSE(crowd.motionAt(2).moving);
+}
+
+TEST_CASE("an allied idler steps aside for a jammed mover", "[congestion]") {
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const std::array armies{
+        rm::sim::Army{.index = 0, .alliance = 0},
+        rm::sim::Army{.index = 1, .alliance = 0},
+    };
+    Crowd crowd;
+    crowd.add(100.0f, 100.0f, false, false, 0);
+    crowd.add(100.0f, 140.0f, false, false, 1);   // allied army, same alliance
+    crowd.add(100.0f, 175.0f, false, false, 1, false);
+    rm::sim::orderTo(crowd.store.motion()[0], terrain,
+                     rm::test::fx(100.0f), rm::test::fx(300.0f));
+
+    bool asked = false;
+    for (int i = 0; i < 300 && crowd.motionAt(0).moving; ++i) {
+        crowd.step(field, armies);
+        asked = asked || crowd.motionAt(1).yielding;
+    }
+
+    CHECK(asked);
+    CHECK(crowd.at(0).z > rm::test::fx(280.0f));
+    CHECK(displacement(crowd.at(1), 100.0f, 140.0f) > rm::sim::Fx::fromInt(15));
+}
+
+TEST_CASE("a hostile blocker is routed around rather than asked to move", "[congestion]") {
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    Crowd crowd;
+    crowd.add(100.0f, 100.0f, false, false, 0);
+    crowd.add(100.0f, 140.0f, false, false, 1);   // enemy idler
+    crowd.add(100.0f, 175.0f, false, false, 1, false);
+    rm::sim::orderTo(crowd.store.motion()[0], terrain,
+                     rm::test::fx(100.0f), rm::test::fx(300.0f));
+
+    for (int i = 0; i < 300 && crowd.motionAt(0).moving; ++i) {
+        crowd.step(field, armies);
+        // An enemy is never given a sidestep order — not even for one tick.
+        CHECK_FALSE(crowd.motionAt(1).yielding);
+        CHECK_FALSE(crowd.motionAt(1).moving);
+    }
+
+    CHECK(crowd.at(0).z > rm::test::fx(280.0f));
+    // Pushed about a little by the collision pass, but it never walked away.
+    CHECK(displacement(crowd.at(1), 100.0f, 140.0f) < rm::sim::Fx::fromInt(20));
+}
+
+TEST_CASE("a busy friend keeps its orders while the mover routes around it", "[congestion]") {
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    Crowd crowd;
+    crowd.add(100.0f, 100.0f);
+    crowd.add(100.0f, 140.0f);
+    crowd.add(100.0f, 175.0f, false, false, 0, false);
+    // An order the unit has not started yet still makes it busy: the queue is
+    // intent, and a sidestep would overwrite the route the command owns.
+    crowd.store.orders()[1].append(rm::sim::Command{});
+    rm::sim::orderTo(crowd.store.motion()[0], terrain,
+                     rm::test::fx(100.0f), rm::test::fx(300.0f));
+
+    for (int i = 0; i < 300 && crowd.motionAt(0).moving; ++i) {
+        crowd.step(field);
+        CHECK_FALSE(crowd.motionAt(1).yielding);
+        CHECK_FALSE(crowd.motionAt(1).moving);
+    }
+
+    CHECK(crowd.at(0).z > rm::test::fx(280.0f));
+    CHECK(displacement(crowd.at(1), 100.0f, 140.0f) < rm::sim::Fx::fromInt(20));
+}
+
+TEST_CASE("congestion handling is deterministic", "[congestion][determinism]") {
+    const auto run = [] {
+        const HeightField field = flatField();
+        const rm::sim::Terrain terrain{field};
+        Crowd crowd;
+        crowd.add(100.0f, 100.0f);
+        crowd.add(100.0f, 140.0f);
+        crowd.add(100.0f, 175.0f, false, false, 0, false);
+        rm::sim::orderTo(crowd.store.motion()[0], terrain,
+                         rm::test::fx(100.0f), rm::test::fx(300.0f));
+        for (int i = 0; i < 300; ++i) {
+            crowd.step(field);
+        }
+        return crowd.store.transforms()[0];
+    };
+    const rm::sim::Transform first = run();
+    const rm::sim::Transform second = run();
+    CHECK(first.x == second.x);
+    CHECK(first.z == second.z);
+}
 
 TEST_CASE("a unit with no order does not move") {
     const HeightField field = flatField();

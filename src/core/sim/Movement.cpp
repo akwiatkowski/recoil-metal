@@ -62,15 +62,24 @@ void orderTo(MoveState& state, const Terrain& terrain, Fx x, Fx z) noexcept {
     state.destinationZ = std::clamp(z, Fx{}, depth);
     state.moving = true;
 
-    // A direct order supersedes a route. Without this the unit would reach the
-    // new destination and then carry on with whatever it was doing before.
+    // A direct order supersedes a route — and a sidestep. Without this the unit
+    // would reach the new destination and then carry on with whatever it was
+    // doing before, or keep answering a congestion request it no longer walks.
     state.path.clear();
     state.pathIndex = 0;
+    state.yielding = false;
+    // A new leg re-arms congestion detection: the stall that fired on the old
+    // destination says nothing about this one.
+    state.blockedTicks = 0;
+    state.lastGoalDistance = Fx::fromInt(-1);
 }
 
 void orderAlongPath(MoveState& state, std::span<const std::array<Fx, 2>> path) {
     state.path.assign(path.begin(), path.end());
     state.pathIndex = 0;
+    state.yielding = false;
+    state.blockedTicks = 0;
+    state.lastGoalDistance = Fx::fromInt(-1);
 
     if (state.path.empty()) {
         state.moving = false;
@@ -909,6 +918,254 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain,
             placeOnMotionLayer(unit, motion[i], terrain);
         } else {
             unit.y = terrain.heightAt(unit.x, unit.z);
+        }
+    }
+}
+
+namespace {
+
+/// Sends a blocker on a one-leg sidestep out of someone's corridor. A borrowed
+/// `orderTo` — deliberately NOT an order-queue entry, because the queue belongs
+/// to the unit's own intent and an idle unit's queue is empty anyway. The
+/// `yielding` mark is what stops a second requester re-issuing the leg while
+/// the first one is still being walked.
+void orderSidestep(MoveState& state, Fx x, Fx z, Fx width, Fx depth) noexcept {
+    state.destinationX = std::clamp(x, Fx{}, width);
+    state.destinationZ = std::clamp(z, Fx{}, depth);
+    state.path.clear();
+    state.pathIndex = 0;
+    state.moving = true;
+    state.yielding = true;
+    state.blockedTicks = 0;
+    state.lastGoalDistance = Fx::fromInt(-1);
+}
+
+} // namespace
+
+void resolveCongestion(UnitStore& store, const Terrain& terrain,
+                       std::span<const PassabilityGrid* const> gridForType,
+                       std::span<const Army> armies) {
+    const std::span<Transform> transforms = store.transforms();
+    const std::span<MoveState> motion = store.motion();
+    const std::span<const CommandQueue> orders = store.orders();
+    const std::size_t count =
+        std::min({transforms.size(), motion.size(), orders.size()});
+    if (count == 0) {
+        return;
+    }
+
+    const Fx width = Fx::fromInt(terrain.field().squaresX * kSquareSize);
+    const Fx depth = Fx::fromInt(terrain.field().squaresZ * kSquareSize);
+
+    // CONGESTION DETECTION, per unit and once a tick. "Blocked" is measured on
+    // outcome, not intent: the distance to the destination has to shrink, and
+    // the collision pass's push-back has already happened by the time this
+    // pass runs — which is why the count cannot live in the movement tick,
+    // where a leaner's stride still reads as a full step.
+    for (std::size_t i = 0; i < count; ++i) {
+        MoveState& state = motion[i];
+        // A finished yield retires its flag: arrival only clears `moving` and
+        // cannot know the leg was borrowed, so the mark is cleaned up where it
+        // was issued.
+        if (state.yielding && !state.moving) {
+            state.yielding = false;
+        }
+        if (!state.moving || state.attached || state.airborne) {
+            state.blockedTicks = 0;
+            state.lastGoalDistance = Fx::fromInt(-1);
+            continue;
+        }
+        const Fx distance =
+            fxHypot(state.destinationX - transforms[i].x,
+                    state.destinationZ - transforms[i].z);
+        if (state.lastGoalDistance < Fx{}) {
+            // First observation of this leg: it primes the anchor rather than
+            // counting — a new order must not inherit the old leg's stall.
+            state.lastGoalDistance = distance;
+            state.blockedTicks = 0;
+            continue;
+        }
+        const Fx progress = state.lastGoalDistance - distance;
+        state.lastGoalDistance = distance;
+        // Saturating rather than wrapping keeps a permanently jammed unit on
+        // the tenth-beat cadence instead of ticking over to an immediate retry.
+        state.blockedTicks =
+            progress < state.speedPerTick * kBlockedStepFraction
+                ? static_cast<std::uint16_t>(
+                      std::min<std::uint32_t>(state.blockedTicks + 1, 0xFFFF))
+                : std::uint16_t{0};
+    }
+
+    Fx largestRadius{};
+    for (std::size_t i = 0; i < count; ++i) {
+        largestRadius = std::max(largestRadius, motion[i].radiusElmos);
+    }
+    if (largestRadius <= Fx{}) {
+        return;
+    }
+    // Far enough that any unit whose centre could sit in a corridor answers.
+    const Fx reach = largestRadius + largestRadius + kCongestionLead;
+
+    std::vector<UnitIndex> neighbours;
+
+    const auto siteAllowed = [&](std::size_t slot, Fx x, Fx z) {
+        if (motion[slot].airborne) {
+            return true;
+        }
+        const auto type = static_cast<std::size_t>(
+            store.typeAt(static_cast<UnitIndex>(slot)));
+        const PassabilityGrid* grid =
+            type < gridForType.size() ? gridForType[type] : nullptr;
+        return grid == nullptr
+            || sitePlaceable(*grid, x, z, motion[slot].radiusElmos);
+    };
+
+    for (std::size_t a = 0; a < count; ++a) {
+        MoveState& mover = motion[a];
+        if (!mover.moving || mover.attached || mover.airborne
+            || mover.speedPerTick <= Fx{}
+            || mover.blockedTicks < kCongestionBeats
+            || mover.blockedTicks % kCongestionBeats != 0) {
+            continue;
+        }
+        const Transform& at = transforms[a];
+        const Fx toX = mover.destinationX - at.x;
+        const Fx toZ = mover.destinationZ - at.z;
+        const Fx distance = fxHypot(toX, toZ);
+        if (distance <= Fx::fromRaw(4)) {
+            continue;  // coincident with its own destination: nothing to walk toward
+        }
+        const Fx dirX = toX / distance;
+        const Fx dirZ = toZ / distance;
+        const Fx lead = std::min(distance, mover.radiusElmos + kCongestionLead);
+
+        const std::span<const UnitIndex> near =
+            store.space().within(at.x, at.z, reach);
+        neighbours.assign(near.begin(), near.end());
+
+        bool acted = false;
+        // The nearest unit in the corridor that could not be asked to move —
+        // the one a detour has to get around.
+        Fx hardForward = lead;
+        std::size_t hard = count;
+        Fx hardLateral{};
+
+        for (const UnitIndex bIndex : neighbours) {
+            const std::size_t b = static_cast<std::size_t>(bIndex);
+            if (b == a || b >= count) {
+                continue;
+            }
+            const MoveState& blocker = motion[b];
+            if (blocker.radiusElmos <= Fx{} || blocker.airborne != mover.airborne
+                || blocker.surfaceWater != mover.surfaceWater || blocker.attached) {
+                continue;
+            }
+            const Fx relX = transforms[b].x - at.x;
+            const Fx relZ = transforms[b].z - at.z;
+            const Fx forward = relX * dirX + relZ * dirZ;
+            if (forward <= Fx{} || forward > lead) {
+                continue;
+            }
+            // Signed cross of travel against the offset: which side of the
+            // corridor the blocker leans to. The perpendicular below is
+            // (dirZ, -dirX), the direction lateral is measured along.
+            const Fx lateral = relX * dirZ - relZ * dirX;
+            const Fx corridor = mover.radiusElmos + blocker.radiusElmos;
+            if (lateral >= corridor || lateral <= -corridor) {
+                continue;
+            }
+
+            // Friendly means not hostile — an empty army list has no enemies at
+            // all, which is what a crowd with no match wants.
+            const int armyA = mover.armyIndex;
+            const int armyB = blocker.armyIndex;
+            const bool friendly =
+                armies.empty()
+                || (armyA >= 0 && armyB >= 0
+                    && static_cast<std::size_t>(armyA) < armies.size()
+                    && static_cast<std::size_t>(armyB) < armies.size()
+                    && !hostile(armies[static_cast<std::size_t>(armyA)],
+                                armies[static_cast<std::size_t>(armyB)]));
+            const bool yieldable = friendly && !blocker.moving
+                && blocker.speedPerTick > Fx{} && !blocker.yielding
+                && orders[b].empty();
+
+            bool yielded = false;
+            if (yieldable) {
+                // Sidestep to the side the blocker already leans toward — dead
+                // centre picks on the pair's slots so the choice is stable.
+                const Fx side = lateral > Fx{}    ? kFxOne
+                              : lateral < Fx{}    ? -kFxOne
+                              : ((a + b) & 1) != 0 ? kFxOne : -kFxOne;
+                const Fx step = corridor + kSidestepMargin;
+                const Fx firstX = transforms[b].x + dirZ * side * step;
+                const Fx firstZ = transforms[b].z - dirX * side * step;
+                const Fx otherX = transforms[b].x - dirZ * side * step;
+                const Fx otherZ = transforms[b].z + dirX * side * step;
+                if (siteAllowed(b, firstX, firstZ)) {
+                    orderSidestep(motion[b], firstX, firstZ, width, depth);
+                    yielded = acted = true;
+                } else if (siteAllowed(b, otherX, otherZ)) {
+                    orderSidestep(motion[b], otherX, otherZ, width, depth);
+                    yielded = acted = true;
+                }
+            }
+            if (!yielded && forward < hardForward) {
+                hardForward = forward;
+                hard = b;
+                hardLateral = lateral;
+            }
+        }
+
+        // Route the mover around the nearest blocker that could not be asked —
+        // a hostile, a structure, a unit with orders of its own, or a friend
+        // whose sides were both unwalkable. The waypoint lands on the blocker's
+        // FAR side, off the corridor.
+        if (hard < count) {
+            const Fx corridor =
+                mover.radiusElmos + motion[hard].radiusElmos + kSidestepMargin;
+            const Fx side = hardLateral > Fx{}    ? -kFxOne
+                          : hardLateral < Fx{}    ? kFxOne
+                          : ((a + hard) & 1) != 0 ? kFxOne : -kFxOne;
+            for (const Fx attempt : {side, -side}) {
+                const Fx detourX = transforms[hard].x + dirZ * attempt * corridor;
+                const Fx detourZ = transforms[hard].z - dirX * attempt * corridor;
+                // A detour only helps while the current leg is longer than the
+                // dodge — on a short leg (a previous detour, final approach)
+                // inserting another one would just churn the path.
+                if (fxHypot(detourX - at.x, detourZ - at.z) >= distance) {
+                    break;
+                }
+                if (!siteAllowed(a, detourX, detourZ)) {
+                    continue;
+                }
+                const std::array<Fx, 2> detour{
+                    std::clamp(detourX, Fx{}, width), std::clamp(detourZ, Fx{}, depth)};
+                if (mover.path.empty()) {
+                    // A straight-leg order has no route to splice into: the
+                    // detour becomes one, with the real destination behind it.
+                    mover.path.push_back(detour);
+                    mover.path.push_back({mover.destinationX, mover.destinationZ});
+                    mover.pathIndex = 0;
+                } else {
+                    mover.path.insert(
+                        mover.path.begin()
+                            + static_cast<std::ptrdiff_t>(
+                                std::min(mover.pathIndex, mover.path.size())),
+                        detour);
+                }
+                mover.destinationX = detour[0];
+                mover.destinationZ = detour[1];
+                mover.lastGoalDistance = Fx::fromInt(-1);
+                acted = true;
+                break;
+            }
+        }
+
+        // Acting re-arms the wait: the yield or the dodge gets ten beats to work
+        // before the same unit is reconsidered.
+        if (acted) {
+            mover.blockedTicks = 0;
         }
     }
 }
