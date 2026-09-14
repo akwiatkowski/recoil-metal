@@ -264,6 +264,31 @@ void divertToFlareOwner(Projectile& shot, const UnitStore& store, const UnitCata
     return aim;
 }
 
+/// `interceptLead` for a unit target, and the same two-iteration shape: the
+/// position advanced by the target's measured per-tick step over the flight
+/// time. The step is what the unit covered LAST tick — turn-penalty, arrival
+/// clamp and border clamp already inside it — so a pivoting target reads slow
+/// and a stopped one reads still. Horizontal only: a ground unit's height is
+/// the terrain's, not its own, and a flyer's climb is not led either.
+[[nodiscard]] std::array<Fx, 3> leadUnitPosition(std::array<Fx, 3> from,
+                                                 std::array<Fx, 3> to,
+                                                 Fx stepX, Fx stepZ,
+                                                 Fx muzzlePerTick) noexcept {
+    std::array<Fx, 3> aim = to;
+    for (int step = 0; step < 2; ++step) {
+        const Fx dx = aim[0] - from[0];
+        const Fx dy = aim[1] - from[1];
+        const Fx dz = aim[2] - from[2];
+        const Fx distance = fxHypot(fxHypot(dx, dz), dy);
+        if (distance <= Fx{} || muzzlePerTick <= Fx{}) {
+            return aim;
+        }
+        const Fx flightTicks = distance / muzzlePerTick;
+        aim = {to[0] + stepX * flightTicks, to[1], to[2] + stepZ * flightTicks};
+    }
+    return aim;
+}
+
 /// Deliberately no per-missile shooter cap: every launcher independently engages
 /// its nearest threat, spending counted ammo per shot through the silo gate.
 /// No retail source was found for assignment caps, and FAF launchers observably
@@ -888,24 +913,28 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
 }
 
 /// Automatic acquisition keeps its selected UnitId and truth-based rank. Only the muzzle's
-/// point of aim is uncertain, and only while that live unit is currently radar-only.
+/// point of aim is uncertain, and only while that live unit is currently radar-only —
+/// a blip is a position WITHOUT a velocity, so a radar-only contact is never led.
+/// A seen target under a `LeadTarget` weapon is aimed at where its step takes it.
 [[nodiscard]] std::array<Fx, 3> automaticProjectileAimPosition(
-    UnitId target, int fromArmy, const UnitStore& store, const UnitCatalog& catalog,
+    UnitId target, std::array<Fx, 3> from, int fromArmy, const unitdef::Weapon& weapon,
+    Fx muzzlePerTick, const UnitStore& store, const UnitCatalog& catalog,
     std::span<const Army> armies, const Intel* intel, TickIndex tick, TickRate rate) noexcept {
-    std::array<Fx, 3> position = positionOf(store.transforms()[target.index]);
-    if (intel == nullptr) {
+    const std::array<Fx, 3> position = positionOf(store.transforms()[target.index]);
+    if (intel != nullptr) {
+        const Army* mine = armyFor(fromArmy, armies);
+        if (mine != nullptr
+            && contactKindForUnit(mine->alliance, target.index, store, catalog, armies, *intel)
+                   == ContactKind::Radar) {
+            const auto [x, z] = radarBlipPosition(target, position[0], position[2], tick, rate);
+            return {x, position[1], z};
+        }
+    }
+    if (!weapon.leadTarget) {
         return position;
     }
-    const Army* mine = armyFor(fromArmy, armies);
-    if (mine == nullptr
-        || contactKindForUnit(mine->alliance, target.index, store, catalog, armies, *intel)
-               != ContactKind::Radar) {
-        return position;
-    }
-    const auto [x, z] = radarBlipPosition(target, position[0], position[2], tick, rate);
-    position[0] = x;
-    position[2] = z;
-    return position;
+    const MoveState& motion = store.motion()[target.index];
+    return leadUnitPosition(from, position, motion.stepX, motion.stepZ, muzzlePerTick);
 }
 
 /// Which priority row a candidate matches, or `npos` for none.
@@ -1581,11 +1610,21 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                                                    store.targetFocuses()[slot]);
                 }
                 if (candidateUnit) {
-                    candidatePosition = !hasExplicitAttack && !weapon.beam
-                                            ? automaticProjectileAimPosition(
-                                                  *candidateUnit, motion[slot].armyIndex, store,
-                                                  catalog, armies, intel, tick, rate)
-                                            : positionOf(transforms[candidateUnit->index]);
+                    const Fx muzzlePerTick =
+                        catalog.weaponRates(store.typeAt(slot), w).muzzlePerTick;
+                    if (!hasExplicitAttack && !weapon.beam) {
+                        candidatePosition = automaticProjectileAimPosition(
+                            *candidateUnit, from, motion[slot].armyIndex, weapon,
+                            muzzlePerTick, store, catalog, armies, intel, tick, rate);
+                    } else {
+                        const std::array<Fx, 3> exact =
+                            positionOf(transforms[candidateUnit->index]);
+                        candidatePosition = weapon.leadTarget && !weapon.beam
+                            ? leadUnitPosition(from, exact,
+                                               motion[candidateUnit->index].stepX,
+                                               motion[candidateUnit->index].stepZ, muzzlePerTick)
+                            : exact;
+                    }
                 }
             }
             if (!candidatePosition) {
@@ -1908,18 +1947,27 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 continue;
             }
 
-            const std::array<Fx, 3> to = !hasExplicitAttack && !weapon.beam
-                                             ? automaticProjectileAimPosition(
-                                                   *target, army, store, catalog, armies, intel,
-                                                   tick, rate)
-                                             : positionOf(transforms[target->index]);
-
             // The weapon's derived per-tick rates come from the catalog, which computed them
             // when it learned the type — not from the weapon, which only knows its authored
-            // per-second figures (§5.1). Fetched before the gate now because the turret's
-            // slew step and its on-target test both read the authored traverse speed.
+            // per-second figures (§5.1). Fetched before the aim point now because a led
+            // target's flight time reads the muzzle speed, and before the gate because the
+            // turret's slew step and its on-target test read the authored traverse speed.
             const UnitCatalog::WeaponRates& rates =
                 catalog.weaponRates(store.typeAt(slot), w);
+
+            const std::array<Fx, 3> to = [&] {
+                if (!hasExplicitAttack && !weapon.beam) {
+                    return automaticProjectileAimPosition(
+                        *target, from, army, weapon, rates.muzzlePerTick, store, catalog,
+                        armies, intel, tick, rate);
+                }
+                const std::array<Fx, 3> exact = positionOf(transforms[target->index]);
+                return weapon.leadTarget && !weapon.beam
+                    ? leadUnitPosition(from, exact, motions[target->index].stepX,
+                                       motions[target->index].stepZ, rates.muzzlePerTick)
+                    : exact;
+            }();
+
             const bool muzzled = mounted && slot < motions.size();
 
             // The point the barrel must bear on is the one `launch` aims at —

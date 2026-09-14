@@ -837,6 +837,48 @@ TEST_CASE("a unit accumulates the ground distance it has covered") {
     }
 }
 
+TEST_CASE("a unit's measured step is what it covered last tick") {
+    // What a leading weapon advances its aim by: the displacement that actually
+    // happened, so a unit turning on the spot reads slow and a stopped one
+    // reads still — not the speed it was ordered to make.
+    const HeightField field = flatField();
+    std::vector<rm::sim::Transform> instances{unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{ordinary()};
+
+    SECTION("an idle unit stepped nowhere") {
+        run(instances, motion, field, 5);
+        CHECK(motion[0].stepX == rm::sim::Fx{});
+        CHECK(motion[0].stepZ == rm::sim::Fx{});
+    }
+
+    SECTION("a unit already facing its destination steps one tick of travel") {
+        // Due +Z: the whole step is in Z and X stays put.
+        rm::sim::orderTo(motion[0], rm::sim::Terrain{field}, rm::test::fx(100.0f),
+                     rm::test::fx(700.0f));
+        rm::sim::tick(instances, motion, rm::sim::Terrain{field});
+        CHECK(motion[0].stepZ > rm::sim::Fx{});
+        CHECK(rm::test::asFloat(motion[0].stepZ)
+              == Approx(rm::test::asFloat(motion[0].speedPerTick)).margin(0.5));
+        CHECK(rm::test::asFloat(motion[0].stepX) == Approx(0.0).margin(0.01));
+    }
+
+    SECTION("a unit pivoting on the spot steps almost nowhere") {
+        rm::sim::orderTo(motion[0], rm::sim::Terrain{field}, rm::test::fx(100.0f),
+                     rm::test::fx(-400.0f));
+        rm::sim::tick(instances, motion, rm::sim::Terrain{field});
+        CHECK(rm::test::asFloat(motion[0].stepZ) < 1.0f);
+    }
+
+    SECTION("arrival zeroes the step") {
+        rm::sim::orderTo(motion[0], rm::sim::Terrain{field}, rm::test::fx(100.0f),
+                     rm::test::fx(300.0f));
+        run(instances, motion, field, 4 * static_cast<int>(kRate.ticksPerSecond()));
+        REQUIRE_FALSE(motion[0].moving);
+        CHECK(motion[0].stepX == rm::sim::Fx{});
+        CHECK(motion[0].stepZ == rm::sim::Fx{});
+    }
+}
+
 TEST_CASE("a unit walks a path waypoint by waypoint") {
     const HeightField field = flatField();
     std::vector<rm::sim::Transform> instances{unitAt(50.0f, 50.0f)};

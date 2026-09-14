@@ -160,6 +160,13 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
         feed(h, motion.yielding);
         feed(h, motion.lastGoalDistance);
     }
+    // The measured step a `LeadTarget` weapon reads — execution state that
+    // changes aim, fed only once nonzero so a match of standing armies keeps
+    // the digest it had before the field existed.
+    if (motion.stepX != Fx{} || motion.stepZ != Fx{}) {
+        feed(h, motion.stepX);
+        feed(h, motion.stepZ);
+    }
     // The live turret pose. Fed always: a traversing ring is gameplay state
     // (fire gates on it), and zeros for the unturreted keep their digests
     // moving exactly as before only until the first traverse — after which a

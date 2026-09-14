@@ -187,6 +187,16 @@ struct MoveState {
     // has covered twice what its displacement says.
     Fx distanceTravelledElmos{};
 
+    /// The horizontal displacement this unit actually covered on the latest
+    /// movement tick, in elmos — measured where the step lands, so the
+    /// turn-penalty, the arrival clamp and the border clamp are already inside
+    /// it. That is the velocity a `LeadTarget` weapon advances its aim by.
+    /// Collision push-back is deliberately outside the measure: a unit being
+    /// jostled has not changed course. Zero for anything that did not move —
+    /// structures included, which is how they are never led.
+    Fx stepX{};
+    Fx stepZ{};
+
     // The route still to walk, as world (x, z) waypoints, and how far along it
     // the unit is. Empty for a unit heading straight at a point.
     //

@@ -48,6 +48,9 @@ TEST_CASE("the Titan's turret resolves from blueprint onto mesh", "[slice][turre
     REQUIRE(spec.has_value());
     const rm::unitdef::Weapon& gun = def->weapons[spec->second];
     CHECK(gun.turreted);
+    // `LeadTarget = true` on the authored Heavy Plasma Cannon — the muzzle leads
+    // a moving target by its measured step over flight time.
+    CHECK(gun.leadTarget);
     CHECK_FALSE(gun.turretYawBone.empty());
     CHECK_FALSE(gun.turretPitchBone.empty());
     CHECK_FALSE(gun.muzzleBone.empty());

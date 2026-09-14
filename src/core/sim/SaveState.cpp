@@ -78,6 +78,10 @@ constexpr std::uint32_t kVersion29 = 29;
 constexpr std::uint32_t kVersion30 = 30;
 // 31: congestion bookkeeping — `blockedTicks` and `yielding` in MoveState.
 constexpr std::uint32_t kVersion31 = 31;
+// 32: the measured per-tick step (`stepX`/`stepZ`) that `LeadTarget` weapons
+// advance their aim by. Older saves decode with both zero — one tick of
+// unleaded aim before movement measures again.
+constexpr std::uint32_t kVersion32 = 32;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -828,6 +832,26 @@ bool readCongestion(PayloadReader& r, std::vector<MoveState>& motion) {
     return true;
 }
 
+void writeLeadStep(PayloadWriter& w, std::span<const MoveState> motion) {
+    w.count(motion.size());
+    for (const auto& state : motion) {
+        w.i32(state.stepX.raw());
+        w.i32(state.stepZ.raw());
+    }
+}
+
+bool readLeadStep(PayloadReader& r, std::vector<MoveState>& motion) {
+    std::size_t count{};
+    if (!r.count(count, 8) || count != motion.size()) return false;
+    for (auto& state : motion) {
+        std::int32_t x{}, z{};
+        if (!r.i32(x) || !r.i32(z)) return false;
+        state.stepX = Fx::fromRaw(x);
+        state.stepZ = Fx::fromRaw(z);
+    }
+    return true;
+}
+
 bool readSubMotion(PayloadReader& r, std::vector<MoveState>& motion) {
     std::size_t count{};
     if (!r.count(count, 15) || count != motion.size()) return false;
@@ -1335,6 +1359,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion24) writeTurretPose(payloadWriter, state.units.motion);
     if (version >= kVersion25) writeTurretPoseDual(payloadWriter, state.units.motion);
     if (version >= kVersion31) writeCongestion(payloadWriter, state.units.motion);
+    if (version >= kVersion32) writeLeadStep(payloadWriter, state.units.motion);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -1375,7 +1400,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion25 && version != kVersion26
                && version != kVersion27 && version != kVersion28
                && version != kVersion29 && version != kVersion30
-               && version != kVersion31)
+               && version != kVersion31 && version != kVersion32)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -1434,6 +1459,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion24 && !readTurretPose(reader, units.motion)) return std::nullopt;
     if (version >= kVersion25 && !readTurretPoseDual(reader, units.motion)) return std::nullopt;
     if (version >= kVersion31 && !readCongestion(reader, units.motion)) return std::nullopt;
+    if (version >= kVersion32 && !readLeadStep(reader, units.motion)) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
@@ -1465,7 +1491,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion31);
+    return rm::sim::encode(state, kVersion32);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

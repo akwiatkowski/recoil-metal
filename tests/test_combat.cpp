@@ -1304,6 +1304,90 @@ TEST_CASE("automatic projectile fire aims at a live radar contact's deterministi
     CHECK(shots.front().velocity == expected.velocity);
 }
 
+TEST_CASE("a LeadTarget weapon fires where a crossing target is going",
+          "[lead]") {
+    // `LeadTarget = true` on the blueprint: the muzzle's point of aim is the
+    // target's position advanced by its measured per-tick step over the shot's
+    // flight time, twice iterated — the same shape `interceptLead` gives a
+    // point-defence shot, for unit targets. Firing at where the target WAS is
+    // a guaranteed miss on a crossing mover, which is what the flag exists for.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.leadTarget = true;
+    const UnitId shooter =
+        roster.add(roster.addType(gunnerDef(weapon)), 0.0f, 0.0f, 0, 100.0f);
+    roster.motion(shooter).turnPerTick = rm::sim::kBradHalfTurn;
+    // Crossing east at four elmos a tick — the measured step, as movement writes it.
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
+    roster.motion(target).stepX = rm::test::fx(4.0f);
+
+    constexpr rm::TickIndex tick = 3;
+    std::vector<Projectile> shots;
+    REQUIRE(rm::sim::aimAtTargets(roster.store, roster.catalog, armies, nullptr, nullptr,
+                                  nullptr, tick, roster.rate)
+            == 1);
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate,
+                                  nullptr, nullptr, nullptr, tick)
+            == 1);
+    REQUIRE(shots.size() == 1);
+
+    // The led point by the same two iterations the spec states.
+    const rm::sim::Fx muzzlePerTick =
+        roster.catalog.weaponRates(roster.store.typeAt(shooter.index), 0).muzzlePerTick;
+    const rm::sim::Fx stepX = rm::test::fx(4.0f);
+    const rm::sim::Fx baseY = roster.transform(target).y;
+    std::array<rm::sim::Fx, 3> aim{rm::sim::Fx{}, baseY, rm::test::fx(100.0f)};
+    for (int i = 0; i < 2; ++i) {
+        const rm::sim::Fx distance =
+            rm::sim::fxHypot(rm::sim::fxHypot(aim[0], aim[1] - rm::sim::positionOf(
+                                                              roster.transform(shooter))[1]),
+                             aim[2]);
+        const rm::sim::Fx flight = distance / muzzlePerTick;
+        aim = {stepX * flight, baseY, rm::test::fx(100.0f)};
+    }
+    REQUIRE(aim[0] > rm::test::fx(30.0f));  // sanity: the lead is real, ~40 elmos
+
+    const Projectile expected = rm::sim::launch(
+        rm::sim::positionOf(roster.transform(shooter)), aim, weapon, 0, roster.rate,
+        muzzlePerTick,
+        roster.catalog.weaponRates(roster.store.typeAt(shooter.index), 0).damage, shooter);
+    CHECK(shots.front().velocity == expected.velocity);
+}
+
+TEST_CASE("a weapon without LeadTarget fires at where the mover is", "[lead]") {
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon weapon = directFire(10.0f, 300.0f);  // leadTarget stays false
+    const UnitId shooter =
+        roster.add(roster.addType(gunnerDef(weapon)), 0.0f, 0.0f, 0, 100.0f);
+    roster.motion(shooter).turnPerTick = rm::sim::kBradHalfTurn;
+    // Off-axis: dead ahead of the default +Z facing needs no turn, and the
+    // pass counts turned units.
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 40.0f, 100.0f, 1, 100.0f);
+    roster.motion(target).stepX = rm::test::fx(4.0f);
+
+    std::vector<Projectile> shots;
+    REQUIRE(rm::sim::aimAtTargets(roster.store, roster.catalog, armies, nullptr, nullptr,
+                                  nullptr, 3, roster.rate)
+            == 1);
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate,
+                                  nullptr, nullptr, nullptr, 3)
+            == 1);
+    REQUIRE(shots.size() == 1);
+
+    const Projectile expected = rm::sim::launch(
+        rm::sim::positionOf(roster.transform(shooter)),
+        rm::sim::positionOf(roster.transform(target)), weapon, 0, roster.rate,
+        roster.catalog.weaponRates(roster.store.typeAt(shooter.index), 0).muzzlePerTick,
+        roster.catalog.weaponRates(roster.store.typeAt(shooter.index), 0).damage, shooter);
+    CHECK(shots.front().velocity == expected.velocity);
+}
+
 TEST_CASE("automatic targeting scores radar-only contacts at their blip, not truth",
           "[intel][targeting]") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);

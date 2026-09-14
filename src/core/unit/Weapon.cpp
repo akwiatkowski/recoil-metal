@@ -121,6 +121,9 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
             weaponRoleFromCategory(entry.stringAt("WeaponCategory").value_or("(none)"));
         weapon.targetsProjectiles = entry.stringAt("TargetType").value_or("")
                                     == "RULEWTT_Projectile";
+        if (const lua::Value* lead = entry.find("LeadTarget")) {
+            weapon.leadTarget = lead->asBoolean().value_or(false);
+        }
         if (const lua::Value* counted = entry.find("CountedProjectile")) {
             weapon.countedProjectile = counted->asBoolean().value_or(false);
         }

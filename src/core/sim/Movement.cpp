@@ -417,6 +417,10 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
 
     for (std::size_t i = first; i < last; ++i) {
         MoveState& state = motion[i];
+        // The measured step belongs to the tick it was taken on: re-zeroed here,
+        // written below only by a branch that actually moved the transform.
+        state.stepX = Fx{};
+        state.stepZ = Fx{};
         if (state.submersible && terrain.hasWater() && !state.attached) {
             // C-200, ART-E001 0x006c9ca0. The 0.25-ogrid seabed clearance is
             // 2 elmos. Ease by sin(depth fraction * pi), with a 10% speed floor.
@@ -605,6 +609,8 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
                 state.velocity = {};
                 state.idleTicks = 0;
             }
+            state.stepX = unit.x - previousX;
+            state.stepZ = unit.z - previousZ;
             continue;
         }
 
@@ -619,7 +625,9 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
         // Measured after the clamp, so a unit pressed against the border stops
         // striding instead of walking on the spot forever. Horizontal only: a
         // walk cycle is paced by ground covered, not by height climbed.
-        state.distanceTravelledElmos += fxHypot(unit.x - previousX, unit.z - previousZ);
+        state.stepX = unit.x - previousX;
+        state.stepZ = unit.z - previousZ;
+        state.distanceTravelledElmos += fxHypot(state.stepX, state.stepZ);
 
         if (state.hovering) {
             unit.y = terrain.surfaceHeightAt(unit.x, unit.z) + state.hoverElevation;
