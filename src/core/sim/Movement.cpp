@@ -513,9 +513,12 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
         const bool wasMoving = state.moving;
         // A flyer off the deck keeps flying through arrival waypoints: stopping dead
         // would freeze a descent (or a climb) the same tick it was committed, because
-        // the `continue` below skips the air branch that performs it.
+        // the `continue` below skips the air branch that performs it. `Up`/`Down`
+        // count even while `airborne` is still false — a takeoff committed to a hop
+        // inside one tick's travel can "arrive" before the lift law raises the unit,
+        // and skipping the air branch then strands it `Down` on the deck forever.
         const bool flyThrough =
-            state.canFly && state.airborne && state.airState != MoveState::AirState::Bottom;
+            state.canFly && state.airState != MoveState::AirState::Bottom;
         if (distance <= std::max(radius, travel)
             && state.airCombatState == MoveState::AirCombatState::None) {
             if (!onFinalWaypoint) {

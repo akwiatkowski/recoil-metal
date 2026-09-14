@@ -22,8 +22,10 @@
 #include "support/FxMatchers.hpp"
 #include "support/TestRoster.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 namespace {
@@ -770,4 +772,208 @@ TEST_CASE("a transport's cargo dies with it", "[transport]") {
     CHECK_FALSE(roster.store.alive(first));
     CHECK_FALSE(roster.store.alive(second));
     CHECK(roster.store.childrenOf(transport).empty());
+}
+
+// --- Retail validation ---------------------------------------------------------
+//
+// Everything above proves the mechanism on synthetic numbers; these prove the
+// SHIPPED numbers drive it — a real C-6 Courier (UEA0107, `TransportClass = 10`,
+// `Class2AttachSize = 2`, `Class3AttachSize = 4`) lifting real class-1 cargo
+// (UEL0101, no `TransportClass` → the default), Pillars (UEL0202, class 2)
+// and a UEF ACU (UEL0001, class 3 → four slots).
+//
+// `CANTRANSPORTCOMMANDER` is deliberately NOT modelled: every shipped carrier
+// that can afford four slots also carries the flag, and the one that cannot
+// (UEA0203's `ClassGenericUpTo = 2`) is excluded by the attach-cost table
+// already — the flag would be dead enforcement on shipped content.
+
+/// The extracted retail units tree, or empty when the corpus is not on disk.
+[[nodiscard]] std::filesystem::path corpusUnitsDir() {
+    const char* home = std::getenv("HOME");
+    if (home == nullptr) {
+        return {};
+    }
+    const std::filesystem::path dir =
+        std::filesystem::path{home} / "projects/llm/input/faf/units";
+    return std::filesystem::exists(dir) ? dir : std::filesystem::path{};
+}
+
+/// One shipped blueprint, read the way the content loader reads it.
+[[nodiscard]] UnitDef realUnitDef(const std::filesystem::path& units,
+                                  const char* id) {
+    const auto loaded =
+        rm::unitbp::loadFile(units / id / (std::string{id} + "_unit.bp"));
+    REQUIRE(loaded.has_value());
+    return *loaded;
+}
+
+/// Every shared piece of a lift scenario: one landed carrier plus the pieces
+/// each section sends to board it.
+struct RetailLift {
+    rm::HeightField field = flatField();
+    rm::sim::Terrain terrain{field};
+    rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies = std::vector<rm::sim::Economy>(1);
+    // One army that never fielded a commander: `{1, 0}` would instead seed
+    // army 0 with a past commander it does not have, and the Assassination
+    // poll would declare it dead inside three seconds of tick one.
+    std::vector<int> commandersEver = std::vector<int>(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids;
+    Match match;
+    std::uint32_t serial = 1;
+
+    RetailLift(const std::filesystem::path& units)
+        : grids(roster.catalog.size(), nullptr), match(loneMatch(armies, economies,
+                                                                commandersEver)) {
+        const rm::UnitTypeIndex courier = roster.addType(realUnitDef(units, "UEA0107"));
+        marineType = roster.addType(realUnitDef(units, "UEL0101"));
+        pillarType = roster.addType(realUnitDef(units, "UEL0202"));
+        acuType = roster.addType(realUnitDef(units, "UEL0001"));
+        grids.assign(roster.catalog.size(), &grid);
+        match.passability = grids;
+        transport = landedTransport(roster, courier, 50.0f, 400.0f);
+    }
+
+    rm::UnitTypeIndex marineType{}, pillarType{}, acuType{};
+    UnitId transport;
+
+    [[nodiscard]] UnitId cargo(rm::UnitTypeIndex type, float x, float z) {
+        return roster.add(type, x, z, 0, 500.0f);
+    }
+
+    /// Issues the board order; intake accepts it whether or not the carrier
+    /// can still fit the unit — overflow waits on the pad.
+    void board(UnitId unit) {
+        REQUIRE(rm::sim::applyCommand(loadIssue(unit, transport, serial++),
+                                    roster.store, roster.catalog, players, armies,
+                                    terrain, [&](UnitId) { return &grid; },
+                                    roster.rate)
+                    .accepted.size()
+                == 1);
+    }
+
+    /// Lets the boarders walk and climb until nobody new attaches.
+    void settle(int ticks = 2000) {
+        for (int i = 0; i < ticks; ++i) {
+            (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        }
+    }
+};
+
+TEST_CASE("a retail C-6 Courier fills on the shipped class costs",
+          "[transport][retail]") {
+    const std::filesystem::path units = corpusUnitsDir();
+    if (units.empty()) {
+        SKIP("the FA corpus is not extracted");
+    }
+    RetailLift lift{units};
+
+    // The anchors themselves, so the capacity maths below is checked against
+    // the blueprint rather than assumed: ten slots, class 2 costs two,
+    // class 3 costs four.
+    const UnitDef* courier = lift.roster.catalog.def(
+        lift.roster.store.typeAt(lift.transport.index));
+    REQUIRE(courier != nullptr);
+    CHECK(courier->transportCapacity() == 10);
+    CHECK(courier->transportAttachCost(1) == 1);
+    CHECK(courier->transportAttachCost(2) == 2);
+    CHECK(courier->transportAttachCost(3) == 4);
+    CHECK(lift.roster.catalog.def(lift.marineType)->transportCargoClass() == 1);
+    CHECK(lift.roster.catalog.def(lift.pillarType)->transportCargoClass() == 2);
+    CHECK(lift.roster.catalog.def(lift.acuType)->transportCargoClass() == 3);
+
+    SECTION("ten class-1 units fill it; the eleventh waits on the pad") {
+        std::vector<UnitId> marines;
+        for (int i = 0; i < 11; ++i) {
+            // Spread on a 10-elmo grid so boarding is not also a congestion
+            // test — the question is capacity, not the jam at the ramp.
+            marines.push_back(lift.cargo(
+                lift.marineType, 60.0f + 10.0f * static_cast<float>(i % 4),
+                400.0f + 10.0f * static_cast<float>(i / 4)));
+            lift.board(marines.back());
+        }
+        lift.settle();
+        int attached = 0;
+        for (const UnitId marine : marines) {
+            attached += lift.roster.motion(marine).attached ? 1 : 0;
+        }
+        CHECK(attached == 10);
+        CHECK(lift.roster.store.childrenOf(lift.transport).size() == 10);
+    }
+
+    SECTION("five Pillars fill it; the sixth waits on the pad") {
+        std::vector<UnitId> pillars;
+        for (int i = 0; i < 6; ++i) {
+            pillars.push_back(lift.cargo(lift.pillarType, 60.0f + 10.0f * static_cast<float>(i),
+                                         400.0f));
+            lift.board(pillars.back());
+        }
+        lift.settle();
+        int attached = 0;
+        for (const UnitId pillar : pillars) {
+            attached += lift.roster.motion(pillar).attached ? 1 : 0;
+        }
+        CHECK(attached == 5);
+        CHECK(lift.roster.store.childrenOf(lift.transport).size() == 5);
+    }
+
+    SECTION("an ACU rides with six marines; the seventh waits") {
+        const UnitId acu = lift.cargo(lift.acuType, 60.0f, 400.0f);
+        lift.board(acu);
+        std::vector<UnitId> marines;
+        for (int i = 0; i < 7; ++i) {
+            marines.push_back(lift.cargo(
+                lift.marineType, 70.0f + 10.0f * static_cast<float>(i % 4),
+                400.0f + 10.0f * static_cast<float>(i / 4)));
+            lift.board(marines.back());
+        }
+        lift.settle();
+        CHECK(lift.roster.motion(acu).attached);
+        int attached = 0;
+        for (const UnitId marine : marines) {
+            attached += lift.roster.motion(marine).attached ? 1 : 0;
+        }
+        // 4 slots of ACU plus 6 of marine is exactly the ten the blueprint
+        // states — the seventh marine found the bay full.
+        CHECK(attached == 6);
+        CHECK(lift.roster.store.childrenOf(lift.transport).size() == 7);
+    }
+
+    SECTION("a loaded courier flies to the drop and sets its marines down") {
+        std::vector<UnitId> marines;
+        for (int i = 0; i < 3; ++i) {
+            marines.push_back(lift.cargo(lift.marineType, 60.0f + 10.0f * static_cast<float>(i),
+                                         400.0f));
+            lift.board(marines.back());
+        }
+        lift.settle(1200);
+        for (const UnitId marine : marines) {
+            REQUIRE(lift.roster.motion(marine).attached);
+        }
+        REQUIRE(rm::sim::applyCommand(
+                    dropIssue(lift.transport, 500.0f, 400.0f, lift.serial++),
+                    lift.roster.store, lift.roster.catalog, lift.players,
+                    lift.armies, lift.terrain,
+                    [&](UnitId) { return &lift.grid; }, lift.roster.rate)
+                    .accepted.size()
+                == 1);
+        for (int i = 0; i < 4000; ++i) {
+            (void)rm::sim::tickSkirmish(lift.roster.store, lift.roster.catalog,
+                                        lift.match, lift.terrain);
+            if (std::ranges::none_of(marines, [&](UnitId m) {
+                    return lift.roster.motion(m).attached;
+                })) {
+                break;
+            }
+        }
+        for (const UnitId marine : marines) {
+            CHECK_FALSE(lift.roster.motion(marine).attached);
+            const rm::sim::Transform& at = lift.roster.transform(marine);
+            CHECK(rm::sim::fxToFloat(at.x) == Catch::Approx(500.0f).margin(16.0f));
+        }
+    }
 }
