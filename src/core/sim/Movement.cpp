@@ -1,5 +1,6 @@
 #include "core/sim/Movement.hpp"
 
+#include "core/TaskPool.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/sim/UnitStore.hpp"
 
@@ -385,10 +386,18 @@ Fx wingedLift(Fx need, Fx speedRatio, Fx liftFactor, Fx heightAbove, Fx elevatio
     return cap;
 }
 
-void tick(std::span<Transform> transforms, std::span<MoveState> motion,
-          const Terrain& terrain) noexcept {
-    const std::size_t count = std::min(transforms.size(), motion.size());
-
+/// One lane's share of the movement tick: every unit's state moves forward.
+///
+/// A unit reads and writes ONLY its own slot — `transforms[i]` and `motion[i]`
+/// — which is what makes this fork-joinable under ADR-036/D15: a lane can run
+/// its range's movement and alignment in either order relative to another
+/// lane's, because nothing it touches belongs to that lane. The two sub-passes
+/// stay fused per range (movement, then alignment over the same slots) so a
+/// unit's post-move position is what its own alignment reads, exactly as the
+/// serial two-loop version produced.
+void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
+               const Terrain& terrain, std::size_t first,
+               std::size_t last) noexcept {
     const Fx width = Fx::fromInt(terrain.field().squaresX * kSquareSize);
     const Fx depth = Fx::fromInt(terrain.field().squaresZ * kSquareSize);
 
@@ -397,7 +406,7 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
     // pass no longer sees. One tick of THIS unit's travel is the bound that matters.
     const Fx halfSquare = Fx::fromInt(kSquareSize) * Fx::fromRatio(1, 2);
 
-    for (std::size_t i = 0; i < count; ++i) {
+    for (std::size_t i = first; i < last; ++i) {
         MoveState& state = motion[i];
         if (state.submersible && terrain.hasWater() && !state.attached) {
             // C-200, ART-E001 0x006c9ca0. The 0.25-ogrid seabed clearance is
@@ -621,7 +630,7 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
     //
     // A separate pass rather than a line in the loop above, because it applies
     // to a different set: the loop moves what is moving, this tilts everything.
-    for (std::size_t i = 0; i < count; ++i) {
+    for (std::size_t i = first; i < last; ++i) {
         // A flyer off the deck owns its altitude AND attitude in the winged integrator
         // above — this pass would otherwise teleport every climb back to clearance
         // height at the end of the same tick that earned it.
@@ -638,6 +647,14 @@ void tick(std::span<Transform> transforms, std::span<MoveState> motion,
         unit.pitch = align[0];
         unit.roll = align[1];
     }
+}
+
+void tick(std::span<Transform> transforms, std::span<MoveState> motion,
+          const Terrain& terrain) noexcept {
+    const std::size_t count = std::min(transforms.size(), motion.size());
+    rm::parallelFor(count, [&](std::size_t first, std::size_t last) {
+        tickRange(transforms, motion, terrain, first, last);
+    });
 }
 
 int TickClock::advance(float seconds) noexcept {

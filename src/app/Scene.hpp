@@ -22,6 +22,7 @@
 #include "core/scene/WeaponVisuals.hpp"
 #include "core/scene/CombatEffects.hpp"
 #include "core/scene/ProjectileTrails.hpp"
+#include "core/TaskPool.hpp"
 #include "core/scene/Selection.hpp"
 #include "core/scene/UnitBatch.hpp"
 #include "core/scene/UnitDraw.hpp"
@@ -899,56 +900,86 @@ struct UnitScene {
             return !store.alive(store.idAt(kv.first));
         });
 
-        for (const rm::DrawUnit& unit : drawUnits) {
-            // FOG OF WAR (ADR-037). A unit the viewer's side cannot see is not drawn at all —
-            // not drawn dimmed, not drawn as a ghost. It is also left out of `drawIndexOf`,
-            // which is what picking reads, so an invisible unit cannot be clicked either;
-            // that is the same rule the gather already applied to the dead, and getting it
-            // wrong would leak positions through the cursor rather than through the screen.
-            if (!visibleToViewer(unit.id)) {
-                continue;
-            }
-
-            // THROUGH THE MAP, not `unit.type` directly (`#3090`). A type and a batch are no
-            // longer the same number: a blueprint can be registered as buildable long before
-            // anything of it is built, and such a type has no batch until it spawns.
-            std::size_t batch = batchOf(unit.type);
-            if (batch == kNoBatch || batch >= drawScratch.size()) {
-                continue;  // a type with no batch: nothing to draw it with
-            }
-            // Far enough for the coarse mesh? Distance to the CAMERA, all three axes —
-            // zooming out is flying up, and height is most of the distance that matters.
-            if (eye != nullptr) {
-                if (const auto lod = lodOfType.find(unit.type);
-                    lod != lodOfType.end() && lod->second.batch < drawScratch.size()) {
-                    const float dx = unit.position[0] - (*eye)[0];
-                    const float dy = unit.position[1] - (*eye)[1];
-                    const float dz = unit.position[2] - (*eye)[2];
-                    const float cutoff = lod->second.cutoffElmos;
-                    if (dx * dx + dy * dy + dz * dz > cutoff * cutoff) {
-                        batch = lod->second.batch;
+        // STAGE, fork-joined (ADR-036/D15). Everything a lane computes is a
+        // pure function of its own DrawUnit plus read-only tables — fog,
+        // batch/LOD maps, catalog, batch metadata — so the frame's work can
+        // reorder freely. What stays serial in the merge below is everything
+        // that writes shared state in draw order: `drawIndexOf` (the picking
+        // answer), the ordered batch appends, `shieldScratch`, and
+        // `builderShownAim`, the one map the per-unit path actually mutates.
+        struct StagedDraw {
+            rm::UnitInstance instance{};
+            std::array<float, 3> shieldCentre{};
+            float shieldRadius = 0.0f;
+            std::size_t batch = kNoBatch;
+        };
+        std::vector<StagedDraw> staged(drawUnits.size());
+        rm::parallelFor(drawUnits.size(), [&](std::size_t first,
+                                              std::size_t last) {
+            for (std::size_t i = first; i < last; ++i) {
+                const rm::DrawUnit& unit = drawUnits[i];
+                if (!visibleToViewer(unit.id)) {
+                    continue;  // ADR-037 fog: nothing staged, nothing merged
+                }
+                std::size_t batch = batchOf(unit.type);
+                if (batch == kNoBatch || batch >= drawScratch.size()) {
+                    continue;  // a type with no batch: nothing to draw it with
+                }
+                // Far enough for the coarse mesh? Distance to the CAMERA, all three
+                // axes — zooming out is flying up, and height is most of the
+                // distance that matters.
+                if (eye != nullptr) {
+                    if (const auto lod = lodOfType.find(unit.type);
+                        lod != lodOfType.end() && lod->second.batch < drawScratch.size()) {
+                        const float dx = unit.position[0] - (*eye)[0];
+                        const float dy = unit.position[1] - (*eye)[1];
+                        const float dz = unit.position[2] - (*eye)[2];
+                        const float cutoff = lod->second.cutoffElmos;
+                        if (dx * dx + dy * dy + dz * dz > cutoff * cutoff) {
+                            batch = lod->second.batch;
+                        }
                     }
                 }
+                StagedDraw draw{.batch = batch};
+                const rm::sim::UnitCatalog::ShieldInfo& shield =
+                    catalog.shield(unit.type);
+                if (unit.shieldActive && shield.exists()
+                    && shield.shape == rm::unitdef::ShieldShape::Sphere) {
+                    draw.shieldCentre = unit.position;
+                    draw.shieldCentre[1] +=
+                        rm::sim::fxToFloat(shield.verticalOffsetElmos);
+                    draw.shieldRadius = rm::sim::fxToFloat(shield.radiusElmos);
+                }
+                draw.instance = instanceFor(unit, batch);
+                staged[i] = draw;
             }
-            const rm::sim::UnitCatalog::ShieldInfo& shield = catalog.shield(unit.type);
-            if (unit.shieldActive && shield.exists()
-                && shield.shape == rm::unitdef::ShieldShape::Sphere) {
-                std::array<float, 3> centre = unit.position;
-                centre[1] += rm::sim::fxToFloat(shield.verticalOffsetElmos);
-                // Same cyan as the shield HUD, with calibrated low alpha so overlapping shells
-                // remain readable without hiding the battle underneath.
-                rm::appendShieldSphere(shieldScratch, centre,
-                                       rm::sim::fxToFloat(shield.radiusElmos),
+        });
+
+        // MERGE, serial and in draw order — `shieldScratch` order, per-batch
+        // instance order and the instance index `drawIndexOf` records all come
+        // from this walk, exactly as the single loop produced them.
+        for (std::size_t i = 0; i < drawUnits.size(); ++i) {
+            const StagedDraw& draw = staged[i];
+            if (draw.batch == kNoBatch || draw.batch >= drawScratch.size()) {
+                continue;
+            }
+            const rm::DrawUnit& unit = drawUnits[i];
+            const std::size_t batch = draw.batch;
+            if (draw.shieldRadius > 0.0f) {
+                // Same cyan as the shield HUD, with calibrated low alpha so overlapping
+                // shells remain readable without hiding the battle underneath.
+                rm::appendShieldSphere(shieldScratch, draw.shieldCentre,
+                                       draw.shieldRadius,
                                        {{0.2f, 0.75f, 1.0f, 0.12f}});
             }
-            // Still keyed by SLOT, because that is what selection and picking name a unit by,
-            // and a snapshot entry carries the id it came from.
+            // Still keyed by SLOT, because that is what selection and picking name a
+            // unit by, and a snapshot entry carries the id it came from.
             const auto slot = static_cast<std::size_t>(unit.id.index);
             if (slot < drawIndexOf.size()) {
                 drawIndexOf[slot] =
                     rm::SelectionEntry{.batch = batch, .instance = drawScratch[batch].size()};
             }
-            rm::UnitInstance instance = instanceFor(unit, batch);
+            rm::UnitInstance instance = draw.instance;
             // The turret pose arrived on the DrawUnit — the sim's own scalars,
             // interpolated. The builder arm below is still presentation-side.
             applyBuilderArm(instance, unit, batch, dtSeconds);

@@ -62,14 +62,11 @@ struct TaskPool::Impl {
     void run(std::size_t n,
              const std::function<void(std::size_t, std::size_t)>& fn) noexcept {
         // BEFORE publishing: no lane may still hold a view of the previous
-        // job's fields when they are overwritten. A worker that observed a
-        // generation counts itself under the lock before leaving the wait —
-        // and a worker that has NOT woken yet cannot pass the predicate until
-        // the generation bump below — so a zero here means nobody anywhere is
-        // between the wait and the drain with a stale job pointer. Without
-        // this barrier a preempted worker could wake into fields mid-rewrite:
-        // the old (by then dead) function called with the new range.
-        while (inFlight.load(std::memory_order_acquire) != 0) {
+        // job's fields when they are overwritten. The join below already
+        // guarantees all of these are zero — the barrier is the stated
+        // invariant, not the mechanism that establishes it.
+        while (inFlight.load(std::memory_order_acquire) != 0
+               || pendingWake.load(std::memory_order_acquire) != 0) {
             std::this_thread::yield();
         }
         {
@@ -80,6 +77,12 @@ struct TaskPool::Impl {
             chunkSize = (n + chunks - 1) / chunks;
             nextChunk.store(0, std::memory_order_relaxed);
             finished.store(0, std::memory_order_relaxed);
+            // Every worker owes this generation a check-in: the claim is what
+            // keeps `fn` alive, and a worker that has woken for the job but
+            // not yet claimed is INVISIBLE to `inFlight` — without this count
+            // the join could retire `fn` while a preempted worker still holds
+            // a pointer to it.
+            pendingWake.store(threads.size(), std::memory_order_release);
             ++generation;  // release: the job is fully described before this lands
         }
         cv.notify_all();
@@ -87,10 +90,11 @@ struct TaskPool::Impl {
         drainJob();
         inFlight.fetch_sub(1, std::memory_order_acq_rel);
         // The caller's own drain returns when chunks run out, which can be
-        // before the last one finishes on another lane — wait for it here, and
-        // for every lane to have released its claim, so the next `run`'s
-        // pre-publish barrier sees a drained job rather than a live one.
+        // before the last one finishes on another lane — wait for it here,
+        // for every woken worker to have claimed, and for every claim to be
+        // released: `fn` must outlive the last lane that could read `job`.
         while (finished.load(std::memory_order_acquire) != chunks
+               || pendingWake.load(std::memory_order_acquire) != 0
                || inFlight.load(std::memory_order_acquire) != 0) {
             std::this_thread::yield();
         }
@@ -106,10 +110,12 @@ struct TaskPool::Impl {
                 if (stopping) {
                     return;
                 }
-                // The claim is taken UNDER the lock, before the lane can read
-                // a single job field — that ordering is what makes the
-                // publisher's `inFlight == 0` barrier mean "no stale readers".
+                // Claim BEFORE the check-in, both under the lock: the check-in
+                // is what lets the join return, so it must never pass while a
+                // woken worker is still short of its claim — that order is
+                // the whole fix for the stale-`job` drain.
                 inFlight.fetch_add(1, std::memory_order_acq_rel);
+                pendingWake.fetch_sub(1, std::memory_order_acq_rel);
             }
             drainJob();
             inFlight.fetch_sub(1, std::memory_order_acq_rel);
@@ -133,6 +139,10 @@ struct TaskPool::Impl {
     std::atomic<std::size_t> nextChunk{0};
     std::atomic<std::size_t> finished{0};
     std::atomic<int> inFlight{0};
+    /// Workers that have been woken for the live generation but not yet
+    /// claimed. The join waits on it so `fn` cannot die between a worker's
+    /// wake and its `inFlight` claim.
+    std::atomic<std::size_t> pendingWake{0};
 };
 
 TaskPool::TaskPool(std::size_t workers) : lanes_(std::max<std::size_t>(workers, 1)) {

@@ -1,5 +1,6 @@
 #include "core/sim/SpatialGrid.hpp"
 
+#include "core/TaskPool.hpp"
 #include "core/sim/UnitStore.hpp"
 
 #include <algorithm>
@@ -30,20 +31,30 @@ namespace {
 void SpatialGrid::rebuild(const UnitStore& store, Fx cellSize) {
     cellSize_ = std::max(cellSize, kMinCellSize);
 
-    entries_.clear();
-    entries_.reserve(store.slotCount());
-
+    // The fill is fork-joined (ADR-036/D15): each lane writes only its own
+    // slots' entries, and the sort below is a TOTAL order, so the answer does
+    // not depend on which lane computed which entry — only on the fields,
+    // which are the same either way. The sort itself stays serial: it is a
+    // total order over a few thousand tiny records and its order IS the
+    // result, so a parallel sort would spend the win on proving nothing.
     const std::span<const Transform> transforms = store.transforms();
-    for (UnitIndex slot = 0; slot < transforms.size(); ++slot) {
-        const Fx x = transforms[slot].x;
-        const Fx z = transforms[slot].z;
-        entries_.push_back(Entry{
-            .cell = packCell((x / cellSize_).floorToInt(), (z / cellSize_).floorToInt()),
-            .slot = slot,
-            .x = x,
-            .z = z,
-        });
-    }
+    entries_.resize(transforms.size());
+    rm::parallelFor(transforms.size(), [this,
+                                        &transforms](std::size_t first,
+                                                     std::size_t last) {
+        for (UnitIndex slot = static_cast<UnitIndex>(first);
+             slot < static_cast<UnitIndex>(last); ++slot) {
+            const Fx x = transforms[slot].x;
+            const Fx z = transforms[slot].z;
+            entries_[slot] = Entry{
+                .cell = packCell((x / cellSize_).floorToInt(),
+                                 (z / cellSize_).floorToInt()),
+                .slot = slot,
+                .x = x,
+                .z = z,
+            };
+        }
+    });
 
     // By cell, then by slot. The second key is what makes the sort a total order rather than
     // merely a grouping — two units in one cell must come out in a defined sequence, or a scan

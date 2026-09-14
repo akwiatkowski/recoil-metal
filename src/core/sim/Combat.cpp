@@ -2726,6 +2726,199 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos,
                           events, targetLayers, false, std::nullopt, std::nullopt, features);
 }
 
+/// The part of a shot's tick that touches only the shot and the world —
+/// lifetime, guidance, gravity, integration and the Aeon flare divert — shared
+/// by the fork-joined flight pass and the serial interceptor path below.
+///
+/// Returns the tick-start position the swept segment begins at, captured
+/// BEFORE integration, exactly where the serial loop captured it.
+///
+/// Writes only `shot`: a lane can run it on its own shot without reading or
+/// writing anything another lane owns, which is the whole of what
+/// ADR-036/D15 asks of the parallel phase. `redirectMissile` is deliberately
+/// NOT in here — it writes the shared `redirects` cooldowns, so it runs in the
+/// serial apply walk where ordering is defined.
+[[nodiscard]] std::array<Fx, 3> advanceFlight(
+    Projectile& shot, Fx gravityPerTickSquared, const UnitStore& store,
+    const UnitCatalog* catalog, std::span<const Army> armies) noexcept {
+    --shot.ticksRemaining;
+
+    const std::array<Fx, 3> oldVelocity = shot.velocity;
+    if (store.alive(shot.guidanceTarget) && shot.turnPerTick > 0) {
+        const auto target = positionOf(store.transforms()[shot.guidanceTarget.index]);
+        const Fx dx = target[0] - shot.position[0];
+        const Fx dy = target[1] + kMuzzleHeight * Fx::fromRatio(1, 2) - shot.position[1];
+        const Fx dz = target[2] - shot.position[2];
+        const Brad yaw = fxBearing(shot.velocity[0], shot.velocity[2]);
+        const Brad pitch = fxBearing(shot.velocity[1], fxHypot(shot.velocity[0], shot.velocity[2]));
+        // A bounded yaw/pitch pursuit controller, not a claim of retail's native
+        // steering law. Both axes share the authored angular budget.
+        const auto error = [](Brad from, Brad to) {
+            const std::uint16_t wrapped = static_cast<std::uint16_t>(to - from);
+            return wrapped > kBradHalfTurn ? static_cast<std::int32_t>(wrapped) - 65536
+                                           : static_cast<std::int32_t>(wrapped);
+        };
+        const Fx yawError = Fx::fromInt(error(yaw, fxBearing(dx, dz)));
+        const Fx pitchError = Fx::fromInt(error(pitch, fxBearing(dy, fxHypot(dx, dz))));
+        const Fx length = fxHypot(yawError, pitchError);
+        const Fx fraction = length > Fx{} ? std::min(Fx::fromInt(1), Fx::fromInt(shot.turnPerTick) / length)
+                                          : Fx{};
+        const Brad nextYaw = static_cast<Brad>(yaw + (yawError * fraction).raw() / (1 << kFxFractionalBits));
+        const Brad nextPitch = static_cast<Brad>(pitch + (pitchError * fraction).raw() / (1 << kFxFractionalBits));
+        Fx speed = fxHypot(fxHypot(shot.velocity[0], shot.velocity[2]), shot.velocity[1]);
+        if (shot.maxSpeedPerTick > Fx{}) {
+            speed = std::min(shot.maxSpeedPerTick, speed + shot.accelerationPerTickSquared);
+        }
+        shot.velocity = {fxSin(nextYaw) * fxCos(nextPitch) * speed,
+                         fxSin(nextPitch) * speed, fxCos(nextYaw) * fxCos(nextPitch) * speed};
+    }
+    if (shot.arc != unitdef::BallisticArc::None) {
+        shot.velocity[1] -= gravityPerTickSquared;
+    }
+
+    const std::array<Fx, 3> from = shot.position;
+    // Velocity is already per tick. Retail integrates the average before and after this
+    // tick's acceleration; the delta form avoids overflowing `old + new` before halving.
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const Fx averageVelocity =
+            oldVelocity[axis]
+            + (shot.velocity[axis] - oldVelocity[axis]) * Fx::fromRatio(1, 2);
+        shot.position[axis] += averageVelocity;
+    }
+
+    // Aeon flares divert before anything impacts: a retargeted shot must not resolve
+    // a unit hit on its pre-diversion course in the same tick (`C-088` (c)).
+    divertToFlareOwner(shot, store, catalog, armies);
+    return from;
+}
+
+/// Everything a shot's sweep decided this tick, held until the serial apply
+/// walk reaches it. The lane that flew the shot computed these against the
+/// same read-only world the serial pass would have, so applying them in list
+/// order reproduces the serial pass exactly.
+struct StagedFlight {
+    std::array<Fx, 3> position{};
+    std::array<Fx, 3> velocity{};
+    UnitId guidanceTarget{};
+    UnitId impactTarget{};
+    int ticksRemaining = 0;
+    ImpactType pendingImpact = ImpactType::Invalid;
+    bool computed = false;
+};
+
+/// The unit/terrain sweep a flying shot ends its tick with: strike detection,
+/// the C-168 proximity fallback, and the ground-miss test. Writes the outcome
+/// onto `shot` — pending impact, target, snapped position. Interceptors never
+/// reach it: they take their own branch in the apply walk.
+void sweepFlight(Projectile& shot, std::array<Fx, 3> from,
+                 const UnitStore& store, std::span<const Army> armies,
+                 const UnitCatalog* catalog, const Terrain& terrain) {
+    // TWO ways a shot ends, and both are needed.
+    //
+    // It HITS something: the first hostile body on the extended sweep, or a body inside
+    // C-168's old-position sphere when motion is too small for a sweep.
+    //
+    // Or it reaches the GROUND, which is what a miss does. Height is the test there
+    // rather than proximity, because a near miss must land rather than fly on and hit
+    // whatever happens to be behind it.
+    const std::optional<SweptHit> struck =
+        firstStruck(shot, from, shot.position, store, armies, catalog);
+    const std::optional<SweepFraction> groundHit =
+        terrainEntry(from, shot.position, terrain);
+    // Retail skips the fallback entity query entirely once this tick has a surface hit.
+    const bool hitUnit =
+        struck
+        && (!groundHit
+            || (!struck->proximityFallback
+                && struck->fraction < *groundHit));
+
+    if (!hitUnit && !groundHit) {
+        if (shot.ticksRemaining <= 0) {
+            shot.pendingImpact = shot.position[1] < terrain.waterLevel()
+                                   ? ImpactType::Underwater
+                                   : ImpactType::Air;
+            shot.impactTarget = {};
+        }
+        return;
+    }
+
+    if (hitUnit) {
+        if (struck->proximityFallback) {
+            shot.position = from;
+        } else {
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                shot.position[axis] =
+                    interpolateSweep(from[axis], shot.position[axis], struck->fraction);
+            }
+        }
+        shot.impactTarget = store.idAt(struck->slot);
+        if (struck->shield) {
+            shot.pendingImpact = ImpactType::Shield;
+        } else if (shot.position[1] < terrain.waterLevel()) {
+            shot.pendingImpact = ImpactType::UnitUnderwater;
+        } else {
+            shot.pendingImpact = store.motion()[struck->slot].airborne
+                                   ? ImpactType::UnitAir
+                                   : ImpactType::Unit;
+        }
+    } else {
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            shot.position[axis] =
+                interpolateSweep(from[axis], shot.position[axis], *groundHit);
+        }
+        shot.position[1] = terrain.heightAt(shot.position[0], shot.position[2]);
+        shot.pendingImpact = ImpactType::Terrain;
+        shot.impactTarget = {};
+    }
+}
+
+/// One pending impact resolved in place: the C-173 event, then the damage —
+/// single-target or area — and finally the shot's own fields reset for
+/// removal. This writes the world (health, features, events), which is why it
+/// is the segment boundary the parallel flight phases are built around.
+void resolvePendingImpact(Projectile& shot, UnitStore& store,
+                          std::span<const Army> armies,
+                          const UnitCatalog* catalog, EventQueue* events,
+                          FeatureStore* features) {
+    const UnitId target = store.alive(shot.impactTarget)
+                            ? shot.impactTarget
+                            : UnitId{};
+    emit(events, Event{
+                     .kind = EventKind::ProjectileImpact,
+                     .unit = target,
+                     .instigator = shot.firedBy,
+                     .army = shot.firedByArmy,
+                     // The BASE, because an event says what was thrown rather than
+                     // what each target took — `UnitDamaged` carries the latter.
+                     .amount = shot.damage.base,
+                     .at = shot.position,
+                     .impactType = shot.pendingImpact,
+                     .visualId = shot.visualId,
+                     .visualDirection = shot.velocity,
+                 });
+    if (shot.damageRadiusElmos <= Fx{}) {
+        if (target.generation != 0) {
+            (void)damageTarget(target.index, shot.damage, shot.firedByArmy, store,
+                               armies, catalog, shot.firedBy, events,
+                               shot.targetLayers);
+        }
+    } else {
+        const std::optional<UnitIndex> impactTarget = target.generation != 0
+                                                        ? std::optional<UnitIndex>{
+                                                              target.index}
+                                                        : std::nullopt;
+        (void)damageTargets(shot.position, shot.damageRadiusElmos, shot.damage,
+                             shot.firedByArmy, store, armies, catalog, shot.firedBy,
+                             events, shot.targetLayers, false, std::nullopt, impactTarget, features);
+    }
+
+    // Recoil Metal has no Lua projectile lifecycle yet, so retain its established
+    // destroy-after-impact policy after reproducing the native one-tick timing.
+    shot.pendingImpact = ImpactType::Invalid;
+    shot.impactTarget = {};
+    shot.ticksRemaining = 0;
+}
+
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
                         EventQueue* events, const UnitCatalog* catalog,
@@ -2746,186 +2939,137 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                                       && shot.pendingImpact == ImpactType::Invalid});
     }
 
-    for (Projectile& shot : projectiles) {
-        // Retail detects contact in one MotionTick and invokes Impact at the start of the next.
-        // This branch runs before lifetime and motion so the projectile remains exactly at the
-        // recorded point for that intervening tick (`C-173`).
-        if (shot.pendingImpact != ImpactType::Invalid) {
-            const UnitId target = store.alive(shot.impactTarget)
-                                    ? shot.impactTarget
-                                    : UnitId{};
-            emit(events, Event{
-                             .kind = EventKind::ProjectileImpact,
-                             .unit = target,
-                             .instigator = shot.firedBy,
-                             .army = shot.firedByArmy,
-                             // The BASE, because an event says what was thrown rather than
-                             // what each target took — `UnitDamaged` carries the latter.
-                             .amount = shot.damage.base,
-                             .at = shot.position,
-                             .impactType = shot.pendingImpact,
-                             .visualId = shot.visualId,
-                             .visualDirection = shot.velocity,
-                         });
-            if (shot.damageRadiusElmos <= Fx{}) {
-                if (target.generation != 0) {
-                    (void)damageTarget(target.index, shot.damage, shot.firedByArmy, store,
-                                       armies, catalog, shot.firedBy, events,
-                                       shot.targetLayers);
+    // FLIGHT, fork-joined in segments (ADR-036/D15). A flying shot's sweep
+    // reads the UNIT world — alive flags, shields, airborne layers — and a
+    // pending-impact resolution WRITES that world, so the shots between two
+    // impacts must fly against exactly the state their serial position
+    // implies: after every earlier resolution, before every later one. The
+    // list is therefore split at each pending impact; a segment's flight runs
+    // in parallel (each lane's shot reads read-only state and writes only its
+    // own staged outcome), its outcomes land in list order, and the boundary
+    // impact resolves where the serial pass resolved it.
+    //
+    // Staying serial inside a segment's apply walk:
+    //   * interceptor shots — their sweep reads OTHER shots' live fields, a
+    //     world that only exists in the mixed state the ordered walk produces;
+    //   * `redirectMissile` — it spends a shared `redirects` cooldown.
+    std::vector<StagedFlight> staged(projectiles.size());
+
+    // One segment [lo, hi): parallel flight, then the ordered apply walk.
+    const auto runSegment = [&](std::size_t lo, std::size_t hi) {
+        rm::parallelFor(hi - lo, [&](std::size_t first, std::size_t last) {
+            for (std::size_t i = lo + first; i < lo + last; ++i) {
+                const Projectile& shot = projectiles[i];
+                if (shot.ticksRemaining <= 0 || shot.interceptor) {
+                    continue;
                 }
-            } else {
-                const std::optional<UnitIndex> impactTarget = target.generation != 0
-                                                                ? std::optional<UnitIndex>{
-                                                                      target.index}
-                                                                : std::nullopt;
-                (void)damageTargets(shot.position, shot.damageRadiusElmos, shot.damage,
-                                     shot.firedByArmy, store, armies, catalog, shot.firedBy,
-                                     events, shot.targetLayers, false, std::nullopt, impactTarget, features);
+                // The helpers mutate a Projectile, so the lane flies a COPY:
+                // the staged outcome is the per-slot write, and the live list
+                // keeps its tick-start values for the ordered walk below to
+                // reproduce the mixed read pattern the serial pass made.
+                Projectile flying = shot;
+                const std::array<Fx, 3> from = advanceFlight(
+                    flying, gravityPerTickSquared, store, catalog, armies);
+                sweepFlight(flying, from, store, armies, catalog, terrain);
+                staged[i] = StagedFlight{
+                    .position = flying.position,
+                    .velocity = flying.velocity,
+                    .guidanceTarget = flying.guidanceTarget,
+                    .impactTarget = flying.impactTarget,
+                    .ticksRemaining = flying.ticksRemaining,
+                    .pendingImpact = flying.pendingImpact,
+                    .computed = true,
+                };
             }
+        });
 
-            // Recoil Metal has no Lua projectile lifecycle yet, so retain its established
-            // destroy-after-impact policy after reproducing the native one-tick timing.
-            shot.pendingImpact = ImpactType::Invalid;
-            shot.impactTarget = {};
-            shot.ticksRemaining = 0;
-            continue;
-        }
-
-        if (shot.ticksRemaining <= 0) {
-            continue;
-        }
-        --shot.ticksRemaining;
-
-        const std::array<Fx, 3> oldVelocity = shot.velocity;
-        if (store.alive(shot.guidanceTarget) && shot.turnPerTick > 0) {
-            const auto target = positionOf(store.transforms()[shot.guidanceTarget.index]);
-            const Fx dx = target[0] - shot.position[0];
-            const Fx dy = target[1] + kMuzzleHeight * Fx::fromRatio(1, 2) - shot.position[1];
-            const Fx dz = target[2] - shot.position[2];
-            const Brad yaw = fxBearing(shot.velocity[0], shot.velocity[2]);
-            const Brad pitch = fxBearing(shot.velocity[1], fxHypot(shot.velocity[0], shot.velocity[2]));
-            // A bounded yaw/pitch pursuit controller, not a claim of retail's native
-            // steering law. Both axes share the authored angular budget.
-            const auto error = [](Brad from, Brad to) {
-                const std::uint16_t wrapped = static_cast<std::uint16_t>(to - from);
-                return wrapped > kBradHalfTurn ? static_cast<std::int32_t>(wrapped) - 65536
-                                               : static_cast<std::int32_t>(wrapped);
-            };
-            const Fx yawError = Fx::fromInt(error(yaw, fxBearing(dx, dz)));
-            const Fx pitchError = Fx::fromInt(error(pitch, fxBearing(dy, fxHypot(dx, dz))));
-            const Fx length = fxHypot(yawError, pitchError);
-            const Fx fraction = length > Fx{} ? std::min(Fx::fromInt(1), Fx::fromInt(shot.turnPerTick) / length)
-                                              : Fx{};
-            const Brad nextYaw = static_cast<Brad>(yaw + (yawError * fraction).raw() / (1 << kFxFractionalBits));
-            const Brad nextPitch = static_cast<Brad>(pitch + (pitchError * fraction).raw() / (1 << kFxFractionalBits));
-            Fx speed = fxHypot(fxHypot(shot.velocity[0], shot.velocity[2]), shot.velocity[1]);
-            if (shot.maxSpeedPerTick > Fx{}) {
-                speed = std::min(shot.maxSpeedPerTick, speed + shot.accelerationPerTickSquared);
-            }
-            shot.velocity = {fxSin(nextYaw) * fxCos(nextPitch) * speed,
-                             fxSin(nextPitch) * speed, fxCos(nextYaw) * fxCos(nextPitch) * speed};
-        }
-        if (shot.arc != unitdef::BallisticArc::None) {
-            shot.velocity[1] -= gravityPerTickSquared;
-        }
-
-        const std::array<Fx, 3> from = shot.position;
-        // Velocity is already per tick. Retail integrates the average before and after this
-        // tick's acceleration; the delta form avoids overflowing `old + new` before halving.
-        for (std::size_t axis = 0; axis < 3; ++axis) {
-            const Fx averageVelocity =
-                oldVelocity[axis]
-                + (shot.velocity[axis] - oldVelocity[axis]) * Fx::fromRatio(1, 2);
-            shot.position[axis] += averageVelocity;
-        }
-
-        // Aeon flares divert before anything impacts: a retargeted shot must not resolve
-        // a unit hit on its pre-diversion course in the same tick (`C-088` (c)).
-        divertToFlareOwner(shot, store, catalog, armies);
-        // The Cybran redirect answers second: it only fires on shots the flare ignored.
-        redirectMissile(shot, store, armies, redirects);
-
-        if (shot.interceptor) {
-            // C-087: interception DAMAGES; it does not force-destroy. The struck shot dies
-            // only when its authored pool (`Defense.MaxHealth`: tacticals 1-3, nukes 25)
-            // runs out; a shot with no authored pool dies to any damage, and the interceptor
-            // itself is consumed on contact either way.
-            if (shot.damage.base > Mag{}) {
-                if (Projectile* target = interceptedProjectile(shot, from, shot.position,
-                                                                projectiles, starts,
-                                                                armies)) {
-                    if (target->maxHealth > Mag{}) {
-                        target->health -= shot.damage.base;
-                    }
-                    if (target->maxHealth <= Mag{} || target->health <= Mag{}) {
-                        target->pendingImpact = ImpactType::Invalid;
-                        target->impactTarget = {};
-                        target->ticksRemaining = 0;
-                    }
-                    shot.ticksRemaining = 0;
-                }
-            }
-            continue;
-        }
-
-        // TWO ways a shot ends, and both are needed.
-        //
-        // It HITS something: the first hostile body on the extended sweep, or a body inside
-        // C-168's old-position sphere when motion is too small for a sweep.
-        //
-        // Or it reaches the GROUND, which is what a miss does. Height is the test there
-        // rather than proximity, because a near miss must land rather than fly on and hit
-        // whatever happens to be behind it.
-        const std::optional<SweptHit> struck =
-            firstStruck(shot, from, shot.position, store, armies, catalog);
-        const std::optional<SweepFraction> groundHit =
-            terrainEntry(from, shot.position, terrain);
-        // Retail skips the fallback entity query entirely once this tick has a surface hit.
-        const bool hitUnit =
-            struck
-            && (!groundHit
-                || (!struck->proximityFallback
-                    && struck->fraction < *groundHit));
-
-        if (!hitUnit && !groundHit) {
+        for (std::size_t i = lo; i < hi; ++i) {
+            Projectile& shot = projectiles[i];
             if (shot.ticksRemaining <= 0) {
+                // Inert at tick start — or killed by an earlier interceptor,
+                // in which case its staged flight is dropped like the serial
+                // pass dropped the un-run iteration.
+                continue;
+            }
+
+            if (shot.interceptor) {
+                // The whole iteration runs inline: its flight mutates only the
+                // shot, but the interception sweep reads every other shot's
+                // live fields — decidable only at this point in the walk.
+                const std::array<Fx, 3> from = advanceFlight(
+                    shot, gravityPerTickSquared, store, catalog, armies);
+                // The Cybran redirect answers second: it only fires on shots the
+                // flare ignored.
+                redirectMissile(shot, store, armies, redirects);
+
+                // C-087: interception DAMAGES; it does not force-destroy. The struck
+                // shot dies only when its authored pool (`Defense.MaxHealth`:
+                // tacticals 1-3, nukes 25) runs out; a shot with no authored pool
+                // dies to any damage, and the interceptor itself is consumed on
+                // contact either way.
+                if (shot.damage.base > Mag{}) {
+                    if (Projectile* target = interceptedProjectile(
+                            shot, from, shot.position, projectiles, starts, armies)) {
+                        if (target->maxHealth > Mag{}) {
+                            target->health -= shot.damage.base;
+                        }
+                        if (target->maxHealth <= Mag{} || target->health <= Mag{}) {
+                            target->pendingImpact = ImpactType::Invalid;
+                            target->impactTarget = {};
+                            target->ticksRemaining = 0;
+                        }
+                        shot.ticksRemaining = 0;
+                    }
+                }
+                continue;
+            }
+
+            const StagedFlight& flight = staged[i];
+            if (!flight.computed) {
+                continue;  // unreachable for a live flying shot; kept as the
+                           // cost of stating the invariant rather than asserting it
+            }
+            shot.position = flight.position;
+            shot.velocity = flight.velocity;
+            shot.guidanceTarget = flight.guidanceTarget;
+            shot.ticksRemaining = flight.ticksRemaining;
+
+            // Redirect AFTER flight, BEFORE the outcome — the serial pass's
+            // order. Its decision reads the staged position and lifetime just
+            // applied, matching what the serial sweep order showed it.
+            redirectMissile(shot, store, armies, redirects);
+            if (flight.pendingImpact != ImpactType::Invalid) {
+                // A hit is geometric — a redirect that killed the shot this
+                // tick cannot unmake the contact the serial sweep still saw.
+                shot.pendingImpact = flight.pendingImpact;
+                shot.impactTarget = flight.impactTarget;
+            } else if (shot.ticksRemaining <= 0) {
+                // The redirect's kill IS the serial sweep's expiry gate: the
+                // staged sweep ran while the shot still had lifetime, so a
+                // no-hit flight now earns the same Air/Underwater impact the
+                // serial pass gave a shot that died this tick.
                 shot.pendingImpact = shot.position[1] < terrain.waterLevel()
                                        ? ImpactType::Underwater
                                        : ImpactType::Air;
                 shot.impactTarget = {};
             }
+        }
+    };
+
+    // Walk the segments: everything before a pending-impact index flies
+    // against the pre-resolution world, then the impact resolves — exactly
+    // the interleaving the serial loop produced.
+    std::size_t segmentStart = 0;
+    for (std::size_t i = 0; i < projectiles.size(); ++i) {
+        if (projectiles[i].pendingImpact == ImpactType::Invalid) {
             continue;
         }
-
-        if (hitUnit) {
-            if (struck->proximityFallback) {
-                shot.position = from;
-            } else {
-                for (std::size_t axis = 0; axis < 3; ++axis) {
-                    shot.position[axis] =
-                        interpolateSweep(from[axis], shot.position[axis], struck->fraction);
-                }
-            }
-            shot.impactTarget = store.idAt(struck->slot);
-            if (struck->shield) {
-                shot.pendingImpact = ImpactType::Shield;
-            } else if (shot.position[1] < terrain.waterLevel()) {
-                shot.pendingImpact = ImpactType::UnitUnderwater;
-            } else {
-                shot.pendingImpact = store.motion()[struck->slot].airborne
-                                       ? ImpactType::UnitAir
-                                       : ImpactType::Unit;
-            }
-        } else {
-            for (std::size_t axis = 0; axis < 3; ++axis) {
-                shot.position[axis] =
-                    interpolateSweep(from[axis], shot.position[axis], *groundHit);
-            }
-            shot.position[1] = terrain.heightAt(shot.position[0], shot.position[2]);
-            shot.pendingImpact = ImpactType::Terrain;
-            shot.impactTarget = {};
-        }
+        runSegment(segmentStart, i);
+        resolvePendingImpact(projectiles[i], store, armies, catalog, events,
+                             features);
+        segmentStart = i + 1;
     }
+    runSegment(segmentStart, projectiles.size());
 
     // A zero-lifetime shot with an impact still has one tick of work left. Everything else at
     // zero is spent, removed after the pass so the list is not resized while it is walked.
