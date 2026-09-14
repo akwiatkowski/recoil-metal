@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace rm::sim {
@@ -138,6 +139,106 @@ private:
     std::vector<PathSearchNode> open_;
     std::vector<std::array<Fx, 2>> path_;
     bool finished_ = false;
+};
+
+/// A content fingerprint distinguishing two grids that happen to share an
+/// address across requests.
+///
+/// Requests snapshot their grid by COPY, so pointer identity cannot key the
+/// flow-field cache — two movers on the same terrain arrive holding different
+/// shared_ptrs to equal contents. FNV-1a over the dimensions and the passable
+/// bytes: cheap enough to run per request, and a grid mutated in place (the
+/// C-177 re-request path edits `passable` directly) earns a new fingerprint,
+/// which is exactly the invalidation that path needs.
+[[nodiscard]] std::uint64_t fingerprintOf(const PassabilityGrid& grid) noexcept;
+
+/// A shared field of cost-to-goal over one grid — ADR-035's layer 2.
+///
+/// A reverse Dijkstra grown lazily from the goal cell: `stepUntil` expands the
+/// frontier only until the cells it was asked about are CLOSED, so a field's
+/// footprint stays the size of its demand rather than flooding the map. Every
+/// requester to the same goal cell shares the object — the second mover to a
+/// click point walks a gradient that is already settled instead of paying a
+/// search of its own.
+///
+/// `blocked` is the dynamic overlay (layer 3): cells under standing structures
+/// read as impassable WITHOUT being written into the terrain grid, so a placed
+/// building reroutes new fields while the grid underneath stays immutable. A
+/// field records every cell its frontier ever entered (`touched`); a blocking
+/// change inside that region marks it `stale` and the cache drops it, while a
+/// change outside leaves the field alone — "dirties only the fields whose
+/// region it touches".
+class FlowField {
+public:
+    enum class Reach : std::uint8_t { Pending, Reached, Unreachable };
+
+    FlowField(std::shared_ptr<const PassabilityGrid> grid, int goalX, int goalZ,
+              std::vector<std::uint8_t> blocked = {});
+
+    /// Expands at most `budget` nodes, stopping early once every cell in
+    /// `until` is settled. `until` is a span rather than a cell because two
+    /// armies can share one field and the step owes them all progress.
+    void stepUntil(std::span<const int> until, std::size_t budget);
+
+    /// Whether `cell` (row-major index) is settled: reached once closed,
+    /// unreachable once the frontier can never arrive — including a cell the
+    /// grid or the overlay has always refused, which answers at once rather
+    /// than waiting out the expansion.
+    [[nodiscard]] Reach reach(int cell) const noexcept;
+
+    /// Whether `cell` ever entered the frontier — the region a blocking change
+    /// inside it would invalidate.
+    [[nodiscard]] bool touched(int cell) const noexcept;
+
+    /// Waypoints from a world position to the goal's exact target, in the same
+    /// shape `findPath` returns: cell centres, start cell excluded, exact
+    /// target last. Empty while the start is unsettled — the caller checks
+    /// `reach` first.
+    [[nodiscard]] std::vector<std::array<Fx, 2>> route(Fx fromX, Fx fromZ, Fx toX,
+                                                       Fx toZ) const;
+
+    /// Whether a blocking change inside the explored region has retired this
+    /// field. A stale field stops spending budget and its owner re-attaches.
+    [[nodiscard]] bool stale() const noexcept { return stale_; }
+    void markStale() noexcept { stale_ = true; }
+
+    [[nodiscard]] int goalX() const noexcept { return goalX_; }
+    [[nodiscard]] int goalZ() const noexcept { return goalZ_; }
+    [[nodiscard]] const std::vector<Fx>& costs() const noexcept { return costs_; }
+    [[nodiscard]] const std::vector<int>& next() const noexcept { return next_; }
+    [[nodiscard]] const std::vector<std::uint8_t>& closed() const noexcept { return closed_; }
+    [[nodiscard]] const std::vector<PathSearchNode>& open() const noexcept { return open_; }
+    [[nodiscard]] const std::vector<std::uint8_t>& explored() const noexcept {
+        return touched_;
+    }
+
+private:
+    [[nodiscard]] bool standable(int x, int z) const noexcept;
+    /// The cheapest settled neighbour a requester standing in a BLOCKED cell can
+    /// escape through — its own cell never settles (the overlay refuses it), so
+    /// the field answers its route from next door instead. A factory's product
+    /// rolls off into cells the factory itself claims; without this the first
+    /// order out of every yard reads unreachable. -1 when there is no way out.
+    [[nodiscard]] int escapeCell(int cell) const noexcept;
+
+    std::shared_ptr<const PassabilityGrid> grid_;
+    /// Snapshot of the overlay the field was built on — a copy, because the
+    /// service replaces its layer on change and a cached field outlives it.
+    std::vector<std::uint8_t> blocked_;
+    int goalX_ = 0;
+    int goalZ_ = 0;
+    /// Cost-to-goal per closed-or-frontier cell; `next` is the settled step
+    /// TOWARD the goal (the cell that relaxed this one), which is what makes a
+    /// route a walk and not a search.
+    std::vector<Fx> costs_;
+    std::vector<int> next_;
+    std::vector<std::uint8_t> closed_;
+    std::vector<std::uint8_t> touched_;
+    std::vector<PathSearchNode> open_;
+    /// The goal cell itself is out: nothing stands there, so every reach is
+    /// Unreachable — the same early answer `PathSearch` gave an impassable goal.
+    bool dead_ = false;
+    bool stale_ = false;
 };
 
 /// Whether a structure of `radiusElmos` may be founded at a world point.

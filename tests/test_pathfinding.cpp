@@ -6,6 +6,7 @@
 #include "core/map/HeightField.hpp"
 #include "core/sim/Pathfinding.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <numbers>
@@ -280,6 +281,137 @@ TEST_CASE("pathfinding is deterministic") {
         CHECK(first[i][0] == second[i][0]);
         CHECK(first[i][1] == second[i][1]);
     }
+}
+
+TEST_CASE("a flow field routes a settled start to its goal") {
+    // ADR-035 layer 2: one reverse Dijkstra from the goal cell; a requester's
+    // route is a gradient walk off the shared field rather than a search of its own.
+    const HeightField field = flatField(64);
+    const auto grid =
+        std::make_shared<PassabilityGrid>(rm::sim::buildPassability(field, -1000.0f));
+
+    rm::sim::FlowField flow(grid, /*goalX=*/6, /*goalZ=*/6);
+    const int start = 0;  // cell (0,0)
+    const int starts[]{start};
+
+    for (int i = 0; i < 64 && flow.reach(start) == rm::sim::FlowField::Reach::Pending; ++i) {
+        flow.stepUntil(starts, 1000);
+    }
+    REQUIRE(flow.reach(start) == rm::sim::FlowField::Reach::Reached);
+
+    const auto route = flow.route(rm::test::fx(60.0f), rm::test::fx(60.0f),
+                                  rm::test::fx(440.0f), rm::test::fx(440.0f));
+    REQUIRE_FALSE(route.empty());
+    CHECK(route.back()[0] == rm::test::fx(440.0f));
+    CHECK(route.back()[1] == rm::test::fx(440.0f));
+    for (const auto& point : route) {
+        CHECK(grid->passableAt(grid->cellAtWorld(point[0]), grid->cellAtWorld(point[1])));
+    }
+}
+
+TEST_CASE("one flow field serves every start it has settled") {
+    const HeightField field = flatField(64);
+    const auto grid =
+        std::make_shared<PassabilityGrid>(rm::sim::buildPassability(field, -1000.0f));
+
+    rm::sim::FlowField flow(grid, /*goalX=*/6, /*goalZ=*/6);
+    const int first = 0;                       // cell (0,0)
+    const int second = 7 * grid->cellsX + 1;   // cell (1,7)
+    const int firsts[]{first};
+    const int seconds[]{second};
+
+    for (int i = 0; i < 64 && flow.reach(first) == rm::sim::FlowField::Reach::Pending; ++i) {
+        flow.stepUntil(firsts, 1000);
+    }
+    REQUIRE(flow.reach(first) == rm::sim::FlowField::Reach::Reached);
+
+    // The second requester pays only for settling ITS cell — nothing restarts.
+    for (int i = 0; i < 64 && flow.reach(second) == rm::sim::FlowField::Reach::Pending; ++i) {
+        flow.stepUntil(seconds, 1000);
+    }
+    REQUIRE(flow.reach(second) == rm::sim::FlowField::Reach::Reached);
+
+    const auto route = flow.route(rm::test::fx(96.0f), rm::test::fx(472.0f),
+                                  rm::test::fx(440.0f), rm::test::fx(440.0f));
+    REQUIRE_FALSE(route.empty());
+    CHECK(route.back()[0] == rm::test::fx(440.0f));
+    CHECK(route.back()[1] == rm::test::fx(440.0f));
+}
+
+TEST_CASE("a flow field reports a start it can never reach") {
+    HeightField field = flatField(64);
+    // A wall clean across the map: nothing can cross it.
+    setCorners(field, 32, 0, 32, field.verticesZ() - 1, 4000);
+    const auto grid =
+        std::make_shared<PassabilityGrid>(rm::sim::buildPassability(field, -1000.0f));
+
+    rm::sim::FlowField flow(grid, /*goalX=*/6, /*goalZ=*/3);
+    const int start = 1 * grid->cellsX + 1;  // cell (1,1), wrong side of the wall
+    const int starts[]{start};
+
+    for (int i = 0; i < 64 && flow.reach(start) == rm::sim::FlowField::Reach::Pending; ++i) {
+        flow.stepUntil(starts, 1000);
+    }
+    CHECK(flow.reach(start) == rm::sim::FlowField::Reach::Unreachable);
+    CHECK(flow.route(rm::test::fx(96.0f), rm::test::fx(96.0f),
+                     rm::test::fx(440.0f), rm::test::fx(224.0f)).empty());
+}
+
+TEST_CASE("a dynamic blocking layer reroutes a flow field without touching terrain") {
+    // ADR-035 layer 3: cells under placed buildings read as out, layered over the
+    // terrain grid rather than baked into it.
+    const HeightField field = flatField(64);
+    const auto grid =
+        std::make_shared<PassabilityGrid>(rm::sim::buildPassability(field, -1000.0f));
+
+    // A wall of "buildings" down column x=4, leaving a gap at row z=0 only.
+    std::vector<std::uint8_t> blocked(
+        static_cast<std::size_t>(grid->cellsX) * static_cast<std::size_t>(grid->cellsZ), 0);
+    for (int z = 1; z < grid->cellsZ; ++z) {
+        blocked[static_cast<std::size_t>(z) * static_cast<std::size_t>(grid->cellsX) + 4] = 1;
+    }
+
+    rm::sim::FlowField flow(grid, /*goalX=*/6, /*goalZ=*/6, blocked);
+    const int start = 4 * grid->cellsX + 1;  // cell (1,4), left of the wall
+    const int starts[]{start};
+
+    for (int i = 0; i < 64 && flow.reach(start) == rm::sim::FlowField::Reach::Pending; ++i) {
+        flow.stepUntil(starts, 1000);
+    }
+    REQUIRE(flow.reach(start) == rm::sim::FlowField::Reach::Reached);
+
+    const auto route = flow.route(rm::test::fx(96.0f), rm::test::fx(288.0f),
+                                  rm::test::fx(440.0f), rm::test::fx(440.0f));
+    REQUIRE_FALSE(route.empty());
+    for (const auto& point : route) {
+        const int cell = grid->cellAtWorld(point[1]) * grid->cellsX
+                       + grid->cellAtWorld(point[0]);
+        CHECK(blocked[static_cast<std::size_t>(cell)] == 0);
+    }
+    // The only way round is the gap: some waypoint must sit in row z=0.
+    CHECK(std::any_of(route.begin(), route.end(),
+                      [](const auto& point) { return point[1] < rm::test::fx(64.0f); }));
+}
+
+TEST_CASE("a flow field marks the cells its search has touched") {
+    const HeightField field = flatField(64);
+    const auto grid =
+        std::make_shared<PassabilityGrid>(rm::sim::buildPassability(field, -1000.0f));
+
+    rm::sim::FlowField flow(grid, /*goalX=*/0, /*goalZ=*/0);
+    const int start = 3;  // cell (3,0): three cells out along the top row
+    const int starts[]{start};
+    for (int i = 0; i < 64 && flow.reach(start) == rm::sim::FlowField::Reach::Pending; ++i) {
+        flow.stepUntil(starts, 1000);
+    }
+    REQUIRE(flow.reach(start) == rm::sim::FlowField::Reach::Reached);
+
+    CHECK(flow.touched(start));
+    CHECK(flow.touched(0));
+    // The far corner never entered the frontier — a building there must not dirty
+    // this field.
+    const int far = 7 * grid->cellsX + 7;
+    CHECK_FALSE(flow.touched(far));
 }
 
 TEST_CASE("path search phases use the row-major start cell and both beats") {

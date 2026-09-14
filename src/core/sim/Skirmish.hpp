@@ -297,4 +297,19 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                                const UnitCatalog& catalog,
                                                std::size_t armyCount);
 
+/// The cells a grid should treat as occupied by standing structures — ADR-035's
+/// layer-3 blocking overlay.
+///
+/// Anything ALIVE that cannot move (speedPerTick == 0) and is on the ground
+/// marks the cells its footprint circle covers, footprint plus half a cell so a
+/// building claims the cell it sits in even when centred off the middle. Mobile
+/// units deliberately do NOT appear: they move, so blocking on them would dirty
+/// fields constantly for nothing — dynamic unit blockage is the congestion
+/// pass's job.
+///
+/// Exposed so a test can assert a published route avoids exactly the cells this
+/// reports, rather than re-deriving the rule.
+[[nodiscard]] std::vector<std::uint8_t> blockingCells(const UnitStore& store,
+                                                    const PassabilityGrid& grid);
+
 } // namespace rm::sim

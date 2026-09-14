@@ -366,42 +366,45 @@ void feedPathRequest(StateHash& h, const PathRequest& request) noexcept {
     feed(h, request.targetZ);
 }
 
-void feedPathSearch(StateHash& h, const PathSearch& search) noexcept {
-    feed(h, search.startX());
-    feed(h, search.startZ());
-    feed(h, search.goalX());
-    feed(h, search.goalZ());
-    feed(h, search.targetX());
-    feed(h, search.targetZ());
-    feed(h, search.finished());
-    feed(h, search.costs().size());
-    for (const Fx cost : search.costs()) {
+void feedFlowField(StateHash& h, const FlowField& field) noexcept {
+    feed(h, field.goalX());
+    feed(h, field.goalZ());
+    feed(h, field.costs().size());
+    for (const Fx cost : field.costs()) {
         feed(h, cost);
     }
-    feed(h, search.parents().size());
-    for (const int parent : search.parents()) {
-        feed(h, parent);
+    feed(h, field.next().size());
+    for (const int next : field.next()) {
+        feed(h, next);
     }
-    feed(h, search.closed().size());
-    for (const std::uint8_t closed : search.closed()) {
+    feed(h, field.closed().size());
+    for (const std::uint8_t closed : field.closed()) {
         feed(h, static_cast<std::uint64_t>(closed));
     }
-    feed(h, search.open().size());
-    for (const PathSearchNode& node : search.open()) {
+    feed(h, field.explored().size());
+    for (const std::uint8_t touched : field.explored()) {
+        feed(h, static_cast<std::uint64_t>(touched));
+    }
+    feed(h, field.open().size());
+    for (const PathSearchNode& node : field.open()) {
         feed(h, node.f);
         feed(h, node.cell);
     }
-    feed(h, search.path().size());
-    for (const std::array<Fx, 2>& waypoint : search.path()) {
-        feed(h, waypoint);
-    }
+}
+
+void feedActiveField(StateHash& h, const PathService::ActiveField& active) noexcept {
+    feed(h, active.gridFingerprint);
+    feed(h, active.goalX);
+    feed(h, active.goalZ);
+    feed(h, active.startCell);
+    feedFlowField(h, *active.field);
 }
 
 void feedPathService(StateHash& h, const PathService& service) noexcept {
     const auto& admissions = service.admissions();
     const auto& pending = service.pending();
     const auto& activeRequests = service.activeRequests();
-    const auto& activeSearches = service.activeSearches();
+    const auto& activeFields = service.activeFields();
     const auto& retryWaits = service.retryWaits();
     const auto& failureCounts = service.failureCounts();
     feed(h, service.serviceBeats());
@@ -422,9 +425,9 @@ void feedPathService(StateHash& h, const PathService& service) noexcept {
         if (activeRequests[army]) {
             feedPathRequest(h, *activeRequests[army]);
         }
-        feed(h, activeSearches[army].has_value());
-        if (activeSearches[army]) {
-            feedPathSearch(h, *activeSearches[army]);
+        feed(h, activeFields[army].has_value());
+        if (activeFields[army]) {
+            feedActiveField(h, *activeFields[army]);
         }
         feed(h, retryWaits[army]);
         feed(h, failureCounts[army]);

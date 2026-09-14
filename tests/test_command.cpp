@@ -465,6 +465,98 @@ TEST_CASE("an unreachable move retries twice after ten idle service beats before
     CHECK(fix.roster.store.orders()[fix.mine.index].empty());
 }
 
+TEST_CASE("queued movers to one goal share a single flow field") {
+    // P10.5 (ADR-035 layer 2): a goal's route data is ONE reverse-Dijkstra field
+    // every requester walks, not one A* search each — a shift-clicked column stops
+    // paying a beat of path work per unit.
+    Fixture fix;
+    const rm::UnitTypeIndex type = fix.roster.store.typeAt(fix.mine.index);
+    std::vector<UnitId> movers{fix.mine};
+    for (int i = 0; i < 5; ++i) {
+        movers.push_back(
+            fix.roster.add(type, 200.0f + 40.0f * static_cast<float>(i + 1), 260.0f, 0, 500.0f));
+    }
+    for (const UnitId mover : movers) {
+        REQUIRE(fix.apply(moveOrder(0, 0, mover, 900.0f, 500.0f)));
+    }
+    fix.run(CommandLog{}, 4);
+
+    CHECK(fix.paths.fieldsCreated() == 1);
+    for (const UnitId mover : movers) {
+        CHECK(fix.roster.motion(mover).moving);
+    }
+}
+
+TEST_CASE("a structure on the corridor redirects a later move around it") {
+    // P10.5 (ADR-035 layer 3): a placed building is a blocking layer over the
+    // terrain grid — routes asked for after it stands go around rather than through.
+    Fixture fix;
+    const rm::UnitTypeIndex type = fix.roster.store.typeAt(fix.mine.index);
+    const UnitId wall = fix.roster.add(type, 512.0f, 200.0f, 0, 500.0f);
+    fix.roster.motion(wall).speedPerTick = {};
+    fix.roster.motion(wall).radiusElmos = rm::test::fx(40.0f);
+    fix.run(CommandLog{}, 1);  // let the tick's blocking layer see the structure
+
+    REQUIRE(fix.apply(moveOrder(0, 0, fix.mine, 900.0f, 200.0f)));
+    fix.run(CommandLog{}, 6);
+
+    const std::vector<std::array<rm::sim::Fx, 2>>& path = fix.roster.motion(fix.mine).path;
+    REQUIRE_FALSE(path.empty());
+    const std::vector<std::uint8_t> blocked =
+        rm::sim::blockingCells(fix.roster.store, fix.grid);
+    for (const auto& point : path) {
+        const int cell = fix.grid.cellAtWorld(point[1]) * fix.grid.cellsX
+                       + fix.grid.cellAtWorld(point[0]);
+        CHECK(blocked[static_cast<std::size_t>(cell)] == 0);
+    }
+}
+
+TEST_CASE("a blocking change dirties only the fields it touches") {
+    // The layer-3 contract: a placement invalidates the fields whose explored
+    // region it lands in, and leaves the rest cached.
+    Fixture fix;
+    const rm::UnitTypeIndex type = fix.roster.store.typeAt(fix.mine.index);
+    const UnitId other = fix.roster.add(type, 300.0f, 300.0f, 0, 500.0f);
+
+    const auto request = [&fix](UnitId unit, float fromX, float fromZ,
+                                float toX, float toZ, rm::CommandId command) {
+        return rm::sim::PathRequest{.unit = unit,
+                                    .command = command,
+                                    .army = 0,
+                                    .fromX = rm::test::fx(fromX),
+                                    .fromZ = rm::test::fx(fromZ),
+                                    .targetX = rm::test::fx(toX),
+                                    .targetZ = rm::test::fx(toZ),
+                                    .grid = std::make_shared<rm::sim::PassabilityGrid>(fix.grid)};
+    };
+
+    // Field A: goal cell (14,7). Field B: goal cell (1,14), far enough away that a
+    // building in A's explored region is outside B's.
+    fix.paths.enqueue(request(fix.mine, 200.0f, 200.0f, 900.0f, 500.0f, rm::CommandId{100}));
+    fix.paths.enqueue(request(other, 300.0f, 900.0f, 100.0f, 900.0f, rm::CommandId{101}));
+    for (int i = 0; i < 8; ++i) {
+        (void)fix.paths.service();
+    }
+    REQUIRE(fix.paths.fieldsCreated() == 2);
+
+    // A building at cell (14,0) sits inside A's frontier disc and outside B's.
+    std::vector<std::uint8_t> blocked(
+        static_cast<std::size_t>(fix.grid.cellsX) * static_cast<std::size_t>(fix.grid.cellsZ), 0);
+    blocked[static_cast<std::size_t>(0) * static_cast<std::size_t>(fix.grid.cellsX) + 14] = 1;
+    fix.paths.setBlocking(fix.grid, blocked);
+
+    const UnitId again = fix.roster.add(type, 320.0f, 220.0f, 0, 500.0f);
+    const UnitId againB = fix.roster.add(type, 340.0f, 880.0f, 0, 500.0f);
+    fix.paths.enqueue(request(again, 320.0f, 220.0f, 900.0f, 500.0f, rm::CommandId{102}));
+    fix.paths.enqueue(request(againB, 340.0f, 880.0f, 100.0f, 900.0f, rm::CommandId{103}));
+    for (int i = 0; i < 8; ++i) {
+        (void)fix.paths.service();
+    }
+
+    // A's field rebuilt; B's was reused untouched.
+    CHECK(fix.paths.fieldsCreated() == 3);
+}
+
 TEST_CASE("a path retry wait changes the authoritative hash") {
     rm::HeightField sunken = flatField();
     sunken.baseHeight = -500.0f;

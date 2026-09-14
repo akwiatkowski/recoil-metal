@@ -364,6 +364,212 @@ void PathSearch::step(std::size_t budget) {
     }
 }
 
+std::uint64_t fingerprintOf(const PassabilityGrid& grid) noexcept {
+    std::uint64_t hash = 1469598103934665603ull;  // FNV-1a offset basis
+    const auto mix = [&hash](std::uint64_t value) {
+        hash = (hash ^ value) * 1099511628211ull;  // FNV prime
+    };
+    mix(static_cast<std::uint64_t>(grid.cellsX));
+    mix(static_cast<std::uint64_t>(grid.cellsZ));
+    mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(grid.elmosPerCell.raw())));
+    for (const std::uint8_t cell : grid.passable) {
+        mix(cell);
+    }
+    return hash;
+}
+
+FlowField::FlowField(std::shared_ptr<const PassabilityGrid> grid, int goalX, int goalZ,
+                     std::vector<std::uint8_t> blocked)
+    : grid_(std::move(grid)), blocked_(std::move(blocked)), goalX_(goalX), goalZ_(goalZ) {
+    if (grid_ == nullptr || grid_->cellsX <= 0 || grid_->cellsZ <=0
+        || !standable(goalX_, goalZ_)) {
+        dead_ = true;
+        return;
+    }
+    const std::size_t cells = static_cast<std::size_t>(grid_->cellsX)
+                             * static_cast<std::size_t>(grid_->cellsZ);
+    costs_.assign(cells, Fx::fromRaw(INT32_MAX));
+    next_.assign(cells, -1);
+    closed_.assign(cells, 0);
+    touched_.assign(cells, 0);
+    const int goal = goalZ_ * grid_->cellsX + goalX_;
+    costs_[static_cast<std::size_t>(goal)] = Fx{};
+    touched_[static_cast<std::size_t>(goal)] = 1;
+    open_.push_back(PathSearchNode{.f = Fx{}, .cell = goal});
+}
+
+bool FlowField::standable(int x, int z) const noexcept {
+    if (!grid_->passableAt(x, z)) {
+        return false;
+    }
+    // The overlay answers the same question as the grid — a cell a building
+    // claims is out — while leaving `passable` itself untouched.
+    return blocked_.empty()
+           || blocked_[static_cast<std::size_t>(z) * static_cast<std::size_t>(grid_->cellsX)
+                       + static_cast<std::size_t>(x)] == 0;
+}
+
+void FlowField::stepUntil(std::span<const int> until, std::size_t budget) {
+    if (dead_ || stale_ || grid_ == nullptr) {
+        return;
+    }
+    const std::size_t cells = costs_.size();
+    const auto settled = [this, cells](int cell) {
+        return cell >= 0 && static_cast<std::size_t>(cell) < cells
+               && closed_[static_cast<std::size_t>(cell)] != 0;
+    };
+    const auto before = [](const PathSearchNode& a, const PathSearchNode& b) {
+        return a.f != b.f ? a.f > b.f : a.cell > b.cell;
+    };
+    static constexpr std::array<std::array<int, 2>, 8> kNeighbours{{
+        {{1, 0}}, {{-1, 0}}, {{0, 1}}, {{0, -1}},
+        {{1, 1}}, {{1, -1}}, {{-1, 1}}, {{-1, -1}},
+    }};
+
+    std::size_t expanded = 0;
+    while (!open_.empty() && expanded < budget
+           && !std::all_of(until.begin(), until.end(), settled)) {
+        std::pop_heap(open_.begin(), open_.end(), before);
+        const PathSearchNode node = open_.back();
+        open_.pop_back();
+        const std::size_t current = static_cast<std::size_t>(node.cell);
+        if (closed_[current] != 0) {
+            continue;
+        }
+        closed_[current] = 1;
+        ++expanded;
+        const int x = node.cell % grid_->cellsX;
+        const int z = node.cell / grid_->cellsX;
+        for (const auto& step : kNeighbours) {
+            const int nx = x + step[0];
+            const int nz = z + step[1];
+            if (!standable(nx, nz)) {
+                continue;
+            }
+            const bool diagonal = step[0] != 0 && step[1] != 0;
+            if (diagonal && (!standable(x + step[0], z) || !standable(x, z + step[1]))) {
+                continue;
+            }
+            const std::size_t next = static_cast<std::size_t>(nz)
+                                       * static_cast<std::size_t>(grid_->cellsX)
+                                   + static_cast<std::size_t>(nx);
+            if (closed_[next] != 0) {
+                continue;
+            }
+            // No heuristic: the frontier must stay honest in EVERY direction, since
+            // the requester it next serves can stand anywhere.
+            const Fx candidate = costs_[current] + (diagonal ? kDiagonalCost : kFxOne);
+            if (candidate >= costs_[next]) {
+                continue;
+            }
+            costs_[next] = candidate;
+            next_[next] = node.cell;
+            touched_[next] = 1;
+            open_.push_back(PathSearchNode{.f = candidate, .cell = static_cast<int>(next)});
+            std::push_heap(open_.begin(), open_.end(), before);
+        }
+    }
+}
+
+int FlowField::escapeCell(int cell) const noexcept {
+    if (!grid_->passableAt(cell % grid_->cellsX, cell / grid_->cellsX)) {
+        return -1;
+    }
+    const int x = cell % grid_->cellsX;
+    const int z = cell / grid_->cellsX;
+    int best = -1;
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dz == 0) {
+                continue;
+            }
+            const int nx = x + dx;
+            const int nz = z + dz;
+            if (nx < 0 || nz < 0 || nx >= grid_->cellsX || nz >= grid_->cellsZ) {
+                continue;
+            }
+            const int next = nz * grid_->cellsX + nx;
+            if (closed_[static_cast<std::size_t>(next)] != 0
+                && (best < 0 || costs_[static_cast<std::size_t>(next)]
+                                 < costs_[static_cast<std::size_t>(best)])) {
+                best = next;
+            }
+        }
+    }
+    return best;
+}
+
+FlowField::Reach FlowField::reach(int cell) const noexcept {
+    if (cell < 0 || static_cast<std::size_t>(cell) >= costs_.size()) {
+        return Reach::Unreachable;
+    }
+    if (closed_[static_cast<std::size_t>(cell)] != 0) {
+        return Reach::Reached;
+    }
+    const int x = cell % grid_->cellsX;
+    const int z = cell / grid_->cellsX;
+    if (!grid_->passableAt(x, z)) {
+        return Reach::Unreachable;
+    }
+    if (!blocked_.empty() && blocked_[static_cast<std::size_t>(cell)] != 0) {
+        // Out by overlay, not by terrain: the requester is already standing
+        // there, so it escapes through a settled neighbour if one exists.
+        if (escapeCell(cell) >= 0) {
+            return Reach::Reached;
+        }
+        return dead_ || open_.empty() ? Reach::Unreachable : Reach::Pending;
+    }
+    if (dead_ || open_.empty()) {
+        return Reach::Unreachable;
+    }
+    return Reach::Pending;
+}
+
+bool FlowField::touched(int cell) const noexcept {
+    return cell >= 0 && static_cast<std::size_t>(cell) < touched_.size()
+           && touched_[static_cast<std::size_t>(cell)] != 0;
+}
+
+std::vector<std::array<Fx, 2>> FlowField::route(Fx fromX, Fx fromZ, Fx toX, Fx toZ) const {
+    std::vector<std::array<Fx, 2>> path;
+    if (grid_ == nullptr) {
+        return path;
+    }
+    const int startCell = grid_->cellAtWorld(fromZ) * grid_->cellsX
+                        + grid_->cellAtWorld(fromX);
+    if (startCell < 0 || static_cast<std::size_t>(startCell) >= closed_.size()) {
+        return path;
+    }
+    int cell = startCell;
+    if (closed_[static_cast<std::size_t>(startCell)] == 0) {
+        // The requester stands in an overlay-blocked cell: first waypoint is the
+        // settled neighbour it escapes through, then the chain runs as normal.
+        cell = escapeCell(startCell);
+        if (cell < 0) {
+            return path;
+        }
+        path.push_back({{grid_->worldAtCellCentre(cell % grid_->cellsX),
+                         grid_->worldAtCellCentre(cell / grid_->cellsX)}});
+    }
+    const int goal = goalZ_ * grid_->cellsX + goalX_;
+    for (; cell != goal;) {
+        cell = next_[static_cast<std::size_t>(cell)];
+        if (cell < 0) {
+            return {};  // a settled chain always bottoms out at the goal
+        }
+        path.push_back({{grid_->worldAtCellCentre(cell % grid_->cellsX),
+                         grid_->worldAtCellCentre(cell / grid_->cellsX)}});
+    }
+    const Fx targetX = std::clamp(toX, Fx{},
+                                  Fx::fromInt(grid_->cellsX) * grid_->elmosPerCell);
+    const Fx targetZ = std::clamp(toZ, Fx{},
+                                  Fx::fromInt(grid_->cellsZ) * grid_->elmosPerCell);
+    if (path.empty() || path.back()[0] != targetX || path.back()[1] != targetZ) {
+        path.push_back({{targetX, targetZ}});
+    }
+    return path;
+}
+
 std::vector<std::array<Fx, 2>> findPath(const PassabilityGrid& grid, Fx fromX, Fx fromZ,
                                         Fx toX, Fx toZ) {
     if (grid.cellsX <= 0 || grid.cellsZ <= 0) {

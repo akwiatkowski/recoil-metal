@@ -349,6 +349,45 @@ std::vector<int> countCommanders(const UnitStore& store, const UnitCatalog& cata
     return alive;
 }
 
+std::vector<std::uint8_t> blockingCells(const UnitStore& store,
+                                      const PassabilityGrid& grid) {
+    std::vector<std::uint8_t> cells(
+        static_cast<std::size_t>(grid.cellsX) * static_cast<std::size_t>(grid.cellsZ), 0);
+    if (grid.cellsX <= 0 || grid.cellsZ <= 0) {
+        return cells;
+    }
+    // Half a cell past the footprint, so a building claims the cell it sits in
+    // even when centred on the boundary — a radius alone would let a small
+    // structure on a corner claim nothing.
+    const Fx halfCell = grid.elmosPerCell / Fx::fromInt(2);
+    const std::span<const Transform> transforms = store.transforms();
+    const std::span<const MoveState> motion = store.motion();
+    for (UnitIndex slot = 0; slot < motion.size() && slot < transforms.size(); ++slot) {
+        const MoveState& state = motion[slot];
+        if (!store.slotAlive(slot) || state.airborne || state.attached
+            || state.speedPerTick > Fx{}) {
+            continue;
+        }
+        const Transform& at = transforms[slot];
+        const Fx reach = state.radiusElmos + halfCell;
+        const int x0 = grid.cellAtWorld(at.x - reach);
+        const int x1 = grid.cellAtWorld(at.x + reach);
+        const int z0 = grid.cellAtWorld(at.z - reach);
+        const int z1 = grid.cellAtWorld(at.z + reach);
+        for (int z = z0; z <= z1; ++z) {
+            for (int x = x0; x <= x1; ++x) {
+                const Fx dx = grid.worldAtCellCentre(x) - at.x;
+                const Fx dz = grid.worldAtCellCentre(z) - at.z;
+                if (fxHypot(dx, dz) <= reach) {
+                    cells[static_cast<std::size_t>(z) * static_cast<std::size_t>(grid.cellsX)
+                          + static_cast<std::size_t>(x)] = 1;
+                }
+            }
+        }
+    }
+    return cells;
+}
+
 namespace {
 
 /// The cell size the spatial index uses, in elmos.
@@ -439,6 +478,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    settled by the economy pass at the foot of the tick, which is also where retail
     //    writes the ratio this stage will multiply by next beat.
     if (match.pathService != nullptr) {
+        // ADR-035 layer 3: tell the path service which cells standing structures
+        // now claim, per movement domain. One tick stale — the layer describes
+        // where units ENDED last tick, like the sight stamp below.
+        for (const PassabilityGrid* grid : match.passability) {
+            if (grid != nullptr) {
+                match.pathService->setBlocking(*grid, blockingCells(store, *grid));
+            }
+        }
         for (const PathResult& result : match.pathService->service()) {
             (void)publishPathResult(result, store, catalog);
         }

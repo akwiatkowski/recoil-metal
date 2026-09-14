@@ -6,9 +6,12 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -37,16 +40,41 @@ struct PathResult {
     std::vector<std::array<Fx, 2>> path;
 };
 
-/// Match-owned, per-army FIFO path work.
+/// Match-owned, per-army FIFO path work over shared flow fields (ADR-035 layers 2-3).
 ///
 /// Requests capture their issue-time start point and grid. The grid is immutable match terrain;
 /// its address is deliberately not part of the authoritative state, while the search state is.
+///
+/// The unit of work is a FIELD, not a search: every request to a goal cell shares one
+/// reverse-Dijkstra `FlowField` (keyed on the goal cell and the grid's content fingerprint,
+/// since requests carry COPIES of the grid). A requester whose start cell the frontier has
+/// already settled publishes the same beat it attaches — fifty shift-clicked movers to one
+/// point pay one expansion instead of fifty searches.
 class PathService {
 public:
+    /// One army's in-flight work: the request, the shared field serving it, and
+    /// the start cell that field must settle before the route extracts.
+    struct ActiveField {
+        std::shared_ptr<FlowField> field;
+        std::uint64_t gridFingerprint = 0;
+        int goalX = 0;
+        int goalZ = 0;
+        int startCell = -1;
+    };
+
     void enqueue(PathRequest request);
 
-    /// Resumes at most one search per army for its fixed expansion allowance.
+    /// Resumes the fields each army's head request is waiting on, within the
+    /// fixed per-army expansion allowance, and publishes every route a field
+    /// can now answer — one beat may complete several requests that share a goal.
     [[nodiscard]] std::vector<PathResult> service();
+
+    /// Records which cells a grid's structures now stand on (ADR-035 layer 3).
+    ///
+    /// Called once per grid per tick, BEFORE `service`. A layer that differs
+    /// from the last one retires exactly the cached fields whose frontier ever
+    /// touched a changed cell; the rest keep serving.
+    void setBlocking(const PassabilityGrid& grid, std::vector<std::uint8_t> blocked);
 
     /// Whether a command still owns queued or active path work.
     [[nodiscard]] bool contains(UnitId unit, CommandId command) const noexcept;
@@ -63,8 +91,8 @@ public:
     [[nodiscard]] const std::vector<std::optional<PathRequest>>& activeRequests() const noexcept {
         return activeRequests_;
     }
-    [[nodiscard]] const std::vector<std::optional<PathSearch>>& activeSearches() const noexcept {
-        return activeSearches_;
+    [[nodiscard]] const std::vector<std::optional<ActiveField>>& activeFields() const noexcept {
+        return activeFields_;
     }
     [[nodiscard]] const std::vector<std::size_t>& retryWaits() const noexcept {
         return retryWaits_;
@@ -81,22 +109,52 @@ public:
     /// Restores the match-owned beat clock before service resumes from a save state.
     void restoreServiceBeats(std::uint64_t beats) noexcept { serviceBeats_ = beats; }
 
+    /// How many fields the cache has ever built — the test hook for "N movers,
+    /// one field".
+    [[nodiscard]] std::size_t fieldsCreated() const noexcept { return fieldsCreated_; }
+
 private:
+    struct FieldKey {
+        std::uint64_t grid = 0;
+        int goalX = 0;
+        int goalZ = 0;
+        [[nodiscard]] constexpr auto operator<=>(const FieldKey&) const noexcept = default;
+    };
+    struct CachedField {
+        std::shared_ptr<FlowField> field;
+        std::uint64_t used = 0;  // LRU clock
+    };
+
     void ensureArmy(int army);
+    /// Promotes the head of an army's queue into `activeRequests_` and binds it
+    /// to a cached or freshly-built field for its goal.
+    void attach(std::size_t army);
 
     /// C-176: an unroutable move waits this many service beats before each re-path attempt.
     static constexpr std::size_t kRetryDelayBeats = 10;
     /// C-176: the third failed search publishes its empty route and retires the intent.
     static constexpr std::size_t kMaximumFailures = 3;
+    /// Fields kept per service across goals and grids. Each is bounded by its
+    /// grid's cell count; eight live goals per movement domain is generous for
+    /// a match tick.
+    static constexpr std::size_t kFieldCacheLimit = 8;
 
     // Commands accepted during this beat become eligible only after its service pass completes.
     std::vector<std::deque<PathRequest>> admissions_;
     std::vector<std::deque<PathRequest>> pending_;
     std::vector<std::optional<PathRequest>> activeRequests_;
-    std::vector<std::optional<PathSearch>> activeSearches_;
+    std::vector<std::optional<ActiveField>> activeFields_;
     std::vector<std::size_t> retryWaits_;
     std::vector<std::size_t> failureCounts_;
     std::uint64_t serviceBeats_ = 0;
+
+    /// The layer-2 cache and the layer-3 overlay. Both keyed on grid content
+    /// fingerprints — the requests' grids are private copies, so pointer
+    /// identity would never share.
+    std::map<FieldKey, CachedField> fields_;
+    std::unordered_map<std::uint64_t, std::vector<std::uint8_t>> blocked_;
+    std::uint64_t fieldClock_ = 0;
+    std::size_t fieldsCreated_ = 0;
 };
 
 } // namespace rm::sim
