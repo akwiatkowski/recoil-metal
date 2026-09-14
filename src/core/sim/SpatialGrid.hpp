@@ -81,16 +81,18 @@ public:
     /// Slots within `radius` of (x, z), measured on the GROUND — the same distance
     /// `groundDistanceElmos` measures, so range is a footprint on the map and not a sphere.
     ///
-    /// Ascending slot order. **The span points into this object and is invalidated by the next
-    /// query** — a caller that needs two results at once must copy the first. That is the same
-    /// bargain Recoil's vector pool makes, with the failure mode moved from "the pool ran out"
-    /// to "you kept a span too long".
+    /// Ascending slot order. **The span points into a per-lane scratch buffer and is
+    /// invalidated by the next query on the same lane** — a caller that needs two results at
+    /// once must copy the first. That is the same bargain Recoil's vector pool makes, with
+    /// the failure mode moved from "the pool ran out" to "you kept a span too long".
     ///
-    /// CONST, with the answer buffer `mutable`. The buffer is a cache and nothing more: the
-    /// same query twice gives the same answer, so a query does not change what this object
-    /// MEANS. Making it non-const instead would force `nearestTarget` and `damageArea` to take
-    /// a mutable store, and a targeting pass that could write to the world is a worse hazard
-    /// than a cache behind a const method. Single-threaded, like the rest of the sim.
+    /// CONST, with the answer buffer `thread_local` rather than a member: targeting queries
+    /// run fork-joined inside `aimAtTargets`/`fireWeapons` (ADR-036), and a member buffer
+    /// shared by every lane was a data race. Each lane keeps the same warm-capacity cache the
+    /// member was for — a cache and nothing more, since the same query twice gives the same
+    /// answer either way. Making the method non-const instead would force `nearestTarget` and
+    /// `damageArea` to take a mutable store, and a targeting pass that could write to the
+    /// world is a worse hazard than a scratch buffer behind a const method.
     [[nodiscard]] std::span<const UnitIndex> within(Fx x, Fx z, Fx radius) const;
 
     /// The same, WITHOUT the distance test: every slot in a cell that overlaps the square
@@ -113,15 +115,11 @@ private:
         Fx z{};
     };
 
-    /// Fills `result_` with the cells overlapping the square, then optionally distance-filters.
-    void gather(Fx x, Fx z, Fx radius, bool exact) const;
+    /// Returns the cells overlapping the square, optionally distance-filtered,
+    /// out of a per-lane scratch buffer (see `within`).
+    [[nodiscard]] std::span<const UnitIndex> gather(Fx x, Fx z, Fx radius, bool exact) const;
 
     std::vector<Entry> entries_;
-
-    /// The last query's answer. A member so that repeated queries in one pass reuse the
-    /// capacity — which is what "no per-query allocation" means in practice. `mutable` because
-    /// it is a cache: see `within`.
-    mutable std::vector<UnitIndex> result_;
 
     Fx cellSize_ = kMinCellSize;
 };

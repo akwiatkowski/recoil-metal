@@ -53,10 +53,16 @@ void SpatialGrid::rebuild(const UnitStore& store, Fx cellSize) {
     });
 }
 
-void SpatialGrid::gather(Fx x, Fx z, Fx radius, bool exact) const {
-    result_.clear();
+std::span<const UnitIndex> SpatialGrid::gather(Fx x, Fx z, Fx radius,
+                                                   bool exact) const {
+    // The answer scratch is PER LANE (thread_local): queries now run
+    // fork-joined inside the aiming and firing passes (ADR-036/D15), so the
+    // member buffer this used to be was a data race between lanes. Each lane
+    // keeps the same warm allocation the member provided.
+    thread_local std::vector<UnitIndex> result;
+    result.clear();
     if (entries_.empty()) {
-        return;
+        return result;
     }
 
     const Fx reach = std::max(radius, Fx{});
@@ -72,7 +78,7 @@ void SpatialGrid::gather(Fx x, Fx z, Fx radius, bool exact) const {
         // On the GROUND — the same measure `groundDistanceElmos` uses, so a range is a
         // footprint on the map and a unit on a cliff is no harder to shoot than one on the flat.
         if (!exact || fxHypot(entry.x - x, entry.z - z) <= reach) {
-            result_.push_back(entry.slot);
+            result.push_back(entry.slot);
         }
     };
 
@@ -109,17 +115,16 @@ void SpatialGrid::gather(Fx x, Fx z, Fx radius, bool exact) const {
     // brute-force scan this replaces, including its order, so every tie-break that relied on
     // meeting the lowest slot first still does — and it makes the two paths above
     // indistinguishable to a caller.
-    std::sort(result_.begin(), result_.end());
+    std::sort(result.begin(), result.end());
+    return result;
 }
 
 std::span<const UnitIndex> SpatialGrid::within(Fx x, Fx z, Fx radius) const {
-    gather(x, z, radius, /*exact=*/true);
-    return result_;
+    return gather(x, z, radius, /*exact=*/true);
 }
 
 std::span<const UnitIndex> SpatialGrid::candidates(Fx x, Fx z, Fx radius) const {
-    gather(x, z, radius, /*exact=*/false);
-    return result_;
+    return gather(x, z, radius, /*exact=*/false);
 }
 
 } // namespace rm::sim

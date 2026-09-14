@@ -1,9 +1,11 @@
 #include "core/sim/Combat.hpp"
 #include "core/sim/Reclaim.hpp"
+#include "core/TaskPool.hpp"
 
 #include "core/unit/BuildTree.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <numbers>
@@ -1461,8 +1463,17 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
     const std::span<const MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
 
-    std::size_t turned = 0;
-    for (UnitIndex slot = 0; slot < transforms.size() && slot < motion.size(); ++slot) {
+    // FORK-JOINED per slot (ADR-036/D15): the acquisition queries are read-only
+    // over the shared world, and the only write — the hull's heading — lands in
+    // the worker's own slots, so no result can depend on which lane ran it.
+    // `turned` is summed per range and folded after the join for the same reason.
+    std::atomic<std::size_t> turned{0};
+    rm::parallelFor(
+        std::min(transforms.size(), motion.size()),
+        [&](std::size_t first, std::size_t last) {
+            std::size_t turnedHere = 0;
+            for (UnitIndex slot = static_cast<UnitIndex>(first);
+                 slot < static_cast<UnitIndex>(last); ++slot) {
         if (motion[slot].moving) {
             continue;  // an order is already deciding where this one points
         }
@@ -1576,9 +1587,11 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
         transforms[slot].heading = static_cast<Brad>(
             static_cast<std::uint16_t>(transforms[slot].heading)
             + static_cast<std::uint16_t>(std::clamp(delta, -step, step)));
-        ++turned;
-    }
-    return turned;
+        ++turnedHere;
+            }
+            turned.fetch_add(turnedHere, std::memory_order_relaxed);
+        });
+    return turned.load();
 }
 
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
@@ -1593,6 +1606,60 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
     const std::span<const Transform> transforms = store.transforms();
     const std::span<MoveState> motions = store.motion();
     const std::span<Health> healths = store.health();
+
+    // ACQUISITION, fork-joined (ADR-036/D15): `nearestTarget` is a read-only
+    // query over the post-movement world, so every (slot, weapon) answer lands
+    // in its own cell here and the serial pass below reads the cells in slot
+    // order — the results it applies are exactly what the inline queries would
+    // have produced. Only the queries the pass can REACH are computed: a
+    // weapon asks nothing until this tick's decrement leaves its reload at
+    // zero, so a pre-tick value above one is never a question.
+    std::vector<std::vector<std::optional<UnitId>>> automaticTargets(transforms.size());
+    rm::parallelFor(transforms.size(), [&](std::size_t first, std::size_t last) {
+        for (UnitIndex slot = static_cast<UnitIndex>(first);
+             slot < static_cast<UnitIndex>(last); ++slot) {
+            if (slot >= healths.size() || !healths[slot].alive()) {
+                continue;
+            }
+            if (slot < motions.size() && motions[slot].attached) {
+                continue;
+            }
+            const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+            if (def == nullptr || def->weapons.empty()) {
+                continue;
+            }
+            if (hasExplicitAttackOrder(slot, store)) {
+                continue;  // the explicit path checks its named target inline
+            }
+            const int army = armyAt(store, slot);
+            const std::array<Fx, 3> from = positionOf(transforms[slot]);
+            const MoveState& sourceMotion = motions[slot];
+            const std::optional<bool> sourceSubmerged = sourceMotion.submersible
+                ? std::optional<bool>{sourceMotion.submerged} : std::nullopt;
+            std::vector<std::optional<UnitId>>& row = automaticTargets[slot];
+            row.resize(def->weapons.size());
+            for (std::size_t w = 0; w < def->weapons.size(); ++w) {
+                const unitdef::Weapon& weapon = def->weapons[w];
+                if (!weapon.fires()) {
+                    continue;  // projectile intercepts and non-firing weapons
+                }
+                const int reload = w < healths[slot].reloadRemaining.size()
+                                       ? healths[slot].reloadRemaining[w]
+                                       : 0;
+                if (reload > 1) {
+                    continue;
+                }
+                const std::optional<UnitId> incumbent =
+                    w < healths[slot].automaticTargets.size()
+                        ? std::optional<UnitId>{healths[slot].automaticTargets[w]}
+                        : std::nullopt;
+                row[w] = nearestTarget(from, army, weapon, store, armies, intel,
+                                       &catalog, transforms[slot].heading, incumbent,
+                                       playableRect, claims, sourceSubmerged, tick,
+                                       rate, store.targetFocuses()[slot]);
+            }
+        }
+    });
 
     for (UnitIndex slot = 0; slot < transforms.size(); ++slot) {
         if (slot >= healths.size() || !healths[slot].alive()) {
@@ -1764,15 +1831,16 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 continue;
             }
 
+            // The answer the acquisition pass computed — identical inputs, so
+            // identical answer to the inline query it replaced.
             const std::optional<UnitId> target = hasExplicitAttack
                 ? (forced && canShootExplicitTarget(*forced, from, army, weapon, store, armies,
                                                     catalog, intel, sourceSubmerged)
                        ? forced
                        : std::nullopt)
-                : nearestTarget(from, army, weapon, store, armies, intel, &catalog,
-                                 transforms[slot].heading, health.automaticTargets[w], playableRect,
-                                 claims, sourceSubmerged, tick, rate,
-                                 store.targetFocuses()[slot]);
+                : (w < automaticTargets[slot].size()
+                       ? automaticTargets[slot][w]
+                       : std::optional<UnitId>{});
             if (!hasExplicitAttack) {
                 health.automaticTargets[w] = target.value_or(UnitId{});
             }

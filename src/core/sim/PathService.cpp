@@ -1,5 +1,7 @@
 #include "core/sim/PathService.hpp"
 
+#include "core/TaskPool.hpp"
+
 #include <algorithm>
 #include <iterator>
 
@@ -28,6 +30,9 @@ void PathService::enqueue(PathRequest request) {
 
 std::vector<PathResult> PathService::service() {
     std::vector<PathResult> completed;
+
+    // BOOKKEEPING, serial and per army: promotion, retry waits and search
+    // creation are cheap state moves whose ORDER is the contract.
     for (std::size_t army = 0; army < pending_.size(); ++army) {
         if (activeRequests_[army] && !activeSearches_[army] && retryWaits_[army] > 0) {
             --retryWaits_[army];
@@ -45,11 +50,24 @@ std::vector<PathResult> PathService::service() {
             activeSearches_[army].emplace(request.grid, request.fromX, request.fromZ,
                                           request.targetX, request.targetZ);
         }
-        if (!activeSearches_[army]) {
-            continue;
+    }
+
+    // THE EXPENSIVE PART, fork-joined (ADR-036/D15): each army's resumable
+    // search spends its beat allowance independently — a `PathSearch` is a
+    // private object, so per-army steps are per-slot writes by construction
+    // and the pool can reorder the work without ever reordering a result.
+    rm::parallelFor(pending_.size(), [this](std::size_t first, std::size_t last) {
+        for (std::size_t army = first; army < last; ++army) {
+            if (activeSearches_[army]) {
+                activeSearches_[army]->step(kPathArmyBudget);
+            }
         }
-        activeSearches_[army]->step(kPathArmyBudget);
-        if (!activeSearches_[army]->finished()) {
+    });
+
+    // COLLECTION, serial and in army order: which army's result lands first in
+    // `completed` is state the dispatch order below depends on.
+    for (std::size_t army = 0; army < pending_.size(); ++army) {
+        if (!activeSearches_[army] || !activeSearches_[army]->finished()) {
             continue;
         }
         const PathRequest request = *activeRequests_[army];
