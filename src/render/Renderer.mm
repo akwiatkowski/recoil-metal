@@ -90,26 +90,26 @@ Renderer::Renderer(CA::MetalLayer* layer)
     propShadowPipeline_ =
         makeDepthOnlyPipeline(device_, library, "propShadowVertex", "propShadowFragment");
     terrainPipeline_ = makePipeline(device_, library, "terrainVertex", "terrainFragment",
-                                    BlendMode::Opaque, kDepthFormat, kHdrFormat);
+                                    BlendMode::Opaque, kDepthFormat, kHdrFormat, kSceneSamples);
     skyPipeline_ =
         makePipeline(device_, library, "skyVertex", "skyFragment", BlendMode::Opaque,
-                     kDepthFormat, kHdrFormat);
+                     kDepthFormat, kHdrFormat, kSceneSamples);
     // No hardware blending: the water shader reads the framebuffer itself and
     // composites, which is what lets it absorb by depth rather than by a single
     waterPipeline_ = makePipeline(device_, library, "waterVertex", "waterFragment",
-                                  BlendMode::Opaque, kDepthFormat, kHdrFormat);
+                                  BlendMode::Opaque, kDepthFormat, kHdrFormat, kSceneSamples);
     unitPipeline_ = makePipeline(device_, library, "unitVertex", "unitFragment",
-                                 BlendMode::Opaque, kDepthFormat, kHdrFormat);
+                                 BlendMode::Opaque, kDepthFormat, kHdrFormat, kSceneSamples);
     // The build ghost: the same vertex stage — it IS a unit, geometrically — with a flat
     // luminous fragment and blending, because a silhouette that occluded the ground it is
     // about to claim would hide the one thing the player is judging.
     ghostPipeline_ = makePipeline(device_, library, "unitVertex", "unitGhostFragment",
-                                  BlendMode::StraightAlpha, kDepthFormat, kHdrFormat);
+                                  BlendMode::StraightAlpha, kDepthFormat, kHdrFormat, kSceneSamples);
     // A construction site: the same vertex stage again, and blended because Aeon's unbuilt
     // half is translucent light. The other three factions discard rather than blend, so the
     // blend state costs them nothing.
     constructionPipeline_ = makePipeline(device_, library, "unitVertex", "unitBuildFragment",
-                                         BlendMode::StraightAlpha, kDepthFormat, kHdrFormat);
+                                         BlendMode::StraightAlpha, kDepthFormat, kHdrFormat, kSceneSamples);
     // Blended, and drawn last of all: the HUD sits over the world rather than in it.
     textPipeline_ = makePipeline(device_, library, "textVertex", "textFragment",
                                   BlendMode::PremultipliedAlpha);
@@ -139,13 +139,13 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // A selection ring is interface laid over the ground, and a solid band would hide the
     // terrain it marks.
     decalPipeline_ = makePipeline(device_, library, "decalVertex", "decalFragment",
-                                  BlendMode::StraightAlpha, kDepthFormat, kHdrFormat);
+                                  BlendMode::StraightAlpha, kDepthFormat, kHdrFormat, kSceneSamples);
     // The selection outline. Front faces culled and no depth write: what shows is the
     // shell's far side, and only where it survives the depth test against the unit
     // that has already been drawn — which is exactly the silhouette.
     {
         outlinePipeline_ = makePipeline(device_, library, "outlineVertex", "outlineFragment",
-                                        BlendMode::Opaque, kDepthFormat, kHdrFormat);
+                                        BlendMode::Opaque, kDepthFormat, kHdrFormat, kSceneSamples);
 
         const std::size_t bytes = kMaxOutlinedUnits * sizeof(UnitInstance) * kMaxFramesInFlight;
         outlineBuffer_ = device_->newBuffer(bytes, MTL::ResourceStorageModeShared);
@@ -157,13 +157,13 @@ Renderer::Renderer(CA::MetalLayer* layer)
     // Particle colours are authored premultiplied so the same pipeline can draw translucent
     // dust and additive sparks. The explicit mode keeps that contract beside every other one.
     particlePipeline_ = makePipeline(device_, library, "particleVertex", "particleFragment",
-                                     BlendMode::PremultipliedAlpha, kDepthFormat, kHdrFormat);
+                                     BlendMode::PremultipliedAlpha, kDepthFormat, kHdrFormat, kSceneSamples);
     modulatedParticlePipelines_[0] = makePipeline(device_, library, "particleVertex", "particleFragment",
                                                  BlendMode::ModulateInverse, kDepthFormat,
-                                                 kHdrFormat);
+                                                 kHdrFormat, kSceneSamples);
     modulatedParticlePipelines_[1] = makePipeline(device_, library, "particleVertex", "particleFragment",
                                                  BlendMode::Modulate2xInverse, kDepthFormat,
-                                                 kHdrFormat);
+                                                 kHdrFormat, kSceneSamples);
     library->release();
 
     // Two immutable kernels, one selected per frame. Only one is ever encoded, and both work
@@ -232,10 +232,23 @@ Renderer::Renderer(CA::MetalLayer* layer)
         descriptor->setStorageMode(MTL::StorageModePrivate);
         reflectionColour_ = device_->newTexture(descriptor);
 
-        descriptor->setPixelFormat(kDepthFormat);
-        descriptor->setUsage(MTL::TextureUsageRenderTarget);
-        reflectionDepth_ = device_->newTexture(descriptor);
         descriptor->release();
+
+        // The 4x source the colour resolves from. The reflection depth is
+        // never sampled, so it exists only in its multisample form — there is
+        // no single-sample target for it to resolve into.
+        auto* msaa = MTL::TextureDescriptor::alloc()->init();
+        msaa->setTextureType(MTL::TextureType::TextureType2DMultisample);
+        msaa->setSampleCount(kSceneSamples);
+        msaa->setPixelFormat(kHdrFormat);
+        msaa->setWidth(kReflectionWidth);
+        msaa->setHeight(kReflectionHeight);
+        msaa->setUsage(MTL::TextureUsageRenderTarget);
+        msaa->setStorageMode(MTL::StorageModePrivate);
+        reflectionMsaaColour_ = device_->newTexture(msaa);
+        msaa->setPixelFormat(kDepthFormat);
+        reflectionMsaaDepth_ = device_->newTexture(msaa);
+        msaa->release();
 
         auto* sampler = MTL::SamplerDescriptor::alloc()->init();
         sampler->setMinFilter(MTL::SamplerMinMagFilter::SamplerMinMagFilterLinear);
@@ -411,7 +424,8 @@ Renderer::~Renderer() {
     // Reverse acquisition order; all are +1 objects from newXxx()/CreateXxx.
     releaseWaterBuffers();
     if (reflectionSampler_ != nullptr) reflectionSampler_->release();
-    if (reflectionDepth_ != nullptr) reflectionDepth_->release();
+    if (reflectionMsaaDepth_ != nullptr) reflectionMsaaDepth_->release();
+    if (reflectionMsaaColour_ != nullptr) reflectionMsaaColour_->release();
     if (reflectionColour_ != nullptr) reflectionColour_->release();
     if (skyDepthState_ != nullptr) skyDepthState_->release();
     if (skyPipeline_ != nullptr) skyPipeline_->release();
@@ -455,6 +469,8 @@ Renderer::~Renderer() {
     if (bloomA_ != nullptr) bloomA_->release();
     if (blurB_ != nullptr) blurB_->release();
     if (blurA_ != nullptr) blurA_->release();
+    if (worldMsaaDepth_ != nullptr) worldMsaaDepth_->release();
+    if (worldMsaaColour_ != nullptr) worldMsaaColour_->release();
     if (worldColour_ != nullptr) worldColour_->release();
     mps::destroyGaussianBlur(reducedBlur_);
     mps::destroyGaussianBlur(fullBlur_);
@@ -838,7 +854,8 @@ void Renderer::ensureBackdropTextures(unsigned int width, unsigned int height) n
         && worldColour_->height() == height && blurA_ != nullptr
         && blurA_->width() == blurWidth && blurA_->height() == blurHeight
         && blurB_ != nullptr && bloomA_ != nullptr && bloomB_ != nullptr
-        && aoA_ != nullptr && aoB_ != nullptr) {
+        && aoA_ != nullptr && aoB_ != nullptr && worldMsaaColour_ != nullptr
+        && worldMsaaDepth_ != nullptr) {
         return;
     }
 
@@ -848,6 +865,8 @@ void Renderer::ensureBackdropTextures(unsigned int width, unsigned int height) n
     if (bloomA_ != nullptr) bloomA_->release();
     if (blurB_ != nullptr) blurB_->release();
     if (blurA_ != nullptr) blurA_->release();
+    if (worldMsaaDepth_ != nullptr) worldMsaaDepth_->release();
+    if (worldMsaaColour_ != nullptr) worldMsaaColour_->release();
     if (worldColour_ != nullptr) worldColour_->release();
     aoB_ = nullptr;
     aoA_ = nullptr;
@@ -855,6 +874,8 @@ void Renderer::ensureBackdropTextures(unsigned int width, unsigned int height) n
     bloomA_ = nullptr;
     blurB_ = nullptr;
     blurA_ = nullptr;
+    worldMsaaDepth_ = nullptr;
+    worldMsaaColour_ = nullptr;
     worldColour_ = nullptr;
 
     // Half float: the world renders linear HDR, and the composite tone-maps it
@@ -865,6 +886,22 @@ void Renderer::ensureBackdropTextures(unsigned int width, unsigned int height) n
     descriptor->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead);
     descriptor->setStorageMode(MTL::StorageModePrivate);
     worldColour_ = device_->newTexture(descriptor);
+
+    // The 4x sources worldColour_ and depthTexture_ resolve from (#15503).
+    // RenderTarget only — the resolve writes them, nothing samples them — and
+    // private, because the CPU never reads a multisample buffer.
+    auto* msaa = MTL::TextureDescriptor::alloc()->init();
+    msaa->setTextureType(MTL::TextureType::TextureType2DMultisample);
+    msaa->setSampleCount(kSceneSamples);
+    msaa->setWidth(width);
+    msaa->setHeight(height);
+    msaa->setUsage(MTL::TextureUsageRenderTarget);
+    msaa->setStorageMode(MTL::StorageModePrivate);
+    msaa->setPixelFormat(MTL::PixelFormatRGBA16Float);
+    worldMsaaColour_ = device_->newTexture(msaa);
+    msaa->setPixelFormat(kDepthFormat);
+    worldMsaaDepth_ = device_->newTexture(msaa);
+    msaa->release();
 
     descriptor->setWidth(blurWidth);
     descriptor->setHeight(blurHeight);
@@ -891,22 +928,29 @@ void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     // pipelines declare the HDR format and a drawable-bound pass would reject
     // them. The glass blur still only runs when panels need it.
     ensureBackdropTextures(width, height);
-    if (worldColour_ == nullptr) {
+    if (worldColour_ == nullptr || worldMsaaColour_ == nullptr
+        || worldMsaaDepth_ == nullptr) {
         return;  // allocation failure: a black frame, honestly arrived at
     }
-    // World first, into a shader-readable target. The water's pre-water refraction copy stays
-    // separate (`sceneColour_`); this texture is the complete post-water world the HUD sees.
+    // World first, into a 4x multisample target that resolves into the
+    // shader-readable worldColour_ when the pass ends. The water's pre-water
+    // refraction copy stays separate (`sceneColour_`); worldColour_ is the
+    // complete post-water world the HUD sees.
     MTL::RenderPassDescriptor* worldPass = MTL::RenderPassDescriptor::alloc()->init();
     auto* worldColor = worldPass->colorAttachments()->object(0);
-    worldColor->setTexture(worldColour_);
+    worldColor->setTexture(worldMsaaColour_);
+    worldColor->setResolveTexture(worldColour_);
     worldColor->setLoadAction(MTL::LoadAction::LoadActionClear);
-    worldColor->setStoreAction(MTL::StoreAction::StoreActionStore);
+    worldColor->setStoreAction(MTL::StoreAction::StoreActionMultisampleResolve);
     worldColor->setClearColor(MTL::ClearColor::Make(kSkyR, kSkyG, kSkyB, 1.0));
     auto* worldDepth = worldPass->depthAttachment();
-    worldDepth->setTexture(depthTexture_);
+    worldDepth->setTexture(worldMsaaDepth_);
+    worldDepth->setResolveTexture(depthTexture_);
     worldDepth->setLoadAction(MTL::LoadAction::LoadActionClear);
-    // Store, not DontCare: the AO pass below samples this buffer.
-    worldDepth->setStoreAction(MTL::StoreAction::StoreActionStore);
+    // Resolve, not DontCare: the AO pass below samples the resolved depth. The
+    // default Sample0 filter picks one subsample — any of the four is a valid
+    // surface depth, and a fixed choice keeps the AO input stable frame to frame.
+    worldDepth->setStoreAction(MTL::StoreAction::StoreActionMultisampleResolve);
     worldDepth->setClearDepth(1.0);
     encodeScene(commandBuffer, worldPass, width, height, nullptr, false);
 
@@ -1059,19 +1103,31 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     }
     const bool grabbing = grabScene && sceneColour_ != nullptr;
 
+    MTL::Texture* colourTarget = pass->colorAttachments()->object(0)->texture();
+    // A multisample attachment changes what "store" means at every split:
+    // the multisample data must persist for the resumed pass AND resolve into
+    // the single-sample target the blit reads.
+    const bool multisampled =
+        colourTarget != nullptr
+        && colourTarget->textureType() == MTL::TextureType::TextureType2DMultisample;
+
     if (grabbing) {
         // The split costs exactly this: the colour attachment has to be written
         // out so it can be copied, and the depth attachment has to be written out
         // so the water can still depth-test against the terrain when the pass
         // resumes. On a tile-based GPU both are writebacks that the single-pass
         // version never performs, which is the whole price of the offset.
-        pass->colorAttachments()->object(0)->setStoreAction(MTL::StoreAction::StoreActionStore);
+        pass->colorAttachments()->object(0)->setStoreAction(
+            multisampled ? MTL::StoreAction::StoreActionStoreAndMultisampleResolve
+                         : MTL::StoreAction::StoreActionStore);
         if (pass->depthAttachment()->texture() != nullptr) {
-            pass->depthAttachment()->setStoreAction(MTL::StoreAction::StoreActionStore);
+            // Resolving here also seeds the AO input with the pre-water depth —
+            // the same content the single-sample store left in place.
+            pass->depthAttachment()->setStoreAction(
+                multisampled ? MTL::StoreAction::StoreActionStoreAndMultisampleResolve
+                             : MTL::StoreAction::StoreActionStore);
         }
     }
-
-    MTL::Texture* colourTarget = pass->colorAttachments()->object(0)->texture();
     MTL::RenderCommandEncoder* encoder = commandBuffer->renderCommandEncoder(pass);
 
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
@@ -1692,22 +1748,33 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     const auto captureScene = [&]() {
         encoder->endEncoding();
 
+        // A blit cannot resolve a multisample source — the copy reads the
+        // resolve target the pass just wrote, which holds exactly the same
+        // image a single-sample attachment would have stored.
+        MTL::Texture* resolved =
+            pass->colorAttachments()->object(0)->resolveTexture();
         MTL::BlitCommandEncoder* blit = commandBuffer->blitCommandEncoder();
-        blit->copyFromTexture(colourTarget, 0, 0, MTL::Origin{0, 0, 0},
-                              MTL::Size{width, height, 1}, sceneColour_, 0, 0,
-                              MTL::Origin{0, 0, 0});
+        blit->copyFromTexture(resolved != nullptr ? resolved : colourTarget, 0, 0,
+                              MTL::Origin{0, 0, 0}, MTL::Size{width, height, 1},
+                              sceneColour_, 0, 0, MTL::Origin{0, 0, 0});
         blit->endEncoding();
 
         // Load, not clear: this pass continues the last one. Getting either
         // attachment wrong here is loud — a cleared colour draws the water on an
         // empty sky, and a cleared depth lets it paint over the terrain standing
-        // in front of it.
+        // in front of it. The resumed pass still STORES the multisample data —
+        // captureScene can run again below for refracting particles, and a bare
+        // MultisampleResolve would leave the next Load nothing to load.
         pass->colorAttachments()->object(0)->setLoadAction(MTL::LoadAction::LoadActionLoad);
-        pass->colorAttachments()->object(0)->setStoreAction(MTL::StoreAction::StoreActionStore);
+        pass->colorAttachments()->object(0)->setStoreAction(
+            multisampled ? MTL::StoreAction::StoreActionStoreAndMultisampleResolve
+                         : MTL::StoreAction::StoreActionStore);
         if (pass->depthAttachment()->texture() != nullptr) {
             pass->depthAttachment()->setLoadAction(MTL::LoadAction::LoadActionLoad);
-            pass->depthAttachment()->setStoreAction(refractingParticles ? MTL::StoreActionStore
-                : MTL::StoreActionDontCare);
+            pass->depthAttachment()->setStoreAction(
+                multisampled ? MTL::StoreAction::StoreActionStoreAndMultisampleResolve
+                : refractingParticles ? MTL::StoreActionStore
+                                      : MTL::StoreActionDontCare);
         }
         encoder = commandBuffer->renderCommandEncoder(pass);
     };

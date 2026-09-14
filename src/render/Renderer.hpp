@@ -615,7 +615,11 @@ private:
     };
 
     MTL::Texture* reflectionColour_ = nullptr;  // owned
-    MTL::Texture* reflectionDepth_ = nullptr;   // owned
+    // The reflection renders multisampled like the world pass — the two share
+    // encodeScene's pipelines, and a pipeline's sample count must match its
+    // pass. These are what the single-sample targets resolve from.
+    MTL::Texture* reflectionMsaaColour_ = nullptr;  // owned, 4x
+    MTL::Texture* reflectionMsaaDepth_ = nullptr;   // owned, 4x
     MTL::SamplerState* reflectionSampler_ = nullptr;  // owned
 
     /// Renders the world mirrored in the water plane, for the water to sample.
@@ -644,6 +648,11 @@ private:
 
     // Full/Reduced only. Off never calls ensureBackdropTextures and retains the direct path.
     MTL::Texture* worldColour_ = nullptr;  // owned, full resolution
+    // The 4x sources `worldColour_` and `depthTexture_` resolve from (#15503).
+    // Nobody samples them — RenderTarget only — so their cost is bandwidth, not
+    // pipeline state.
+    MTL::Texture* worldMsaaColour_ = nullptr;  // owned, full resolution, 4x
+    MTL::Texture* worldMsaaDepth_ = nullptr;   // owned, full resolution, 4x
     MTL::Texture* blurA_ = nullptr;        // owned, quarter resolution
     MTL::Texture* blurB_ = nullptr;        // owned, quarter resolution
     // The bloom bright-pass pair — quarter-res like the glass pair but separate,

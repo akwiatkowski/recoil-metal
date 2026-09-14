@@ -406,11 +406,16 @@ void Renderer::encodeReflectionPass(MTL::CommandBuffer* commandBuffer) noexcept 
         return;
     }
 
+    if (reflectionMsaaColour_ == nullptr || reflectionMsaaDepth_ == nullptr) {
+        return;  // allocation failed at startup: no mirror, honestly arrived at
+    }
+
     MTL::RenderPassDescriptor* pass = MTL::RenderPassDescriptor::alloc()->init();
     MTL::RenderPassColorAttachmentDescriptor* colour = pass->colorAttachments()->object(0);
-    colour->setTexture(reflectionColour_);
+    colour->setTexture(reflectionMsaaColour_);
+    colour->setResolveTexture(reflectionColour_);
     colour->setLoadAction(MTL::LoadAction::LoadActionClear);
-    colour->setStoreAction(MTL::StoreAction::StoreActionStore);
+    colour->setStoreAction(MTL::StoreAction::StoreActionMultisampleResolve);
     // Cleared to ZERO alpha, which is how the water tells "the mirror saw
     // something here" from "the mirror saw nothing". Clearing to the sky
     // colour with alpha 1 makes every texel look like geometry, and the water
@@ -418,7 +423,7 @@ void Renderer::encodeReflectionPass(MTL::CommandBuffer* commandBuffer) noexcept 
     colour->setClearColor(MTL::ClearColor::Make(0.0, 0.0, 0.0, 0.0));
 
     MTL::RenderPassDepthAttachmentDescriptor* depth = pass->depthAttachment();
-    depth->setTexture(reflectionDepth_);
+    depth->setTexture(reflectionMsaaDepth_);
     depth->setLoadAction(MTL::LoadAction::LoadActionClear);
     depth->setStoreAction(MTL::StoreAction::StoreActionDontCare);
     depth->setClearDepth(1.0);

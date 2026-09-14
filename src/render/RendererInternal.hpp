@@ -399,6 +399,13 @@ constexpr MTL::PixelFormat kDepthFormat = MTL::PixelFormat::PixelFormatDepth32Fl
 /// texel on a 1024-square map — coarse enough to be cheap, fine enough that a
 /// unit-sized shadow is several texels rather than one.
 constexpr MTL::PixelFormat kShadowFormat = MTL::PixelFormat::PixelFormatDepth32Float;
+
+/// Every `encodeScene` pass — the world and the reflection — renders at 4x
+/// MSAA and resolves into its single-sample target (#15503). One count for
+/// both passes is what lets one pipeline set serve them: a pipeline's
+/// rasterSampleCount must equal its pass's attachments, so splitting the
+/// count would mean a second set of everything the scene draws.
+constexpr NS::UInteger kSceneSamples = 4;
 constexpr unsigned int kShadowResolution = 2048;
 
 /// Spans across the water surface grid. Far coarser than the terrain: the
@@ -523,7 +530,8 @@ static_assert(sourceAlphaBlendFactor(BlendMode::PremultipliedAlpha)
                                                       const char* vertexName,
                                                       const char* fragmentName, BlendMode blend,
                                                       MTL::PixelFormat depthFormat = kDepthFormat,
-                                                      MTL::PixelFormat colorFormat = kColorFormat) {
+                                                      MTL::PixelFormat colorFormat = kColorFormat,
+                                                      NS::UInteger sampleCount = 1) {
     MTL::Function* vertexFn =
         library->newFunction(NS::String::string(vertexName, NS::UTF8StringEncoding));
     MTL::Function* fragmentFn =
@@ -548,6 +556,10 @@ static_assert(sourceAlphaBlendFactor(BlendMode::PremultipliedAlpha)
     // The pipeline must know the depth format or the render pass silently
     // refuses to write depth.
     descriptor->setDepthAttachmentPixelFormat(depthFormat);
+    // And the sample count must match the pass's attachments: a pipeline built
+    // for the 4x world target cannot run in a single-sample pass, and vice
+    // versa — Metal validates the pair at draw time.
+    descriptor->setRasterSampleCount(sampleCount);
 
     NS::Error* error = nullptr;
     MTL::RenderPipelineState* pipeline = device->newRenderPipelineState(descriptor, &error);
