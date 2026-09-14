@@ -1256,14 +1256,18 @@ fewer of those today than there will ever be again.
       rather than to zero. *Manual:* `--dump-weapons` shows a commander's Overcharge with its
       overrides listed.
 
-- [ ] **P10.2 Shields, as an armour class.** Nearly free once P10.1 lands, because that is
+- [x] **P10.2 Shields, as an armour class.** — **done** (personal + dome bubbles,
+      `tickShields`, ShieldDamaged/Collapsed/Restored events; `a15d0c8`, `897ce1a`,
+      `a555a9a`, `1d8a2fe`). Nearly free once P10.1 lands, because that is
       how Recoil does it — `PlasmaRepulser.cpp:201-202` reads
       `damageArray.Get(weaponDef->shieldArmorType)`, so a shield is not a special case in the
       damage path at all. *Test:* a weapon with a shield-class override is absorbed at a
       different rate than the same weapon against the hull. *Manual:* a shielded unit under
       fire.
 
-- [ ] **P10.3 Projectile kinds** (`ADR-034`, D13). A `ProjectileKind` tag and a flags
+- [x] **P10.3 Projectile kinds** (`ADR-034`, D13) — **done**: flat `Projectile` carries
+      `interceptor`, `targetLayers`, tracking guidance, proximity-fuse fallback and
+      intercept sweeps; the state hash still walks a visitor-free struct. A
       bitmask on the same flat struct: tracking, torpedo and semi-ballistic motion, a
       target-layer mask, `targetable`/`interceptor` bitmasks, and a proximity fuse — which is
       one field here and does not exist in Recoil at all (`13 §1.5`). *Test:* an
@@ -1286,11 +1290,13 @@ fewer of those today than there will ever be again.
       route makes the units go round rather than through. *Manual:* `--bench` — this should
       show up as a drop, not a wash.
 
-- [ ] **P10.6 Threading, path work first** (`ADR-036`, D15). Fork-join, per-slot writes,
-      application in slot order, pool sized to the *performance*-core count. *Test:* the
-      replay hash is identical single-threaded and multi-threaded, and identical across two
-      different pool sizes — that equality **is** the test, and if it ever fails the rule in
-      D15 has been broken somewhere. *Manual:* `--bench` at 5,000 units.
+- [x] **P10.6 Threading, path work first** (`ADR-036`, D15) — **done 2026-09-14**
+      (`dabdd2d`, `11b7ea2`). `TaskPool` fixed-lane fork-join sized to performance cores;
+      path steps, aim/fire acquisition, grid-rebuild fill, `Movement::tick`, segmented
+      projectile flight and the draw gather all fan out; `resolveCollisions` stays
+      Gauss-Seidel serial. The replay-hash-equality test exists and pins pool sizes
+      1/2/4/8; golden MATCHes under serial and default pools; `--bench` went
+      4.3x → 16.6x real time at 5,000 units.
 
 - [x] **P10.7 The event queue's frame boundary** — **done 2026-08-21.** `REVIEW.md` §5.7. The
       queue's lifetime was a convention described in prose across two headers: `Events.hpp` said
