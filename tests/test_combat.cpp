@@ -1304,6 +1304,66 @@ TEST_CASE("automatic projectile fire aims at a live radar contact's deterministi
     CHECK(shots.front().velocity == expected.velocity);
 }
 
+TEST_CASE("a radar-only contact is led from its blip, not from truth", "[lead]") {
+    // Radar gives a position with error but the step underneath it is still
+    // measured — retail's lead reads the target's real velocity whatever the
+    // contact quality (C-171). So a moving blip is aimed at BLIP + step over
+    // the flight time: right direction, wrong place, by the blip's own error.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon weapon = directFire(10.0f, 300.0f);  // leadTarget defaults on
+    UnitDef gunner = gunnerDef(weapon);
+    gunner.radarRadiusElmos = 300.0f;  // vision stays zero: radar-only contact
+    const UnitId shooter =
+        roster.add(roster.addType(gunner), 0.0f, 0.0f, 0, 100.0f);
+    roster.motion(shooter).turnPerTick = rm::sim::kBradHalfTurn;
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
+    roster.motion(target).stepX = rm::test::fx(4.0f);
+
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, target.index, roster.store, roster.catalog,
+                                      armies, intel)
+            == rm::sim::ContactKind::Radar);
+
+    constexpr rm::TickIndex tick = 3;
+    std::vector<Projectile> shots;
+    REQUIRE(rm::sim::aimAtTargets(roster.store, roster.catalog, armies, &intel, nullptr,
+                                  nullptr, tick, roster.rate)
+            == 1);
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate,
+                                  nullptr, &intel, nullptr, tick)
+            == 1);
+    REQUIRE(shots.size() == 1);
+
+    // Led blip by the same two iterations the implementation runs.
+    const rm::sim::Fx muzzlePerTick =
+        roster.catalog.weaponRates(roster.store.typeAt(shooter.index), 0).muzzlePerTick;
+    const auto [blipX, blipZ] = rm::sim::radarBlipPosition(
+        target, roster.transform(target).x, roster.transform(target).z, tick, roster.rate);
+    const rm::sim::Fx stepX = rm::test::fx(4.0f);
+    const rm::sim::Fx baseY = roster.transform(target).y;
+    std::array<rm::sim::Fx, 3> aim{blipX, baseY, blipZ};
+    for (int i = 0; i < 2; ++i) {
+        const rm::sim::Fx distance =
+            rm::sim::fxHypot(rm::sim::fxHypot(aim[0], aim[1] - rm::sim::positionOf(
+                                                              roster.transform(shooter))[1]),
+                             aim[2]);
+        aim = {blipX + stepX * (distance / muzzlePerTick), baseY, blipZ};
+    }
+    REQUIRE(aim[0] != blipX);  // the lead is real, not the raw blip
+
+    const Projectile expected = rm::sim::launch(
+        rm::sim::positionOf(roster.transform(shooter)), aim, weapon, 0, roster.rate,
+        muzzlePerTick,
+        roster.catalog.weaponRates(roster.store.typeAt(shooter.index), 0).damage, shooter);
+    CHECK(shots.front().velocity == expected.velocity);
+}
+
 TEST_CASE("a LeadTarget weapon fires where a crossing target is going",
           "[lead]") {
     // `LeadTarget = true` on the blueprint: the muzzle's point of aim is the
@@ -1361,7 +1421,8 @@ TEST_CASE("a weapon without LeadTarget fires at where the mover is", "[lead]") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;
 
-    Weapon weapon = directFire(10.0f, 300.0f);  // leadTarget stays false
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.leadTarget = false;  // an authored `LeadTarget = false` opt-out
     const UnitId shooter =
         roster.add(roster.addType(gunnerDef(weapon)), 0.0f, 0.0f, 0, 100.0f);
     roster.motion(shooter).turnPerTick = rm::sim::kBradHalfTurn;

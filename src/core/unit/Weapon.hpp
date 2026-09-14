@@ -120,11 +120,13 @@ struct Weapon {
     /// ordinary unit acquisition.
     bool targetsProjectiles = false;
 
-    /// `LeadTarget = true` — the muzzle aims where a moving target is GOING, not where it is:
-    /// the target's measured per-tick step, advanced over the shot's flight time. 33 corpus
-    /// blueprints state the field (11 of them `false`), the Titan's Heavy Plasma Cannon among
-    /// them; absent means no lead, which is the authored default.
-    bool leadTarget = false;
+    /// `LeadTarget` — the muzzle aims where a moving target is GOING, not where it is: the
+    /// target's measured per-tick step, advanced over the shot's flight time (retail runs two
+    /// Newton iterations of exactly this, `C-171`). Leading is the default for every weapon —
+    /// shooting at where a mover WAS is a guaranteed miss. The corpus states the field 44
+    /// times: 34 `true`, and 10 authored `false` opt-outs that are honoured (torpedoes and
+    /// beam generators — slow homing or hitscan-adjacent shots the flag exists to exempt).
+    bool leadTarget = true;
 
     /// `CountedProjectile` means this weapon consumes a missile built and stored by its unit's
     /// silo. The stored count is separate mutable state; this is only the authored capability.

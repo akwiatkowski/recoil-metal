@@ -913,28 +913,32 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
 }
 
 /// Automatic acquisition keeps its selected UnitId and truth-based rank. Only the muzzle's
-/// point of aim is uncertain, and only while that live unit is currently radar-only —
-/// a blip is a position WITHOUT a velocity, so a radar-only contact is never led.
-/// A seen target under a `LeadTarget` weapon is aimed at where its step takes it.
+/// point of aim is uncertain: a radar-only contact aims at its deterministic blip, a seen
+/// one at the true position. EITHER is then led — retail leads with the target's real
+/// velocity unconditionally (`C-171`: two Newton iterations of `targetPos + targetVel·t`),
+/// so the blip's contribution is positional error, never a hidden step. A shot at a led
+/// blip lands at the predicted true point displaced by the blip's own wander — radar fire
+/// is a bit less certain than sighted fire, which is the whole point of the model.
 [[nodiscard]] std::array<Fx, 3> automaticProjectileAimPosition(
     UnitId target, std::array<Fx, 3> from, int fromArmy, const unitdef::Weapon& weapon,
     Fx muzzlePerTick, const UnitStore& store, const UnitCatalog& catalog,
     std::span<const Army> armies, const Intel* intel, TickIndex tick, TickRate rate) noexcept {
     const std::array<Fx, 3> position = positionOf(store.transforms()[target.index]);
+    std::array<Fx, 3> aim = position;
     if (intel != nullptr) {
         const Army* mine = armyFor(fromArmy, armies);
         if (mine != nullptr
             && contactKindForUnit(mine->alliance, target.index, store, catalog, armies, *intel)
                    == ContactKind::Radar) {
             const auto [x, z] = radarBlipPosition(target, position[0], position[2], tick, rate);
-            return {x, position[1], z};
+            aim = {x, position[1], z};
         }
     }
     if (!weapon.leadTarget) {
-        return position;
+        return aim;
     }
     const MoveState& motion = store.motion()[target.index];
-    return leadUnitPosition(from, position, motion.stepX, motion.stepZ, muzzlePerTick);
+    return leadUnitPosition(from, aim, motion.stepX, motion.stepZ, muzzlePerTick);
 }
 
 /// Which priority row a candidate matches, or `npos` for none.

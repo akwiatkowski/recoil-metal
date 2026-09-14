@@ -16,6 +16,7 @@
 #include "core/model/Scm.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -33,7 +34,26 @@ namespace {
                 : std::filesystem::path{};
 }
 
+[[nodiscard]] std::filesystem::path unitDir(std::string_view id) {
+    const char* home = std::getenv("HOME");
+    return home ? std::filesystem::path{home} / "projects/llm/input/faf/units"
+                    / std::string{id}
+                : std::filesystem::path{};
+}
+
 } // namespace
+
+TEST_CASE("an authored LeadTarget = false opts the weapon out", "[slice][turret]") {
+    // The Seraphim destroyer's cavitation torpedoes state the flag explicitly —
+    // the default is leading, so a false has to SURVIVE the parse to mean anything.
+    const auto dir = unitDir("XSS0304");
+    if (!std::filesystem::is_directory(dir)) SKIP("retail corpus unavailable");
+    const auto def = rm::unitbp::loadFile(dir / "XSS0304_unit.bp");
+    REQUIRE(def);
+    REQUIRE(std::ranges::any_of(def->weapons, [](const rm::unitdef::Weapon& w) {
+        return !w.leadTarget;
+    }));
+}
 
 TEST_CASE("the Titan's turret resolves from blueprint onto mesh", "[slice][turret]") {
     const auto dir = titanDir();
