@@ -63,6 +63,24 @@ struct MoveDef {
     /// `Footprint.MinWaterDepth` outright, so this is filled by `moveDefFor(def)`,
     /// not the class table.
     float minWaterDepthElmos = 0.0f;
+
+    /// Whether this class occupies a second movement layer under the water.
+    ///
+    /// True only for `RULEUMT_SurfacingSub`. Retail's footprint evaluator
+    /// (C-205, C-219) admits the `Sub` layer below the footprint's own
+    /// `MinWaterDepth` — a DIFFERENT question from the surfaced hull's draft,
+    /// so a sub that dives can cross shelves its keel would ground on. The
+    /// layer switch follows `MoveState::submerged`, which flips only when the
+    /// dive completes: mid-transition the old layer still governs (C-219's
+    /// hold-the-old-layer rule).
+    bool submerges = false;
+
+    /// The water the SUBMERGED layer needs, in elmos — the footprint's authored
+    /// `MinWaterDepth` WITHOUT the surfaced hull's `Elevation` draft. Every
+    /// shipped `SurfacingSub` leaves it unauthored (zero → "wet"), so the
+    /// submerged grid is usually the whole sea minus dry land. Meaningful only
+    /// when `submerges`; filled by `moveDefFor(def)`.
+    float submergedMinWaterDepthElmos = 0.0f;
 };
 
 /// The MoveDef for a motion class.

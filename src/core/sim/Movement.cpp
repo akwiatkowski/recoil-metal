@@ -31,18 +31,20 @@ using rm::sim::Fx;
 /// One elmo, the sample distance for the terrain gradient.
 inline constexpr Fx kOneElmo = Fx::fromInt(1);
 
-/// The P10.4 speed divisor one unit pays where it stands: its type's grid
-/// answers the cell under its feet. No grid, no divisor — and a 0 answers
+/// The P10.4 speed divisor one unit pays where it stands: the grid its current
+/// LAYER answers the cell under its feet. No grid, no divisor — and a 0 answers
 /// "impassable" rather than "stopped", because the field gates routes, never
 /// the stride's permission to move.
 [[nodiscard]] std::uint8_t speedDivisorAt(
-    std::span<const rm::sim::PassabilityGrid* const> gridForType, std::size_t type, Fx x,
-    Fx z) noexcept {
-    if (type >= gridForType.size() || gridForType[type] == nullptr) {
+    std::span<const rm::sim::PassabilityGrid* const> gridForType,
+    std::span<const rm::sim::PassabilityGrid* const> gridForTypeSubmerged,
+    bool submergedLayer, std::size_t type, Fx x, Fx z) noexcept {
+    const rm::sim::PassabilityGrid* grid =
+        layerGridFor(gridForType, gridForTypeSubmerged, submergedLayer, type);
+    if (grid == nullptr) {
         return 0;
     }
-    const rm::sim::PassabilityGrid& grid = *gridForType[type];
-    return grid.divisorAt(grid.cellAtWorld(x), grid.cellAtWorld(z));
+    return grid->divisorAt(grid->cellAtWorld(x), grid->cellAtWorld(z));
 }
 
 } // namespace
@@ -421,8 +423,9 @@ Fx wingedLift(Fx need, Fx speedRatio, Fx liftFactor, Fx heightAbove, Fx elevatio
 void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
                const Terrain& terrain,
                std::span<const PassabilityGrid* const> gridForType,
-               std::span<const UnitTypeIndex> types, std::size_t first,
-               std::size_t last) noexcept {
+               std::span<const UnitTypeIndex> types,
+               std::span<const PassabilityGrid* const> gridForTypeSubmerged,
+               std::size_t first, std::size_t last) noexcept {
     const Fx width = Fx::fromInt(terrain.field().squaresX * kSquareSize);
     const Fx depth = Fx::fromInt(terrain.field().squaresZ * kSquareSize);
 
@@ -497,7 +500,9 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
         Fx travel = state.speedPerTick;
         if (i < types.size()) {
             const std::uint8_t divisor = speedDivisorAt(
-                gridForType, static_cast<std::size_t>(types[i]), unit.x, unit.z);
+                gridForType, gridForTypeSubmerged,
+                state.submersible && state.submerged,
+                static_cast<std::size_t>(types[i]), unit.x, unit.z);
             if (divisor > 1) {
                 travel = travel / Fx::fromInt(divisor);
             }
@@ -696,10 +701,12 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
 
 void tick(std::span<Transform> transforms, std::span<MoveState> motion,
           const Terrain& terrain, std::span<const PassabilityGrid* const> gridForType,
-          std::span<const UnitTypeIndex> types) noexcept {
+          std::span<const UnitTypeIndex> types,
+          std::span<const PassabilityGrid* const> gridForTypeSubmerged) noexcept {
     const std::size_t count = std::min(transforms.size(), motion.size());
     rm::parallelFor(count, [&](std::size_t first, std::size_t last) {
-        tickRange(transforms, motion, terrain, gridForType, types, first, last);
+        tickRange(transforms, motion, terrain, gridForType, types,
+                  gridForTypeSubmerged, first, last);
     });
 }
 
@@ -798,7 +805,8 @@ void placeOnMotionLayer(Transform& transform, const MoveState& state,
 }
 
 void resolveCollisions(UnitStore& store, const Terrain& terrain,
-                       std::span<const PassabilityGrid* const> gridForType) {
+                       std::span<const PassabilityGrid* const> gridForType,
+                       std::span<const PassabilityGrid* const> gridForTypeSubmerged) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::size_t count = std::min(transforms.size(), motion.size());
@@ -909,8 +917,9 @@ void resolveCollisions(UnitStore& store, const Terrain& terrain,
                 }
                 const auto type = static_cast<std::size_t>(
                     store.typeAt(static_cast<UnitIndex>(slot)));
-                const PassabilityGrid* grid =
-                    type < gridForType.size() ? gridForType[type] : nullptr;
+                const PassabilityGrid* grid = layerGridFor(
+                    gridForType, gridForTypeSubmerged,
+                    motion[slot].submersible && motion[slot].submerged, type);
                 return grid == nullptr
                     || sitePlaceable(*grid, x, z, motion[slot].radiusElmos);
             };
@@ -981,7 +990,8 @@ void orderSidestep(MoveState& state, Fx x, Fx z, Fx width, Fx depth) noexcept {
 
 void resolveCongestion(UnitStore& store, const Terrain& terrain,
                        std::span<const PassabilityGrid* const> gridForType,
-                       std::span<const Army> armies) {
+                       std::span<const Army> armies,
+                       std::span<const PassabilityGrid* const> gridForTypeSubmerged) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<MoveState> motion = store.motion();
     const std::span<const CommandQueue> orders = store.orders();
@@ -1028,7 +1038,8 @@ void resolveCongestion(UnitStore& store, const Terrain& terrain,
         // costly cell is slow by terrain, not stalled by traffic, and measuring
         // it against full speed would report a jam that does not exist.
         const std::uint8_t divisor = speedDivisorAt(
-            gridForType,
+            gridForType, gridForTypeSubmerged,
+            state.submersible && state.submerged,
             static_cast<std::size_t>(store.typeAt(static_cast<UnitIndex>(i))),
             transforms[i].x, transforms[i].z);
         const Fx expected = divisor > 1 ? state.speedPerTick / Fx::fromInt(divisor)
@@ -1060,8 +1071,9 @@ void resolveCongestion(UnitStore& store, const Terrain& terrain,
         }
         const auto type = static_cast<std::size_t>(
             store.typeAt(static_cast<UnitIndex>(slot)));
-        const PassabilityGrid* grid =
-            type < gridForType.size() ? gridForType[type] : nullptr;
+        const PassabilityGrid* grid = layerGridFor(
+            gridForType, gridForTypeSubmerged,
+            motion[slot].submersible && motion[slot].submerged, type);
         return grid == nullptr
             || sitePlaceable(*grid, x, z, motion[slot].radiusElmos);
     };

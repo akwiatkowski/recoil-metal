@@ -1442,10 +1442,20 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // per tick and builds a grid only the first time a new pair of limits appears.
     runner.gridForType.clear();
     runner.gridForType.reserve(scene.catalog.size());
+    runner.gridForTypeSubmerged.clear();
+    runner.gridForTypeSubmerged.reserve(scene.catalog.size());
     for (std::size_t type = 0; type < scene.catalog.size(); ++type) {
         runner.gridForType.push_back(&runner.passability.gridFor(scene, type));
+        // The second layer exists only for types that dive (C-205); for
+        // everything else `gridForSubmerged` hands back the same grid and the
+        // layer pick below never reaches it anyway.
+        const bool dives = type < scene.moveDefForType.size()
+                        && scene.moveDefForType[type].submerges;
+        runner.gridForTypeSubmerged.push_back(
+            dives ? &runner.passability.gridForSubmerged(scene, type) : nullptr);
     }
     runner.match.passability = runner.gridForType;
+    runner.match.passabilitySubmerged = runner.gridForTypeSubmerged;
 
     // Replay submits the exact semantic phase the original run recorded. Setup commands are
     // regenerated before the runner exists, so a matching prefix is already applied and owns
@@ -1793,7 +1803,14 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                                                        rm::kSquareSize / 2));
             if (scene.store.motion()[spawned->index].surfaceWater) {
                 const auto type = static_cast<std::size_t>(scene.store.typeAt(spawned->index));
-                const rm::sim::PassabilityGrid& grid = runner.passability.gridFor(scene, type);
+                // A factory-built sub leaves the pad already submerged: clamp
+                // its roll-off on the layer it actually occupies, not the
+                // surfaced hull's draft.
+                const rm::sim::PassabilityGrid& grid =
+                    scene.store.motion()[spawned->index].submersible
+                        && scene.store.motion()[spawned->index].submerged
+                        ? runner.passability.gridForSubmerged(scene, type)
+                        : runner.passability.gridFor(scene, type);
                 if (const auto waterTarget = rm::sim::reachablePointToward(
                         grid, work.position[0], work.position[2], to[0], to[1])) {
                     to = *waterTarget;

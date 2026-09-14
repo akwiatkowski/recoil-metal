@@ -1287,30 +1287,29 @@ public:
             // waterline, so a destroyer and a hovercraft answer different questions on
             // the same sea. Memoised on the depth — the corpus keeps the distinct
             // drafts to a handful.
-            auto [entry, fresh] =
-                surfaceWater_.try_emplace(move.minWaterDepthElmos, rm::sim::PassabilityGrid{});
-            if (fresh) {
-                entry->second = rm::sim::buildSurfaceWaterPassability(*field_, waterLevel_,
-                                                                      move.minWaterDepthElmos);
-                std::printf("passability: %d x %d cells of %.0f elmos, %zu%% navigable water"
-                            " (draft %.0f elmos)\n",
-                            entry->second.cellsX, entry->second.cellsZ,
-                            static_cast<double>(rm::sim::fxToFloat(entry->second.elmosPerCell)),
-                            entry->second.divisor.empty()
-                                ? 0u
-                                : 100u * static_cast<std::size_t>(std::count_if(
-                                                entry->second.divisor.begin(),
-                                                entry->second.divisor.end(),
-                                                [](std::uint8_t d) { return d != 0; }))
-                                      / entry->second.divisor.size(),
-                            static_cast<double>(move.minWaterDepthElmos));
-            }
-            return entry->second;
+            return waterAtDepth(move.minWaterDepthElmos);
         }
         if (!move.usesGroundGrid) {
             return empty_;
         }
         return gridFor(move.maxSlopeDegrees, move.maxWaterDepthElmos);
+    }
+
+    /// The grid a type routes on while SUBMERGED — the `Sub` layer's own
+    /// admission (C-205), which reads the footprint's `MinWaterDepth` rather
+    /// than the surfaced hull's `Elevation` draft. Falls back to the ordinary
+    /// grid for anything that never dives, so a caller can ask unconditionally
+    /// and only `SurfacingSub` types answer differently.
+    [[nodiscard]] const rm::sim::PassabilityGrid& gridForSubmerged(const UnitScene& scene,
+                                                                    std::size_t type) {
+        if (type >= scene.moveDefForType.size()) {
+            return empty_;
+        }
+        const rm::data::MoveDef& move = scene.moveDefForType[type];
+        if (!move.submerges || !hasWater_) {
+            return gridFor(scene, type);
+        }
+        return waterAtDepth(move.submergedMinWaterDepthElmos);
     }
 
     /// The terrain domain a new unit or structure must occupy.
@@ -1331,6 +1330,31 @@ public:
     }
 
 private:
+    /// The memoised "navigable water at depth D" grid — the shared answer for
+    /// a hull's draft AND a sub's submerged minimum, because the question is
+    /// the same one: how much water must stand over the seabed.
+    [[nodiscard]] const rm::sim::PassabilityGrid& waterAtDepth(float minDepthElmos) {
+        auto [entry, fresh] =
+            surfaceWater_.try_emplace(minDepthElmos, rm::sim::PassabilityGrid{});
+        if (fresh) {
+            entry->second = rm::sim::buildSurfaceWaterPassability(*field_, waterLevel_,
+                                                                  minDepthElmos);
+            std::printf("passability: %d x %d cells of %.0f elmos, %zu%% navigable water"
+                        " (draft %.0f elmos)\n",
+                        entry->second.cellsX, entry->second.cellsZ,
+                        static_cast<double>(rm::sim::fxToFloat(entry->second.elmosPerCell)),
+                        entry->second.divisor.empty()
+                            ? 0u
+                            : 100u * static_cast<std::size_t>(std::count_if(
+                                            entry->second.divisor.begin(),
+                                            entry->second.divisor.end(),
+                                            [](std::uint8_t d) { return d != 0; }))
+                                  / entry->second.divisor.size(),
+                        static_cast<double>(minDepthElmos));
+        }
+        return entry->second;
+    }
+
     const rm::HeightField* field_;
     bool hasWater_;
     float waterLevel_;

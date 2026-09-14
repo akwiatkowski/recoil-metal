@@ -47,13 +47,22 @@ MoveDef moveDefFor(unitdef::MotionType motion) noexcept {
                        .usesGroundGrid = false};
 
     case MotionType::Water:
-    case MotionType::SurfacingSub:
         // Surface ships use the inverse domain: every square under a path cell must be below
         // the waterline. They do not care about seabed slope because they float above it.
         // The draft that separates a shelf-skimmer from a deep hull is per-unit —
         // `moveDefFor(def)` fills `minWaterDepthElmos` from the blueprint.
         return MoveDef{.maxSlopeDegrees = 0.0f, .maxWaterDepthElmos = 0.0f,
                         .usesGroundGrid = false, .usesSurfaceWaterGrid = true};
+
+    case MotionType::SurfacingSub:
+        // Same surface domain while up — a surfaced sub floats like any hull.
+        // `submerges` marks the second layer the dive opens: `moveDefFor(def)`
+        // fills `submergedMinWaterDepthElmos` from the FOOTPRINT's own
+        // `MinWaterDepth`, which no shipped sub authors, so the submerged grid
+        // is "wet" where the surfaced one demanded the hull's draft.
+        return MoveDef{.maxSlopeDegrees = 0.0f, .maxWaterDepthElmos = 0.0f,
+                        .usesGroundGrid = false, .usesSurfaceWaterGrid = true,
+                        .submerges = true};
 
     }
 
@@ -81,6 +90,14 @@ MoveDef moveDefFor(const unitdef::UnitDef& def) noexcept {
     if (move.usesSurfaceWaterGrid) {
         move.minWaterDepthElmos =
             std::max(def.minWaterDepthElmos, -std::min(0.0f, def.elevationElmos));
+    }
+    if (move.submerges) {
+        // The submerged layer asks the FOOTPRINT's question only — C-205's
+        // `Sub` admission reads `MinWaterDepth`, not `Physics.Elevation`, so
+        // the draft term that grounds the surfaced hull does not follow the
+        // sub under water. No shipped sub authors `MinWaterDepth`: zero means
+        // "wet" and a dived boat crosses shelves its keel could not.
+        move.submergedMinWaterDepthElmos = def.minWaterDepthElmos;
     }
     return move;
 }

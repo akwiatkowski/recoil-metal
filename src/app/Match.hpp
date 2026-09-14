@@ -166,6 +166,13 @@ struct MatchRunner {
     /// table built once at the start would have a hole exactly where the new unit is.
     std::vector<const rm::sim::PassabilityGrid*> gridForType;
 
+    /// The SECOND-layer table, parallel to `gridForType`: where a type routes
+    /// while `MoveState::submerged` (C-205's `Sub` admission — only
+    /// `SurfacingSub` entries differ from the surfaced table, and only they
+    /// may hold a grid built for a shallower depth). Refilled in the same
+    /// pass, for the same catalog-growth reason.
+    std::vector<const rm::sim::PassabilityGrid*> gridForTypeSubmerged;
+
     /// Running totals, for the callers that report them at the end.
     std::size_t shotsFired = 0;
     std::size_t completedBuilds = 0;

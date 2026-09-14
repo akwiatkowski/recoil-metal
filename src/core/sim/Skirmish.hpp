@@ -135,6 +135,14 @@ struct Match {
     /// advanced at all, which is exactly right for a `--units` crowd that cannot have any.
     std::span<const PassabilityGrid* const> passability;
 
+    /// The SECOND layer, parallel to `passability`: the grid a `SurfacingSub`
+    /// type routes on while `MoveState::submerged` is set (C-205's `Sub`
+    /// admission — the footprint's own `MinWaterDepth`, which shipped subs
+    /// leave at "wet"). Null entries and a short/empty span both read as "no
+    /// distinct submerged layer", so every non-submersible type simply does
+    /// not have one.
+    std::span<const PassabilityGrid* const> passabilitySubmerged;
+
     /// Optional match-owned path service. Null preserves the synchronous compatibility seam
     /// for callers that do not model a full match yet.
     PathService* pathService = nullptr;

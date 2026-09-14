@@ -328,4 +328,26 @@ private:
 [[nodiscard]] std::optional<std::array<Fx, 2>> reachablePointToward(
     const PassabilityGrid& grid, Fx fromX, Fx fromZ, Fx towardX, Fx towardZ);
 
+/// The grid ONE unit routes and pays on where it stands.
+///
+/// `gridForType` answers the type's surfaced/ordinary layer; `submergedForType`
+/// is the parallel table of second-layer grids for `SurfacingSub` types
+/// (nullptr entries read as "no distinct submerged layer" — land units, air,
+/// ships that never dive). `submergedLayer` is the caller's
+/// `motion.submersible && motion.submerged`, spelled as a bool so the helper
+/// does not drag `MoveState` into a header that only knows grids.
+///
+/// C-219 holds the OLD layer until the dive completes, which is exactly what
+/// keying on `submerged` — a flag that flips at the transition's end — gives.
+[[nodiscard]] inline const PassabilityGrid* layerGridFor(
+    std::span<const PassabilityGrid* const> gridForType,
+    std::span<const PassabilityGrid* const> submergedForType, bool submergedLayer,
+    std::size_t type) noexcept {
+    if (submergedLayer && type < submergedForType.size()
+        && submergedForType[type] != nullptr) {
+        return submergedForType[type];
+    }
+    return type < gridForType.size() ? gridForType[type] : nullptr;
+}
+
 } // namespace rm::sim

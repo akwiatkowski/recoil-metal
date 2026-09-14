@@ -497,7 +497,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                           match.intel,
                                           match.playableRect ? &*match.playableRect
                                                              : nullptr,
-                                          match.scriptTasks, &guardWork, &match.random, tickIndex);
+                                          match.scriptTasks, &guardWork, &match.random,
+                                          tickIndex, match.passabilitySubmerged);
 
     // 0b. TRANSPORTS. Between dispatch and movement so a route issued here —
     //     a carrier coming to its cargo, a ferry turning for the drop — moves
@@ -512,7 +513,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    view built to hand every batch to the collision pass at once — because two units
     //    of different models had to be able to see each other. With one flat array that
     //    problem does not arise.
-    tick(store.transforms(), store.motion(), terrain, match.passability, store.types());
+    tick(store.transforms(), store.motion(), terrain, match.passability, store.types(),
+         match.passabilitySubmerged);
     store.propagateAttachments();
 
     //    THE SPATIAL INDEX IS REBUILT TWICE, and both points are load-bearing (§7 P5.2).
@@ -523,7 +525,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    Each rebuild is one pass over the slots and a sort — cheap against what it replaces,
     //    which was a scan over every unit for every shooter, every projectile and every blast.
     store.reindex(spatialCellSize(store));
-    resolveCollisions(store, terrain, match.passability);
+    resolveCollisions(store, terrain, match.passability, match.passabilitySubmerged);
     // Collision resolution can move either member independently. Reapply attachment-local
     // transforms before publishing positions to combat, so children never lag a parent by a tick.
     store.propagateAttachments();
@@ -533,7 +535,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    blocker gets it to step aside; a hard blocker gets a waypoint around it.
     //    Runs on the post-push positions the second reindex just published, and
     //    before the match-only early return so a crowd un-jams itself too.
-    resolveCongestion(store, terrain, match.passability, match.armies);
+    resolveCongestion(store, terrain, match.passability, match.armies,
+                      match.passabilitySubmerged);
 
     // Everything below is a MATCH, and a scene with no armies is not one — a `--units`
     // crowd scattered for a screenshot has nothing to shoot at and nobody to pay.
@@ -567,7 +570,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // Attack-move and patrol acquire only from the post-movement, post-intel world. Their
     // temporary target then feeds the ordinary aiming and firing passes below.
     updateAggressiveOrders(store, catalog, match.armies, terrain, match.passability, rate,
-                            match.intel, playableRect, tickIndex);
+                            match.intel, playableRect, tickIndex, match.passabilitySubmerged);
 
     // Same class of per-unit automation: a hull under its retreat threshold abandons
     // its queue for the nearest mechanic before the aim pass picks its next target.

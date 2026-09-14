@@ -1356,6 +1356,22 @@ std::vector<DispatchedCommand> dispatchCommands(UnitScene& scene,
     dispatched.reserve(due.size());
     const rm::sim::Terrain terrain = scene.terrain(field);
     for (rm::sim::CommandIssue& issue : due) {
+        // The LAYER grid, not just the type grid: a submerged submarine is
+        // answered by its own (usually shallower) water grid at intake too —
+        // C-205's `Sub` admission — while a surfaced hull or anything that
+        // never dives keeps the one it had.
+        const auto layerGridForUnit =
+            [&](rm::sim::UnitId unit) -> const rm::sim::PassabilityGrid* {
+            if (!scene.store.alive(unit)) {
+                return nullptr;
+            }
+            const auto unitType = static_cast<std::size_t>(scene.store.typeAt(unit.index));
+            const rm::sim::MoveState& motion = scene.store.motion()[unit.index];
+            if (motion.submersible && motion.submerged) {
+                return &passability.gridForSubmerged(scene, unitType);
+            }
+            return &passability.gridFor(scene, unitType);
+        };
         const auto gridForUnit = [&](rm::sim::UnitId unit) -> const rm::sim::PassabilityGrid* {
             if (!scene.store.alive(unit)) {
                 return nullptr;
@@ -1365,15 +1381,12 @@ std::vector<DispatchedCommand> dispatchCommands(UnitScene& scene,
                 return &passability.gridForBuild(
                     scene, static_cast<std::size_t>(issue.buildType), unitType);
             }
-            return &passability.gridFor(scene, unitType);
+            return layerGridForUnit(unit);
         };
         rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
             issue, scene.store, scene.catalog, scene.players, scene.armies, terrain, gridForUnit,
             gAppTickRate, &scene.building, &scene.events, &scene.features, pathService,
-            scriptTasks, [&](rm::sim::UnitId unit) -> const rm::sim::PassabilityGrid* {
-                return scene.store.alive(unit)
-                    ? &passability.gridFor(scene, scene.store.typeAt(unit.index)) : nullptr;
-            });
+            scriptTasks, layerGridForUnit);
         if (rm::log::enabled(rm::log::Level::Debug)) {
             for (const auto unit : issue.units) {
                 rm::log::writef(rm::log::Level::Debug, "order",

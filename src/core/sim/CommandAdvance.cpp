@@ -225,7 +225,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                              PathService* pathService, std::span<const Army> armies,
                              const Intel* intel, const PlayableRect* playableRect,
                              ScriptTaskHost* scriptTasks, std::vector<GuardWork>* guardWork,
-                             RandomStream* random, TickIndex tick) {
+                             RandomStream* random, TickIndex tick,
+                             std::span<const PassabilityGrid* const> gridForTypeSubmerged) {
     std::size_t started = 0;
     std::vector<UnitIndex> delayedScripts;
     if (guardWork != nullptr) {
@@ -253,8 +254,13 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         }
 
         const auto builderType = static_cast<std::size_t>(store.typeAt(slot));
+        // The LAYER the unit occupies now, not just its type: a submerged
+        // submarine routes on its own (usually shallower) water grid, and
+        // C-219's hold-the-old-layer rule is what keying on `submerged` —
+        // which flips only at the transition's end — reproduces.
         const PassabilityGrid* approachGrid =
-            builderType < gridForType.size() ? gridForType[builderType] : nullptr;
+            layerGridFor(gridForType, gridForTypeSubmerged,
+                         motion[slot].submersible && motion[slot].submerged, builderType);
         // Movement uses this unit's grid; construction uses the PRODUCT's. Commands retain type
         // ids but not derived grids, so the choice must be repeated when a deferred order starts.
         const auto gridFor = [&](const QueuedCommand& command) -> const PassabilityGrid* {
@@ -1419,7 +1425,8 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                             std::span<const Army> armies, const Terrain& terrain,
                             std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                             const Intel* intel, const PlayableRect* playableRect,
-                            TickIndex tick) {
+                            TickIndex tick,
+                            std::span<const PassabilityGrid* const> gridForTypeSubmerged) {
     const auto armyFor = [armies](int index) -> const Army* {
         for (const Army& army : armies) {
             if (army.index == index) {
@@ -1441,7 +1448,10 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
         }
 
         const auto type = static_cast<std::size_t>(store.typeAt(slot));
-        const PassabilityGrid* grid = type < gridForType.size() ? gridForType[type] : nullptr;
+        const MoveState& layer = store.motion()[slot];
+        const PassabilityGrid* grid =
+            layerGridFor(gridForType, gridForTypeSubmerged,
+                         layer.submersible && layer.submerged, type);
         const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
         if (grid == nullptr || def == nullptr) {
             continue;

@@ -450,7 +450,8 @@ void orderAlongPath(MoveState& state, std::span<const std::array<Fx, 2>> path);
 /// positions that `tick` has just changed.
 void resolveCollisions(
     UnitStore& store, const Terrain& terrain,
-    std::span<const PassabilityGrid* const> gridForType = {});
+    std::span<const PassabilityGrid* const> gridForType = {},
+    std::span<const PassabilityGrid* const> gridForTypeSubmerged = {});
 
 /// Beats of no progress before a mover acts on congestion, and how often it
 /// re-checks while it stays stuck.
@@ -513,7 +514,8 @@ inline constexpr Fx kSidestepMargin = Fx::fromInt(8);
 void resolveCongestion(
     UnitStore& store, const Terrain& terrain,
     std::span<const PassabilityGrid* const> gridForType = {},
-    std::span<const Army> armies = {});
+    std::span<const Army> armies = {},
+    std::span<const PassabilityGrid* const> gridForTypeSubmerged = {});
 
 /// How close counts as reaching an intermediate waypoint, in elmos.
 ///
@@ -555,12 +557,15 @@ void placeOnMotionLayer(Transform& transform, const MoveState& state,
 /// the first two spans and to `MatchContext::passability`: a ground mover pays
 /// its current cell's divisor while it crosses it. Both default to empty —
 /// a crowd with no grids strides undivided, exactly as before.
+/// `gridForTypeSubmerged` is the second-layer table (`SurfacingSub` only): a
+/// dived boat pays the divisor on ITS grid, not the surfaced hull's.
 ///
 /// noexcept and allocation-free: this runs inside the frame loop.
 void tick(std::span<Transform> transforms, std::span<MoveState> motion,
           const Terrain& terrain,
           std::span<const PassabilityGrid* const> gridForType = {},
-          std::span<const UnitTypeIndex> types = {}) noexcept;
+          std::span<const UnitTypeIndex> types = {},
+          std::span<const PassabilityGrid* const> gridForTypeSubmerged = {}) noexcept;
 
 /// A `MoveState` with the authored default speed and turn rate, converted for this clock.
 ///

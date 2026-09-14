@@ -183,6 +183,94 @@ TEST_CASE("a move command routes a unit, and a stop cancels it") {
     CHECK(fix.roster.motion(fix.mine).path.empty());
 }
 
+TEST_CASE("a submerged submarine routes on its own depth, not the hull's draft",
+          "[navy][depth]") {
+    // C-205/C-219's layer admission: a `SurfacingSub`'s `Sub` layer asks for the
+    // footprint's own `MinWaterDepth` — unauthored on every shipped sub, so
+    // submerged routing asks "is it wet" — while the surfaced hull needs its
+    // `Physics.Elevation` draft. A shelf 10 elmos under the waterline is a wall
+    // to a hull drawing 12 and open water to the sub riding the seabed clamp
+    // (C-200) beneath it.
+    rm::HeightField field;
+    field.squaresX = 64;
+    field.squaresZ = 64;
+    field.baseHeight = -20.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    // One full pathfinding cell of shelf, spanning the map top to bottom:
+    // squares 16..23 in X, terrain raised to height 0 — 10 elmos of water.
+    for (int z = 0; z < field.verticesZ(); ++z) {
+        for (int x = 16; x <= 24; ++x) {
+            field.raw[static_cast<std::size_t>(z) * static_cast<std::size_t>(field.verticesX())
+                      + static_cast<std::size_t>(x)] = std::uint16_t{20};
+        }
+    }
+    const rm::sim::Terrain terrain{field, true, 10.0f};
+    const rm::sim::PassabilityGrid surfaced =
+        rm::sim::buildSurfaceWaterPassability(field, 10.0f, 12.0f);
+    const rm::sim::PassabilityGrid submerged =
+        rm::sim::buildSurfaceWaterPassability(field, 10.0f, 0.0f);
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&surfaced};
+    const std::vector<const rm::sim::PassabilityGrid*> submergedGrids{&submerged};
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef subDef;
+    subDef.name = "test_sub";
+    subDef.categories = {"NAVAL", "SUBMERSIBLE"};
+    subDef.motion = rm::unitdef::MotionType::SurfacingSub;
+    subDef.elevationElmos = -12.0f;
+    const rm::UnitTypeIndex subType = roster.addType(subDef);
+    const UnitId sub = roster.add(subType, 64.0f, 256.0f, 0, 500.0f);
+    roster.motion(sub).submersible = true;
+    roster.motion(sub).surfaceWater = true;
+
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<Player> players = rm::sim::onePlayerPerArmy(1, /*humanArmy=*/0);
+    // Queued, so intake stores the order and `advanceOrders` routes it — the
+    // deferred pick is what the per-type spans feed.
+    const CommandIssue issue{.tick = 0,
+                             .source = 0,
+                             .id = rm::commandId(0, 0),
+                             .player = 0,
+                             .kind = CommandKind::Move,
+                             .queued = true,
+                             .units = {sub},
+                             .targetX = rm::test::fx(448.0f),
+                             .targetZ = rm::test::fx(256.0f)};
+    // Intake answers with the layer grid too — the same contract the app's
+    // dispatcher fills.
+    const auto gridForUnit = [&](UnitId) -> const rm::sim::PassabilityGrid* {
+        return roster.motion(sub).submerged ? &submerged : &surfaced;
+    };
+    const auto issueAndAdvance = [&] {
+        REQUIRE(static_cast<bool>(rm::sim::applyCommand(
+            issue, roster.store, roster.catalog, players, armies, terrain, gridForUnit,
+            roster.rate)));
+        return rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids,
+                                      roster.rate, nullptr, nullptr, nullptr, nullptr,
+                                      nullptr, {}, nullptr, nullptr, nullptr, nullptr,
+                                      nullptr, 0, submergedGrids);
+    };
+
+    SECTION("submerged, the shelf is open water") {
+        roster.motion(sub).submerged = true;
+        CHECK(issueAndAdvance() == 1);
+        CHECK(roster.motion(sub).moving);
+    }
+    SECTION("surfaced, the hull's draft refuses the shelf") {
+        roster.motion(sub).submerged = false;
+        CHECK_FALSE(roster.motion(sub).moving);
+    }
+    SECTION("mid-dive still routes on the surfaced layer") {
+        // C-219 holds the old layer until the transition completes: the dive is
+        // ORDERED but `submerged` has not flipped, so the hull's draft still
+        // governs.
+        roster.motion(sub).submerged = false;
+        roster.motion(sub).diveTargetSubmerged = true;
+        CHECK_FALSE(roster.motion(sub).moving);
+    }
+}
+
 TEST_CASE("path requests admitted during a beat wait until the next beat") {
     Fixture fix;
     const UnitId second = fix.roster.add(fix.roster.store.typeAt(fix.mine.index), 200.0f, 300.0f,

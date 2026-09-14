@@ -475,7 +475,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                               const PlayableRect* playableRect = nullptr,
                               ScriptTaskHost* scriptTasks = nullptr,
                               std::vector<GuardWork>* guardWork = nullptr,
-                              RandomStream* random = nullptr, TickIndex tick = 0);
+                              RandomStream* random = nullptr, TickIndex tick = 0,
+                              std::span<const PassabilityGrid* const> gridForTypeSubmerged = {});
 
 /// Updates attack-move and patrol combat after movement and intel. These orders retain their
 /// waypoint while `target` temporarily names the visible hostile that interrupted the route.
@@ -484,7 +485,8 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                              std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                              const Intel* intel = nullptr,
                              const PlayableRect* playableRect = nullptr,
-                             TickIndex tick = 0);
+                             TickIndex tick = 0,
+                             std::span<const PassabilityGrid* const> gridForTypeSubmerged = {});
 
 // --- The log --------------------------------------------------------------------------
 //
