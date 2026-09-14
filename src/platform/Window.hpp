@@ -153,6 +153,13 @@ public:
     /// else, including no callback at all, keeps today's anchored zoom.
     void onScroll(std::function<bool(float scrollingDeltaY)> callback);
 
+    /// Called when a Shift-left-drag begins, before the trackpad pan claims it.
+    /// Returning true means the app owns the drag — an armed build paints its
+    /// array sites — and the camera stays put. No callback, or false, keeps the
+    /// pan. Right-drag panning is unaffected; Shift-right stays a camera
+    /// gesture because a queued order is only ever released, never dragged.
+    void onLeftDragClaim(std::function<bool()> callback);
+
     /// Whether the left button is down right now, and where its press began, in AppKit logical
     /// points. POLLED, like the cursor and for the same reason: a drag is a per-frame
     /// fact, and the interface is rebuilt per frame. The origin is only meaningful while

@@ -1448,6 +1448,11 @@ int runWindowed(const Session& session) {
             return true;
         });
 
+        // An armed build owns every left-drag — shift included, since shift is
+        // what keeps the placement going — so the trackpad's shift-drag pan
+        // stands down until the tray is disarmed.
+        window.onLeftDragClaim([&armedOption] { return armedOption.has_value(); });
+
         // THE BUILD PANEL (BAR-styled, `core/ui/BuildPanel.hpp`). Scratch kept outside the loop
         // for the same reason every other scratch here is: a frame should not allocate.
         //

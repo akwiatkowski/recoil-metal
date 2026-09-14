@@ -88,6 +88,7 @@ namespace {
     const std::function<void(const rm::Ray&, rm::MouseButton, rm::MouseModifiers)>* clickCallback;
 @property(nonatomic, assign) const std::function<void(rm::KeyEvent)>* keyCallback;
 @property(nonatomic, assign) const std::function<bool(float)>* scrollCallback;
+@property(nonatomic, assign) const std::function<bool()>* leftDragClaim;
 @property(nonatomic, assign) std::set<rm::Key>* heldKeys;
 /// The player's requested multiplier on automatic size — `--ui-scale`. 1 is automatic.
 @property(nonatomic, assign) float userHudScale;
@@ -400,9 +401,13 @@ static std::array<float, 2> viewPointIn(NSView* view, NSPoint windowPoint) {
     }
     // Shift is the trackpad's way in: a right-drag needs a second button, and a
     // two-finger click-drag on a trackpad is awkward enough that binding pan to
-    // it alone would leave laptop use without a pan at all.
+    // it alone would leave laptop use without a pan at all — UNLESS the app owns
+    // the gesture: an armed build shift-drags to paint an array of sites, and a
+    // camera that walks the ground away mid-paint breaks the drag.
     if ((event.modifierFlags & NSEventModifierFlagShift) != 0) {
-        [self panBy:event];
+        if (self.leftDragClaim == nullptr || !(*self.leftDragClaim)()) {
+            [self panBy:event];
+        }
         return;
     }
 
@@ -515,6 +520,7 @@ struct rm::Window::Impl {
     std::function<void(const rm::Ray&, rm::MouseButton, rm::MouseModifiers)> clickCallback;
     std::function<void(rm::KeyEvent)> keyCallback;
     std::function<bool(float)> scrollCallback;
+    std::function<bool()> leftDragClaim;
     std::set<rm::Key> heldKeys;
     std::optional<std::array<float, 2>> injectedCursor;
 
@@ -562,6 +568,7 @@ struct rm::Window::Impl {
         view.clickCallback = &clickCallback;
         view.keyCallback = &keyCallback;
         view.scrollCallback = &scrollCallback;
+        view.leftDragClaim = &leftDragClaim;
         view.heldKeys = &heldKeys;
         delegate = [[RMDisplayLinkDelegate alloc] init];
         delegate.renderer = renderer.get();
@@ -582,6 +589,7 @@ struct rm::Window::Impl {
         view.clickCallback = nullptr;
         view.keyCallback = nullptr;
         view.scrollCallback = nullptr;
+        view.leftDragClaim = nullptr;
         view.heldKeys = nullptr;
         delegate.frameCallback = nullptr;
         renderer.reset();
@@ -671,6 +679,10 @@ void Window::onKey(std::function<void(KeyEvent event)> callback) {
 
 void Window::onScroll(std::function<bool(float scrollingDeltaY)> callback) {
     impl_->scrollCallback = std::move(callback);
+}
+
+void Window::onLeftDragClaim(std::function<bool()> callback) {
+    impl_->leftDragClaim = std::move(callback);
 }
 
 bool Window::keyHeld(Key key) const { return impl_->heldKeys.contains(key); }
