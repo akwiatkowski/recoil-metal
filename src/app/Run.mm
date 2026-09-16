@@ -711,6 +711,24 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                     shotProduction->queue.size(), shotProduction->repeat ? "on" : "off");
             }
 
+            // THE ECONOMY WINDOW under `--econ-window`, for the same reason `--select`
+            // exists: an overlay only a key press opens can never reach a screenshot,
+            // and a screenshot is how this project verifies anything. The budget
+            // stands untouched — all fabricators on — and no row is focused.
+            if (hasFlag(argc, argv, "--econ-window")) {
+                rm::ui::EconomyWindowView econView;
+                rm::app::gatherEconomyWindow(units, capturedSelection, -1.0f,
+                                             std::nullopt, econView);
+                const rm::ui::Rect econRect =
+                    rm::ui::economyWindowRect(shotFrame, econView.rows.size());
+                rm::ui::appendEconomyWindow(hud, renderer.labelFont(),
+                                            renderer.readoutFont(), shotTheme, econRect,
+                                            econView);
+                std::printf("  economy window: %zu row(s), %zu fabricator(s), funded %.0f%%\n",
+                            econView.rows.size(), econView.fabricators.size(),
+                            static_cast<double>(econView.fundedFraction * 100.0f));
+            }
+
             renderer.setHud(hud);
             const rm::ui::UiCapacityReport& hudCapacity = renderer.uiCapacityReport();
             std::printf("  hud vertices (uploaded/submitted/capacity):");

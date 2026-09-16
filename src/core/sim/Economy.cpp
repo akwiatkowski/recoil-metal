@@ -289,6 +289,14 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
             lowestBinds = massBinds;
         }
 
+        // The per-tier readings the economy window reports — same numbers the lowest-tier
+        // fields below keep, but not collapsed onto the worst tier. Reporting only; nothing
+        // in the allocation reads them back.
+        economy.tierMultiFunded[tier] = r1;
+        economy.tierSingleFunded[tier] = r2;
+        economy.tierMassBinds[tier] = massBinds;
+        economy.tierAsked[tier] = total.mass > Mag{} || total.energy > Mag{};
+
         // A consumer takes `r1` when it is outstanding on the binding resource, else
         // `r2` — which is the bucket it was counted in.
         const auto grantFor = [massBinds, r1, r2](Resources out) {

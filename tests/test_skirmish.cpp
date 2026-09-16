@@ -484,7 +484,11 @@ TEST_CASE("a finished construction is reported but left in the list") {
     Roster roster;
     UnitDef tankDef;
     tankDef.name = "test_tank";
-    const rm::sim::UnitId builder = roster.add(roster.addType(tankDef), 0.0f, 0.0f, 0, 500.0f);
+    // Standing on the work, as a real builder is by the time its row advances: out of
+    // reach the order now routes instead of progressing, so a founder that never walked
+    // would stall the record below.
+    const rm::sim::UnitId builder = roster.add(roster.addType(tankDef), 100.0f, 100.0f, 0,
+                                             500.0f);
 
     std::vector<Army> armies = twoSides();
     std::vector<Projectile> projectiles;

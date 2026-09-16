@@ -369,7 +369,8 @@ swings when you meant to select is the most disorienting thing an RTS camera can
 | mouse wheel mid-drag | row spacing: up tightens to touching footprints, down spreads to 40 build squares (320 elmos, about 80% of a T2 point defence's range) whatever the footprint. Silhouettes update while held; the camera zoom stays fixed during the drag |
 | click a command cell, then right click | arm the command shown in the fixed 4×3 rack; Stop applies immediately and disabled positions stay put |
 | click **AUTO MEX** | a standing order for the selected field engineers: whenever one is idle it walks to the nearest free mass or hydrocarbon deposit on your side of the map and builds there, then the next. Lit while on; click again to lift it. A manual order takes precedence and the engineer resumes when idle |
-| `E` | same AUTO MEX toggle for the selected field engineers, without the click. Silent unless the selection holds one |
+| `M` | same AUTO MEX toggle for the selected field engineers, without the click. Silent unless the selection holds one |
+| `E` | open/close the economy window — the same action as clicking the economy module |
 | hold `space` + drag | swing the camera. Let go and it returns to the overhead view the app opened with, so a glance never costs you your bearings |
 | shift + drag | pan with the mouse |
 | scroll | zoom |

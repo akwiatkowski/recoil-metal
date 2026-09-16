@@ -22,6 +22,7 @@
 #include "core/scene/UnitIcons.hpp"
 #include "core/camera/OrbitCamera.hpp"
 #include "core/ui/BuildPanel.hpp"
+#include "core/ui/EconomyWindow.hpp"
 #include "core/ui/GameProfile.hpp"
 #include "core/ui/Hud.hpp"
 #include "core/ui/Minimap.hpp"
@@ -251,6 +252,16 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
 [[nodiscard]] std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
                                                                      rm::sim::UnitId builder);
 
+/// The economy window's view: the header readings, every fabricator, and one row per
+/// producer — every factory (idle included), plus builders, stations, silos and
+/// commanders that have live economic work. `fabBudget` is the player's slider position
+/// in e/s and `focus` the keyboard-navigated row; both are session state passed through,
+/// not sim state. Rows are emitted per unit and grouped/sorted by the ui module's own
+/// pure functions, so the row a click addresses is the row that was drawn.
+void gatherEconomyWindow(const UnitScene& scene,
+                         std::span<const rm::sim::UnitId> selection, float fabBudget,
+                         std::optional<std::size_t> focus, rm::ui::EconomyWindowView& out);
+
 void appendViewFootprint(std::vector<std::array<float, 2>>& out, const rm::OrbitCamera& camera,
                          const rm::HeightField& field, const rm::ui::UiViewport& viewport);
 
@@ -416,13 +427,14 @@ inline constexpr float kOrderPickFloorElmos = 8.0f;
 [[nodiscard]] bool orderHitConfirmed(const rm::Ray& ray, std::array<float, 3> at,
                                      float radiusElmos) noexcept;
 
-/// The founder to assist when a right-click lands on rising scaffold: the nearest
-/// unfinished construction of `army` whose site covers (`x`, `z`), through its living
-/// builder. The structure does not exist as a unit until its work completes, so there
-/// is no hit to retarget — this is what turns "help that building" into an order.
-/// Nothing when no site covers the point or the founder is gone.
-[[nodiscard]] std::optional<rm::sim::UnitId> siteAssistFounder(const UnitScene& scene, float x,
-                                                               float z, int army) noexcept;
+/// The unfinished construction of `army` whose site covers (`x`, `z`) — what a right-click
+/// on rising scaffold resolves to. The ROW, not its founder: the structure does not exist
+/// as a unit until its work completes, and a scaffold whose builder was re-tasked or died
+/// stays standing, so the answer is the site itself and the click becomes a Build order
+/// onto it — which lends rate to a worked row and takes over an abandoned one. Nothing
+/// when no site covers the point.
+[[nodiscard]] const rm::sim::Construction* constructionSiteAt(const UnitScene& scene, float x,
+                                                              float z, int army) noexcept;
 
 [[nodiscard]] bool hostileTo(const UnitScene& scene, int army, rm::sim::UnitId id);
 [[nodiscard]] bool alliedTo(const UnitScene& scene, int army, rm::sim::UnitId id);

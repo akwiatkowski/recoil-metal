@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <vector>
 
 using rm::sim::Command;
@@ -636,6 +637,14 @@ TEST_CASE("repair competes with construction in the shared economy allocation") 
 
     // Both requests cost one mass and two energy at this rate. The shared bank can cover only
     // one, so construction and repair must each receive half; repair may not debit first.
+    // The row needs a live builder holding its order at the site — an interrupted scaffold
+    // stays on the map but stops drawing, so a record nobody is working would ask for
+    // nothing.
+    const UnitId builder = f.roster.add(f.engineerType, 0.0f, 0.0f, 0, 100.0f);
+    f.roster.store.orders()[builder.index].append(rm::sim::QueuedCommand{
+        builder, std::make_shared<const rm::sim::SharedCommand>(rm::sim::SharedCommand{
+                     .kind = CommandKind::Build, .buildType = f.engineerType})});
+    f.roster.store.orders()[builder.index].markCurrentActive();
     f.building.push_back(rm::sim::Construction{
         .armyIndex = 0,
         .cost = {.mass = rm::sim::magFromFloat(100.0f),
@@ -643,6 +652,7 @@ TEST_CASE("repair competes with construction in the shared economy allocation") 
         .buildTimeRemaining = rm::sim::magFromFloat(100.0f),
         .totalBuildTime = rm::sim::magFromFloat(100.0f),
         .buildPerTick = rm::sim::magFromFloat(1.0f),
+        .builder = builder,
     });
     f.economies[0].stored = {.mass = rm::sim::magFromFloat(1.0f),
                               .energy = rm::sim::magFromFloat(2.0f)};

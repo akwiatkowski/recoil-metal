@@ -376,6 +376,7 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
     // end-of-run read races the decay. Any nonzero sample proves the kick.
     bool kicked = false;
     std::vector<std::array<float, 2>> eastBolts;
+    std::vector<std::array<float, 3>> eastOrigins;
     INFO("shooter " << shooter.index << ":" << shooter.generation);
     for (int tick = 0; tick < 30; ++tick) {
         (void)rm::app::advanceMatch(runner, tick, 0.0f);
@@ -387,6 +388,9 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
             if (shot.firedBy == shooter && eastBolts.size() < 5) {
                 eastBolts.push_back({rm::sim::fxToFloat(shot.velocity[0]),
                                      rm::sim::fxToFloat(shot.velocity[2])});
+                eastOrigins.push_back({rm::sim::fxToFloat(shot.visualOrigin[0]),
+                                       rm::sim::fxToFloat(shot.visualOrigin[1]),
+                                       rm::sim::fxToFloat(shot.visualOrigin[2])});
             }
         }
         if (tick == 29) {
@@ -499,23 +503,20 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
             (axis[0] * toTarget[0] + axis[1] * toTarget[1] + axis[2] * toTarget[2])
             / axisLen / tgtLen;
         CHECK(cosTarget > 0.995f);
-        // And the shots in flight were launched FROM a posed muzzle — the
-        // sim's `visualOrigin` is a barrel tip, not hull centre. Two manip-
-        // ulators alternate, so either muzzle answers.
+        // Sampled shots were launched FROM a posed muzzle — `visualOrigin` is
+        // a barrel tip, not hull centre. Two manipulators alternate, so either
+        // muzzle answers.
         const auto emuzzle2 = scene.weaponMuzzle(shooter, ekey, 1);
         REQUIRE(emuzzle2.has_value());
         bool sawEastShot = false;
-        for (const rm::sim::Projectile& shot : scene.projectiles) {
-            if (shot.firedBy != shooter) continue;
+        for (const std::array<float, 3>& origin : eastOrigins) {
             sawEastShot = true;
-            // The origin is the muzzle AT FIRE TIME: the gate lets a shot go
-            // once the ring is within a slew step of the target, so a shot can
-            // ride up to ~2 elmos of approach arc behind the converged tip.
+            // The sampled origin is the muzzle AT FIRE TIME. Retaining it lets
+            // this test prove the fire origin even when a stricter aim gate
+            // delays the shot until its short flight has already ended.
             const auto matches = [&](const std::array<float, 3>& m) {
-                return std::abs(rm::sim::fxToFloat(shot.visualOrigin[0]) - m[0])
-                               < 3.0f
-                       && std::abs(rm::sim::fxToFloat(shot.visualOrigin[2]) - m[2])
-                               < 3.0f;
+                return std::abs(origin[0] - m[0]) < 3.0f
+                       && std::abs(origin[2] - m[2]) < 3.0f;
             };
             const bool fromAPosedMuzzle =
                 matches(*emuzzle) || matches(*emuzzle2);
@@ -530,8 +531,16 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
     scene.store.health()[tgt.index].current = rm::sim::Mag::fromInt(1000000);
     scene.store.health()[tgt.index].maximum = rm::sim::Mag::fromInt(1000000);
     scene.store.transforms()[tgt.index].x = rm::sim::fxFromFloat(100.0f);
-    for (int tick = 30; tick < 55; ++tick) {
+    std::vector<std::array<float, 3>> westOrigins;
+    for (int tick = 30; tick < 75; ++tick) {
         (void)rm::app::advanceMatch(runner, tick, 0.0f);
+        for (const rm::sim::Projectile& shot : scene.projectiles) {
+            if (shot.firedBy == shooter && westOrigins.size() < 5) {
+                westOrigins.push_back({rm::sim::fxToFloat(shot.visualOrigin[0]),
+                                       rm::sim::fxToFloat(shot.visualOrigin[1]),
+                                       rm::sim::fxToFloat(shot.visualOrigin[2])});
+            }
+        }
     }
     shooterAim();
     const float yawWest = gotYaw;
@@ -561,23 +570,22 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
     const auto muzzle2 = scene.weaponMuzzle(shooter, key, 1);
     REQUIRE(muzzle2.has_value());
     bool sawMuzzleShot = false;
-    for (const rm::sim::Projectile& shot : scene.projectiles) {
-        if (shot.firedBy != shooter) continue;
+    for (const std::array<float, 3>& origin : westOrigins) {
         sawMuzzleShot = true;
-        // Same approach-arc margin as the east block: the origin is the muzzle
-        // at fire time, up to a gate-tolerance slew behind the converged tip.
+        // Same sampled-origin assertion as the east block: it is the muzzle
+        // at fire time, retained after the fast projectile has impacted.
         const auto matches = [&](const std::array<float, 3>& m) {
-            return std::abs(rm::sim::fxToFloat(shot.visualOrigin[0]) - m[0]) < 3.0f
-                   && std::abs(rm::sim::fxToFloat(shot.visualOrigin[2]) - m[2]) < 3.0f;
+            return std::abs(origin[0] - m[0]) < 3.0f
+                   && std::abs(origin[2] - m[2]) < 3.0f;
         };
         const bool fromAPosedMuzzle = matches(*muzzle) || matches(*muzzle2);
         CHECK(fromAPosedMuzzle);
     }
     CHECK(sawMuzzleShot);
     // March orders: ground covered becomes walk phase.
-    REQUIRE(rm::app::issueMove(scene, shooter, 0, 55, rm::sim::fxFromFloat(400.0f),
+    REQUIRE(rm::app::issueMove(scene, shooter, 0, 75, rm::sim::fxFromFloat(400.0f),
                                rm::sim::fxFromFloat(200.0f)));
-    for (int tick = 55; tick < 85; ++tick) {
+    for (int tick = 75; tick < 105; ++tick) {
         (void)rm::app::advanceMatch(runner, tick, 0.0f);
     }
     scene.publish(64);

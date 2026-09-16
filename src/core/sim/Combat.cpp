@@ -1,7 +1,6 @@
 #include "core/sim/Combat.hpp"
 #include "core/sim/Reclaim.hpp"
 #include "core/TaskPool.hpp"
-#include "core/log/Log.hpp"
 
 #include "core/unit/BuildTree.hpp"
 
@@ -1502,11 +1501,10 @@ mountSolveDual(const UnitCatalog::TurretMount& mount, const Transform& self,
 /// turreted weapon asks "is the BORE on the launch line" rather than "is the hull
 /// aimed". One composed check on the firing barrel rather than a per-angle one:
 /// a ring allowed one slew step short AND an arm allowed one step short stack
-/// into several steps of bore error on a retarget (the Titan read 12.9 degrees
-/// on a target switch, 2026-09-14). The floor is the largest per-tick slew
-/// rate, so a target the mount still out-runs does not hold fire forever, and
-/// a converged barrel fires within a step — the steady state the per-angle
-/// gate produced, without the stacking.
+/// into several steps of bore error on a retarget (the Titan read 12.9 degrees).
+/// Authored `FiringTolerance` sets the baseline. A per-tick floor prevents a
+/// chase stall, but never above the visual 3.9-degree ceiling: a fast mount
+/// previously fired 12 degrees short in the UEL0303 trial.
 [[nodiscard]] bool turretOnTarget(const UnitCatalog::TurretMount& mount,
                                   const Transform& self, const MoveState& state,
                                   const std::array<Fx, 3>& worldTarget,
@@ -1518,9 +1516,14 @@ mountSolveDual(const UnitCatalog::TurretMount& mount, const Transform& self,
         fx3Sub(muzzle, mountTrunnionWorld(mount, self, state, second));
     const std::int32_t error =
         angleBetweenBrads(bore, fx3Sub(worldTarget, muzzle));
-    return error
-           <= std::max({weapon.firingToleranceBrads, rates.turretYawPerTick,
-                        rates.turretPitchPerTick});
+    // 710 brads = 3.90015 degrees: the user's four-degree rig/launch limit
+    // minus a tenth-degree fixed-point margin (360 degrees = 65,536 brads).
+    constexpr std::int32_t kMaximumBoreFireErrorBrads = 710;
+    const std::int32_t tolerance = std::min(
+        kMaximumBoreFireErrorBrads,
+        std::max({weapon.firingToleranceBrads, rates.turretYawPerTick,
+                  rates.turretPitchPerTick}));
+    return error <= tolerance;
 }
 
 std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
@@ -2009,36 +2012,6 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                     mount.dual && own.turretMuzzlePhase != 0)) {
                     continue;
                 }
-                // TEMP-DIAG: one line per fired shot for dual mounts, decomposing
-                // the bore-vs-launch error into its four slew legs.
-                if (mount.dual) {
-                    const bool second = own.turretMuzzlePhase != 0;
-                    const auto [wYaw, wPitch] = mountSolve(mount, transforms[slot], aimTo);
-                    const auto [wYaw2, wPitch2] =
-                        mountSolveDual(mount, transforms[slot], aimTo, own.turretYaw);
-                    const auto leg = [](std::int32_t want, Brad have) {
-                        return std::abs(static_cast<std::int32_t>(static_cast<std::int16_t>(
-                            static_cast<std::uint16_t>(static_cast<Brad>(want))
-                            - static_cast<std::uint16_t>(have))));
-                    };
-                    const std::array<Fx, 3> mz =
-                        mountMuzzleWorld(mount, transforms[slot], own, second);
-                    const std::array<Fx, 3> bore =
-                        fx3Sub(mz, mountTrunnionWorld(mount, transforms[slot], own, second));
-                    const std::int32_t boreErr =
-                        angleBetweenBrads(bore, fx3Sub(aimTo, mz));
-                    rm::log::writef(rm::log::Level::Info, "aim-dbg",
-                        "tick=%d slot=%u yaw=%d/%d pitch=%d/%d yaw2=%d pitch2=%d bore=%d tol=%d",
-                        static_cast<int>(tick), static_cast<unsigned>(slot),
-                        static_cast<int>(leg(wYaw, own.turretYaw)),
-                        static_cast<int>(rates.turretYawPerTick),
-                        static_cast<int>(leg(wPitch, own.turretPitch)),
-                        static_cast<int>(rates.turretPitchPerTick),
-                        static_cast<int>(leg(wYaw2, own.turretYaw2)),
-                        static_cast<int>(leg(wPitch2, own.turretPitch2)),
-                        static_cast<int>(boreErr),
-                        static_cast<int>(weapon.firingToleranceBrads));
-                }
             } else if (!canFireAt(weapon, transforms[slot].heading, bearingTo(from, to))) {
                 continue;
             }
@@ -2131,34 +2104,6 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                                                 motions[slot], lastSecond))
                                     : std::array<Fx, 3>{},
                              });
-                // TEMP-DIAG: the event's own numbers, decomposed — the bore
-                // angle the metric will compute, the launch line's agreement
-                // with the aim point, all for the barrel that actually fired.
-                if (muzzled && mount.dual) {
-                    const std::array<Fx, 3> evtBore =
-                        fx3Sub(projectiles.back().position,
-                               mountTrunnionWorld(mount, transforms[slot], motions[slot],
-                                                  lastSecond));
-                    const std::int32_t evtErr =
-                        angleBetweenBrads(evtBore, projectiles.back().velocity);
-                    const std::int32_t velErr =
-                        angleBetweenBrads(projectiles.back().velocity,
-                                          fx3Sub(aimTo, projectiles.back().position));
-                    const std::array<Fx, 3> mz2 =
-                        mountMuzzleWorld(mount, transforms[slot], motions[slot], lastSecond);
-                    const std::int32_t posGap =
-                        angleBetweenBrads(fx3Sub(projectiles.back().position, mz2),
-                                          std::array<Fx, 3>{Fx{}, Fx{}, Fx::fromInt(1)});
-                    rm::log::writef(rm::log::Level::Info, "aim-dbg2",
-                        "tick=%d slot=%u second=%d evt=%d vel=%d posgap=%d pos=%d,%d,%d mz=%d,%d,%d",
-                        static_cast<int>(tick), static_cast<unsigned>(slot),
-                        lastSecond ? 1 : 0, static_cast<int>(evtErr),
-                        static_cast<int>(velErr), static_cast<int>(posGap),
-                        projectiles.back().position[0].floorToInt(),
-                        projectiles.back().position[1].floorToInt(),
-                        projectiles.back().position[2].floorToInt(),
-                        mz2[0].floorToInt(), mz2[1].floorToInt(), mz2[2].floorToInt());
-                }
             }
             ++fired;
 

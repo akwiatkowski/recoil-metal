@@ -648,6 +648,22 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.weapons = unitdef::weaponsFrom(*weapons, def.motion == unitdef::MotionType::Air);
     }
 
+    // A weapon whose Label names one of the unit's own enhancements is the script-gated
+    // shape: the blueprint omits `EnabledByEnhancement` because the unit's Lua does it —
+    // `SetWeaponEnabledByLabel('Missile', false)` in OnCreate, re-enabled by the
+    // enhancement's install handler (XSL0001, XSL0301; UAL0001's ChronoDampener likewise).
+    // The flag here stands in for that script line: no silo record, no auto-fire, until
+    // an enhancement exists that turns it on.
+    for (unitdef::Weapon& weapon : def.weapons) {
+        if (weapon.enabledByEnhancement || weapon.label.empty()) {
+            continue;
+        }
+        weapon.enabledByEnhancement = std::ranges::any_of(
+            def.enhancements, [&weapon](const unitdef::EnhancementSpec& spec) {
+                return spec.name == weapon.label;
+            });
+    }
+
     // --- transport ---------------------------------------------------------
     //
     // The `Transport` block. On a carrier (`TRANSPORTATION`) `TransportClass` is

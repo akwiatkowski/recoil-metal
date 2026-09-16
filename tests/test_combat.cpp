@@ -2841,8 +2841,8 @@ TEST_CASE("a mounted turret slews at its authored rate and fires only once aimed
     // target is ~31 ticks of traverse, not an instant snap.
     gun.turretYawSpeedRadPerSecond = 0.5f;
     gun.turretPitchSpeedRadPerSecond = 0.5f;
-    // One degree — the gate floors at a slew step, so this still fires a hair
-    // short of the goal, not at the corpus's ten-degree default.
+    // One degree — the authored gate waits for this bore tolerance rather
+    // than treating one large 2.86-degree slew tick as arrival.
     gun.firingToleranceBrads = rm::unitdef::firingToleranceBradsFromDegrees(1.0f);
 
     Roster roster;
@@ -2899,8 +2899,8 @@ TEST_CASE("a dual manipulator alternates its two posed muzzles", "[turret]") {
     gun.turreted = true;
     gun.turretYawSpeedRadPerSecond = 0.5f;
     gun.turretPitchSpeedRadPerSecond = 0.5f;
-    // One degree, so the gate waits for the converged pose — the origins below
-    // then sit on the posed tips to within a slew step.
+    // One degree, so the gate waits for the authored bore tolerance; the
+    // origins below then sit on the posed tips within solver residual.
     gun.firingToleranceBrads = rm::unitdef::firingToleranceBradsFromDegrees(1.0f);
 
     Roster roster;
@@ -2976,9 +2976,8 @@ TEST_CASE("a dual manipulator alternates its two posed muzzles", "[turret]") {
                                         -1.0f, 1.0f);
         return std::acos(cosine) * 180.0f / std::numbers::pi_v<float>;
     };
-    // The first shot may leave one slew step short — the gate floors the firing
-    // tolerance at the per-tick rate (2.86 degrees here). Once the ring has
-    // converged, though, BOTH barrels must sit on their shots: that is the
+    // The first shot may retain the solved muzzle-parallax residual. Once the
+    // ring has converged, BOTH barrels must sit on their shots: that is the
     // property the splayed second arm used to break by ~17 degrees. The
     // residual is the solve's two passes over the muzzle parallax plus the
     // half-muzzle centre-mass lift the launch now shares with the solve —

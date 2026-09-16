@@ -17,6 +17,7 @@
 #include "support/TestRoster.hpp"
 
 #include <array>
+#include <cstdio>
 #include <vector>
 
 using rm::sim::Command;

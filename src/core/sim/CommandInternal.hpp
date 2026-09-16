@@ -53,6 +53,16 @@ void canonicalizeUnits(std::vector<UnitId>& units);
 [[nodiscard]] Construction* activeConstruction(std::vector<Construction>& building,
                                                UnitId builder) noexcept;
 
+/// Whether a refused Build was refused by an OCCUPIED SITE — an unfinished row of the same
+/// blueprint stands where it targets and belongs to this builder's side. Such an order still
+/// means "build there" (resume an abandoned scaffold, lend to a colleague's), so intake and
+/// head dispatch must admit it rather than drop it; the dispatch stage then decides which of
+/// lend or takeover applies.
+[[nodiscard]] bool joinableConstructionAt(std::vector<Construction>& building,
+                                          const Command& command, const UnitStore& store,
+                                          const UnitCatalog& catalog,
+                                          std::span<const Army> armies) noexcept;
+
 /// Drops a unit to stillness: clears the motion flags and the stored path in one place, so no
 /// stage that cancels or supersedes an order can forget half of it.
 void teardownMovement(MoveState& motion);

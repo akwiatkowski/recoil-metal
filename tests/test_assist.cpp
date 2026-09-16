@@ -54,6 +54,8 @@ struct Fixture {
 
     rm::UnitTypeIndex engineerType{};
     rm::UnitTypeIndex factoryType{};
+    /// What `factoryType` upgrades into — the pad-bound row a helper's Assist must find.
+    rm::UnitTypeIndex factory2Type{};
     rm::UnitTypeIndex tankType{};
     rm::UnitTypeIndex hutType{};
     /// An engineering station: FA's Kennel shape — immobile, no orders of its own, twice an
@@ -64,6 +66,13 @@ struct Fixture {
     rm::UnitTypeIndex mex2Type{};
     /// A unit repair can price: it has a build time and a cost, unlike the bare `tankType`.
     rm::UnitTypeIndex repairableType{};
+    /// The scenario test's cast, all with their real blueprint numbers: UEL0309's
+    /// BuildRate 15, XRB0304's (the Hive's third stage, i.e. the UPGRADED one) 35 and
+    /// 200-elmo reach, XAB1401's scripted output, UEB2401's economy line.
+    rm::UnitTypeIndex t3EngineerType{};
+    rm::UnitTypeIndex hiveType{};
+    rm::UnitTypeIndex paragonType{};
+    rm::UnitTypeIndex experimentalType{};
 
     Fixture() {
         rm::unitdef::UnitDef engineer;
@@ -75,6 +84,7 @@ struct Fixture {
         rm::unitdef::UnitDef factory = engineer;
         factory.name = "test_factory";
         factory.categories = {"FACTORY"};
+        factory.upgradesTo = "test_factory2";
         factoryType = roster.addType(factory);
 
         rm::unitdef::UnitDef tank;
@@ -88,6 +98,10 @@ struct Fixture {
         hut.buildCostEnergy = rm::sim::magFromFloat(100.0f);
         hut.buildTime = rm::sim::magFromFloat(100.0f);  // 100 ticks alone, 50 helped
         hutType = roster.addType(hut);
+
+        rm::unitdef::UnitDef factory2 = hut;
+        factory2.name = "test_factory2";
+        factory2Type = roster.addType(factory2);
 
         rm::unitdef::UnitDef station;
         station.name = "test_station";
@@ -112,6 +126,36 @@ struct Fixture {
         repairable.buildCostEnergy = rm::sim::magFromFloat(200.0f);
         repairable.buildTime = rm::sim::magFromFloat(100.0f);  // one build unit heals 1%
         repairableType = roster.addType(repairable);
+
+        rm::unitdef::UnitDef t3engineer;
+        t3engineer.name = "test_t3_engineer";
+        t3engineer.buildRate = 15.0f;  // UEL0309's BuildRate: 1.5 build units a tick
+        t3engineer.buildableCategory = {{"T4EXPERIMENTAL"}};
+        t3EngineerType = roster.addType(t3engineer);
+
+        rm::unitdef::UnitDef hive;
+        hive.name = "test_hive";
+        hive.categories = {"ENGINEERSTATION"};
+        hive.buildRate = 35.0f;           // XRB0304's BuildRate: 3.5 a tick
+        hive.buildDistanceElmos = 200.0f; // XRB0304's MaxBuildDistance 25 ogrids
+        hiveType = roster.addType(hive);
+
+        rm::unitdef::UnitDef paragon;
+        paragon.name = "test_paragon";
+        // XAB1401's income is script-set in retail rather than blueprint fields; the
+        // numbers the script sets are the famous ones, and they are what `recomputeIncome`
+        // reads here.
+        paragon.producesMassPerSecond = 10000.0f;
+        paragon.producesEnergyPerSecond = 1000000.0f;
+        paragonType = roster.addType(paragon);
+
+        rm::unitdef::UnitDef experimental;
+        experimental.name = "test_experimental";
+        experimental.categories = {"T4EXPERIMENTAL"};
+        experimental.buildCostMass = rm::sim::magFromFloat(299700.0f);   // UEB2401 Mavor
+        experimental.buildCostEnergy = rm::sim::magFromFloat(5994000.0f);
+        experimental.buildTime = rm::sim::magFromFloat(99900.0f);
+        experimentalType = roster.addType(experimental);
     }
 
     [[nodiscard]] bool apply(const Command& command) {
@@ -119,24 +163,32 @@ struct Fixture {
                                      terrain, grid, roster.rate, &building);
     }
 
-    [[nodiscard]] bool build(UnitId who, float x, float z, bool queued = false) {
+    [[nodiscard]] bool build(UnitId who, rm::UnitTypeIndex what, float x, float z,
+                             bool queued = false) {
         return apply(Command{.kind = CommandKind::Build,
                              .queued = queued,
                              .unit = who,
                              .targetX = rm::sim::fxFromFloat(x),
                              .targetZ = rm::sim::fxFromFloat(z),
-                             .buildType = hutType});
+                             .buildType = what});
+    }
+
+    [[nodiscard]] bool build(UnitId who, float x, float z, bool queued = false) {
+        return build(who, hutType, x, z, queued);
     }
 
     /// The in-place upgrade order: a structure builds what its blueprint says it becomes,
     /// on its own pad.
-    [[nodiscard]] bool upgrade(UnitId who) {
+    [[nodiscard]] bool upgrade(UnitId who, rm::UnitTypeIndex what) {
         const rm::sim::Transform& at = roster.store.transforms()[who.index];
         return apply(Command{.kind = CommandKind::Build,
                              .unit = who,
                              .targetX = at.x,
                              .targetZ = at.z,
-                             .buildType = mex2Type});
+                             .buildType = what});
+    }
+    [[nodiscard]] bool upgrade(UnitId who) {
+        return upgrade(who, mex2Type);
     }
 
     [[nodiscard]] bool move(UnitId who, float x, float z) {
@@ -388,6 +440,28 @@ TEST_CASE("assisting an upgrading structure speeds the upgrade") {
     // Assist resolves through — so the helper's 1 a tick lands on it beside the mex's own 1.
     REQUIRE(f.building.size() == 1);
     CHECK(f.building[0].upgradeOf == mex);
+    CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(1.0f).margin(0.001));
+    CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining) == Approx(98.0f).margin(0.01));
+}
+
+TEST_CASE("an engineer assists a factory's own upgrade") {
+    Fixture f;
+    const UnitId factory = f.roster.add(f.factoryType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId helper = f.roster.add(f.engineerType, 220.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    // The T1 land factory's upgrade order is a Build of the T2 blueprint on the factory's
+    // own pad — the factory is both the builder and the thing being upgraded. An engineer
+    // told to assist the factory must land its rate on that row, exactly as it does on a
+    // self-upgrading extractor.
+    REQUIRE(f.upgrade(factory, f.factory2Type));
+    REQUIRE(f.assist(helper, factory));
+    f.tick(1);
+
+    REQUIRE(f.building.size() == 1);
+    CHECK(f.building[0].upgradeOf == factory);
+    CHECK(f.building[0].builder == factory);
     CHECK(rm::test::asFloat(f.building[0].assistPerTick) == Approx(1.0f).margin(0.001));
     CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining) == Approx(98.0f).margin(0.01));
 }
@@ -815,4 +889,141 @@ TEST_CASE("a finished build is retired by the dispatch stage, and the next order
     // re-entry does: a task that reports done hands the dispatcher straight back to itself.
     CHECK(f.roster.store.orders()[founder.index].current()->kind() == CommandKind::Move);
     CHECK(f.roster.store.motion()[founder.index].moving);
+}
+
+TEST_CASE("an experimental's build time scales with every arm on a Paragon's income") {
+    // The scenario as played: a Paragon is ALREADY STANDING, so mass and energy are a
+    // solved problem and the only variable left is how much build power sits on the pad.
+    // UEB2401 asks for 99900 build units; the rates per tick at 10 Hz:
+    //
+    //     5 T3 engineers   ->  5 x 1.5          =  7.5/tick  -> 13320 ticks
+    //    15 T3 engineers   -> 15 x 1.5          = 22.5/tick  ->  4440 ticks
+    //     5 eng + 5 hives  ->  7.5 + 5 x 3.5    = 25.0/tick  ->  3996 ticks
+    //
+    // so the third row is the interesting one: five upgraded Hives out-build ten extra
+    // T3 engineers.
+    struct Result {
+        int ticks = 0;
+        float assistPerTick = 0.0f;
+    };
+    const auto build = [](int engineers, int hives) {
+        Fixture f;
+        (void)f.roster.add(f.paragonType, 100.0f, 100.0f, 0, 100.0f);
+        const UnitId founder = f.roster.add(f.t3EngineerType, 200.0f, 200.0f, 0, 100.0f);
+        REQUIRE(f.build(founder, f.experimentalType, 220.0f, 200.0f));
+        REQUIRE(f.building.size() == 1);
+
+        // A ring 30 elmos out — inside the combined reach (40 build + 4 + 4 radii) of the
+        // FOUNDER, which is what an Assist order is ranged on, and far enough apart that
+        // separation never has to move anyone.
+        constexpr std::array<std::array<float, 2>, 14> helperSpots{{
+            {170, 190}, {170, 200}, {170, 210}, {190, 170}, {200, 170}, {210, 170},
+            {230, 190}, {230, 200}, {230, 210}, {190, 230}, {200, 230}, {210, 230},
+            {180, 180}, {220, 220},
+        }};
+        for (std::size_t i = 1; i < static_cast<std::size_t>(engineers); ++i) {
+            const UnitId helper = f.roster.add(f.t3EngineerType, helperSpots[i - 1][0],
+                                               helperSpots[i - 1][1], 0, 100.0f);
+            REQUIRE(f.assist(helper, founder));
+        }
+        // The hives are deliberately IDLE: the ENGINEERSTATION scan hands them the nearest
+        // build in reach, which is how a Cybran player actually uses them — drop the ring
+        // around the pad and they help on their own.
+        constexpr std::array<std::array<float, 2>, 5> hiveSpots{{
+            {160, 150}, {200, 150}, {240, 150}, {200, 250}, {260, 250},
+        }};
+        for (std::size_t i = 0; i < static_cast<std::size_t>(hives); ++i) {
+            (void)f.roster.add(f.hiveType, hiveSpots[i][0], hiveSpots[i][1], 0, 100.0f);
+        }
+
+        Result result;
+        // The cap is a loud stall detector: unfunded or unassisted this loop would run the
+        // whole budget instead of failing on a wrong number.
+        for (int guard = 0; guard < 30000 && !f.building[0].finished(); ++guard) {
+            f.tick();
+            ++result.ticks;
+            if (result.ticks == 10) {
+                // Mid-build probe: the arms that SHOULD be on the row, in build units.
+                result.assistPerTick = rm::test::asFloat(f.building[0].assistPerTick);
+            }
+        }
+        REQUIRE(f.building[0].finished());
+        return result;
+    };
+
+    const Result five = build(5, 0);
+    const Result fifteen = build(15, 0);
+    const Result hived = build(5, 5);
+
+    // First the arms, then the clock: the probe proves every helper was on the work rather
+    // than the tick count merely landing near a guess.
+    CHECK(five.assistPerTick == Approx(4.0f * 1.5f).margin(0.01f));
+    CHECK(fifteen.assistPerTick == Approx(14.0f * 1.5f).margin(0.01f));
+    CHECK(hived.assistPerTick == Approx(4.0f * 1.5f + 5.0f * 3.5f).margin(0.01f));
+
+    // The margin is dispatch and settle beats, not uncertainty about the arithmetic — the
+    // RATIOS are the assertion, and 5% swallows neither 3x nor 25/22.5.
+    CHECK(five.ticks == Approx(13320.0).epsilon(0.05));
+    CHECK(fifteen.ticks == Approx(4440.0).epsilon(0.05));
+    CHECK(hived.ticks == Approx(3996.0).epsilon(0.05));
+    CHECK(fifteen.ticks < five.ticks);
+    CHECK(hived.ticks < fifteen.ticks);
+}
+
+TEST_CASE("an interrupted structure stays on the map for any builder to resume") {
+    Fixture f;
+    // A builder that can actually walk — the stock fixture engineer has no speed, and a
+    // builder that cannot move cannot be sent away from its own scaffold.
+    rm::unitdef::UnitDef runner = *f.roster.catalog.def(f.engineerType);
+    runner.name = "test_runner";
+    runner.speedElmosPerSecond = 40.0f;   // 4 elmos a tick
+    const rm::UnitTypeIndex runnerType = f.roster.addType(runner);
+    const UnitId founder = f.roster.add(runnerType, 200.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    REQUIRE(f.build(founder, 205.0f, 200.0f));
+    f.tick(10);
+    REQUIRE(f.building.size() == 1);
+    const rm::sim::Mag left = f.building[0].buildTimeRemaining;
+    CHECK(rm::test::asFloat(left) < 95.0f);   // ten ticks in, ~90 of 100 to go
+
+    // The interruption every player gives by reflex: a plain move order. In retail the
+    // half-built structure stays — it is world state, not a side effect of the order
+    // that started it — and any builder sent back to the site continues it.
+    REQUIRE(f.move(founder, 600.0f, 600.0f));
+    f.tick(5);
+    REQUIRE(f.building.size() == 1);
+    CHECK(f.building[0].buildTimeRemaining == left);   // frozen, not gone
+
+    // And it holds no bill while nobody works it — an abandoned scaffold cannot eat.
+    CHECK(f.economies[0].requestedLastTick.mass == rm::sim::Mag{});
+
+    SECTION("the founder can be ordered back onto its own scaffold") {
+        // What a right-click on the site resolves to: a Build order on that footprint.
+        REQUIRE(f.build(founder, 205.0f, 200.0f));
+        f.tick(160);
+        REQUIRE(f.building.size() == 1);
+        CHECK(f.building[0].finished());
+        CHECK(f.building[0].builder == founder);
+    }
+    SECTION("another engineer adopts the abandoned site") {
+        const UnitId colleague = f.roster.add(runnerType, 215.0f, 210.0f, 0, 100.0f);
+        REQUIRE(f.build(colleague, 205.0f, 200.0f));
+        f.tick(160);
+        REQUIRE(f.building.size() == 1);
+        CHECK(f.building[0].finished());
+        CHECK(f.building[0].builder == colleague);
+    }
+    SECTION("a dead founder's site is resumable too") {
+        f.roster.health(founder).current = rm::sim::Mag{};
+        f.tick(1);
+        REQUIRE(f.building.size() == 1);   // the death does not take the scaffold
+        const UnitId colleague = f.roster.add(runnerType, 215.0f, 210.0f, 0, 100.0f);
+        REQUIRE(f.build(colleague, 205.0f, 200.0f));
+        f.tick(160);
+        REQUIRE(f.building.size() == 1);
+        CHECK(f.building[0].finished());
+        CHECK(f.building[0].builder == colleague);
+    }
 }

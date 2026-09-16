@@ -4,6 +4,7 @@
 #include "core/map/HeightField.hpp"
 #include "core/sim/StateHash.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -840,4 +841,413 @@ TEST_CASE("app match runner executes a logged paid engineering enhancement", "[e
     CHECK(scene.store.enhancements()[unit.index].at("LCH") == name);
     CHECK(scene.economies[0].stored.mass == Mag{});
     CHECK(scene.commands.all().size() == 1);
+}
+
+TEST_CASE("a rally click on a lone factory leaves the queue alone and the product walks to it") {
+    const rm::HeightField field = flatField();
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(1);
+    scene.players = rm::sim::onePlayerPerArmy(1, 0);
+    scene.economies.assign(1, rm::sim::Economy{});
+    scene.commandersEver.assign(1, 0);
+
+    // FACTORY on the def, because that category is the gate the real click path checks
+    // before it writes a rally point at all (WindowedSession.mm:1932).
+    rm::unitdef::UnitDef factory;
+    factory.name = "test_factory";
+    factory.categories = {"FACTORY"};
+    factory.buildRate = 60.0f;  // 6 build units a tick
+    factory.buildableCategory = {{"TEST_TANK"}};
+    scene.definitions.push_back(factory);
+    const rm::UnitTypeIndex factoryType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(factoryType, rm::data::moveDefFor(factory), 1.0f);
+
+    rm::unitdef::UnitDef tank;
+    tank.name = "test_tank";
+    tank.categories = {"TEST_TANK"};
+    tank.motion = rm::unitdef::MotionType::Land;
+    tank.speedElmosPerSecond = 100.0f;         // 10 elmos a tick: 200 elmos in 20 ticks
+    tank.turnRateRadiansPerSecond = 100.0f;
+    tank.buildTime = rm::sim::magFromFloat(60.0f);  // ten ticks on the pad
+    scene.definitions.push_back(tank);
+    const rm::UnitTypeIndex tankType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(tankType, rm::data::moveDefFor(tank), 1.0f);
+    // The completion path respawns products through the VFS-keyed cache; registering the
+    // path resolves the synthetic type without touching mounted content.
+    constexpr std::string_view kTankPath{"/test_tank"};
+    scene.setPathForType(tankType, kTankPath);
+    scene.typeForBlueprint.emplace(kTankPath, tankType);
+
+    const rm::sim::UnitId factoryId = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = factoryType,
+        .transform = {.x = rm::sim::fxFromFloat(200.0f),
+                      .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = rm::app::motionFor(factory, 0),
+        .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+    });
+
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+
+    // Re-indexed on every read: the product's spawn grows the store, and a stored reference
+    // into the orders array would dangle.
+    const auto queue = [&]() -> const rm::sim::CommandQueue& {
+        return scene.store.orders()[factoryId.index];
+    };
+
+    // Two products queued, as a player leaving the factory working.
+    REQUIRE(rm::app::issueBuild(scene, factoryId, 0, 0, tankType,
+                                rm::sim::fxFromFloat(200.0f), rm::sim::fxFromFloat(200.0f)));
+    REQUIRE(rm::app::issueBuild(scene, factoryId, 0, 0, tankType,
+                                rm::sim::fxFromFloat(200.0f), rm::sim::fxFromFloat(200.0f),
+                                true));
+    (void)rm::app::advanceMatch(runner, 0, 0.0f);
+    REQUIRE(queue().entries().size() == 2);
+
+    // THE CLICK ITSELF. A lone factory selected, right-click on open ground: the windowed
+    // path writes the rally point and submits NO command (WindowedSession.mm:1932-1944),
+    // so in a headless match this write is the click.
+    scene.rallyPoints[factoryId.index] = {400.0f, 200.0f};
+    (void)rm::app::advanceMatch(runner, 1, 0.0f);
+
+    // 1) The queue is untouched — same two builds, and no third command was recorded.
+    CHECK(queue().entries().size() == 2);
+    CHECK(queue().entries()[0].kind() == rm::sim::CommandKind::Build);
+    CHECK(queue().entries()[1].kind() == rm::sim::CommandKind::Build);
+    CHECK(scene.commands.all().size() == 2);
+
+    // 2) Queueing still works afterwards — the rally did not lock the factory out.
+    REQUIRE(rm::app::issueBuild(scene, factoryId, 0, 2, tankType,
+                                rm::sim::fxFromFloat(200.0f), rm::sim::fxFromFloat(200.0f),
+                                true));
+    (void)rm::app::advanceMatch(runner, 2, 0.0f);
+    CHECK(queue().entries().size() == 3);
+
+    // 3) The first product rolls off and heads for the clicked point. Sixty build units
+    // at six a tick means roughly tick 11 for the spawn.
+    rm::sim::UnitId product{};
+    int spawnTick = -1;
+    for (int tick = 3; tick < 40; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0.0f);
+        const rm::sim::UnitId maybe = scene.store.idAt(1);
+        if (scene.store.alive(maybe)) {
+            product = maybe;
+            spawnTick = tick;
+            break;
+        }
+    }
+    REQUIRE(spawnTick > 0);
+
+    // The PostSpawn move the completion path issued is aimed at the click, exactly —
+    // rally outranks the default roll-off (Match.cpp:1792).
+    const rm::sim::CommandIssue& postSpawn = scene.commands.all().back();
+    CHECK(postSpawn.phase == rm::sim::CommandPhase::PostSpawn);
+    CHECK(postSpawn.kind == rm::sim::CommandKind::Move);
+    CHECK(postSpawn.units == std::vector{product});
+    CHECK(postSpawn.targetX == rm::sim::fxFromFloat(400.0f));
+    CHECK(postSpawn.targetZ == rm::sim::fxFromFloat(200.0f));
+
+    // And it actually walks there, not just carries the order.
+    for (int tick = spawnTick + 1; tick < spawnTick + 40; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0.0f);
+    }
+    CHECK(rm::sim::fxToFloat(scene.store.transforms()[product.index].x)
+          == Catch::Approx(400.0).margin(10.0));
+    CHECK(rm::sim::fxToFloat(scene.store.transforms()[product.index].z)
+          == Catch::Approx(200.0).margin(10.0));
+}
+
+TEST_CASE("an engineer's assist lands on a factory's own upgrade") {
+    const rm::HeightField field = flatField();
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(1);
+    scene.players = rm::sim::onePlayerPerArmy(1, 0);
+    scene.economies.assign(1, rm::sim::Economy{});
+    scene.commandersEver.assign(1, 0);
+    scene.economies[0].stored = {.mass = rm::sim::magFromFloat(100000.0f),
+                                 .energy = rm::sim::magFromFloat(100000.0f)};
+
+    // The T1 land factory shape: FACTORY, a build rate, and the tech-path field
+    // `General.UpgradesTo`, which belongs to no BuildableCategory.
+    rm::unitdef::UnitDef factory;
+    factory.name = "test_factory";
+    factory.categories = {"FACTORY"};
+    factory.buildRate = 60.0f;  // 6 build units a tick
+    factory.upgradesTo = "test_factory2";
+    // UEB0101's real shape: the T2 factory satisfies the build tree because it carries
+    // BUILTBYTIER1FACTORY plus the STRUCTURE LAND term — UpgradesTo itself is in no
+    // BuildableCategory.
+    factory.buildableCategory = {{"BUILTBYTIER1FACTORY", "TEST_STRUCTURE"}};
+    scene.definitions.push_back(factory);
+    const rm::UnitTypeIndex factoryType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(factoryType, rm::data::moveDefFor(factory), 1.0f);
+
+    rm::unitdef::UnitDef factory2;
+    factory2.name = "test_factory2";
+    factory2.categories = {"BUILTBYTIER1FACTORY", "FACTORY", "TEST_STRUCTURE"};
+    factory2.buildRate = 90.0f;
+    factory2.buildCostMass = rm::sim::magFromFloat(1000.0f);
+    factory2.buildCostEnergy = rm::sim::magFromFloat(1000.0f);
+    factory2.buildTime = rm::sim::magFromFloat(600.0f);  // 100 ticks alone
+    scene.definitions.push_back(factory2);
+    const rm::UnitTypeIndex factory2Type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(factory2Type, rm::data::moveDefFor(factory2), 1.0f);
+
+    rm::unitdef::UnitDef engineer;
+    engineer.name = "test_engineer";
+    engineer.categories = {"ENGINEER"};
+    engineer.buildRate = 10.0f;  // 1 build unit a tick
+    engineer.motion = rm::unitdef::MotionType::Land;
+    engineer.speedElmosPerSecond = 100.0f;
+    scene.definitions.push_back(engineer);
+    const rm::UnitTypeIndex engineerType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(engineerType, rm::data::moveDefFor(engineer), 1.0f);
+
+    const rm::sim::UnitId factoryId = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = factoryType,
+        .transform = {.x = rm::sim::fxFromFloat(200.0f),
+                      .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = rm::app::motionFor(factory, 0),
+        .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+    });
+    const rm::sim::UnitId engineerId = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = engineerType,
+        .transform = {.x = rm::sim::fxFromFloat(220.0f),
+                      .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = rm::app::motionFor(engineer, 0),
+        .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+    });
+
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+
+    // The factory's upgrade order is the build panel's SubmitAtBuilder issue: a Build of
+    // the next tier aimed at the pad. The engineer's right-click on the upgrading factory
+    // is the guard order.
+    REQUIRE(rm::app::issueBuild(scene, factoryId, 0, 0, factory2Type,
+                                rm::sim::fxFromFloat(200.0f),
+                                rm::sim::fxFromFloat(200.0f)));
+    const std::array<rm::sim::UnitId, 1> helpers{engineerId};
+    REQUIRE(rm::app::issueAssist(scene, helpers, 0, 0, factoryId, false));
+    (void)rm::app::advanceMatch(runner, 0, 0.0f);
+
+    REQUIRE(scene.building.size() == 1);
+    CHECK(scene.building[0].upgradeOf == factoryId);
+    CHECK(scene.building[0].builder == factoryId);
+    CHECK(rm::sim::magToFloat(scene.building[0].assistPerTick)
+          == Catch::Approx(1.0).margin(0.001));
+    // Six from the pad plus one lent: seven build units spent of the six hundred.
+    CHECK(rm::sim::magToFloat(scene.building[0].buildTimeRemaining)
+          == Catch::Approx(593.0).margin(0.01));
+}
+
+TEST_CASE("a commander's assist lands on a factory's own upgrade") {
+    const rm::HeightField field = flatField();
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(1);
+    scene.players = rm::sim::onePlayerPerArmy(1, 0);
+    scene.economies.assign(1, rm::sim::Economy{});
+    scene.commandersEver.assign(1, 0);
+    scene.economies[0].stored = {.mass = rm::sim::magFromFloat(100000.0f),
+                                 .energy = rm::sim::magFromFloat(100000.0f)};
+
+    rm::unitdef::UnitDef factory;
+    factory.name = "test_factory";
+    factory.categories = {"FACTORY"};
+    factory.buildRate = 60.0f;
+    factory.upgradesTo = "test_factory2";
+    factory.buildableCategory = {{"BUILTBYTIER1FACTORY", "TEST_STRUCTURE"}};
+    scene.definitions.push_back(factory);
+    const rm::UnitTypeIndex factoryType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(factoryType, rm::data::moveDefFor(factory), 1.0f);
+
+    rm::unitdef::UnitDef factory2;
+    factory2.name = "test_factory2";
+    factory2.categories = {"BUILTBYTIER1FACTORY", "FACTORY", "TEST_STRUCTURE"};
+    factory2.buildRate = 90.0f;
+    factory2.buildCostMass = rm::sim::magFromFloat(1000.0f);
+    factory2.buildCostEnergy = rm::sim::magFromFloat(1000.0f);
+    factory2.buildTime = rm::sim::magFromFloat(600.0f);
+    scene.definitions.push_back(factory2);
+    const rm::UnitTypeIndex factory2Type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(factory2Type, rm::data::moveDefFor(factory2), 1.0f);
+
+    // The ACU's shape: COMMAND first so `roleOf` reads commander, an ordinary weapon so
+    // the guard-attack branch could in principle veto the help, and a build arm.
+    rm::unitdef::UnitDef acu;
+    acu.name = "test_acu";
+    acu.categories = {"COMMAND", "DIRECTFIRE", "ENGINEER", "MOBILE"};
+    acu.buildRate = 10.0f;  // 1 build unit a tick
+    acu.motion = rm::unitdef::MotionType::Land;
+    acu.speedElmosPerSecond = 100.0f;
+    rm::unitdef::Weapon gun;
+    gun.maxRange = rm::sim::fxFromFloat(200.0f);
+    gun.damage = rm::sim::magFromFloat(100.0f);
+    gun.rateOfFire = 1.0f;
+    acu.weapons.push_back(gun);
+    scene.definitions.push_back(acu);
+    const rm::UnitTypeIndex acuType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(acuType, rm::data::moveDefFor(acu), 1.0f);
+
+    const rm::sim::UnitId factoryId = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = factoryType,
+        .transform = {.x = rm::sim::fxFromFloat(200.0f),
+                      .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = rm::app::motionFor(factory, 0),
+        .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+    });
+    const rm::sim::UnitId acuId = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = acuType,
+        .transform = {.x = rm::sim::fxFromFloat(220.0f),
+                      .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = rm::app::motionFor(acu, 0),
+        .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+    });
+
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+
+    REQUIRE(rm::app::issueBuild(scene, factoryId, 0, 0, factory2Type,
+                                rm::sim::fxFromFloat(200.0f),
+                                rm::sim::fxFromFloat(200.0f)));
+    const std::array<rm::sim::UnitId, 1> helpers{acuId};
+    REQUIRE(rm::app::issueAssist(scene, helpers, 0, 0, factoryId, false));
+    (void)rm::app::advanceMatch(runner, 0, 0.0f);
+
+    REQUIRE(scene.building.size() == 1);
+    CHECK(scene.building[0].upgradeOf == factoryId);
+    CHECK(scene.building[0].builder == factoryId);
+    CHECK(rm::sim::magToFloat(scene.building[0].assistPerTick)
+          == Catch::Approx(1.0).margin(0.001));
+    CHECK(rm::sim::magToFloat(scene.building[0].buildTimeRemaining)
+          == Catch::Approx(593.0).margin(0.01));
+}
+
+TEST_CASE("a commander that built a factory still assists its upgrade") {
+    const rm::HeightField field = flatField();
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(1);
+    scene.players = rm::sim::onePlayerPerArmy(1, 0);
+    scene.economies.assign(1, rm::sim::Economy{});
+    scene.commandersEver.assign(1, 0);
+    scene.economies[0].stored = {.mass = rm::sim::magFromFloat(1000000.0f),
+                                 .energy = rm::sim::magFromFloat(1000000.0f)};
+
+    rm::unitdef::UnitDef factory;
+    factory.name = "test_factory";
+    factory.categories = {"BUILTBYCOMMANDER", "FACTORY"};
+    factory.buildRate = 60.0f;
+    factory.upgradesTo = "test_factory2";
+    factory.buildableCategory = {{"BUILTBYTIER1FACTORY", "TEST_STRUCTURE"}};
+    factory.buildCostMass = rm::sim::magFromFloat(100.0f);
+    factory.buildCostEnergy = rm::sim::magFromFloat(100.0f);
+    factory.buildTime = rm::sim::magFromFloat(10.0f);
+    factory.collisionRadiusElmos = 20.0f;
+    // Spawned through the completion path, which takes its hull from the def — a
+    // zero-health factory would be retired by `retireDead` on the tick after it stands.
+    factory.health = rm::sim::magFromFloat(1000.0f);
+    scene.definitions.push_back(factory);
+    const rm::UnitTypeIndex factoryType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(factoryType, rm::data::moveDefFor(factory), 1.0f);
+    // The completion path respawns products through the VFS-keyed cache; registering the
+    // path resolves the synthetic type without touching mounted content.
+    constexpr std::string_view kFactoryPath{"/test_factory"};
+    scene.setPathForType(factoryType, kFactoryPath);
+    scene.typeForBlueprint.emplace(kFactoryPath, factoryType);
+
+    rm::unitdef::UnitDef factory2;
+    factory2.name = "test_factory2";
+    factory2.categories = {"BUILTBYTIER1FACTORY", "FACTORY", "TEST_STRUCTURE"};
+    factory2.buildRate = 90.0f;
+    factory2.buildCostMass = rm::sim::magFromFloat(1000.0f);
+    factory2.buildCostEnergy = rm::sim::magFromFloat(1000.0f);
+    factory2.buildTime = rm::sim::magFromFloat(600.0f);
+    factory2.collisionRadiusElmos = 20.0f;
+    factory2.health = rm::sim::magFromFloat(2000.0f);
+    scene.definitions.push_back(factory2);
+    const rm::UnitTypeIndex factory2Type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(factory2Type, rm::data::moveDefFor(factory2), 1.0f);
+    constexpr std::string_view kFactory2Path{"/test_factory2"};
+    scene.setPathForType(factory2Type, kFactory2Path);
+    scene.typeForBlueprint.emplace(kFactory2Path, factory2Type);
+
+    rm::unitdef::UnitDef acu;
+    acu.name = "test_acu";
+    acu.categories = {"COMMAND", "DIRECTFIRE", "ENGINEER", "MOBILE"};
+    acu.buildRate = 10.0f;
+    acu.motion = rm::unitdef::MotionType::Land;
+    acu.speedElmosPerSecond = 100.0f;
+    acu.buildableCategory = {{"BUILTBYCOMMANDER"}};
+    scene.definitions.push_back(acu);
+    const rm::UnitTypeIndex acuType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(acuType, rm::data::moveDefFor(acu), 1.0f);
+
+    const rm::sim::UnitId acuId = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = acuType,
+        .transform = {.x = rm::sim::fxFromFloat(160.0f),
+                      .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = rm::app::motionFor(acu, 0),
+        .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+    });
+
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+
+    // The reported sequence: the commander puts up the T1 factory itself — the build order
+    // completes, retires, and the factory unit stands — and only then does the upgrade and
+    // the help order arrive.
+    REQUIRE(rm::app::issueBuild(scene, acuId, 0, 0, factoryType,
+                                rm::sim::fxFromFloat(200.0f),
+                                rm::sim::fxFromFloat(200.0f)));
+    rm::sim::UnitId factoryId{};
+    int now = 0;
+    for (; now < 200 && !scene.store.alive(factoryId); ++now) {
+        (void)rm::app::advanceMatch(runner, now, 0.0f);
+        for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+            if (slot != acuId.index && scene.store.slotAlive(slot)
+                && scene.store.typeAt(slot) == factoryType) {
+                factoryId = scene.store.idAt(slot);
+            }
+        }
+    }
+    REQUIRE(scene.store.alive(factoryId));
+
+    const rm::TickIndex issueTick = static_cast<rm::TickIndex>(now);
+    REQUIRE(rm::app::issueBuild(scene, factoryId, 0, issueTick, factory2Type,
+                                rm::sim::fxFromFloat(200.0f),
+                                rm::sim::fxFromFloat(200.0f)));
+    const std::array<rm::sim::UnitId, 1> helpers{acuId};
+    REQUIRE(rm::app::issueAssist(scene, helpers, 0, issueTick, factoryId, false));
+    (void)rm::app::advanceMatch(runner, now, 0.0f);
+
+    const rm::sim::Construction* upgrade = nullptr;
+    for (const auto& work : scene.building) {
+        if (!work.finished() && work.upgradeOf == factoryId) upgrade = &work;
+    }
+    REQUIRE(upgrade != nullptr);
+    CHECK(upgrade->builder == factoryId);
+    CHECK(rm::sim::magToFloat(upgrade->assistPerTick) > 0.0f);
 }

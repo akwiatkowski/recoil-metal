@@ -69,6 +69,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "cycle-retreat-threshold";
     case CommandKind::CycleTargetFocus:
         return "cycle-target-focus";
+    case CommandKind::SetBuildPriority:
+        return "set-build-priority";
     case CommandKind::Repair:
         return "repair";
     case CommandKind::Script:
@@ -100,7 +102,7 @@ bool operator==(const CommandIssue& a, const CommandIssue& b) noexcept {
            && a.units == b.units && a.targetX == b.targetX && a.targetZ == b.targetZ
            && a.target == b.target && a.buildType == b.buildType && a.count == b.count
            && a.scriptTask == b.scriptTask && a.scriptData == b.scriptData
-           && a.cancelCommandId == b.cancelCommandId;
+           && a.cancelCommandId == b.cancelCommandId && a.priority == b.priority;
 }
 
 // --- The shared predicates ------------------------------------------------
@@ -116,6 +118,93 @@ Fx constructionReach(const UnitCatalog& catalog, UnitTypeIndex builder,
          + catalog.rates(product).buildSkirtElmos;
 }
 
+std::optional<std::pair<Fx, Fx>> buildSiteFor(
+    UnitTypeIndex buildType, Fx targetX, Fx targetZ, UnitIndex slot,
+    const UnitStore& store, const UnitCatalog& catalog) noexcept {
+    const unitdef::UnitDef* builder = catalog.def(store.typeAt(slot));
+    const unitdef::UnitDef* product = catalog.def(buildType);
+    if (builder == nullptr || product == nullptr) {
+        return std::nullopt;
+    }
+    // The same rule `startCommand`'s Build case applies: an upgrade and a factory's
+    // mobile product happen on the builder's own pad; anything else stands where ordered.
+    const bool pad = (!builder->upgradesTo.empty() && builder->upgradesTo == product->name)
+                     || (builder->hasCategory("FACTORY") && product->isMobile());
+    if (pad) {
+        const Transform& at = store.transforms()[slot];
+        return std::pair{at.x, at.z};
+    }
+    return std::pair{targetX, targetZ};
+}
+
+Construction* constructionAtSite(std::vector<Construction>& building,
+                                 UnitTypeIndex blueprint, Fx x, Fx z) noexcept {
+    for (Construction& work : building) {
+        if (work.blueprintIndex == blueprint && work.position[0] == x && work.position[2] == z) {
+            return &work;
+        }
+    }
+    return nullptr;
+}
+
+bool constructionWorkedOn(const Construction& work, const UnitStore& store,
+                          const UnitCatalog& catalog) noexcept {
+    if (!store.alive(work.builder)) {
+        return false;
+    }
+    const CommandQueue& queue = store.orders()[work.builder.index];
+    if (work.retainedCommandId != kInvalidCommandId) {
+        // A factory's own build retained behind its Guard order: the Guard dispatch is
+        // what advances it, so it is worked while the retained entry is still queued.
+        return std::ranges::any_of(queue.entries(), [&](const QueuedCommand& entry) {
+            return entry.kind() == CommandKind::Build
+                   && entry.payload().id == work.retainedCommandId;
+        });
+    }
+    const QueuedCommand* active = queue.activeEntry();
+    if (active == nullptr || active->kind() != CommandKind::Build) {
+        return false;
+    }
+    const auto site = buildSiteFor(active->buildType(), active->targetX(), active->targetZ(),
+                                   work.builder.index, store, catalog);
+    return site.has_value() && work.blueprintIndex == active->buildType()
+           && work.position[0] == site->first && work.position[2] == site->second;
+}
+
+bool constructionArmyAllied(const Construction& work, UnitIndex slot,
+                            const UnitStore& store,
+                            std::span<const Army> armies) noexcept {
+    if (armies.empty()) {
+        return true;
+    }
+    const int mine = store.motion()[slot].armyIndex;
+    const auto a = std::ranges::find_if(armies, [mine](const Army& army) {
+        return army.index == mine;
+    });
+    const auto b = std::ranges::find_if(armies, [theirs = work.armyIndex](const Army& army) {
+        return army.index == theirs;
+    });
+    return a != armies.end() && b != armies.end() && allied(*a, *b);
+}
+
+bool joinableConstructionAt(std::vector<Construction>& building, const Command& command,
+                            const UnitStore& store, const UnitCatalog& catalog,
+                            std::span<const Army> armies) noexcept {
+    if (command.kind != CommandKind::Build) {
+        return false;
+    }
+    const auto site = buildSiteFor(command.buildType, command.targetX, command.targetZ,
+                                   command.unit.index, store, catalog);
+    if (!site) {
+        return false;
+    }
+    const Construction* row = constructionAtSite(building, command.buildType,
+                                                 site->first, site->second);
+    return row != nullptr && !row->finished()
+           && (row->builder == command.unit
+               || constructionArmyAllied(*row, command.unit.index, store, armies));
+}
+
 bool canPauseProduction(const unitdef::UnitDef& def) noexcept {
     if (def.isBuilder() || def.hasCategory("FACTORY")
         || def.hasToggleCap("RULEUTC_ProductionToggle") || def.producesMassPerSecond > 0.0f
@@ -125,6 +214,16 @@ bool canPauseProduction(const unitdef::UnitDef& def) noexcept {
     return std::ranges::any_of(
         def.weapons, [](const unitdef::Weapon& weapon) { return weapon.countedProjectile; });
 }
+
+bool canSetBuildPriority(const unitdef::UnitDef& def) noexcept {
+    // The tier is bucketed by the PRODUCER — a unit whose work the allocator can
+    // serve early: builders and factories for construction/repair/capture/enhance,
+    // counted-projectile silos for their ammo builds (`tickEconomy`'s tierAt calls).
+    return def.isBuilder() || def.hasCategory("FACTORY")
+           || std::ranges::any_of(
+               def.weapons, [](const unitdef::Weapon& w) { return w.countedProjectile; });
+}
+
 bool buildSitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos,
                         const UnitStore& store, const UnitCatalog& catalog,
                         std::span<const Construction> building) noexcept {

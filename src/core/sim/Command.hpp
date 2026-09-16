@@ -178,6 +178,12 @@ enum class CommandKind : std::uint8_t {
     /// `CycleRetreatThreshold`: the setting itself is sim state, and
     /// `nearestTarget` is the pass that reads it.
     CycleTargetFocus = 24,
+    /// Set a producer's construction priority to the tier `priority` names —
+    /// the two-state REGULAR/PRIORITY control the economy window offers, which
+    /// a cycle cannot express (Normal → High → Low → Normal has no direct
+    /// High → Normal edge). Same authoritative-but-unqueued shape as
+    /// `CycleBuildPriority`: it acts on intake, the same beat it was issued.
+    SetBuildPriority = 25,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {
@@ -191,6 +197,12 @@ enum class CommandKind : std::uint8_t {
 /// is what "pausable production everywhere" means. Def-level only so the command
 /// panel can answer the same question without a catalog.
 [[nodiscard]] bool canPauseProduction(const unitdef::UnitDef& def) noexcept;
+
+/// Whether a unit may carry a build-priority tier: every producer whose demand the
+/// allocator can actually tier — builders, factories, and counted-projectile silos,
+/// whose ammo build is bucketed by owner like any other work. Anything else would
+/// hold a flag that never moves a resource.
+[[nodiscard]] bool canSetBuildPriority(const unitdef::UnitDef& def) noexcept;
 
 /// One order, from one player, on one tick.
 ///
@@ -263,6 +275,8 @@ struct CommandIssue {
     std::vector<std::uint8_t> scriptData;
     /// Used only by CancelFactoryBuild; this action never becomes a queued order.
     CommandId cancelCommandId = kInvalidCommandId;
+    /// Used only by SetBuildPriority: the tier to set, not a cycle step.
+    BuildPriority priority = BuildPriority::Normal;
 };
 
 /// Transport-only command intake. It is deliberately absent from the state hash.
@@ -427,6 +441,35 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// its build reach plus its own footprint plus the product's skirt (`CUnitMobileBuildTask`).
 [[nodiscard]] Fx constructionReach(const UnitCatalog& catalog, UnitTypeIndex builder,
                                    UnitTypeIndex product) noexcept;
+
+/// Where a Build order's work stands: the builder's own pad for an upgrade or a factory's
+/// mobile product, the ordered position for a placed structure. Nullopt when either
+/// definition is missing.
+[[nodiscard]] std::optional<std::pair<Fx, Fx>> buildSiteFor(
+    UnitTypeIndex buildType, Fx targetX, Fx targetZ, UnitIndex slot,
+    const UnitStore& store, const UnitCatalog& catalog) noexcept;
+
+/// A construction of `blueprint` at exactly this site, by anyone — the colleague an
+/// arriving builder finds when another claimed the same deposit first, or the scaffold a
+/// returning founder abandoned and was sent back to.
+[[nodiscard]] Construction* constructionAtSite(std::vector<Construction>& building,
+                                               UnitTypeIndex blueprint, Fx x,
+                                               Fx z) noexcept;
+
+/// Whether `work`'s builder is still building it — alive, with its queue's active head
+/// the Build order this row stands for, or a guarding factory whose retained entry it
+/// mirrors. A row nobody works is ORPHANED: it keeps its place and its progress, draws
+/// nothing, and waits for a builder ordered onto the site to take it over.
+[[nodiscard]] bool constructionWorkedOn(const Construction& work, const UnitStore& store,
+                                        const UnitCatalog& catalog) noexcept;
+
+/// Whether `slot`'s army is on the side that pays for `work` — the join/adopt check for a
+/// construction already on the map, which works on a dead founder's row because the row
+/// remembers its army even when its builder is gone. No alliance state (a bare test
+/// store) counts as allied, the way `alliedBuilder` already reads it.
+[[nodiscard]] bool constructionArmyAllied(const Construction& work, UnitIndex slot,
+                                          const UnitStore& store,
+                                          std::span<const Army> armies) noexcept;
 
 /// C-183 eligibility shared by the construction prepass and guard dispatch.
 [[nodiscard]] bool guardAllowsBuildAssistance(UnitIndex slot, const UnitStore& store,

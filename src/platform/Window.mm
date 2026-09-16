@@ -279,27 +279,29 @@ static std::array<float, 2> viewPointIn(NSView* view, NSPoint windowPoint) {
     (*self.clickCallback)(ray, button, mods);
 }
 
-/// Extracts one layout-aware ASCII character, lowercased, from an AppKit event.
+/// Extracts one layout-aware unichar, lowercased, from an AppKit event.
 ///
-/// This is the only AppKit-specific part of keyboard identity. `keyEventForCharacter` immediately
-/// turns the result into the platform-neutral key, phase, repeat, and modifier vocabulary.
+/// Kept as a unichar rather than an ASCII char so private-use keys survive —
+/// arrows arrive as 0xF700+ (`NSUpArrowFunctionKey`), which a `char` silently
+/// drops. `keyEventForUnichar` immediately turns the result into the
+/// platform-neutral key, phase, repeat, and modifier vocabulary.
 ///
 /// Nothing is passed to super, so AppKit does not beep at an unhandled key.
-- (char)charFor:(NSEvent*)event {
+- (unichar)unicharFor:(NSEvent*)event {
     NSString* characters = event.charactersIgnoringModifiers;
     if (characters.length == 0) {
         return 0;
     }
     const unichar first = [characters characterAtIndex:0];
     if (first > 127) {
-        return 0;  // not something a `char` can carry
+        return first;  // arrows and friends — not something `tolower` understands
     }
-    return static_cast<char>(std::tolower(static_cast<int>(first)));
+    return static_cast<unichar>(std::tolower(static_cast<int>(first)));
 }
 
 - (void)keyDown:(NSEvent*)event {
-    const std::optional<rm::KeyEvent> keyEvent = rm::keyEventForCharacter(
-        [self charFor:event], rm::KeyPhase::Press, event.isARepeat,
+    const std::optional<rm::KeyEvent> keyEvent = rm::keyEventForUnichar(
+        [self unicharFor:event], rm::KeyPhase::Press, event.isARepeat,
         rmKeyModifiers(event.modifierFlags));
     if (!keyEvent) {
         return;
@@ -321,8 +323,8 @@ static std::array<float, 2> viewPointIn(NSView* view, NSPoint windowPoint) {
 }
 
 - (void)keyUp:(NSEvent*)event {
-    const std::optional<rm::KeyEvent> keyEvent = rm::keyEventForCharacter(
-        [self charFor:event], rm::KeyPhase::Release, false,
+    const std::optional<rm::KeyEvent> keyEvent = rm::keyEventForUnichar(
+        [self unicharFor:event], rm::KeyPhase::Release, false,
         rmKeyModifiers(event.modifierFlags));
     if (!keyEvent) {
         return;

@@ -59,43 +59,41 @@ namespace {
     orderAlongPath(motion, path);
     return true;
 }
-[[nodiscard]] bool hasActiveConstruction(std::span<const Construction> building,
-                                         UnitId builder) noexcept {
-    return std::ranges::any_of(building, [builder](const Construction& work) {
-        return !work.finished() && work.builder == builder;
-    });
-}
 /// Whether the active queue entry already owns a completed row. Finished constructions remain
 /// as match history, so "no unfinished row" alone cannot distinguish completion from approach.
 [[nodiscard]] bool finishedConstructionFor(const QueuedCommand& command, UnitIndex slot,
                                            const UnitStore& store, const UnitCatalog& catalog,
                                            std::span<const Construction> building) noexcept {
-    const unitdef::UnitDef* builder = catalog.def(store.typeAt(slot));
-    const unitdef::UnitDef* product = catalog.def(command.buildType());
-    if (builder == nullptr || product == nullptr) {
+    const auto site = buildSiteFor(command.buildType(), command.targetX(), command.targetZ(),
+                                   slot, store, catalog);
+    if (!site) {
         return false;
     }
-    const bool upgrade = !builder->upgradesTo.empty() && builder->upgradesTo == product->name;
-    const bool factoryProduction = builder->hasCategory("FACTORY") && product->isMobile();
-    const Transform& at = store.transforms()[slot];
-    const Fx siteX = (upgrade || factoryProduction) ? at.x : command.targetX();
-    const Fx siteZ = (upgrade || factoryProduction) ? at.z : command.targetZ();
     return std::ranges::any_of(building, [&](const Construction& work) {
         return work.finished() && work.builder == store.idAt(slot)
-            && work.blueprintIndex == command.buildType() && work.position[0] == siteX
-            && work.position[2] == siteZ;
+            && work.blueprintIndex == command.buildType() && work.position[0] == site->first
+            && work.position[2] == site->second;
     });
 }
-/// A construction of `blueprint` at exactly this site, by anyone — the colleague an arriving
-/// engineer finds when another builder claimed the same deposit first.
-[[nodiscard]] Construction* constructionAtSite(std::vector<Construction>& building,
-                                               UnitTypeIndex blueprint, Fx x, Fx z) noexcept {
-    for (Construction& work : building) {
-        if (work.blueprintIndex == blueprint && work.position[0] == x && work.position[2] == z) {
-            return &work;
-        }
+/// The unfinished row THIS Build order owns: the builder's, on the site the order resolves to
+/// (`buildSiteFor` — the pad for an upgrade or a factory product, the target for a placed
+/// structure). Scoping by site is what an abandoned scaffold needs: the founder that walked
+/// away still has its row, and only the order pointing back at that row may reattach to it.
+[[nodiscard]] Construction* activeConstructionFor(const QueuedCommand& command, UnitIndex slot,
+                                                  const UnitStore& store,
+                                                  const UnitCatalog& catalog,
+                                                  std::vector<Construction>& building) noexcept {
+    const auto site = buildSiteFor(command.buildType(), command.targetX(), command.targetZ(),
+                                   slot, store, catalog);
+    if (!site) {
+        return nullptr;
     }
-    return nullptr;
+    const auto found = std::ranges::find_if(building, [&](const Construction& work) {
+        return !work.finished() && work.builder == store.idAt(slot)
+            && work.blueprintIndex == command.buildType()
+            && work.position[0] == site->first && work.position[2] == site->second;
+    });
+    return found != building.end() ? &*found : nullptr;
 }
 /// Whether `builder`'s army is on `slot`'s side. No alliance state (a bare test store) counts
 /// as allied, the way the repair path already reads it.
@@ -338,6 +336,15 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                         return;
                     }
                 } else if (pending->kind() == CommandKind::Build && building != nullptr
+                           && joinableConstructionAt(*building, pending->asCommand(), store,
+                                                     catalog, armies)) {
+                    // The site is held by an allied row — worked or abandoned. Either way
+                    // the order means "build there": keep it active at the head and let
+                    // the dispatch beat turn the refusal into a lend or a takeover.
+                    orders[slot].markCurrentActive();
+                    ++started;
+                    return;
+                } else if (pending->kind() == CommandKind::Build && building != nullptr
                            && finished != nullptr) {
                     // PRODUCTION QUEUED ON A RISING FACTORY. The founder's construction
                     // completed THIS BEAT (`finished` holds the row) and the cascade would
@@ -401,7 +408,31 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 return false;
             }
             bool completedUpgrade = false;
-            if (Construction* work = activeConstruction(*building, store.idAt(slot))) {
+            if (Construction* work =
+                    activeConstructionFor(*head, slot, store, catalog, *building)) {
+                // The row may predate the order — a scaffold this builder abandoned and was
+                // sent back to. The reach gate stands either way: out of reach keeps routing
+                // toward the site, in reach stands the builder still and works.
+                const Fx reach =
+                    constructionReach(catalog, store.typeAt(slot), head->buildType());
+                const Fx gap = groundDistanceElmos(positionOf(store.transforms()[slot]),
+                                                   work->position);
+                if (gap > reach) {
+                    MoveState& mine = store.motion()[slot];
+                    const bool routedToSite =
+                        mine.airborne
+                            ? mine.moving && mine.destinationX == work->position[0]
+                                  && mine.destinationZ == work->position[2]
+                            : mine.moving && !mine.path.empty()
+                                  && mine.path.back()[0] == work->position[0]
+                                  && mine.path.back()[1] == work->position[2];
+                    if (!routedToSite && approachGrid != nullptr) {
+                        (void)routeUnit(slot, work->position[0], work->position[2], store,
+                                        terrain, *approachGrid);
+                    }
+                    return false;
+                }
+                teardownMovement(store.motion()[slot]);
                 // The store flag is authoritative; the record mirrors it so callers that
                 // never run `tickSkirmish` — tests driving the queue directly — see the
                 // pause in the same tick it was ordered.
@@ -522,7 +553,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             // Construction row until the exact range gate passes, so revisit `startCommand`
             // each beat to turn an arrived approach into materialised work.
             if (building != nullptr
-                && activeConstruction(*building, store.idAt(slot)) == nullptr
+                && activeConstructionFor(*current, slot, store, catalog, *building) == nullptr
                 && !finishedConstructionFor(*current, slot, store, catalog, *building)) {
                 const PassabilityGrid* buildGrid = gridFor(*current);
                 if (buildGrid == nullptr) {
@@ -530,13 +561,18 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 }
                 if (!startCommand(current->asCommand(), store, catalog, terrain, *buildGrid,
                                   rate, building, events, features, approachGrid)) {
-                    // Refused on the way in: the site changed under the order. Two cases.
+                    // Refused on the way in: the site changed under the order. Three cases.
                     //
                     // A COLLEAGUE got there first — an allied builder's construction of the
-                    // same blueprint stands on the site. Retail treats a build order onto an
-                    // existing construction as assisting it, so hold in reach, lend this beat's
-                    // rate, and let the order complete with the colleague's work. A finished
-                    // one means the job is done.
+                    // same blueprint stands on the site and is being worked. Retail treats a
+                    // build order onto an existing construction as assisting it, so hold in
+                    // reach, lend this beat's rate, and let the order complete with the
+                    // colleague's work. A finished one means the job is done.
+                    //
+                    // An ABANDONED scaffold — the founder was re-tasked or died — is the same
+                    // intent with nobody on the tools: this order takes the work over. The
+                    // row changes hands, the builder's own head becomes its owner, and from
+                    // this beat `materialiseHead` walks it the last mile and advances it.
                     //
                     // ANYTHING ELSE — an enemy on the spot, a different structure — refuses
                     // the order, and the refusal must stop the engineer: without the teardown
@@ -546,25 +582,35 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     Construction* colleague = constructionAtSite(
                         *building, current->buildType(), current->targetX(), current->targetZ());
                     if (colleague != nullptr && !(colleague->builder == store.idAt(slot))
-                        && alliedBuilder(colleague->builder, slot, store, armies)) {
+                        && constructionArmyAllied(*colleague, slot, store, armies)) {
                         if (colleague->finished()) {
                             teardownMovement(mine);
                             (void)orders[slot].finish();
                             startPending();
                             continue;
                         }
-                        const Fx reach = constructionReach(catalog, store.typeAt(slot),
-                                                           current->buildType());
-                        const Fx gap = groundDistanceElmos(positionOf(store.transforms()[slot]),
-                                                           colleague->position);
-                        if (gap <= reach) {
-                            teardownMovement(mine);
-                            colleague->assistPerTick += effectiveBuildPerTick(store, catalog, slot);
-                        } else if (!mine.moving) {
-                            if (approachGrid != nullptr)
-                                (void)routeUnit(slot, colleague->position[0], colleague->position[2],
-                                                store, terrain, *approachGrid);
+                        if (constructionWorkedOn(*colleague, store, catalog)) {
+                            const Fx reach = constructionReach(catalog, store.typeAt(slot),
+                                                               current->buildType());
+                            const Fx gap = groundDistanceElmos(
+                                positionOf(store.transforms()[slot]), colleague->position);
+                            if (gap <= reach) {
+                                teardownMovement(mine);
+                                colleague->assistPerTick +=
+                                    effectiveBuildPerTick(store, catalog, slot);
+                            } else if (!mine.moving) {
+                                if (approachGrid != nullptr)
+                                    (void)routeUnit(slot, colleague->position[0],
+                                                    colleague->position[2], store, terrain,
+                                                    *approachGrid);
+                            }
+                            continue;
                         }
+                        // The site is nobody's task: hand it to this builder and let the
+                        // ordinary build loop take it from here.
+                        colleague->builder = store.idAt(slot);
+                        colleague->paused = store.productionPaused(colleague->builder);
+                        serviceBuilds();
                         continue;
                     }
                     teardownMovement(mine);
@@ -572,7 +618,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     startPending();
                     continue;
                 }
-                if (activeConstruction(*building, store.idAt(slot)) == nullptr) {
+                if (activeConstructionFor(*current, slot, store, catalog, *building) == nullptr) {
                     continue;  // still walking into build range
                 }
             }
@@ -1738,9 +1784,6 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         if (building == nullptr) {
             return false;  // a scene with no construction list cannot build
         }
-        if (hasActiveConstruction(*building, command.unit)) {
-            return false;
-        }
         const unitdef::UnitDef* def = catalog.def(command.buildType);
         if (def == nullptr) {
             return false;  // a type the catalog does not know
@@ -1771,6 +1814,49 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         const Transform& builderAt = store.transforms()[command.unit.index];
         const Fx siteX = (upgrade || factoryProduction) ? builderAt.x : command.targetX;
         const Fx siteZ = (upgrade || factoryProduction) ? builderAt.z : command.targetZ;
+
+        if (upgrade || factoryProduction) {
+            // One pad, one job — an unfinished row on this pad still belongs to whatever
+            // order owns it, and a second product or upgrade cannot materialise beside it.
+            const bool padBusy = std::ranges::any_of(*building, [&](const Construction& work) {
+                return !work.finished() && work.builder == command.unit
+                    && work.position[0] == siteX && work.position[2] == siteZ;
+            });
+            if (padBusy) {
+                return false;
+            }
+        } else {
+            // An unfinished row of the same blueprint ON the exact site means occupied —
+            // whoever founded it — even when the product's skirt is too small for the
+            // generic placeable check to notice. The builder's own row is a RESUME, not a
+            // second job: an interrupt left the scaffold standing and this order reattaches
+            // to it, through the same approach gate a fresh build uses. Anybody else's is
+            // refused outright, and the caller's join path decides lend vs takeover.
+            const Construction* held =
+                constructionAtSite(*building, command.buildType, siteX, siteZ);
+            if (held != nullptr && !held->finished()) {
+                if (held->builder != command.unit) {
+                    return false;
+                }
+                if (groundDistanceElmos(positionOf(builderAt), {siteX, Fx{}, siteZ})
+                    > constructionReach(catalog, store.typeAt(command.unit.index),
+                                        command.buildType)) {
+                    const bool routedToSite =
+                        motion.airborne
+                            ? motion.moving && motion.destinationX == siteX
+                                  && motion.destinationZ == siteZ
+                            : motion.moving && !motion.path.empty()
+                                  && motion.path.back()[0] == siteX
+                                  && motion.path.back()[1] == siteZ;
+                    // The same rule as the fresh-build approach: the builder's grid, never
+                    // the product's placement grid.
+                    return routedToSite
+                        || routeUnit(command.unit.index, siteX, siteZ, store, terrain,
+                                     approachGrid != nullptr ? *approachGrid : grid);
+                }
+                return true;  // in reach — dispatch takes it from here
+            }
+        }
 
         if (!upgrade && !terrain.resourceSitePlaceable(def->buildRestriction, siteX, siteZ)) {
             return false;
@@ -1971,6 +2057,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     case CommandKind::ToggleFactoryRepeat:
     case CommandKind::ToggleProduction:
     case CommandKind::CycleBuildPriority:
+    case CommandKind::SetBuildPriority:
     case CommandKind::CycleRetreatThreshold:
     case CommandKind::CycleTargetFocus:
     case CommandKind::CancelFactoryBuild:

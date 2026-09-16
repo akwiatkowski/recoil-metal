@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -572,6 +573,12 @@ TEST_CASE("construction inspector follows selected work and ignores finished rec
     };
     work.builder = builder;
     work.fundedLastTick = {};
+    // The inspector follows the builder's active order onto the row's site — ownership
+    // alone is not enough now that an interrupted scaffold keeps naming its founder.
+    fixture.scene.store.orders()[builder.index].append(rm::sim::QueuedCommand{
+        builder, std::make_shared<const rm::sim::SharedCommand>(rm::sim::SharedCommand{
+                     .kind = rm::sim::CommandKind::Build})});
+    fixture.scene.store.orders()[builder.index].markCurrentActive();
     fixture.scene.building.push_back(work);
     auto card = rm::app::constructionCard(fixture.scene, builder);
     REQUIRE(card);

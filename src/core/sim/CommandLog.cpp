@@ -68,6 +68,9 @@ namespace {
     if (name == "cycle-build-priority") {
         return CommandKind::CycleBuildPriority;
     }
+    if (name == "set-build-priority") {
+        return CommandKind::SetBuildPriority;
+    }
     if (name == "cycle-retreat-threshold") {
         return CommandKind::CycleRetreatThreshold;
     }
@@ -94,9 +97,10 @@ namespace {
 
 
 inline constexpr std::string_view kCommandLogMagic = "recoil-metal semantic command log";
-/// Version 5 adds immediate `dive`; v4 added `reclaim-unit`. Versions 2–4 are still read, since a
-/// name their writers never produced cannot appear in them.
-inline constexpr std::uint32_t kCommandLogVersion = 5;
+/// Version 6 adds `set-build-priority` and its trailing `priority` column; v5 added
+/// immediate `dive`. Versions 2–5 are still read — the column defaults to Normal there,
+/// and a name their writers never produced cannot appear in them anyway.
+inline constexpr std::uint32_t kCommandLogVersion = 6;
 
 [[nodiscard]] const char* phaseName(CommandPhase phase) noexcept {
     return phase == CommandPhase::PreTick ? "pre-tick" : "post-spawn";
@@ -200,7 +204,8 @@ bool writeCommandLog(const CommandLog& log, const std::string& path,
             scriptData.push_back(kHex[byte & 0x0F]);
         }
         out << ' ' << std::quoted(blueprint) << ' ' << std::quoted(issue.scriptTask) << ' '
-            << std::quoted(scriptData) << ' ' << issue.cancelCommandId << '\n';
+            << std::quoted(scriptData) << ' ' << issue.cancelCommandId << ' '
+            << static_cast<unsigned>(issue.priority) << '\n';
     }
     return out.good();
 }
@@ -327,6 +332,14 @@ std::optional<CommandLog> readCommandLog(const std::string& path,
             std::uint64_t cancelCommandId{};
             if (!(fields >> cancelCommandId) || !fits<CommandId>(cancelCommandId)) return std::nullopt;
             issue.cancelCommandId = static_cast<CommandId>(cancelCommandId);
+        }
+        if (version >= 6) {
+            std::uint64_t priority{};
+            if (!(fields >> priority)
+                || priority > static_cast<std::uint64_t>(BuildPriority::High)) {
+                return std::nullopt;
+            }
+            issue.priority = static_cast<BuildPriority>(priority);
         }
         if (fields >> extra) return std::nullopt;
         issue.scriptTask = std::move(scriptTask);

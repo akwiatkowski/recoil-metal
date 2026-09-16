@@ -285,10 +285,21 @@ int runWindowed(const Session& session) {
         bool cancelledLeftGesture = false;
         std::optional<std::size_t> armedOption;
         std::optional<std::array<float, 2>> arrayDragAnchor;
+        // THE ECONOMY WINDOW (M): open state, the fabricator budget the slider is
+        // holding, the keyboard-focused row, and the view as last DRAWN — the same
+        // contract every panel here keeps, because a click addresses what the player
+        // saw, not what a later frame will gather.
+        bool econOpen = false;
+        float econBudget = -1.0f;  // below zero is "untouched": every fabricator runs
+        std::optional<std::size_t> econFocus;
+        std::size_t econPage = 0;
+        rm::ui::EconomyWindowView econView;
+        bool econSliderHeld = false;
         window.onKey([&window, &selected, &controlGroups, &units, &armedCommand, restPitch,
                       restYaw, &runnerForKeys, &armedOption, &arrayDragging,
                       &cancelledLeftGesture, &arrayDragAnchor, &alertCursor,
-                      &tracking, &map](rm::KeyEvent event) {
+                      &tracking, &map, &econOpen, &econFocus, &econView,
+                      &econSliderHeld](rm::KeyEvent event) {
             if (event.phase == rm::KeyPhase::Release) {
                 if (event.key == rm::Key::Space) {
                     // A held-space glance never costs the player their overhead bearings.
@@ -306,8 +317,69 @@ int runWindowed(const Session& session) {
                 armedCommand.reset();
                 arrayDragging = false;
                 arrayDragAnchor.reset();
+                econOpen = false;
+                econFocus.reset();
+                econSliderHeld = false;
                 window.clearGhost();
                 window.setBuildGrid(false);
+            } else if (event.key == rm::Key::E && !event.repeat) {
+                // The economy window's hotkey — the same action as clicking the
+                // economy module. E for "economy"; the AUTO MEX key moved to M.
+                econOpen = !econOpen;
+                if (!econOpen) {
+                    econFocus.reset();
+                    econSliderHeld = false;
+                }
+            } else if (econOpen && !event.repeat
+                       && (event.key == rm::Key::Up || event.key == rm::Key::Down)) {
+                // Row focus — the keyboard half of "the row is a handle". Arms on the
+                // first press, wraps at the ends, and the P/S controls follow it.
+                if (!econView.rows.empty()) {
+                    if (!econFocus) {
+                        econFocus = event.key == rm::Key::Up ? econView.rows.size() - 1
+                                                             : 0;
+                    } else if (event.key == rm::Key::Up) {
+                        econFocus =
+                            (*econFocus + econView.rows.size() - 1) % econView.rows.size();
+                    } else {
+                        econFocus = (*econFocus + 1) % econView.rows.size();
+                    }
+                }
+            } else if (econOpen && econFocus && *econFocus < econView.rows.size()
+                       && event.key == rm::Key::P && !event.repeat
+                       && runnerForKeys != nullptr) {
+                // PRIORITY on the focused row — the window's two-state contract:
+                // Regular and Priority, never the internal Low the B key cycles
+                // through. Checked before the patrol arming below, so a focused row
+                // owns the key while the window is up.
+                const rm::ui::EconRowView& focused = econView.rows[*econFocus];
+                (void)submitCommand(units, rm::sim::CommandIssue{
+                    .tick = runnerForKeys->tick,
+                    .phase = rm::sim::CommandPhase::PreTick,
+                    .source = static_cast<rm::CommandSource>(
+                        playerDriving(units, units.playerArmy)),
+                    .player = playerDriving(units, units.playerArmy),
+                    .kind = rm::sim::CommandKind::SetBuildPriority,
+                    .units = focused.members,
+                    .priority = focused.priority == rm::BuildPriority::High
+                                    ? rm::BuildPriority::Normal
+                                    : rm::BuildPriority::High,
+                });
+            } else if (econOpen && econFocus && *econFocus < econView.rows.size()
+                       && event.key == rm::Key::S && !event.repeat
+                       && runnerForKeys != nullptr) {
+                // SUSPEND — production pause on the focused row's members, the same
+                // command the pause cell issues.
+                const rm::ui::EconRowView& focused = econView.rows[*econFocus];
+                (void)submitCommand(units, rm::sim::CommandIssue{
+                    .tick = runnerForKeys->tick,
+                    .phase = rm::sim::CommandPhase::PreTick,
+                    .source = static_cast<rm::CommandSource>(
+                        playerDriving(units, units.playerArmy)),
+                    .player = playerDriving(units, units.playerArmy),
+                    .kind = rm::sim::CommandKind::ToggleProduction,
+                    .units = focused.members,
+                });
             } else if (event.key == rm::Key::R) {
                 const bool enabled = !window.reflectionsEnabled();
                 window.setReflections(enabled);
@@ -362,9 +434,10 @@ int runWindowed(const Session& session) {
                 // to where it is standing now.
                 armedCommand = rm::sim::CommandKind::Ferry;
                 std::printf("ferry armed: right-click the drop point — the beacon is where the transport stands\n");
-            } else if (event.key == rm::Key::E) {
+            } else if (event.key == rm::Key::M && !event.repeat) {
                 // AUTO MEX standing order on the selected field engineers — the rack cell
-                // without the click. Silent unless something was eligible to toggle.
+                // without the click. M for "mex": E belongs to the economy window.
+                // Silent unless something was eligible to toggle.
                 if (runnerForKeys != nullptr) {
                     if (const auto on = submitAutoExpandKey(*runnerForKeys, selected)) {
                         std::printf("auto-expand %s for the selection\n", *on ? "on" : "off");
@@ -661,6 +734,48 @@ int runWindowed(const Session& session) {
                 ? static_cast<int>(gAppTickRate.ticks(rm::sim::seconds(marchOptions.seconds)))
                 : 0;
 
+        // Turns the fabricator budget into toggles through the ordinary command path:
+        // cheapest draws first, as far as the budget reaches, and only the DIFFERENCE
+        // is issued — a slider twitch never storms the command log.
+        const auto applyFabBudget = [&]() {
+            std::vector<std::size_t> order(econView.fabricators.size());
+            for (std::size_t at = 0; at < order.size(); ++at) {
+                order[at] = at;
+            }
+            std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+                const rm::ui::EconFabView& fa = econView.fabricators[a];
+                const rm::ui::EconFabView& fb = econView.fabricators[b];
+                if (fa.energyDraw != fb.energyDraw) {
+                    return fa.energyDraw < fb.energyDraw;
+                }
+                return fa.unit.index < fb.unit.index;
+            });
+            float spent = 0.0f;
+            std::vector<rm::sim::UnitId> toggles;
+            for (const std::size_t at : order) {
+                const rm::ui::EconFabView& fab = econView.fabricators[at];
+                const bool want = spent + fab.energyDraw <= econBudget + 0.5f;
+                if (want) {
+                    spent += fab.energyDraw;
+                }
+                if (want != fab.running) {
+                    toggles.push_back(fab.unit);
+                }
+            }
+            if (toggles.empty() || runnerForKeys == nullptr) {
+                return;
+            }
+            (void)submitCommand(units, rm::sim::CommandIssue{
+                .tick = runnerForKeys->tick,
+                .phase = rm::sim::CommandPhase::PreTick,
+                .source = static_cast<rm::CommandSource>(
+                    playerDriving(units, units.playerArmy)),
+                .player = playerDriving(units, units.playerArmy),
+                .kind = rm::sim::CommandKind::ToggleProduction,
+                .units = toggles,
+            });
+        };
+
         // A player order should show the first completed movement tick immediately instead of
         // spending another 100 ms blending toward it. Keep each unit current until the following
         // tick, where normal interpolation starts exactly at that first position and cannot snap
@@ -912,6 +1027,133 @@ int runWindowed(const Session& session) {
             // Convert AppKit's logical click exactly once, beside the hit tests that consume it.
             const rm::ui::FrameLayout frame = rm::ui::frameLayout(clickViewport);
             const rm::ui::MinimapLayout minimap = rm::ui::minimapLayout(frame);
+
+            // THE ECONOMY WINDOW AND ITS LATCH come first, before even the minimap: the
+            // module at the top-left opens and closes the window, and an open window
+            // swallows what lands on it the way every overlay does — the world behind
+            // it is not what the player aimed at.
+            if (frame.economy.contains(hudPoint[0], hudPoint[1])) {
+                if (button == rm::MouseButton::Left) {
+                    econOpen = !econOpen;
+                    if (!econOpen) {
+                        econFocus.reset();
+                        econSliderHeld = false;
+                    }
+                }
+                return;
+            }
+            if (econOpen) {
+                const rm::ui::Rect econRect =
+                    rm::ui::economyWindowRect(frame, econView.rows.size());
+                if (econRect.contains(hudPoint[0], hudPoint[1])) {
+                    armedCommand.reset();
+                    armedOption.reset();
+                    if (button == rm::MouseButton::Left) {
+                        const float px = hudPoint[0];
+                        const float py = hudPoint[1];
+                        if (rm::ui::econCloseAt(econRect, px, py)) {
+                            econOpen = false;
+                            econFocus.reset();
+                            econSliderHeld = false;
+                        } else if (const auto step = rm::ui::econPageStepAt(
+                                       econRect, econView, px, py, econPage)) {
+                            if (*step < 0) {
+                                --econPage;
+                            } else {
+                                ++econPage;
+                            }
+                        } else if (const auto fab = rm::ui::econFabAt(econRect, econView,
+                                                                    px, py)) {
+                            // A per-fab click is the manual override: toggle it, then
+                            // re-seat the budget at what will actually be running so
+                            // the slider keeps meaning the realized draw.
+                            const rm::ui::EconFabView& target = econView.fabricators[*fab];
+                            (void)submitCommand(units, rm::sim::CommandIssue{
+                                .tick = static_cast<rm::TickIndex>(matchTicks),
+                                .phase = rm::sim::CommandPhase::PreTick,
+                                .source = static_cast<rm::CommandSource>(
+                                    playerDriving(units, units.playerArmy)),
+                                .player = playerDriving(units, units.playerArmy),
+                                .kind = rm::sim::CommandKind::ToggleProduction,
+                                .units = {target.unit},
+                            });
+                            float after = 0.0f;
+                            for (const rm::ui::EconFabView& other : econView.fabricators) {
+                                const bool runs = other.unit == target.unit
+                                                      ? !other.running
+                                                      : other.running;
+                                if (runs) {
+                                    after += other.energyDraw;
+                                }
+                            }
+                            econBudget = after;
+                        } else if (rm::ui::econSliderAt(econRect, econView, px, py)) {
+                            econBudget =
+                                rm::ui::econSliderValueAt(econRect, econView, px);
+                            econSliderHeld = true;
+                            applyFabBudget();
+                        } else if (const auto prioRow = rm::ui::econPriorityAt(
+                                       econRect, econView, px, py, econPage)) {
+                            // The two-state toggle — Regular and Priority only.
+                            const rm::ui::EconRowView& hit = econView.rows[*prioRow];
+                            (void)submitCommand(units, rm::sim::CommandIssue{
+                                .tick = static_cast<rm::TickIndex>(matchTicks),
+                                .phase = rm::sim::CommandPhase::PreTick,
+                                .source = static_cast<rm::CommandSource>(
+                                    playerDriving(units, units.playerArmy)),
+                                .player = playerDriving(units, units.playerArmy),
+                                .kind = rm::sim::CommandKind::SetBuildPriority,
+                                .units = hit.members,
+                                .priority = hit.priority == rm::BuildPriority::High
+                                                ? rm::BuildPriority::Normal
+                                                : rm::BuildPriority::High,
+                            });
+                        } else if (const auto pauseRow = rm::ui::econPauseAt(
+                                       econRect, econView, px, py, econPage)) {
+                            (void)submitCommand(units, rm::sim::CommandIssue{
+                                .tick = static_cast<rm::TickIndex>(matchTicks),
+                                .phase = rm::sim::CommandPhase::PreTick,
+                                .source = static_cast<rm::CommandSource>(
+                                    playerDriving(units, units.playerArmy)),
+                                .player = playerDriving(units, units.playerArmy),
+                                .kind = rm::sim::CommandKind::ToggleProduction,
+                                .units = econView.rows[*pauseRow].members,
+                            });
+                        } else if (const auto bodyRow = rm::ui::econRowAt(
+                                       econRect, econView, px, py, econPage)) {
+                            // The row is a handle, not a label: select its members and
+                            // go look at the first of them. Shift adds, like every
+                            // selection in the session.
+                            const std::vector<rm::sim::UnitId>& members =
+                                econView.rows[*bodyRow].members;
+                            if (mods.shift) {
+                                for (const rm::sim::UnitId id : members) {
+                                    if (std::ranges::find(selected, id)
+                                        == selected.end()) {
+                                        selected.push_back(id);
+                                    }
+                                }
+                            } else {
+                                selected = members;
+                            }
+                            if (!members.empty() && units.store.alive(members.front())
+                                && members.front().index
+                                       < units.store.transforms().size()) {
+                                const auto& t =
+                                    units.store.transforms()[members.front().index];
+                                const float wx = rm::sim::fxToFloat(t.x);
+                                const float wz = rm::sim::fxToFloat(t.z);
+                                tracking.clear();
+                                window.camera().target = simd_make_float3(
+                                    wx, map->field.heightAtWorld(wx, wz), wz);
+                            }
+                        }
+                    }
+                    swallowedByPanel("economy");
+                    return;
+                }
+            }
+
             if (rm::ui::insideMinimap(minimap, hudPoint[0], hudPoint[1])) {
                 if (armedCommand && *armedCommand != rm::sim::CommandKind::Move
                     && *armedCommand != rm::sim::CommandKind::AttackMove
@@ -1422,10 +1664,13 @@ int runWindowed(const Session& session) {
             // that builder is in the middle of a construction. A scratched factory turning out
             // tanks, or an extractor mid-upgrade, is what a player right-clicks an engineer onto
             // to make it go faster; repair stays a click away on the rack. The link is the one
-            // the production panel and the assist scan both use: the construction's builder.
+            // the production panel and the assist scan both use — worked, not merely owned:
+            // a re-tasked builder's abandoned scaffold keeps naming it but no longer counts
+            // as "in the middle of a construction".
             const bool hitIsBuilding = allyHit && units.store.alive(*allyHit)
                 && std::ranges::any_of(units.building, [&](const rm::sim::Construction& work) {
-                       return work.builder == *allyHit && !work.finished();
+                       return work.builder == *allyHit && !work.finished()
+                           && rm::sim::constructionWorkedOn(work, units.store, units.catalog);
                    });
             if (armedCommand == rm::sim::CommandKind::Guard) {
                 if (!allyHit || !units.store.alive(*allyHit)
@@ -1558,20 +1803,21 @@ int runWindowed(const Session& session) {
                     return;
                 }
             }
-            // A RIGHT-CLICK ON RISING SCAFFOLD IS AN ASSIST — the structure does not
-            // exist as a unit until its work completes, so there is no hit to retarget
-            // and the click reads as plain ground. Builders in the selection lend rate
-            // through the site's founder (the link the assist scan already resolves);
-            // everyone else walks there. A dead founder leaves plain ground — assistance
-            // keys off the living builder, and that rule lives in the sim, not here.
+            // A RIGHT-CLICK ON RISING SCAFFOLD IS A BUILD ORDER ONTO THE SITE — the
+            // structure does not exist as a unit until its work completes, so there is no
+            // hit to retarget and the click reads as plain ground. Each selected builder is
+            // ordered to build on the site itself: the sim lends the rate when the row is
+            // still being worked and hands it over when it is abandoned — the founder's
+            // own interrupted scaffold and a dead founder's one resume the same way.
+            // Everyone else walks there.
             if (!isAttack && !allyHit && (!armedCommand || explicitAssist)
                 && units.playerArmy != rm::sim::kNoArmy && ground) {
-                if (const auto founder = siteAssistFounder(
+                if (const rm::sim::Construction* site = constructionSiteAt(
                         units, (*ground).x, (*ground).z, units.playerArmy)) {
                     std::vector<rm::sim::UnitId> builders;
                     std::vector<rm::sim::UnitId> movers;
                     for (const rm::sim::UnitId sel : selected) {
-                        if (!units.store.alive(sel) || sel == *founder) {
+                        if (!units.store.alive(sel)) {
                             continue;
                         }
                         const rm::unitdef::UnitDef* def =
@@ -1581,10 +1827,19 @@ int runWindowed(const Session& session) {
                     if (!builders.empty()) {
                         const rm::PlayerIndex player = playerDriving(units, units.playerArmy);
                         const rm::TickIndex tick = static_cast<rm::TickIndex>(matchTicks);
-                        if (issueAssist(units, builders, player, tick, *founder,
-                                        mods.shift)) {
-                            std::printf("assist: %zu builder(s) joined the site\n",
-                                        builders.size());
+                        const auto blueprint =
+                            static_cast<rm::UnitTypeIndex>(site->blueprintIndex);
+                        std::size_t ordered = 0;
+                        for (const rm::sim::UnitId sel : builders) {
+                            ordered += issueBuild(units, sel, player, tick, blueprint,
+                                                  site->position[0], site->position[2],
+                                                  mods.shift)
+                                           ? 1
+                                           : 0;
+                        }
+                        if (ordered > 0) {
+                            std::printf("assist: %zu builder(s) ordered onto the site\n",
+                                        ordered);
                         }
                         (void)(movers.empty()
                                    || issueMove(units, movers, player, tick,
@@ -2318,6 +2573,36 @@ int runWindowed(const Session& session) {
                                      &inspector);
             }
 
+            // --- The economy window --------------------------------------------------
+            // THE OVERLAY IS GATHERED PER FRAME, like every panel here, and the view is
+            // kept in `econView` because the click handler addresses what was DRAWN.
+            // The window floats over a live battlefield — it is not a menu the sim
+            // pauses for, so its rows, tiers and fills all move under the player.
+            if (econOpen) {
+                rm::app::gatherEconomyWindow(units, selected, econBudget, econFocus,
+                                             econView);
+                if (econBudget < 0.0f) {
+                    // Untouched budget adopts the all-on default the gather computes.
+                    econBudget = econView.fabBudget;
+                }
+                const rm::ui::Rect econRect =
+                    rm::ui::economyWindowRect(frame, econView.rows.size());
+                econPage =
+                    rm::ui::econPage(econRect, econView.rows.size(), econPage).page;
+                // A held slider keeps writing while the button is down — the fabs
+                // visibly answer as it moves, which is the point of a slider.
+                if (econSliderHeld && window.leftMouseHeld()) {
+                    econBudget =
+                        rm::ui::econSliderValueAt(econRect, econView, hudCursor[0]);
+                    applyFabBudget();
+                } else {
+                    econSliderHeld = false;
+                }
+                rm::ui::appendEconomyWindow(hudScratch, window.labelFont(),
+                                            window.readoutFont(), theme, econRect,
+                                            econView, econPage);
+            }
+
             // --- The band box, and the minimap's drag-to-pan --------------------------
             // Both are DERIVED FROM POLLED STATE — is the left button down, where did the
             // press begin, where is the cursor now — rather than from drag events, because
@@ -2364,7 +2649,10 @@ int runWindowed(const Session& session) {
                             rm::ui::rosterLayout(frame, rosterTiles.size(), rosterPage), origin[0],
                             origin[1]))
                     || rm::ui::insideCommandRack(
-                        rm::ui::commandRackLayout(frame, !selected.empty()), origin[0], origin[1]);
+                        rm::ui::commandRackLayout(frame, !selected.empty()), origin[0], origin[1])
+                    || (econOpen
+                      && rm::ui::economyWindowRect(frame, econView.rows.size())
+                          .contains(origin[0], origin[1]));
 
                 if (held && onMinimap) {
                     // Drag-to-pan: the ground under the finger, continuously. The same
@@ -3354,7 +3642,47 @@ int runWindowed(const Session& session) {
                     if (!inputBuildClick(inputUpgrade)) return;
                     inputCheck(units.commandInput.size() == before + 1, "upgrade cell submitted no Build");
                     expectInputCommand(rm::sim::CommandKind::Build, inputFactory);
-                    nextInputStage(34);
+                    // The first tier also proves the upgrade can be ASSISTED: a builder's
+                    // native right-click on the mid-upgrade factory is the click ladder's
+                    // own-builder branch — the exact gesture a player gives a rising mex.
+                    nextInputStage(inputUpgradeTier == 2 ? 42 : 34);
+                } else if (inputStage == 42) {
+                    const bool upgrading = std::ranges::any_of(units.building,
+                        [&](const rm::sim::Construction& work) {
+                            return work.isUpgrade() && !work.finished()
+                                && work.upgradeOf == inputFactory;
+                        });
+                    if (!upgrading) return;  // the row appears the beat the Build starts
+                    if (!inputSelect(inputEngineer)) return;
+                    const auto& at = units.store.transforms()[inputFactory.index];
+                    window.focusOn({rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                                    rm::sim::fxToFloat(at.z)}, 420.0f);
+                    nextInputStage(43);
+                } else if (inputStage == 43) {
+                    const auto& at = units.store.transforms()[inputFactory.index];
+                    const auto before = units.commandInput.size();
+                    inputWorldClick(at.x, at.z, rm::MouseButton::Right, false,
+                                    rm::sim::fxToFloat(at.y));
+                    inputCheck(units.commandInput.size() == before + 1,
+                               "native right click on an upgrading factory submitted no order");
+                    expectInputCommand(rm::sim::CommandKind::Assist, inputEngineer);
+                    nextInputStage(44);
+                } else if (inputStage == 44) {
+                    const auto log = units.commands.all();
+                    const bool assisted = std::ranges::any_of(log,
+                        [&](const rm::sim::CommandIssue& issue) {
+                            return issue.kind == rm::sim::CommandKind::Assist
+                                && issue.target == inputFactory;
+                        });
+                    inputCheck(assisted, "native Assist did not name the upgrading factory");
+                    std::printf("input acceptance: native right-click Assist on an upgrading factory PASS\n");
+                    nextInputStage(45);
+                } else if (inputStage == 45) {
+                    // Hand the selection back to the factory so stage 34 can verify the
+                    // upgrade's UnitFinished follow the way the unbroken flow does.
+                    if (!units.store.alive(inputFactory) || inputSelect(inputFactory)) {
+                        nextInputStage(34);
+                    }
                 } else if (inputStage == 34) {
                     if (units.store.alive(inputFactory)) return;
                     // The ordinary frame handler follows UnitFinished to the replacement handle.

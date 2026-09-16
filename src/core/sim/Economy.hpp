@@ -142,6 +142,22 @@ struct Economy {
     /// hypothetical: it is what a perfectly balanced economy produces every tick.
     bool massIsBinding = false;
 
+    /// The SAME allocation ratios, kept per tier (index: `BuildPriority` value, so 0 = Low,
+    /// 1 = Normal, 2 = High) rather than only for the lowest tier that asked.
+    ///
+    /// Reporting-only, like `generatedLifetime`: written once per tier pass inside
+    /// `tickEconomy` from inputs the hash already covers, and read by the economy window so
+    /// a PRIORITY row and a REGULAR row can each show the ratio the allocator actually
+    /// granted their tier — `multiResourceFunded` alone only ever says how badly off the
+    /// WORST-funded tier was. Deliberately outside the state hash and the save format,
+    /// which both enumerate the fields they cover.
+    std::array<Fx, 3> tierMultiFunded{kFxOne, kFxOne, kFxOne};
+    std::array<Fx, 3> tierSingleFunded{kFxOne, kFxOne, kFxOne};
+    std::array<bool, 3> tierMassBinds{};
+    /// Whether the tier asked for anything last tick — the difference between "funded in
+    /// full" and "wanted nothing", which both report a ratio of 1.
+    std::array<bool, 3> tierAsked{};
+
     /// Whether this army offers its over-cap excess to allies (`C-163`).
     ///
     /// Retail gates sharing on a per-army flag and defaults it on for team members; a
@@ -178,6 +194,21 @@ struct Economy {
         }
         const bool outstandingOnBinding = massIsBinding ? wantsMass : wantsEnergy;
         return outstandingOnBinding ? multiResourceFunded : singleResourceFunded;
+    }
+
+    /// The same question answered per tier — what a consumer with THIS demand shape at
+    /// THIS priority was granted. Display-side: the economy window's rows show this rather
+    /// than the lowest-tier figure `consumedRatio` reports, which would understate a High
+    /// row's funding whenever a Normal one is also asking.
+    [[nodiscard]] Fx consumedRatioFor(Resources demand, BuildPriority tier) const noexcept {
+        const bool wantsMass = demand.mass > Mag{};
+        const bool wantsEnergy = demand.energy > Mag{};
+        if (!wantsMass && !wantsEnergy) {
+            return kFxOne;
+        }
+        const std::size_t at = static_cast<std::size_t>(tier);
+        const bool outstandingOnBinding = tierMassBinds[at] ? wantsMass : wantsEnergy;
+        return outstandingOnBinding ? tierMultiFunded[at] : tierSingleFunded[at];
     }
 
     /// Upkeep granted and not yet spent, carried across ticks (`C-162`).
@@ -266,11 +297,12 @@ struct Construction {
     /// (generations start at 1), so no flag is needed to mean "an ordinary build".
     UnitId upgradeOf{};
 
-    /// WHO is building this — the unit whose order created it. What an `Assist` resolves
-    /// against: "help that engineer" means "add my rate to ITS construction", and without
-    /// this field the only link was a position match too fragile to trust. Stale once the
-    /// builder dies, which is fine — assistance stops, the work itself continues, exactly
-    /// as the game has it.
+    /// WHO is building this — the unit whose order created it, or the builder that took the
+    /// row over. What an `Assist` resolves against: "help that engineer" means "add my rate
+    /// to ITS construction", and without this field the only link was a position match too
+    /// fragile to trust. A builder that was re-tasked or died leaves the row standing —
+    /// `applyAssistance` marks it `paused` so it stops billing, and a Build order onto the
+    /// same site adopts it and writes a new name here.
     UnitId builder{};
 
     /// A factory's own Build retained behind Guard. A mirrored guardee build has no retained

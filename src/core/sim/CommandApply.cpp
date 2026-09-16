@@ -80,6 +80,74 @@ void cancelActiveConstruction(std::vector<Construction>* building, UnitId builde
         return !work.finished() && work.builder == builder;
     });
 }
+/// What an interrupt does to the interrupted order's work — and it is per ROW KIND, because
+/// the two kinds of construction are different things. Pad-bound work (a factory's product,
+/// an upgrade) is the task's own: the order dies and takes it, exactly as it always did. A
+/// scaffold standing on the map is world state instead — the player's half-built factory —
+/// so interrupting only takes the builder OFF it. Marking it `paused` is the bookkeeping
+/// that stops its bill; the next `applyAssistance` sweep keeps the flag honest and a Build
+/// order back onto the site adopts it. The row the incoming command re-founds — same site
+/// and blueprint — is skipped: that order is a resume, not an abandonment.
+void releaseInterruptedConstruction(std::vector<Construction>* building,
+                                    const Command& incoming, const UnitStore& store,
+                                    const UnitCatalog& catalog) {
+    if (building == nullptr) {
+        return;
+    }
+    const UnitId me = incoming.unit;
+    // The row the incoming order founded (or is resuming) is not interrupted work — on a
+    // pad the two share one position, so identity is site AND blueprint, not place alone.
+    const std::optional<std::pair<Fx, Fx>> site =
+        incoming.kind == CommandKind::Build
+            ? buildSiteFor(incoming.buildType, incoming.targetX, incoming.targetZ, me.index,
+                           store, catalog)
+            : std::nullopt;
+    const auto isIncomingOwn = [&](const Construction& work) {
+        return site.has_value() && work.blueprintIndex == incoming.buildType
+            && work.position[0] == site->first && work.position[2] == site->second;
+    };
+    // Pad-bound rows — upgrades and mobile products — anchor to the builder, not the
+    // world: the order that stops being current leaves nothing resumable behind. A placed
+    // structure's scaffold does anchor to the world even where it happens to coincide
+    // with the pad, so position alone cannot stand in for the anchor test.
+    const auto padBound = [&](const Construction& work) {
+        if (work.isUpgrade()) {
+            return true;
+        }
+        const unitdef::UnitDef* product =
+            catalog.def(static_cast<UnitTypeIndex>(work.blueprintIndex));
+        return product != nullptr && product->isMobile();
+    };
+    std::erase_if(*building, [&](const Construction& work) {
+        return !work.finished() && work.builder == me && !isIncomingOwn(work)
+            && padBound(work);
+    });
+    for (Construction& work : *building) {
+        if (work.finished() || !(work.builder == me) || isIncomingOwn(work)) {
+            continue;
+        }
+        work.paused = true;
+    }
+}
+/// The row belonging to `command` itself — what the re-issue cancel gesture removes. A
+/// Build's own unfinished work on the site it names; every other kind owns no row, and an
+/// abandoned scaffold elsewhere on the map is not this gesture's business.
+void cancelConstructionFor(std::vector<Construction>* building, const Command& command,
+                           const UnitStore& store, const UnitCatalog& catalog) {
+    if (building == nullptr || command.kind != CommandKind::Build) {
+        return;
+    }
+    const auto site = buildSiteFor(command.buildType, command.targetX, command.targetZ,
+                                   command.unit.index, store, catalog);
+    if (!site) {
+        return;
+    }
+    std::erase_if(*building, [&](const Construction& work) {
+        return !work.finished() && work.builder == command.unit
+            && work.blueprintIndex == command.buildType
+            && work.position[0] == site->first && work.position[2] == site->second;
+    });
+}
 [[nodiscard]] bool validRepair(const Command& command, const UnitStore& store,
                                const UnitCatalog& catalog, std::span<const Army> armies) noexcept {
     if (!store.alive(command.target) || !store.health()[command.target.index].alive()
@@ -343,7 +411,7 @@ void cancelActiveConstruction(std::vector<Construction>* building, UnitId builde
         if (pathService != nullptr) {
             pathService->cancel(command.unit);
         }
-        cancelActiveConstruction(building, command.unit);
+        releaseInterruptedConstruction(building, command, store, catalog);
         teardownMovement(store.motion()[command.unit.index]);
         orders.clear();
         orders.append(std::move(entry));
@@ -379,7 +447,7 @@ void cancelActiveConstruction(std::vector<Construction>* building, UnitId builde
             pathService->cancel(command.unit);
         }
         orders.clear();
-        cancelActiveConstruction(building, command.unit);
+        releaseInterruptedConstruction(building, command, store, catalog);
         motion = std::move(stopped);
         (void)ensureSharedCommand(command, source, id, count, formationAnchorX, formationAnchorZ,
                                   {}, {}, store, shared);
@@ -459,7 +527,7 @@ void cancelActiveConstruction(std::vector<Construction>* building, UnitId builde
             motion.moving = false;
             motion.path.clear();
             motion.pathIndex = 0;
-            cancelActiveConstruction(building, command.unit);
+            cancelConstructionFor(building, command, store, catalog);
             if (const QueuedCommand* next = orders.current()) {
                 if (startCommand(next->asCommand(), store, catalog, terrain, movementGrid, rate, building,
                                  events, features, approachGrid)) {
@@ -535,13 +603,17 @@ void cancelActiveConstruction(std::vector<Construction>* building, UnitId builde
             }
             return true;
         }
-        return false;
+        // A build refused because its site is OCCUPIED still means "build there": an
+        // allied colleague's scaffold or an abandoned one is joined, not routed around.
+        // Admission is all intake owes it — head dispatch decides lend vs takeover.
+        if (command.kind != CommandKind::Build || building == nullptr
+            || !joinableConstructionAt(*building, command, store, catalog, armies)) {
+            return false;
+        }
     }
     MoveState replacementMotion = std::move(motion);
     motion = previous;
-    if (command.kind != CommandKind::Build) {
-        cancelActiveConstruction(building, command.unit);
-    }
+    releaseInterruptedConstruction(building, command, store, catalog);
     const std::shared_ptr<const SharedCommand> payload =
         ensureSharedCommand(command, source, id, count, formationAnchorX, formationAnchorZ,
                             {}, {}, store, shared);
@@ -779,15 +851,33 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             }
             const Player* player = playerFor(issue.player, players);
             const unitdef::UnitDef* definition = catalog.def(store.typeAt(unit.index));
-            // Producers only: a unit with no build rate funds nothing, so a tier on it
-            // would be a flag that never moves a resource — refused rather than stored.
+            // Producers only: a unit with no tierable demand funds nothing, so a tier on
+            // it would be a flag that never moves a resource — refused rather than stored.
             if (player == nullptr || !authorised(*player, store, unit, armies)
-                || definition == nullptr
-                || !(definition->isBuilder() || definition->hasCategory("FACTORY"))) {
+                || definition == nullptr || !canSetBuildPriority(*definition)) {
                 continue;
             }
             (void)store.setBuildPriority(
                 unit, nextBuildPriority(store.buildPriority(unit)));
+            result.accepted.push_back(unit);
+        }
+        return result;
+    }
+    if (issue.kind == CommandKind::SetBuildPriority) {
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit)) {
+                continue;
+            }
+            const Player* player = playerFor(issue.player, players);
+            const unitdef::UnitDef* definition = catalog.def(store.typeAt(unit.index));
+            // The cycle's gate plus a valid tier: a value outside the enum is a malformed
+            // issue, not a tier — refused outright rather than clamped into a wrong one.
+            if (player == nullptr || !authorised(*player, store, unit, armies)
+                || definition == nullptr || !canSetBuildPriority(*definition)
+                || issue.priority > BuildPriority::High) {
+                continue;
+            }
+            (void)store.setBuildPriority(unit, issue.priority);
             result.accepted.push_back(unit);
         }
         return result;

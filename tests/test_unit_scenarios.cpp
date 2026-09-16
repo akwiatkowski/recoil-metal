@@ -23,6 +23,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 #include <unistd.h>
@@ -235,6 +237,97 @@ TEST_CASE("retail naval factories upgrade in place and complete T2 and T3 surfac
                     }
                 }
             }
+        }
+    }
+}
+
+TEST_CASE("a retail engineer assists a retail structure's own upgrade",
+          "[corpus][assist-upgrade][headless-ui]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    // The pair a player right-clicks an engineer onto mid-upgrade: a T1 mex becoming
+    // T2, and a T1 land factory becoming T2. Same ladder, two different pads.
+    for (const auto& pair : {std::pair{"UEB1103", "UEB1202"}, std::pair{"UEB0101", "UEB0201"}}) {
+        const std::string baseId = pair.first;
+        const std::string nextId = pair.second;
+        DYNAMIC_SECTION(baseId) {
+            Scenario job;
+            const auto base = rm::unitbp::loadFile(root / baseId / (baseId + "_unit.bp"));
+            const auto next = rm::unitbp::loadFile(root / nextId / (nextId + "_unit.bp"));
+            const auto eng = rm::unitbp::loadFile(root / "UEL0105/UEL0105_unit.bp");
+            REQUIRE(base);
+            REQUIRE(next);
+            REQUIRE(eng);
+            job.scene.roster = rm::data::Roster::build(
+                std::vector{*base, *next, *eng},
+                std::vector<std::string>{baseId, nextId, "UEL0105"});
+            job.scene.armies[0].faction = rm::sim::Faction::Uef;
+            job.scene.economies[0].stored = {.mass = rm::sim::magFromFloat(100000.0f),
+                                             .energy = rm::sim::magFromFloat(100000.0f)};
+            const auto structure = job.spawn(*base, 300, 300);
+            const auto engineer = job.spawn(*eng, 310, 300);
+            const auto nextType = job.registerType(*next);
+            auto runner = job.runner();
+
+            // The upgrade through the build panel's own path — SubmitAtBuilder aims the
+            // Build at the structure's pad — then the engineer's right-click assist.
+            std::vector<rm::ui::BuildOption> options;
+            rm::app::BuildSelection who;
+            rm::app::gatherBuildOptions(job.scene, structure, rm::ui::neutralTheme(),
+                                        options, who);
+            const auto option = std::ranges::find(options, nextId,
+                                                  &rm::ui::BuildOption::id);
+            REQUIRE(option != options.end());
+            REQUIRE(option->upgrade);
+            REQUIRE(rm::app::submitBuildOption(job.scene, job.content, who.builder, 0, 0,
+                                               *option));
+            const std::array<rm::sim::UnitId, 1> helpers{engineer};
+            REQUIRE(rm::app::issueAssist(job.scene, helpers, 0, 0, structure, false));
+            (void)rm::app::advanceMatch(runner, 0, 0);
+
+            const auto row = std::ranges::find_if(job.scene.building, [&](const auto& work) {
+                return work.blueprintIndex == static_cast<std::size_t>(nextType)
+                       && !work.finished();
+            });
+            REQUIRE(row != job.scene.building.end());
+            CHECK(row->upgradeOf == structure);
+            CHECK(row->builder == structure);
+            CHECK(row->assistPerTick > rm::sim::Mag{});
+        }
+    }
+}
+
+TEST_CASE("script-gated enhancement weapons parse as enhancement-gated",
+          "[corpus][enhancement-weapon][headless-ui]") {
+    const auto root = corpusRoot();
+    if (!std::filesystem::is_directory(root)) SKIP("retail corpus unavailable");
+    // The Seraphim ACU and SACU carry a counted tactical launcher their scripts disable
+    // in OnCreate — `SetWeaponEnabledByLabel('Missile', false)` — until the `Missile`
+    // enhancement turns it on. The blueprint never states `EnabledByEnhancement`, so the
+    // parser infers the gate from Label naming an enhancement. UAL0001's ChronoDampener
+    // and UEL0001's two silos state the field outright — controls for the inference.
+    const std::map<std::string, std::vector<std::string>> expected{
+        {"XSL0001", {"Missile"}},
+        {"XSL0301", {"Missile"}},
+        {"UAL0001", {"ChronoDampener"}},
+        {"UEL0001", {"TacMissile", "TacNukeMissile"}},
+    };
+    for (const auto& [unit, gated] : expected) {
+        DYNAMIC_SECTION(unit) {
+            const auto parsed = rm::unitbp::loadFile(root / unit / (unit + "_unit.bp"));
+            REQUIRE(parsed);
+            for (const rm::unitdef::Weapon& weapon : parsed->weapons) {
+                const bool want = std::ranges::find(gated, weapon.label) != gated.end();
+                CHECK(weapon.enabledByEnhancement == want);
+            }
+            // The gated launcher also keeps its teeth out of both fire paths.
+            const auto missile = std::ranges::find_if(
+                parsed->weapons, [&](const rm::unitdef::Weapon& weapon) {
+                    return std::ranges::find(gated, weapon.label) != gated.end();
+                });
+            REQUIRE(missile != parsed->weapons.end());
+            CHECK(!missile->automaticallyFires());
+            CHECK(!missile->manuallyFired());
         }
     }
 }
@@ -1287,7 +1380,7 @@ TEST_CASE("an order click needs the unit's body, not its neighbourhood", "[order
     CHECK_FALSE(rm::app::orderHitConfirmed(ray, {15.0f, 0.0f, 0.0f}, 10.0f));
 }
 
-TEST_CASE("a scaffold click resolves to the site's living founder", "[corpus][orders]") {
+TEST_CASE("a scaffold click resolves to the site itself", "[corpus][orders]") {
     const auto root = corpusRoot();
     if (!std::filesystem::is_directory(root)) SKIP("no retail unit corpus");
     const auto factory = rm::unitbp::loadFile(root / "UEB0101/UEB0101_unit.bp");
@@ -1305,17 +1398,19 @@ TEST_CASE("a scaffold click resolves to the site's living founder", "[corpus][or
     work.totalBuildTime = rm::sim::Mag::fromInt(100);
     work.blueprintIndex = static_cast<std::size_t>(type);
     scenario.scene.building.push_back(work);
-    // On the scaffold: the founder, through whom assist resolves.
-    const auto found = rm::app::siteAssistFounder(scenario.scene, 240.0f, 200.0f, 0);
-    REQUIRE(found.has_value());
-    CHECK(*found == founder);
+    // On the scaffold: the row, whose site and blueprint the click's Build order takes.
+    const rm::sim::Construction* found =
+        rm::app::constructionSiteAt(scenario.scene, 240.0f, 200.0f, 0);
+    REQUIRE(found != nullptr);
+    CHECK(found->builder == founder);
+    CHECK(found->position[0] == rm::sim::fxFromFloat(240.0f));
     // Across the map: plain ground, a move.
-    CHECK_FALSE(rm::app::siteAssistFounder(scenario.scene, 600.0f, 600.0f, 0).has_value());
+    CHECK(rm::app::constructionSiteAt(scenario.scene, 600.0f, 600.0f, 0) == nullptr);
     // Another army's site is not ours to join.
-    CHECK_FALSE(rm::app::siteAssistFounder(scenario.scene, 240.0f, 200.0f, 1).has_value());
+    CHECK(rm::app::constructionSiteAt(scenario.scene, 240.0f, 200.0f, 1) == nullptr);
     // A finished site is a building, not a scaffold.
     scenario.scene.building[0].buildTimeRemaining = rm::sim::Mag{};
-    CHECK_FALSE(rm::app::siteAssistFounder(scenario.scene, 240.0f, 200.0f, 0).has_value());
+    CHECK(rm::app::constructionSiteAt(scenario.scene, 240.0f, 200.0f, 0) == nullptr);
 }
 
 TEST_CASE("factory cancellation removes only the named entry and replays", "[corpus][factory-cancel]") {
@@ -1656,6 +1751,12 @@ TEST_CASE("construction inspector explains partial funding and the allocation li
     };
     work.builder = builder;
     work.fundedLastTick = rm::sim::kFxOne / rm::sim::Fx::fromInt(4);
+    // A row alone is not work: the inspector shows it while the named builder's active
+    // order is on its site, which is also what an abandoned scaffold fails to satisfy.
+    scene.scene.store.orders()[builder.index].append(rm::sim::QueuedCommand{
+        builder, std::make_shared<const rm::sim::SharedCommand>(rm::sim::SharedCommand{
+                     .kind = rm::sim::CommandKind::Build})});
+    scene.scene.store.orders()[builder.index].markCurrentActive();
     scene.scene.building.push_back(work);
     scene.scene.economies[0].massIsBinding = true;
     auto card = rm::app::constructionCard(scene.scene, builder);

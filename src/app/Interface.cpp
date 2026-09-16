@@ -106,7 +106,8 @@ std::optional<rm::ui::InfoCard> constructionCard(const UnitScene& scene,
     }
     for (const auto& work : scene.building) {
         if ((work.builder != builder && work.upgradeOf != builder)
-            || !constructionInProgress(work)) {
+            || !constructionInProgress(work)
+            || !rm::sim::constructionWorkedOn(work, scene.store, scene.catalog)) {
             continue;
         }
         rm::ui::InfoCard card;
@@ -1480,13 +1481,12 @@ void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
     return gap <= std::max(kOrderPickFloorElmos, radiusElmos);
 }
 
-[[nodiscard]] std::optional<rm::sim::UnitId> siteAssistFounder(const UnitScene& scene, float x,
-                                                               float z, int army) noexcept {
-    std::optional<rm::sim::UnitId> best;
+[[nodiscard]] const rm::sim::Construction* constructionSiteAt(const UnitScene& scene, float x,
+                                                              float z, int army) noexcept {
+    const rm::sim::Construction* best = nullptr;
     float bestGap = std::numeric_limits<float>::max();
     for (const rm::sim::Construction& work : scene.building) {
-        if (work.finished() || work.armyIndex != army
-            || !scene.store.alive(work.builder)) {
+        if (work.finished() || work.armyIndex != army) {
             continue;
         }
         // The scaffold's own size: the rising structure's footprint, with a floor
@@ -1499,7 +1499,7 @@ void appendHealthBars(rm::ui::Geometry& out, const UnitScene& scene,
         const float dz = z - rm::sim::fxToFloat(work.position[2]);
         const float gap = std::sqrt(dx * dx + dz * dz);
         if (gap <= radius && gap < bestGap) {
-            best = work.builder;
+            best = &work;
             bestGap = gap;
         }
     }
@@ -1944,6 +1944,228 @@ std::optional<rm::ui::ProductionView> gatherProduction(const UnitScene& scene,
     }
     if (!view.canRepeat && view.queue.empty() && !view.building) return std::nullopt;
     return view;
+}
+
+void gatherEconomyWindow(const UnitScene& scene,
+                         std::span<const rm::sim::UnitId> selection, float fabBudget,
+                         std::optional<std::size_t> focus, rm::ui::EconomyWindowView& out) {
+    out = rm::ui::EconomyWindowView{};
+    out.focus = focus;
+    out.fabBudget = fabBudget;
+    if (scene.playerArmy == rm::sim::kNoArmy
+        || static_cast<std::size_t>(scene.playerArmy) >= scene.economies.size()) {
+        return;
+    }
+    const rm::sim::Economy& economy =
+        scene.economies[static_cast<std::size_t>(scene.playerArmy)];
+    const float hz = static_cast<float>(gAppTickRate.ticksPerSecond());
+    const auto perSecond = [hz](rm::sim::Mag perTick) {
+        return rm::sim::magToFloat(perTick) * hz;
+    };
+
+    // The header shares the economy module's own conversion — same numbers, bigger
+    // page — plus the per-tier readings only this window has a use for.
+    out.resources = rm::ui::resourceViews(
+        rm::ui::GameProfile::Fa,
+        rm::ui::Gauge{.stored = rm::sim::magToFloat(economy.stored.mass),
+                      .capacity = rm::sim::magToFloat(economy.storage.mass),
+                      .incomePerSecond = perSecond(economy.incomePerTick.mass),
+                      .drainPerSecond = perSecond(economy.usageLastTick.mass)},
+        rm::ui::Gauge{.stored = rm::sim::magToFloat(economy.stored.energy),
+                      .capacity = rm::sim::magToFloat(economy.storage.energy),
+                      .incomePerSecond = perSecond(economy.incomePerTick.energy),
+                      .drainPerSecond = perSecond(economy.usageLastTick.energy)});
+    out.fundedFraction = rm::sim::fxToFloat(economy.fundedFraction);
+    out.massBinding = economy.massIsBinding;
+    for (std::size_t tier = 0; tier < out.tierFunded.size(); ++tier) {
+        // The multi-bucket ratio is the tier's headline: a tier-bound build almost
+        // always wants both resources, so its throttle IS the multi-resource one.
+        out.tierFunded[tier] = rm::sim::fxToFloat(economy.tierMultiFunded[tier]);
+        out.tierAsked[tier] = economy.tierAsked[tier];
+    }
+
+    const auto displayName = [](const rm::unitdef::UnitDef* def) {
+        return def != nullptr && !def->description.empty() ? def->description
+             : def != nullptr                             ? def->name
+                                                          : std::string{};
+    };
+    const auto selectedHas = [&selection](rm::sim::UnitId id) {
+        return std::ranges::find(selection, id) != selection.end();
+    };
+
+    std::vector<rm::ui::EconRowView> rows;
+    const std::span<const rm::sim::MoveState> motion = scene.store.motion();
+    for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+        const rm::sim::UnitId id = scene.store.idAt(slot);
+        if (!scene.store.alive(id) || slot >= motion.size()
+            || motion[slot].armyIndex != scene.playerArmy) {
+            continue;
+        }
+        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(slot));
+        if (def == nullptr) {
+            continue;
+        }
+
+        // THE FABRICATOR STRIP collects in the same pass — a fab's home is the strip,
+        // not a row: it is the one producer the window controls as a SET, through the
+        // budget, rather than as a tier. Checked BEFORE the tier-eligibility gate: a
+        // fab is no builder, factory or silo, so `canSetBuildPriority` would refuse it.
+        // `STRUCTURE` rides along because engineers share MASSFABRICATION — the same
+        // conjunction FAF's own fab queries use.
+        if (def->hasCategory("MASSFABRICATION") && def->hasCategory("STRUCTURE")) {
+            // The catalog's rates, not the blueprint's fields — the same conversion the
+            // income pass charges, so the strip's draw is the draw the economy sees.
+            const rm::sim::UnitCatalog::Rates& rates =
+                scene.catalog.rates(scene.store.typeAt(slot));
+            out.fabricators.push_back({
+                .unit = id,
+                .name = displayName(def),
+                .energyDraw = std::max(0.0f, -perSecond(rates.energyPerTick))
+                            + perSecond(rates.upkeepEnergyPerTick),
+                .massYield = std::max(0.0f, perSecond(rates.massPerTick)),
+                .running = !scene.store.productionPaused(id),
+            });
+            continue;
+        }
+
+        // Only units the allocator can tier belong in the table at all — a row with a
+        // dead priority control would be a report, and this window is a throttle.
+        if (!rm::sim::canSetBuildPriority(*def)) {
+            continue;
+        }
+        const bool factory = def->hasCategory("FACTORY");
+
+        // THE JOB: live work first — it is what the unit is doing THIS tick — then the
+        // queue's first economic entry, which is what it is about to do. A unit whose
+        // only orders are moves and patrols is not economic work and lists nowhere
+        // unless it is a factory.
+        std::string job;
+        bool active = false;
+        /// Work-reported funding beats the tier estimate: a construction founder knows
+        /// exactly what its own build was granted last tick.
+        std::optional<float> fundedFromWork;
+        for (const rm::sim::Construction& work : scene.building) {
+            if (work.builder == id && constructionInProgress(work)) {
+                active = true;
+                fundedFromWork = rm::sim::fxToFloat(work.fundedLastTick);
+                job = displayName(
+                    scene.catalog.def(static_cast<rm::UnitTypeIndex>(work.blueprintIndex)));
+                if (work.isUpgrade()) {
+                    job = "UPGRADE " + job;
+                }
+                break;
+            }
+        }
+        if (!active) {
+            for (const rm::sim::SiloAmmo& ammo : scene.siloAmmo) {
+                if (ammo.owner == id && ammo.building() && !ammo.paused) {
+                    active = true;
+                    job = "MISSILE " + std::to_string(ammo.stored) + "/"
+                        + std::to_string(ammo.capacity);
+                    break;
+                }
+            }
+        }
+        if (!active) {
+            for (const rm::sim::EnhancementWork& work : scene.enhancementWork) {
+                if (work.owner == id && !work.finished()) {
+                    active = true;
+                    fundedFromWork = rm::sim::fxToFloat(work.fundedLastTick);
+                    job = "ENHANCEMENT " + work.name;
+                    break;
+                }
+            }
+        }
+        if (!active && slot < scene.store.orders().size()) {
+            for (const rm::sim::QueuedCommand& entry :
+                 scene.store.orders()[slot].entries()) {
+                const rm::sim::SharedCommand& order = entry.payload();
+                switch (entry.kind()) {
+                case rm::sim::CommandKind::Build:
+                    job = displayName(scene.catalog.def(order.buildType));
+                    break;
+                case rm::sim::CommandKind::Assist:
+                case rm::sim::CommandKind::Guard: {
+                    const rm::unitdef::UnitDef* target =
+                        scene.store.alive(order.target)
+                            ? scene.catalog.def(scene.store.typeAt(order.target.index))
+                            : nullptr;
+                    job = "ASSISTING " + displayName(target);
+                    break;
+                }
+                case rm::sim::CommandKind::Repair: {
+                    const rm::unitdef::UnitDef* target =
+                        scene.store.alive(order.target)
+                            ? scene.catalog.def(scene.store.typeAt(order.target.index))
+                            : nullptr;
+                    job = "REPAIR " + displayName(target);
+                    break;
+                }
+                case rm::sim::CommandKind::Capture: {
+                    const rm::unitdef::UnitDef* target =
+                        scene.store.alive(order.target)
+                            ? scene.catalog.def(scene.store.typeAt(order.target.index))
+                            : nullptr;
+                    job = "CAPTURING " + displayName(target);
+                    break;
+                }
+                case rm::sim::CommandKind::Reclaim:
+                    job = "RECLAIMING";
+                    break;
+                default:
+                    continue;
+                }
+                active = true;
+                break;
+            }
+        }
+        if (!active && !factory) {
+            continue;
+        }
+        if (job.empty()) {
+            job = "IDLE";
+        }
+
+        rm::ui::EconRowView row;
+        row.id = def->name;
+        row.name = displayName(def);
+        row.job = std::move(job);
+        row.members.push_back(id);
+        row.priority = scene.store.buildPriority(id);
+        row.pausable = rm::sim::canPauseProduction(*def);
+        row.pausedCount = scene.store.productionPaused(id) ? 1 : 0;
+        row.anySelected = selectedHas(id);
+        if (slot < scene.resourceFlows.size()
+            && scene.resourceFlows[slot].unit == id) {
+            const rm::sim::UnitResourceFlow& flow = scene.resourceFlows[slot];
+            row.massPerSecond = perSecond(flow.usageLastTick.mass);
+            row.energyPerSecond = perSecond(flow.usageLastTick.energy);
+        }
+        // Without a work-reported ratio the row reads the tier's: what the allocator
+        // would grant THIS demand shape at THIS priority, which is exactly what the
+        // water level is drawn from.
+        row.funded = fundedFromWork.value_or(rm::sim::fxToFloat(economy.consumedRatioFor(
+            {.mass = row.massPerSecond > 0.0f ? rm::sim::Mag::fromInt(1) : rm::sim::Mag{},
+             .energy = row.energyPerSecond > 0.0f ? rm::sim::Mag::fromInt(1)
+                                                 : rm::sim::Mag{}},
+            row.priority)));
+        rows.push_back(std::move(row));
+    }
+
+    out.rows = rm::ui::econGroupedRows(std::move(rows));
+    out.weirIndex = rm::ui::econSortRows(out.rows);
+    for (const rm::ui::EconFabView& fab : out.fabricators) {
+        out.fabDrawTotal += fab.energyDraw;
+        if (fab.running) {
+            out.fabDrawActive += fab.energyDraw;
+            out.fabYieldActive += fab.massYield;
+        }
+    }
+    // An untouched slider means "everything on" — the budget defaults to the total so
+    // opening the window never surprises a running economy.
+    if (out.fabBudget < 0.0f) {
+        out.fabBudget = out.fabDrawTotal;
+    }
 }
 
 bool submitProductionControl(UnitScene& scene, rm::sim::UnitId builder,

@@ -1351,7 +1351,7 @@ TEST_CASE("a build order names a place on the map, and the ground decides the he
     CHECK(rm::test::asFloat(work.position[2]) == 300.0f);
 }
 
-TEST_CASE("a build occupies its builder and refuses parallel work") {
+TEST_CASE("a build occupies its builder and a re-task orphans the scaffold") {
     Fixture fix;
 
     rm::unitdef::UnitDef engineerDef;
@@ -1381,33 +1381,40 @@ TEST_CASE("a build occupies its builder and refuses parallel work") {
     CHECK_FALSE(fix.roster.motion(engineer).moving);
     CHECK(fix.roster.motion(engineer).path.empty());
     CHECK_FALSE(fix.roster.store.orders()[engineer.index].empty());
-    CHECK_FALSE(fix.apply(Command{.tick = 1,
-                                  .player = 0,
-                                  .kind = CommandKind::Build,
-                                  .unit = engineer,
-                                  .targetX = rm::test::fx(340.0f),
-                                  .targetZ = rm::test::fx(300.0f),
-                                  .buildType = mexType}));
-    CHECK(fix.building.size() == 1);
+    // A second structure order re-tasks the engineer rather than being refused: the first
+    // scaffold stays on the map as a paused orphan any builder can resume, while the new
+    // work takes the builder and its own row.
+    REQUIRE(fix.apply(Command{.tick = 1,
+                              .player = 0,
+                              .kind = CommandKind::Build,
+                              .unit = engineer,
+                              .targetX = rm::test::fx(280.0f),
+                              .targetZ = rm::test::fx(300.0f),
+                              .buildType = mexType}));
+    REQUIRE(fix.building.size() == 2);
+    CHECK(fix.building[0].paused);
+    CHECK_FALSE(fix.building[1].paused);
 
     Command queued{.tick = 1,
                    .player = 0,
                    .kind = CommandKind::Build,
                    .queued = true,
                    .unit = engineer,
-                   .targetX = rm::test::fx(340.0f),
-                   .targetZ = rm::test::fx(300.0f),
+                   .targetX = rm::test::fx(300.0f),
+                   .targetZ = rm::test::fx(320.0f),
                    .buildType = mexType};
     REQUIRE(fix.apply(queued));
     CHECK(fix.roster.store.orders()[engineer.index].size() == 2);
-    CHECK(fix.building.size() == 1);
+    CHECK(fix.building.size() == 2);
 
     fix.run(CommandLog{}, 60);
-    CHECK(fix.building[0].finished());
+    CHECK(fix.building[1].finished());
+    CHECK_FALSE(fix.building[0].finished());
+    CHECK(fix.building[0].paused);
     CHECK(fix.roster.store.orders()[engineer.index].size() == 1);
     fix.run(CommandLog{}, 1);
-    REQUIRE(fix.building.size() == 2);
-    CHECK_FALSE(fix.building[1].finished());
+    REQUIRE(fix.building.size() == 3);
+    CHECK_FALSE(fix.building[2].finished());
 }
 
 TEST_CASE("a structure build refuses live occupancy and only unfinished work") {

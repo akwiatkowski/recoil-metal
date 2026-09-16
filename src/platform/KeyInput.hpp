@@ -41,6 +41,9 @@ enum class Key : std::uint8_t {
     Digit8,
     Digit9,
     L,
+    M,
+    Up,
+    Down,
 };
 
 enum class KeyPhase : std::uint8_t { Press, Release };
@@ -72,6 +75,7 @@ struct KeyEvent {
         case 'o': return Key::O;
         case 'g': return Key::G;
         case 'l': return Key::L;
+        case 'm': return Key::M;
         case 'p': return Key::P;
         case 'r': return Key::R;
         case 's': return Key::S;
@@ -100,6 +104,27 @@ struct KeyEvent {
 [[nodiscard]] constexpr std::optional<KeyEvent> keyEventForCharacter(
     char character, KeyPhase phase, bool repeat, KeyModifiers modifiers = {}) noexcept {
     const std::optional<Key> key = keyForCharacter(character);
+    if (!key) {
+        return std::nullopt;
+    }
+    return KeyEvent{.key = *key, .phase = phase, .repeat = repeat, .modifiers = modifiers};
+}
+
+/// Arrows and friends arrive as private-use unichars (NSUpArrowFunctionKey = 0xF700),
+/// which a `char` cannot carry — this is the entry point when the caller kept the
+/// raw UTF-16 unit rather than truncating to ASCII.
+[[nodiscard]] constexpr std::optional<Key> keyForUnichar(unsigned int unichar) noexcept {
+    switch (unichar) {
+        case 0xF700: return Key::Up;
+        case 0xF701: return Key::Down;
+        default:
+            return unichar < 128 ? keyForCharacter(static_cast<char>(unichar)) : std::nullopt;
+    }
+}
+
+[[nodiscard]] constexpr std::optional<KeyEvent> keyEventForUnichar(
+    unsigned int unichar, KeyPhase phase, bool repeat, KeyModifiers modifiers = {}) noexcept {
+    const std::optional<Key> key = keyForUnichar(unichar);
     if (!key) {
         return std::nullopt;
     }

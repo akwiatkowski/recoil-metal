@@ -50,15 +50,11 @@ stationConstructionInReach(UnitIndex slot, const UnitStore& store, const UnitCat
         if (work.finished() || payer == nullptr || !allied(*owner, *payer)) {
             continue;
         }
-        // Only work someone is DOING. Progress happens inside the founder's build task, so a
-        // row whose builder died or was re-tasked never advances; a station that locked onto it
-        // would pour its rate into nothing and, having "a project", never fall back to repair.
-        // The ordered Assist path resolves through a living founder for the same reason.
-        if (!store.alive(work.builder)) {
-            continue;
-        }
-        const QueuedCommand* founding = store.orders()[work.builder.index].active();
-        if (founding == nullptr || founding->kind() != CommandKind::Build) {
+        // Only work someone is DOING. An orphaned row is resumable now — a builder ordered
+        // onto the site takes it over — but nobody is on it until then, and a station that
+        // locked on early would pour its rate into work that is not advancing and, having
+        // "a project", never fall back to repair.
+        if (!constructionWorkedOn(work, store, catalog)) {
             continue;
         }
         const Fx gap = groundDistanceElmos(at, work.position);
@@ -78,9 +74,17 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
                             std::vector<Construction>& building, std::span<const Army> armies,
                             const Intel* intel, const PlayableRect* playableRect,
                             TickIndex tick, TickRate rate) {
-    // Cleared first, unconditionally: last tick's help is not this tick's fact.
+    // Cleared first, unconditionally: last tick's help is not this tick's fact. In the same
+    // sweep, a row nobody is working is marked `paused` — an interrupted scaffold keeps its
+    // place and its progress but draws nothing, which is the same "held, not cancelled"
+    // answer the economy pass already gives a player-paused build. `constructionWorkedOn`
+    // asks the same question the dispatch stage's ownership check does, so a row flips to
+    // abandoned the same beat its builder's order changes.
     for (Construction& work : building) {
         work.assistPerTick = Mag{};
+        if (!work.finished() && !constructionWorkedOn(work, store, catalog)) {
+            work.paused = true;
+        }
     }
     if (building.empty()) {
         return 0;
@@ -147,11 +151,12 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             continue;  // still walking over
         }
 
-        // The OLDEST unfinished construction this target founded — the one it is working
-        // on. First match in list order, which is creation order, so every assister of one
-        // target picks the same work and the answer is replay-stable.
+        // The construction this target is WORKING — the row its active head owns. A founder
+        // who also left an abandoned scaffold elsewhere has both kinds on record; help goes
+        // to the work being done, not the one waiting to be resumed.
         for (Construction& work : building) {
-            if (work.finished() || !(work.builder == founder)) {
+            if (work.finished() || !(work.builder == founder)
+                || !constructionWorkedOn(work, store, catalog)) {
                 continue;
             }
             work.assistPerTick += buildRate;
