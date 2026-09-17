@@ -418,6 +418,7 @@ if(BUILD_TESTING)
         tests/test_real_silo.cpp
         tests/test_unit_capabilities.cpp
         tests/test_unit_scenarios.cpp
+        tests/test_unit_behaviors.cpp
         tests/test_real_unit_blueprints.cpp
         tests/test_real_unitdefs.cpp
         tests/test_team_colours.cpp
