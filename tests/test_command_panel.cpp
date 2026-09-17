@@ -374,6 +374,120 @@ TEST_CASE("toggle cards report present-but-unsupported actions", "[ui][toggles]"
     CHECK(order.title == "STOP");
 }
 
+TEST_CASE("a silo's build cells borrow dead unit-slots, tactical first", "[ui][silo]") {
+    // Retail puts both RULEUCC_SiloBuild* commands at preferredSlot 9 — 0-based 8 here —
+    // so the tactical cell takes Repair's dead cell and the nuke spills to Assist's. The
+    // cells key on the match's records, not the def: a silo the sim does not track has
+    // nothing to build.
+    rm::unitdef::UnitDef silo;
+    silo.name = "test_silo";
+    rm::unitdef::Weapon launcher;
+    launcher.label = "TacMissile";
+    launcher.countedProjectile = true;
+    launcher.manualFire = true;
+    launcher.maxRange = rm::sim::Fx::fromInt(100);
+    launcher.rateOfFire = 0.1f;
+    launcher.damage = rm::sim::Mag::fromInt(100);
+    launcher.projectileTraits.buildTime = rm::sim::Mag::fromInt(100);
+    silo.weapons.push_back(launcher);
+    const rm::sim::UnitId owner{0, 1};
+    const std::vector<rm::sim::SiloAmmo> ammo{
+        rm::sim::makeSiloAmmo(owner, 0, false, 2,
+            {.mass = rm::sim::Mag::fromInt(10), .energy = rm::sim::Mag::fromInt(100)},
+            rm::sim::Mag::fromInt(100), rm::sim::Mag::fromInt(10)),
+        rm::sim::makeSiloAmmo(owner, 1, true, 1,
+            {.mass = rm::sim::Mag::fromInt(10), .energy = rm::sim::Mag::fromInt(100)},
+            rm::sim::Mag::fromInt(100), rm::sim::Mag::fromInt(10)),
+    };
+    const std::array<const rm::unitdef::UnitDef*, 1> selection{&silo};
+    const rm::ui::CommandPage page = rm::ui::commandPage(selection, ammo);
+
+    // Slot 8 belongs to the production toggle — a silo IS a pausable producer — so the
+    // tactical cell lands at 9 and the nuke spills to AUTO MEX's dead cell at 10.
+    CHECK(page[8].toggle.has_value());
+    CHECK(page[9].order == CommandKind::SiloBuildTactical);
+    CHECK(page[9].name == "BUILD TACT");
+    CHECK(page[9].enabled);
+    CHECK(page[10].order == CommandKind::SiloBuildNuke);
+    CHECK(page[10].name == "BUILD NUKE");
+    CHECK(page[10].enabled);
+    // The launch cell still borrows Reclaim's slot — nothing moved there.
+    CHECK(page[11].order == CommandKind::MissileLaunch);
+}
+
+TEST_CASE("a full silo's build cell goes grey, stored plus queued", "[ui][silo]") {
+    rm::unitdef::UnitDef silo;
+    silo.name = "test_silo";
+    const rm::sim::UnitId owner{0, 1};
+    std::vector<rm::sim::SiloAmmo> ammo{
+        rm::sim::makeSiloAmmo(owner, 0, false, 2,
+            {.mass = rm::sim::Mag::fromInt(10), .energy = rm::sim::Mag::fromInt(100)},
+            rm::sim::Mag::fromInt(100), rm::sim::Mag::fromInt(10)),
+    };
+    ammo.front().stored = 1;
+    const std::vector<rm::sim::SiloBuild> queue{
+        rm::sim::SiloBuild{.owner = owner, .slot = 0}};
+    const std::array<const rm::unitdef::UnitDef*, 1> selection{&silo};
+
+    const rm::ui::CommandPage page = rm::ui::commandPage(selection, ammo, queue);
+    // No weapons on this def, so no production toggle: the tactical cell takes slot 8.
+    REQUIRE(page[8].order == CommandKind::SiloBuildTactical);
+    CHECK_FALSE(page[8].enabled);  // 1 stored + 1 queued = capacity 2
+
+    // Pop the queued build and the cell relights.
+    const rm::ui::CommandPage drained = rm::ui::commandPage(selection, ammo);
+    CHECK(drained[8].enabled);
+}
+
+TEST_CASE("a builder's live orders outrank the silo cells", "[ui][silo]") {
+    // The dead-cell borrow never displaces a real order: a silo that is also a builder
+    // keeps Repair and Assist lit; its tactical cell spills to AUTO MEX's dead cell
+    // rather than sitting on a live one.
+    rm::unitdef::UnitDef builder;
+    builder.name = "test_builder_silo";
+    builder.buildRate = 5.0f;
+    const rm::sim::UnitId owner{0, 1};
+    const std::vector<rm::sim::SiloAmmo> ammo{
+        rm::sim::makeSiloAmmo(owner, 0, false, 2,
+            {.mass = rm::sim::Mag::fromInt(10), .energy = rm::sim::Mag::fromInt(100)},
+            rm::sim::Mag::fromInt(100), rm::sim::Mag::fromInt(10)),
+    };
+    const std::array<const rm::unitdef::UnitDef*, 1> selection{&builder};
+    const rm::ui::CommandPage page = rm::ui::commandPage(selection, ammo);
+    CHECK(page[8].name == "REPAIR");
+    CHECK(page[8].enabled);
+    CHECK_FALSE(page[8].order.has_value());  // a real order cell, not a substitution
+    CHECK(page[9].name == "ASSIST");
+    CHECK(page[9].enabled);
+    CHECK(page[10].order == CommandKind::SiloBuildTactical);
+    CHECK(page[10].enabled);
+}
+
+TEST_CASE("the silo build cell inspects as the order it issues", "[ui][silo]") {
+    rm::unitdef::UnitDef silo;
+    silo.name = "test_silo";
+    rm::unitdef::Weapon launcher;
+    launcher.label = "TacMissile";
+    launcher.countedProjectile = true;
+    launcher.nukeWeapon = false;
+    launcher.projectileTraits.buildTime = rm::sim::Mag::fromInt(100);
+    silo.weapons.push_back(launcher);
+    const rm::sim::UnitId owner{0, 1};
+    const std::vector<rm::sim::SiloAmmo> ammo{
+        rm::sim::makeSiloAmmo(owner, 0, false, 2,
+            {.mass = rm::sim::Mag::fromInt(10), .energy = rm::sim::Mag::fromInt(100)},
+            rm::sim::Mag::fromInt(100), rm::sim::Mag::fromInt(10)),
+    };
+    const std::array<const rm::unitdef::UnitDef*, 1> selection{&silo};
+    const rm::ui::CommandPage page = rm::ui::commandPage(selection, ammo);
+    // Slot 9: the production toggle claims 8, so the tactical cell spills one right.
+    const rm::ui::InfoCard card = rm::ui::commandInspector(page, 9, selection);
+    CHECK(card.title == "BUILD TACT");
+    REQUIRE(card.rows.size() >= 4);
+    CHECK(card.rows[0].value == "READY");
+    CHECK(card.rows[1].value == "1 OF 1 UNITS");
+}
+
 TEST_CASE("the retail shield's authored toggle reaches its rack cell", "[ui][toggles][corpus]") {
     // End to end through the real blueprint: UEB4301 authors ShieldToggle plus an
     // override for it, so its rack shows the dome bitmap and help key — disabled.

@@ -3,8 +3,10 @@
 Status: minimum slice implemented 2026-09-09 (`core/sim/Capture.hpp`, `CommandKind::Capture`,
 `CaptureWork` with save v20). One engineer captures one completed, unattached ordinary
 enemy land unit or structure with funded progress and replacement-entity transfer, under
-the progress contract below. General transfer parity (attachments, enhancements, fuel,
-ammo, shields) remains open, as do concurrent-captor races beyond one bar each.
+the progress contract below. Approach and admission were read from the executable
+2026-09-17 (`C-250`, "Approach and admission" below). General transfer parity
+(attachments, enhancements, fuel, ammo, shields) remains open, as do concurrent-captor
+races beyond one bar each.
 
 ## Source identity and corrections
 
@@ -29,6 +31,84 @@ helper is not the authority for this retail slice.
 
 These are corrections to the evidence, not a claim that WP-17 is implemented or
 that every capture branch has passed independent parity review.
+
+## Approach and admission
+
+Read 2026-09-17 from `CUnitCaptureTask::TaskTick` `0x0060AEB0`–`0x0060B8CB`
+(`.\sim\AiUnitCapture.cpp`) and its ctor/factory/dispatcher neighbourhood; full
+evidence is claim `C-250` in `fa-exe-analysis-plan.md`.
+
+**The task is a five-state machine** on `task+0x24`, dispatched through the jump
+table at `0x0060B8CC`: state 0 approach (`0x0060B0D6`), state 1 admission
+(`0x0060B271`), state 2 cost setup (`0x0060B3BC`), state 3 funded progress
+(`0x0060B759`), state 4 completion (`0x0060B822`). States advance with `ret 0`
+(same-beat re-run under the `C-232` contract); `ret -1` ends the task.
+
+**All legality is a per-tick preamble; there is no issue-time validation.** The
+command-issue path (`0x0060F9C0` case `0x00610379` → factory `0x0060AE30`)
+performs no legality check beyond a dead weak target (`cmd+0x2C = 2`). Every tick
+re-checks, in order:
+
+| Gate | Check | Exit |
+|---|---|---|
+| Target alive | weak cell `task+0x44` resolves | `OnStopCapture` on captor, `*cmd+0x2C = 1`, `ret -1` |
+| Capturable | `vt[0x40]` object `+0x69` byte (written by `Unit::SetCapturable` `0x006D00B0`) | same exit |
+| Has army | target `Entity+0x14C` non-null | `*cmd+0x2C = 2`, `ret -1` |
+| Not airborne | target `Entity+0x118` layer != `0x10` (`LAYER_Air`) | status 2 |
+| Not friendly | `0x0057FF00(targetArmy+8, captorArmy+8) != 1` (self/ally) | status 2 |
+| Concurrency | `IsUnitState(27)` `BeingCaptured` AND edge distance > 10.0 | status 2 |
+
+The distance is **footprint-edge distance**, 2D:
+`sqrt(dx² + dz²) − max(captor FootprintSizeX,Z) − max(target FootprintSizeX,Z)`.
+Captor position via `vt[0x14]`, target position at `Entity+0xAC/+0xB4`, both
+footprints as u8 pairs via `0x0067F310` (`Entity::GetFootprint`).
+
+**State 0 — approach.** If `edgeDist <= 5.0` (`0x00E4D960`), the task goes
+straight to state 1 in the same tick — no move is issued. Otherwise it snapshots
+the target position, builds a 16-byte approach block via `0x006AE090` on the
+target's `vt[0x10]` Unit, resolves a pathable goal through `0x00632250` (args:
+captor, target pos, block, `captor+0x154->vt[0xB8]` service, flag 1), and
+enqueues a move task once via `0x0061FB70`. Captor byte `Unit+0x68B` set skips
+the goal recompute; its writer is outside this function and unnamed. The helper
+semantics (approach-block geometry vs pathable-goal resolution) are inferred
+from use — recorded, not named.
+
+**State 1 — admission.** `edgeDist > 10.0` (`0x00E4E150`) → `*cmd+0x2C = 2`,
+`ret -1`: the task ends while the enqueued move task keeps walking. The retry is
+**dispatcher-level**: `IAiCommandDispatchImpl::TaskTick` reads `+0x2C == 2` at
+`0x0059F98C` and re-issues the command through `0x006F4A40`. There is no in-task
+wait state. In range, a dead (`+0x99`) or dying (`+0x1B9`) target ends the task
+quietly; otherwise `captor+0x554` (navigator/rally object) receives `vt[0x3C]`
+goal = target `vt[0x48](-1)` position, the captor gains `UNITSTATE_Capturing`
+(bit 26, `orl $0x4000000, Unit+0x4A0`), and the task advances to state 2.
+
+**The status cell.** `task+0x28` = `&cmd+0x2C`, zeroed at task spawn
+(`0x005F7423`–`0x005F742F`). Semantics: `0` = running or success (state-4
+completion leaves it 0), `1` = target invalidated (fires `OnStopCapture`), `2` =
+legality/range abort (dispatcher re-issues). Whether status 1 also re-issues is
+unread — the observed read checks `== 2` only.
+
+**Concurrency is a refcount, not mutual exclusion.** `SetActive` `0x0060B8E0`
+(gated on `task+0x4C`, called from state 2 after cost setup, the command-event
+listener `0x0060BA90`, and teardown `0x0060BCC1`) sets target
+`UNITSTATE_BeingCaptured` (bit 27) and increments `Unit+0x690` on activation;
+deactivation guarded-decrements and clears the bit only when the count reaches
+0. Multiple near captors are therefore permitted — each funded beat adds the
+live count to each task's progress (`C-243`). The only exclusion is the
+preamble's `BeingCaptured` + >10-elmo early exit for captors still far away.
+
+**Deactivation reports failure, not stop.** On a live target the deactivate arm
+fires `OnFailedBeingCaptured(target,captor)` /
+`OnFailedCapture(captor,target)`; on a dead/dying target (`+0x99`/`+0x1B9`) the
+whole arm is a no-op — which is why a completed transfer's target destruction
+does not produce failure callbacks. Task teardown additionally clears captor
+`Capturing`, zeroes `Unit+0x2AC` (shared work-progress display field), resets
+the `+0x554` goal, and calls `0x006B21F0`.
+
+**Corner case recorded verbatim:** the preamble's dead-target exit fires
+`OnStopCapture` on the captor passing the **captor** cell as arg
+(`0x0060B896`–`0x0060B8AD`), unlike state 4 which passes the target cell — Lua
+receives the captor itself on that path.
 
 ## Progress contract
 
@@ -134,12 +214,17 @@ do not run combat death, grant kills, or spawn a wreck for a transfer. The
 replacement's initial order policy must be documented as a slice decision until
 native queue retention is established.
 
-Before coding approach and admission, finish the focused EXE read of capture
-state 0/1 (`0x0060B0D6–0x0060B3BB`), command-cap/target legality and the same-
-target concurrency guard. These were not established by the earlier timing
-claims. This is bounded follow-up, not a reason to invent repair-range parity.
-General gifting, mixed captors, transport cargo and rich-unit transfers remain
-later work. They must not block specifying or testing the single-captor formula.
+Approach and admission are now read (section above, claim `C-250`): the capture
+task approaches within the edge-distance gates and admits once inside 10 elmos,
+ending with status 2 — not waiting — when the target stays out of reach; the
+command dispatcher's re-issue is retail's retry. Implement the gate and the
+legality preamble, not a repair-style range hysteresis. Remaining open reads
+before full parity claims: `OnCaptured`'s Lua body and `Sim::TransferUnit`'s
+unnamed details, plus the approach helpers (`0x006AE090`, `0x00632250`,
+`0x00511B10`, `Unit+0x68B`/`+0x554`) whose semantics are inferred rather than
+named. General gifting, mixed captors, transport cargo and rich-unit transfers
+remain later work. They must not block specifying or testing the single-captor
+formula.
 
 ## Headless acceptance contract
 

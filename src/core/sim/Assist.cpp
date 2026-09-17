@@ -73,13 +73,17 @@ stationConstructionInReach(UnitIndex slot, const UnitStore& store, const UnitCat
 std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
                             std::vector<Construction>& building, std::span<const Army> armies,
                             const Intel* intel, const PlayableRect* playableRect,
-                            TickIndex tick, TickRate rate) {
+                            TickIndex tick, TickRate rate,
+                            std::vector<AssistLink>* links) {
     // Cleared first, unconditionally: last tick's help is not this tick's fact. In the same
     // sweep, a row nobody is working is marked `paused` — an interrupted scaffold keeps its
     // place and its progress but draws nothing, which is the same "held, not cancelled"
     // answer the economy pass already gives a player-paused build. `constructionWorkedOn`
     // asks the same question the dispatch stage's ownership check does, so a row flips to
     // abandoned the same beat its builder's order changes.
+    if (links != nullptr) {
+        links->clear();
+    }
     for (Construction& work : building) {
         work.assistPerTick = Mag{};
         if (!work.finished() && !constructionWorkedOn(work, store, catalog)) {
@@ -154,13 +158,18 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
         // The construction this target is WORKING — the row its active head owns. A founder
         // who also left an abandoned scaffold elsewhere has both kinds on record; help goes
         // to the work being done, not the one waiting to be resumed.
-        for (Construction& work : building) {
+        for (std::size_t i = 0; i < building.size(); ++i) {
+            Construction& work = building[i];
             if (work.finished() || !(work.builder == founder)
                 || !constructionWorkedOn(work, store, catalog)) {
                 continue;
             }
             work.assistPerTick += buildRate;
             ++helping;
+            if (links != nullptr) {
+                links->push_back(AssistLink{.helper = store.idAt(slot), .work = i,
+                                            .position = work.position});
+            }
             break;
         }
     }
@@ -178,6 +187,10 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
         }
         building[*project].assistPerTick += effectiveBuildPerTick(store, catalog, slot);
         ++helping;
+        if (links != nullptr) {
+            links->push_back(AssistLink{.helper = store.idAt(slot), .work = *project,
+                                        .position = building[*project].position});
+        }
     }
 
     return helping;

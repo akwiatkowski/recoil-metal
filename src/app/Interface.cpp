@@ -39,10 +39,18 @@ namespace {
 }
 
 void appendBuildBeam(std::vector<rm::Particle>& particles, std::array<float, 3> from,
-                     std::array<float, 3> to, const std::array<float, 4>& colour) {
-    constexpr int kMotesPerBeam = 7;
-    for (int mote = 0; mote <= kMotesPerBeam; ++mote) {
-        const float t = static_cast<float>(mote) / static_cast<float>(kMotesPerBeam);
+                     std::array<float, 3> to, const std::array<float, 4>& colour,
+                     float moteSize = 1.6f) {
+    // A mote every few elmos, not a fixed count: an engineer beaming across the map is
+    // otherwise eight dots of empty space, and a helper's stream is the only evidence
+    // the assist order did anything.
+    constexpr float kElmosPerMote = 3.0f;
+    const float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
+    const int motes = std::clamp(
+        static_cast<int>(std::lround(std::sqrt(dx * dx + dy * dy + dz * dz) / kElmosPerMote)),
+        4, 32);
+    for (int mote = 0; mote <= motes; ++mote) {
+        const float t = static_cast<float>(mote) / static_cast<float>(motes);
         particles.push_back(rm::Particle{
             .origin = {{from[0] + (to[0] - from[0]) * t,
                         from[1] + (to[1] - from[1]) * t,
@@ -53,7 +61,7 @@ void appendBuildBeam(std::vector<rm::Particle>& particles, std::array<float, 3> 
             .velocity = {{0.0f, 0.0f, 0.0f}},
             .lifetime = 0.12f,
             .colour = {{colour[0] * 0.9f, colour[1] * 0.9f, colour[2] * 0.9f, 0.0f}},
-            .size = 1.6f,
+            .size = moteSize,
             .growth = 0.0f,
         });
     }
@@ -954,6 +962,79 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
             appendBuildBeam(particles, {{fx, fy + 4.0f, fz}}, {{x, toY, z}}, energy);
         }
     }
+
+    // THE HELPING HANDS. Every unit the assist scan counted this tick streams to the work
+    // it lent its rate to — the visible difference between "guarding the factory" and
+    // "building it faster". These come from the sim's own helper list rather than a second
+    // guess here, so a beam exists exactly when the rate does.
+    for (const rm::sim::AssistLink& link : scene.assistLinks) {
+        if (!scene.store.alive(link.helper)) {
+            continue;
+        }
+        // `work` indexes the list as the assist pass left it; a row reaped later in the
+        // same tick (a dead upgrade's scaffold) shifts every index after it, so the
+        // site's position is the identity the beam must land on. The index is tried
+        // first — reaping is rare, so the hint nearly always hits.
+        const rm::sim::Construction* site = nullptr;
+        if (link.work < scene.building.size()
+            && scene.building[link.work].position == link.position) {
+            site = &scene.building[link.work];
+        } else {
+            for (const rm::sim::Construction& candidate : scene.building) {
+                if (candidate.position == link.position) {
+                    site = &candidate;
+                    break;
+                }
+            }
+        }
+        if (site == nullptr) {
+            continue;
+        }
+        const rm::sim::Construction& work = *site;
+        if (!constructionInProgress(work)
+            || !scene.visibleToViewer(work.position[0], work.position[2])) {
+            continue;
+        }
+        const int army = work.armyIndex;
+        const rm::sim::Faction faction =
+            army >= 0 && static_cast<std::size_t>(army) < scene.armies.size()
+                ? scene.armies[static_cast<std::size_t>(army)].faction
+                : rm::sim::Faction::Uef;
+        const std::array<float, 4> energy = buildEnergyColour(faction);
+        const float x = rm::sim::fxToFloat(work.position[0]);
+        const float z = rm::sim::fxToFloat(work.position[2]);
+        const rm::unitdef::UnitDef* def =
+            scene.catalog.def(static_cast<rm::UnitTypeIndex>(work.blueprintIndex));
+        const float radius = def != nullptr && def->collisionRadiusElmos > 0.0f
+                               ? def->collisionRadiusElmos
+                               : 8.0f;
+        const rm::sim::Transform& from = scene.store.transforms()[link.helper.index];
+        const std::array<float, 3> origin{{rm::sim::fxToFloat(from.x),
+                                           rm::sim::fxToFloat(from.y) + 4.0f,
+                                           rm::sim::fxToFloat(from.z)}};
+        // The same endpoint the founder's own beam aims at — the top edge of the cube the
+        // work is rising into. The pad centre the founder fallback uses sits INSIDE a
+        // factory's mesh for pad-bound work, so a stream aimed there never escapes it.
+        std::array<float, 3> endpoint{{x, field.heightAtWorld(x, z) + radius * 0.5f, z}};
+        if (def != nullptr && def->meshExtentsXElmos > 0.0f && def->meshExtentsZElmos > 0.0f) {
+            endpoint = rm::uefBuildBeamEnds(
+                {{x, field.heightAtWorld(x, z), z}}, origin,
+                def->meshExtentsXElmos, def->meshHeightElmos, def->meshExtentsZElmos,
+                constructionProgress(work), seconds).first;
+        }
+        // Larger motes than the founder's stream plus a splash where the help lands:
+        // "ASSIST +N/S" on the panel is easy to miss; a second stream to the pad is not.
+        appendBuildBeam(particles, origin, endpoint, energy, /*moteSize=*/2.6f);
+        particles.push_back(rm::Particle{
+            .origin = endpoint,
+            .age = 0.02f,
+            .velocity = {{0.0f, 0.0f, 0.0f}},
+            .lifetime = 0.12f,
+            .colour = {{energy[0], energy[1], energy[2], 0.0f}},
+            .size = 4.0f,
+            .growth = 0.0f,
+        });
+    }
 }
 
 [[nodiscard]] rm::ui::MatchState hudStateFrom(const UnitScene& scene, float elapsedSeconds,
@@ -1852,6 +1933,17 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
         tile->siloStock->first += silo.stored;
         tile->siloStock->second += silo.capacity;
     }
+
+    // Queued builds land on the same tile the stock did: the queue is per silo record,
+    // so each entry's owner identifies its type's tile exactly as a record's does.
+    for (const rm::sim::SiloBuild& entry : scene.siloQueue) {
+        if (!scene.store.alive(entry.owner)) continue;
+        const auto* def = scene.catalog.def(scene.store.typeAt(entry.owner.index));
+        if (def == nullptr) continue;
+        auto tile = std::ranges::find(out, def->name, &rm::ui::RosterTile::id);
+        if (tile == out.end() || !tile->siloStock) continue;
+        tile->siloQueued += 1;
+    }
 }
 
 rm::ShotClass shotClassOf(const UnitScene& scene, rm::sim::UnitId unit,
@@ -2058,7 +2150,10 @@ void gatherEconomyWindow(const UnitScene& scene,
         }
         if (!active) {
             for (const rm::sim::SiloAmmo& ammo : scene.siloAmmo) {
-                if (ammo.owner == id && ammo.building() && !ammo.paused) {
+                // "Building" is the queue head now — the one `SiloBuild` a unit funds at
+                // a time names this record's slot (`C-241`'s single economy event).
+                if (ammo.owner == id && !ammo.paused
+                    && rm::sim::siloHeadActive(ammo, scene.siloQueue)) {
                     active = true;
                     job = "MISSILE " + std::to_string(ammo.stored) + "/"
                         + std::to_string(ammo.capacity);

@@ -162,6 +162,7 @@ TEST_CASE("a spawned UEB4302 automatically builds one interceptor in its bluepri
                          .projectiles = &scene.projectiles,
                          .building = &scene.building,
                          .siloAmmo = &scene.siloAmmo,
+                         .siloQueue = &scene.siloQueue,
                          .features = &scene.features,
                          .events = &scene.events,
                          .commandersEver = scene.commandersEver,
@@ -205,7 +206,8 @@ TEST_CASE("an unenhanced ACU never manufactures enhancement-only missile ammunit
     scene.economies[0].stored = {};
     rm::sim::Match match{.armies = scene.armies, .economies = scene.economies,
         .projectiles = &scene.projectiles, .building = &scene.building,
-        .siloAmmo = &scene.siloAmmo, .baseStorage = rm::app::kStartingStorage};
+        .siloAmmo = &scene.siloAmmo, .siloQueue = &scene.siloQueue,
+        .baseStorage = rm::app::kStartingStorage};
     for (rm::TickIndex tick = 0; tick < 100; ++tick) {
         (void)rm::sim::tickSkirmish(scene.store, scene.catalog, match,
             scene.terrain(field), rm::app::gAppTickRate, tick);

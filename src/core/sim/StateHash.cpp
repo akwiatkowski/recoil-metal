@@ -836,6 +836,20 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, static_cast<std::size_t>(ammo.elapsedTicks));
             feed(h, ammo.costPerTick);
             feed(h, ammo.delivered);
+            feed(h, ammo.autoBuild);
+        }
+    }
+
+    // The build queues, same presence-then-contents shape: what a silo is ABOUT to build
+    // changes the next tick's demand, so two matches differing only in a pending nuke must
+    // hash apart now rather than when it lands.
+    feed(h, match.siloQueue != nullptr);
+    if (match.siloQueue != nullptr) {
+        feed(h, match.siloQueue->size());
+        for (const SiloBuild& entry : *match.siloQueue) {
+            feed(h, static_cast<std::size_t>(entry.owner.index));
+            feed(h, static_cast<std::size_t>(entry.owner.generation));
+            feed(h, static_cast<std::size_t>(entry.slot));
         }
     }
 

@@ -1292,6 +1292,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 .building = &scene.building,
                 .captures = &scene.captures,
                 .siloAmmo = &scene.siloAmmo,
+                .siloQueue = &scene.siloQueue,
                 .enhancements = &scene.enhancementWork,
                 .redirects = &scene.redirects,
                 .features = &scene.features,
@@ -1300,6 +1301,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 .commandersEver = scene.commandersEver,
                 .baseStorage = kStartingStorage,
                 .resourceFlows = &scene.resourceFlows,
+                .assistLinks = &scene.assistLinks,
                 .intel = &scene.intel,
                 .playableRect = playableRect,
                 // Seeded from the scene rather than defaulted to false, using the same

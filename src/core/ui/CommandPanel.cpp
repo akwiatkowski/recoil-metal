@@ -110,6 +110,9 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         case sim::CommandKind::ReclaimUnit:  // reached through Reclaim's descriptor, not its own
         case sim::CommandKind::Capture:  // no rack cell yet; issued through its own order path
         case sim::CommandKind::MissileLaunch:  // fills Reclaim's dead cell on a silo, below
+        case sim::CommandKind::SiloBuildTactical:  // fills Repair's dead cell on a silo, below
+        case sim::CommandKind::SiloBuildNuke:     // spills into the next dead unit-slot
+        case sim::CommandKind::ToggleSiloAuto:   // a right-click on either build cell
         case sim::CommandKind::CycleBuildPriority:  // the B key and the production panel's cell
         case sim::CommandKind::SetBuildPriority:  // the economy window's cells, not the rack's
         case sim::CommandKind::CycleRetreatThreshold:  // the V key
@@ -211,11 +214,45 @@ orderKeyFor(sim::CommandKind kind) noexcept {
     }
 }
 
+/// Whether `def` authors a buildable counted projectile on silo `slot` — the same gates
+/// `SceneBuild` applies when it makes a `SiloAmmo` record, kept here so an inspector card
+/// can count eligibility without the match's records.
+[[nodiscard]] bool siloSlotAuthored(const unitdef::UnitDef& def, std::uint8_t slot) {
+    return std::ranges::any_of(def.weapons, [&](const unitdef::Weapon& weapon) {
+        return weapon.countedProjectile && !weapon.enabledByEnhancement
+               && weapon.nukeWeapon == (slot != 0)
+               && weapon.projectileTraits.buildTime > sim::Mag{};
+    });
+}
+
+/// Rounds the owner's `slot` still has room for: capacity minus what is stored and what
+/// the queue already promises (`SiloIsFull`'s stored-plus-queued count, `C-241`).
+[[nodiscard]] int siloRoom(const sim::SiloAmmo& record,
+                           std::span<const sim::SiloBuild> queue) noexcept {
+    const auto pending = static_cast<int>(std::count_if(
+        queue.begin(), queue.end(), [&](const sim::SiloBuild& entry) {
+            return entry.owner == record.owner && entry.slot == record.slot;
+        }));
+    return record.capacity - record.stored - pending;
+}
+
 } // namespace
 
-CommandPage commandPage(std::span<const unitdef::UnitDef* const> selection) noexcept {
+CommandPage commandPage(std::span<const unitdef::UnitDef* const> selection,
+                        std::span<const sim::SiloAmmo> siloAmmo,
+                        std::span<const sim::SiloBuild> siloQueue) noexcept {
     const CommandAvailability available = commandAvailability(selection);
     const ToggleAvailability toggles = toggleAvailability(selection);
+    // Which silo slots the selection owns: a record existing IS the silo existing, so the
+    // build cells key on the records rather than re-deriving the weapon gates.
+    bool tacticalWanted =
+        std::ranges::any_of(siloAmmo, [](const sim::SiloAmmo& record) {
+            return record.slot == 0;
+        });
+    bool nukeWanted =
+        std::ranges::any_of(siloAmmo, [](const sim::SiloAmmo& record) {
+            return record.slot == 1;
+        });
     // A launcher anywhere in the selection earns the silo's launch button — the same ANY
     // semantics `commandAvailability` applies to the rack's own orders.
     const bool hasLauncher = std::ranges::any_of(selection, [](const unitdef::UnitDef* def) {
@@ -260,6 +297,35 @@ CommandPage commandPage(std::span<const unitdef::UnitDef* const> selection) noex
             }
         }
         if (!toggle) {
+            // Silo build buttons borrow dead unit-slots from Repair's onward — retail
+            // puts both at preferredSlot 9 (0-based 8) and lets the second spill, which is
+            // exactly what "tactical first, nuke next, dead cells only" produces. Slot 8
+            // is usually the production toggle's — every silo pauses production — so the
+            // borrow runs through 9 and 10 too: Repair, Assist and AUTO MEX all sit dead
+            // on a silo. A builder silo with live cells simply shows fewer, same as a
+            // builder silo in retail spills out of the rack.
+            if ((slot >= 8 && slot <= 10) && (tacticalWanted || nukeWanted)) {
+                const std::uint8_t siloSlot = tacticalWanted ? 0 : 1;
+                if (tacticalWanted) {
+                    tacticalWanted = false;
+                } else {
+                    nukeWanted = false;
+                }
+                const sim::CommandKind kind = siloSlot == 0
+                    ? sim::CommandKind::SiloBuildTactical
+                    : sim::CommandKind::SiloBuildNuke;
+                // Retail greys a full silo's button — stored plus queued against capacity.
+                const bool room = std::ranges::any_of(
+                    siloAmmo, [&](const sim::SiloAmmo& record) {
+                        return record.slot == siloSlot
+                               && siloRoom(record, siloQueue) > 0;
+                    });
+                const auto [name, icon] = presentation(
+                    siloSlot == 0 ? "RULEUCC_SiloBuildTactical" : "RULEUCC_SiloBuildNuke",
+                    siloSlot == 0 ? "BUILD TACT" : "BUILD NUKE", "silo-build");
+                page[slot] = {name, icon, room, std::nullopt, kind};
+                continue;
+            }
             // A silo's launch button borrows the last unit-specific cell the way a toggle
             // borrows a dead order's: Reclaim never lights on a launcher, and no toggle
             // claims the slot. The override keys are the retail command caps — a nuke
@@ -499,6 +565,38 @@ InfoCard commandInspector(const CommandPage& page, std::size_t slot,
         card.rows.push_back({"APPLIES TO", std::to_string(eligible) + " OF "
             + std::to_string(total) + " UNITS"});
         card.rows.push_back({"TARGET", "UNIT OR GROUND"});
+        return card;
+    }
+    if (page[slot].order == sim::CommandKind::SiloBuildTactical
+        || page[slot].order == sim::CommandKind::SiloBuildNuke) {
+        // Same substituted-cell story as LAUNCH: the descriptor under the cell cannot
+        // answer for a silo. Eligibility keys on the authored weapon slot so the card
+        // works without the match's records.
+        const std::uint8_t siloSlot =
+            page[slot].order == sim::CommandKind::SiloBuildNuke ? 1 : 0;
+        InfoCard card;
+        card.title = std::string{page[slot].name};
+        std::size_t total = 0, eligible = 0;
+        for (const auto* def : selection) {
+            if (!def) continue;
+            ++total;
+            if (siloSlotAuthored(*def, siloSlot)) ++eligible;
+        }
+        if (total == 0) {
+            card.rows.push_back({"STATE", "SELECT A UNIT", kLoss});
+            return card;
+        }
+        if (eligible == 0) {
+            card.rows.push_back({"STATE", "SELECTION CANNOT DO THIS", kLoss});
+            card.rows.push_back({"", "SELECT A MISSILE SILO"});
+            return card;
+        }
+        card.rows.push_back({"STATE", page[slot].enabled ? "READY" : "FULL",
+                             page[slot].enabled ? kGain : kWarn});
+        card.rows.push_back({"APPLIES TO", std::to_string(eligible) + " OF "
+            + std::to_string(total) + " UNITS"});
+        card.rows.push_back({"CLICK", "QUEUES ONE MISSILE"});
+        card.rows.push_back({"RIGHT-CLICK", "TOGGLES AUTO-BUILD"});
         return card;
     }
     return commandCard(kCommandDescriptors[slot], selection, armed);

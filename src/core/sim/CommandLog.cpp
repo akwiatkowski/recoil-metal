@@ -90,6 +90,9 @@ namespace {
     if (name == "load-transport") return CommandKind::LoadTransport;
     if (name == "unload-transport") return CommandKind::UnloadTransport;
     if (name == "ferry") return CommandKind::Ferry;
+    if (name == "silo-build-tactical") return CommandKind::SiloBuildTactical;
+    if (name == "silo-build-nuke") return CommandKind::SiloBuildNuke;
+    if (name == "toggle-silo-auto") return CommandKind::ToggleSiloAuto;
     return std::nullopt;
 }
 

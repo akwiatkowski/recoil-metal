@@ -50,6 +50,7 @@ struct Fixture {
     std::vector<rm::sim::Economy> economies{2};
     std::vector<rm::sim::Projectile> shots;
     std::vector<rm::sim::Construction> building;
+    std::vector<rm::sim::AssistLink> assistLinks;
     std::vector<int> commandersEver{0, 0};
 
     rm::UnitTypeIndex engineerType{};
@@ -217,7 +218,8 @@ struct Fixture {
                              .passability = grids,
                              .commandersEver = commandersEver,
                              .baseStorage = {.mass = rm::sim::magFromFloat(10000.0f),
-                                             .energy = rm::sim::magFromFloat(10000.0f)}};
+                                             .energy = rm::sim::magFromFloat(10000.0f)},
+                             .assistLinks = &assistLinks};
         for (int i = 0; i < times; ++i) {
             (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
                                         roster.rate);
@@ -1026,4 +1028,58 @@ TEST_CASE("an interrupted structure stays on the map for any builder to resume")
         CHECK(f.building[0].finished());
         CHECK(f.building[0].builder == colleague);
     }
+}
+
+TEST_CASE("the assist scan reports who is helping, so the help can be drawn") {
+    Fixture f;
+    const UnitId founder = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId helper = f.roster.add(f.engineerType, 210.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    REQUIRE(f.build(founder, 205.0f, 200.0f));
+    REQUIRE(f.assist(helper, founder));
+    f.tick(1);
+
+    // The presentation channel answers "who lent what this tick" — the beam the HUD draws
+    // is honest only if it comes from the same scan that lends the rate, not a second
+    // guess at who might be helping.
+    REQUIRE(f.assistLinks.size() == 1);
+    CHECK(f.assistLinks[0].helper == helper);
+    CHECK(f.assistLinks[0].work == 0);
+    // `work` is a hint — the index can shift if the list loses a row later in the
+    // tick — so the link also names the site it meant, which is what a consumer
+    // must confirm before drawing.
+    CHECK(f.assistLinks[0].position == f.building[0].position);
+}
+
+TEST_CASE("a helper still walking over reports no link until it lends") {
+    Fixture f;
+    const UnitId founder = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId helper = f.roster.add(f.engineerType, 600.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    REQUIRE(f.build(founder, 205.0f, 200.0f));
+    REQUIRE(f.assist(helper, founder));
+    f.tick(5);
+
+    // 400 elmos out: no rate, no link — a beam to a unit doing nothing would lie.
+    CHECK(f.assistLinks.empty());
+}
+
+TEST_CASE("an idle engineering station reports its project as a link") {
+    Fixture f;
+    const UnitId founder = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId station = f.roster.add(f.stationType, 215.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    REQUIRE(f.build(founder, 205.0f, 200.0f));
+    f.tick(1);
+
+    REQUIRE(f.assistLinks.size() == 1);
+    CHECK(f.assistLinks[0].helper == station);
+    CHECK(f.assistLinks[0].work == 0);
+    CHECK(f.assistLinks[0].position == f.building[0].position);
 }

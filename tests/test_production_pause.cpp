@@ -228,13 +228,20 @@ TEST_CASE("a paused silo neither accumulates nor pays for ammunition",
     economy.storage = {rm::sim::Mag::fromInt(100000), rm::sim::Mag::fromInt(100000)};
     economy.stored = {rm::sim::Mag::fromInt(50000), rm::sim::Mag::fromInt(50000)};
 
-    // One running beat, then the pause, then two beats that must do nothing.
-    rm::sim::tickEconomy(economy, {}, {}, ammo);
+    // One running beat — the auto-refill queues the head and its economy event bills —
+    // then the pause, then two beats that must do nothing. `before > 0` is what makes
+    // this a pause test: a silo that never started had nothing to stop.
+    std::vector<rm::sim::SiloBuild> queue;
+    rm::sim::tickEconomy(economy, {}, {}, ammo, false, {}, rm::sim::kNoArmy, {}, {}, {},
+                         &queue);
     const rm::TickCount before = ammo.front().elapsedTicks;
+    REQUIRE(before > 0);
     ammo.front().paused = true;
     const rm::sim::Resources banked = economy.stored;
-    rm::sim::tickEconomy(economy, {}, {}, ammo);
-    rm::sim::tickEconomy(economy, {}, {}, ammo);
+    rm::sim::tickEconomy(economy, {}, {}, ammo, false, {}, rm::sim::kNoArmy, {}, {}, {},
+                         &queue);
+    rm::sim::tickEconomy(economy, {}, {}, ammo, false, {}, rm::sim::kNoArmy, {}, {}, {},
+                         &queue);
     CHECK(ammo.front().elapsedTicks == before);
     CHECK(ammo.front().stored == 0);
     CHECK(economy.stored.mass == banked.mass);

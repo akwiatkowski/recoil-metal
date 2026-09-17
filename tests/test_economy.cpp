@@ -175,8 +175,11 @@ TEST_CASE("UEB4302's interceptor economy event completes after its projectile-de
     CHECK(ammo.totalTicks == 2400);
     CHECK(amount(ammo.costPerTick.mass) == Approx(1.5f));
     CHECK(amount(ammo.costPerTick.energy) == Approx(150.0f));
+    // The queue carries the build now (`C-241`): auto-mode enqueues it on the first beat.
+    std::vector<rm::sim::SiloBuild> queue;
     for (int tick = 0; tick < 2400; ++tick) {
-        rm::sim::tickEconomy(economy, {}, {}, std::span<rm::sim::SiloAmmo>{&ammo, 1});
+        rm::sim::tickEconomy(economy, {}, {}, std::span<rm::sim::SiloAmmo>{&ammo, 1},
+                             false, {}, rm::sim::kNoArmy, {}, {}, {}, &queue);
     }
     CHECK(ammo.stored == 1);
     CHECK(ammo.elapsedTicks == 0);
@@ -186,11 +189,14 @@ TEST_CASE("a silo economy event retains partial deliveries until a whole product
     Economy economy = rich();
     economy.stored = res(0.75f, 75.0f);
     rm::sim::SiloAmmo ammo{.capacity = 1, .totalTicks = 1, .costPerTick = res(1.5f, 150.0f)};
-    rm::sim::tickEconomy(economy, {}, {}, std::span<rm::sim::SiloAmmo>{&ammo, 1});
+    std::vector<rm::sim::SiloBuild> queue;
+    rm::sim::tickEconomy(economy, {}, {}, std::span<rm::sim::SiloAmmo>{&ammo, 1},
+                         false, {}, rm::sim::kNoArmy, {}, {}, {}, &queue);
     CHECK(ammo.stored == 0);
     CHECK(amount(ammo.delivered.mass) == Approx(0.75f));
     economy.stored = res(0.75f, 75.0f);
-    rm::sim::tickEconomy(economy, {}, {}, std::span<rm::sim::SiloAmmo>{&ammo, 1});
+    rm::sim::tickEconomy(economy, {}, {}, std::span<rm::sim::SiloAmmo>{&ammo, 1},
+                         false, {}, rm::sim::kNoArmy, {}, {}, {}, &queue);
     CHECK(ammo.stored == 1);
 }
 

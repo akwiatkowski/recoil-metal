@@ -1386,7 +1386,7 @@ std::vector<DispatchedCommand> dispatchCommands(UnitScene& scene,
         rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
             issue, scene.store, scene.catalog, scene.players, scene.armies, terrain, gridForUnit,
             gAppTickRate, &scene.building, &scene.events, &scene.features, pathService,
-            scriptTasks, layerGridForUnit);
+            scriptTasks, layerGridForUnit, &scene.siloAmmo, &scene.siloQueue);
         if (rm::log::enabled(rm::log::Level::Debug)) {
             for (const auto unit : issue.units) {
                 rm::log::writef(rm::log::Level::Debug, "order",

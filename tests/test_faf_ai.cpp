@@ -1199,6 +1199,9 @@ TEST_CASE("FAF air scouts check out must-scout areas and clear them on arrival",
         local orders = __rm_faf_decide(0, snap)
         assert(#orders == 1 and orders[1].kind == 'scout',
             'a must-scout area jumps the scoutSites queue')
+        assert(brain.IntelData.AirHiPriScouts == 0
+            and brain.IntelData.AirLowPriScouts == 0,
+            'a must-scout checkout is free — the alternation counters do not move')
         local must = brain.InterestList.MustScout
         assert(#must == 1 and must[1].TaggedBy.h == scout.h, 'checkout tags the area')
         assert(orders[1].x >= 40 and orders[1].x <= 4056
@@ -1211,6 +1214,8 @@ TEST_CASE("FAF air scouts check out must-scout areas and clear them on arrival",
         orders = __rm_faf_decide(0, snap)
         assert(#brain.InterestList.MustScout == 0, 'arrival drops the reached area')
         assert(#orders == 1, 'the freed scout returns to the rotation')
+        assert(brain.IntelData.AirLowPriScouts == 1,
+            'the rotation lands its low visit on the counter, not the checkout')
     )");
     INFO(ai.lastError());
     REQUIRE(ok);
@@ -1255,6 +1260,194 @@ TEST_CASE("FAF dead scouts free their must-scout tag for the next scout",
         local orders = __rm_faf_decide(0, snap)
         assert(#orders == 1 and must[1].TaggedBy.h == scout2.h,
             'the next scout checks out the freed area')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
+TEST_CASE("FAF interest lists seed, promote, dedupe and sort like retail",
+          "[faf][ai][scouting]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 3, base = 'NormalMain',
+            markers = {}, numOpponents = 2,
+            scoutSites = {{x=1000, z=1000, high=true},
+                          {x=2000, z=2000, high=false}} })
+        local brain = __rm_faf.brains[0]
+        -- BuildScoutLocations: occupied enemy starts land in HighPriority,
+        -- enemy-leaning vacant starts in LowPriority, and the lists share
+        -- table identity with scoutSites so both views track one entry.
+        assert(#brain.InterestList.HighPriority == 1
+            and brain.InterestList.HighPriority[1] == brain.scoutSites[1])
+        assert(#brain.InterestList.LowPriority == 1
+            and brain.InterestList.LowPriority[1] == brain.scoutSites[2])
+        assert(brain.InterestList.HighPriority[1].Position[1] == 1000
+            and brain.InterestList.HighPriority[1].Position[3] == 1000
+            and brain.InterestList.HighPriority[1].LastScouted == 0)
+        assert(brain.NumOpponents == 2)
+        assert(brain.IntelData.HiPriScouts == 0
+            and brain.IntelData.AirHiPriScouts == 0
+            and brain.IntelData.AirLowPriScouts == 0)
+        -- ParseIntelThread: a structure 100+ ogrids from every high entry
+        -- removes the low entry it covers and lands in HighPriority.
+        __rm_faf_type('ENEMYFAC', {'STRUCTURE'})
+        local snap = {tick=100, units={}, occupied={}, underway={},
+            enemies={{bp='ENEMYFAC', x=2100, z=2100,
+                      __cats=__rm_faf.cats.ENEMYFAC}},
+            mass=500, energy=5000, massStorage=500, energyStorage=5000,
+            massIncome=10, energyIncome=100, massRequested=1, energyRequested=1,
+            massUsage=1, energyUsage=1, structuresUnderway=0, mobileUnderway=0}
+        __rm_faf_decide(0, snap)
+        assert(#brain.InterestList.LowPriority == 0,
+            'a covered low entry is promoted out')
+        assert(#brain.InterestList.HighPriority == 2)
+        local fresh = brain.InterestList.HighPriority[2]
+        assert(fresh.Position[1] == 2100, 'fresh x')
+        assert(fresh.Position[3] == 2100, 'fresh z')
+        assert(fresh.high == true, 'fresh high')
+        assert(fresh.LastScouted > 0,
+            'a fresh sighting counts as just-scouted')
+        assert(#brain.scoutSites == 2 and brain.scoutSites[2] == fresh,
+            'scoutSites and the priority lists hold the same entry')
+        -- A second structure inside the first's 100-ogrid radius is a dupe.
+        snap.enemies = {{bp='ENEMYFAC', x=2150, z=2150,
+                         __cats=__rm_faf.cats.ENEMYFAC}}
+        snap.tick = 200
+        __rm_faf_decide(0, snap)
+        assert(#brain.InterestList.HighPriority == 2,
+            'nearby structures share one entry')
+        -- Mass extractors never promote (StructuresNotMex).
+        __rm_faf_type('ENEMYMEX', {'STRUCTURE', 'MASSEXTRACTION'})
+        snap.enemies = {{bp='ENEMYMEX', x=3500, z=3500,
+                         __cats=__rm_faf.cats.ENEMYMEX}}
+        snap.tick = 300
+        __rm_faf_decide(0, snap)
+        assert(#brain.InterestList.HighPriority == 2,
+            'mass extractors stay off the intel lists')
+        -- SortScoutingAreas: stalest first, main-base distance the tiebreak.
+        brain.InterestList.HighPriority[1].LastScouted = 5
+        brain.InterestList.HighPriority[2].LastScouted = 5
+        brain:SortScoutingAreas(brain.InterestList.HighPriority)
+        assert(brain.InterestList.HighPriority[1].Position[1] == 1000,
+            'nearer to MAIN wins a LastScouted tie')
+        brain.InterestList.HighPriority[1].LastScouted = 9
+        brain:SortScoutingAreas(brain.InterestList.HighPriority)
+        assert(brain.InterestList.HighPriority[1].Position[1] == 2100,
+            'the staler entry leads regardless of distance')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
+TEST_CASE("FAF scout dispatch alternates priorities through IntelData",
+          "[faf][ai][scouting]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 2, base = 'NormalMain',
+            markers = {}, numOpponents = 1,
+            scoutSites = {{x=1000, z=1000, high=true},
+                          {x=2000, z=2000, high=false}} })
+        local brain = __rm_faf.brains[0]
+        local builders = {}
+        for _, item in ipairs(brain.builders) do
+            if item.spec.BuilderName == 'T1 Land Scout Form' then
+                table.insert(builders, item)
+            end
+        end
+        brain.builders = builders
+        __rm_faf_type('SCOUT', {'MOBILE', 'LAND', 'SCOUT', 'TECH1'})
+        __rm_faf_scout_route = function(h, x, z) return {{x, z}} end
+        local scout = {h=__rm_faf_handle(1, 1), bp='SCOUT', x=0, z=0, idle=true,
+            __cats=__rm_faf.cats.SCOUT, vision=100}
+        local snap = {tick=0, units={scout}, occupied={}, underway={}, enemies={},
+            mass=500, energy=5000, massStorage=500, energyStorage=5000,
+            massIncome=10, energyIncome=100, massRequested=1, energyRequested=1,
+            massUsage=1, energyUsage=1, structuresUnderway=0, mobileUnderway=0}
+        -- One opponent buys exactly one high-priority sweep, then the counter
+        -- resets on the low visit and the stamp lands on the entry.
+        snap.tick = 10
+        assert(#__rm_faf_decide(0, snap) == 1)
+        assert(brain.IntelData.HiPriScouts == 1)
+        assert(brain.scoutSites[1].LastScouted > 0)
+        scout.idle = false; snap.tick = 15
+        assert(#__rm_faf_decide(0, snap) == 0)
+        scout.idle = true; scout.x = 1000; scout.z = 1000; snap.tick = 20
+        assert(#__rm_faf_decide(0, snap) == 1)
+        assert(brain.IntelData.HiPriScouts == 0,
+            'a low-priority visit resets the sweep counter')
+        assert(brain.scoutSites[2].LastScouted > 0)
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
+TEST_CASE("FAF air scouts return to high priority after a low visit",
+          "[faf][ai][scouting]") {
+    // platoon.lua's AirScoutingAI latches AirLowPriScouts on a low visit so the next
+    // pass cannot take another, and its else-branch resets both counters the beat
+    // after. An air scout that never re-arms high priority stops watching the enemy.
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 2, base = 'NormalMain',
+            markers = {}, numOpponents = 1,
+            scoutSites = {{x=1000, z=1000, high=true},
+                          {x=2000, z=2000, high=false},
+                          {x=3000, z=3000, high=false}} })
+        local brain = __rm_faf.brains[0]
+        local builders = {}
+        for _, item in ipairs(brain.builders) do
+            if item.spec.BuilderName == 'T1 Land Scout Form' then
+                table.insert(builders, item)
+            end
+        end
+        brain.builders = builders
+        __rm_faf_type('AIRSCOUT', {'MOBILE', 'AIR', 'SCOUT', 'TECH1'})
+        local scout = {h=__rm_faf_handle(1, 1), bp='AIRSCOUT', x=0, z=0, idle=true,
+            __cats=__rm_faf.cats.AIRSCOUT, vision=100}
+        local snap = {tick=0, units={scout}, occupied={}, underway={}, enemies={},
+            mass=500, energy=5000, massStorage=500, energyStorage=5000,
+            massIncome=10, energyIncome=100, massRequested=1, energyRequested=1,
+            massUsage=1, energyUsage=1, structuresUnderway=0, mobileUnderway=0}
+        __rm_faf_scout_route = function(h, x, z) return {{x, z}} end
+
+        -- One opponent buys exactly one high sweep, then one low pass.
+        snap.tick = 10
+        assert(#__rm_faf_decide(0, snap) == 1)
+        assert(brain.IntelData.AirHiPriScouts == 1)
+        assert(brain.scoutAssignments[scout.h].site.high == true)
+        scout.idle = false; snap.tick = 15
+        assert(#__rm_faf_decide(0, snap) == 0)
+        scout.idle = true; snap.tick = 20
+        assert(#__rm_faf_decide(0, snap) == 1)
+        assert(brain.scoutAssignments[scout.h].site.high == false,
+            'the sweep count buys a low-priority pass')
+        assert(brain.IntelData.AirLowPriScouts == 1)
+
+        -- Retail's else resets the latch the beat after a low visit: the next
+        -- dispatch must be high again — never another low back-to-back.
+        scout.idle = false; snap.tick = 25
+        assert(#__rm_faf_decide(0, snap) == 0)
+        scout.idle = true; snap.tick = 30
+        assert(#__rm_faf_decide(0, snap) == 1)
+        assert(brain.scoutAssignments[scout.h].site.high == true,
+            'a low visit re-arms the high-priority sweep')
+        assert(brain.IntelData.AirLowPriScouts == 0)
+        assert(brain.IntelData.AirHiPriScouts == 1)
     )");
     INFO(ai.lastError());
     REQUIRE(ok);

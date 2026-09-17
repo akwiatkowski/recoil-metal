@@ -72,6 +72,7 @@ struct Fixture {
     std::vector<rm::sim::Projectile> projectiles;
     std::vector<rm::sim::Construction> building;
     std::vector<rm::sim::SiloAmmo> siloAmmo;
+    std::vector<rm::sim::SiloBuild> siloQueue;
     std::vector<rm::sim::MissileRedirect> redirects;
     std::vector<int> commandersEver;
 
@@ -104,6 +105,7 @@ struct Fixture {
             .projectiles = &projectiles,
                 .building = &building,
                 .siloAmmo = &siloAmmo,
+                .siloQueue = &siloQueue,
                 .redirects = &redirects,
             .commandersEver = commandersEver,
         };
@@ -145,6 +147,21 @@ TEST_CASE("silo ammunition state changes the match hash") {
     fixture.siloAmmo.front().slot = 1;
     CHECK(fixture.hash() != withElapsed);
     CHECK(fixture.hash() != withAmmo);
+    // Auto-mode is authoritative — a silo set to hold is not a silo set to refill.
+    fixture.siloAmmo.front().autoBuild = false;
+    CHECK(fixture.hash() != withElapsed);
+}
+
+TEST_CASE("the silo build queue changes the match hash") {
+    // A pending build changes the NEXT tick's demand, so two matches that differ only in
+    // one queued round must hash apart now, not when the round lands.
+    Fixture fixture;
+    const auto baseline = fixture.hash();
+    fixture.siloQueue.push_back({.owner = fixture.store.idAt(0), .slot = 0});
+    CHECK(fixture.hash() != baseline);
+    const auto oneQueued = fixture.hash();
+    fixture.siloQueue.push_back({.owner = fixture.store.idAt(0), .slot = 1});
+    CHECK(fixture.hash() != oneQueued);
 }
 
 TEST_CASE("redirector state changes the match hash") {

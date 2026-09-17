@@ -428,11 +428,46 @@ struct SiloAmmo {
     /// Derived, not authored: serialising it would make the same fact live in two places.
     bool paused = false;
 
-    [[nodiscard]] bool building() const noexcept {
-        return stored < capacity && totalTicks > 0 && costPerTick.mass >= Mag{}
-               && costPerTick.energy >= Mag{};
-    }
+    /// Retail's `SetAutoMode` (`AutoModeEnabled`, the build button's right-click): while on,
+    /// an idle silo re-queues itself (`siloAutoRefill`, `C-241`). Per-record rather than
+    /// per-unit because the records are all this model has of the unit; the toggle command
+    /// sets every record the owner carries, so they cannot disagree in practice.
+    bool autoBuild = true;
 };
+
+/// One entry in a silo's build queue — the list at `CAiSiloBuildImpl+0x20` (`C-081`).
+///
+/// THE QUEUE IS PER UNIT AND FIFO: a unit builds one missile at a time, whichever slot the
+/// head entry names. `SiloIsFull(type)` counts a slot's stored rounds PLUS its queued
+/// entries against its capacity (`C-241`), which is the whole reason the queue exists as
+/// state rather than as "does this record want a round".
+struct SiloBuild {
+    UnitId owner{};
+    /// Which of the owner's silo slots this build feeds — `SiloAmmo::slot`, not the weapon
+    /// index: the record on that slot supplies the costs.
+    std::uint8_t slot = 0;
+};
+
+/// C-241's `SiloAddBuild` (`0x005d5a90`): push one queued build for `owner`'s `slot` —
+/// allowed when a buildable record sits on that slot and stored plus queued is below its
+/// capacity (`SiloIsFull(type)`). The player's `IssueSiloBuildTactical/Nuke` and the
+/// auto-refill share this one admission path, exactly as retail shares the function.
+/// Returns whether an entry was pushed.
+[[nodiscard]] bool queueSiloBuild(std::vector<SiloBuild>& queue,
+                                  std::span<const SiloAmmo> ammo, UnitId owner,
+                                  std::uint8_t slot) noexcept;
+
+/// Whether `ammo` holds the owner's queue HEAD — the one build that runs an economy event
+/// at a time (`C-081`'s single `CEconomyEvent`). No queue, no build: a caller without queue
+/// state has no silo production at all.
+[[nodiscard]] bool siloHeadActive(const SiloAmmo& ammo,
+                                  std::span<const SiloBuild> queue) noexcept;
+
+/// C-241's state-0 refill (`0x005d5d60`–`0x005d5d78`): when `owner` has no queued builds,
+/// an auto-mode, unpaused silo enqueues tactical first, the nuke slot only if the tactical
+/// push could not take. No-op when the queue is non-empty — the unit is already busy.
+[[nodiscard]] bool siloAutoRefill(std::vector<SiloBuild>& queue,
+                                  std::span<const SiloAmmo> ammo, UnitId owner) noexcept;
 
 /// One Cybran Loyalist-style missile redirector (`C-088`, ART-S007
 /// `lua/sim/defaultantiprojectile.lua:MissileRedirect`). Match-owned like `SiloAmmo`:
@@ -505,12 +540,18 @@ void advanceConstruction(Construction& work) noexcept;
 /// `priorities` is `UnitStore::buildPriorities()` — a slot-indexed tier per unit, looked up
 /// by each work record's producer. An empty span means every consumer is Normal, which is
 /// bit-identical to the pre-tier allocator: one pass over the whole supply.
+///
+/// `siloQueue` is the per-unit FIFO of pending missile builds (`C-081`/`C-241`). The tick
+/// runs each owner's state-0 auto-refill on it first, then bills the queue HEAD's record —
+/// one build per unit at a time — and pops an entry when its production lands in `stored`.
+/// Null means the caller has no queue: no refills, no billing, silos are inert.
 void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<RepairWork> repairs = {}, std::span<SiloAmmo> siloAmmo = {},
                   bool deferOverflow = false, std::span<UnitResourceFlow> flows = {},
                   int armyIndex = kNoArmy, std::span<EnhancementWork> enhancements = {},
                   std::span<CaptureWork> captures = {},
-                  std::span<const BuildPriority> priorities = {});
+                  std::span<const BuildPriority> priorities = {},
+                  std::vector<SiloBuild>* siloQueue = nullptr);
 ///
 /// Run AFTER every army has ticked, because an army's spare capacity is only known once it
 /// has spent. Not a flat `1/n`: retail walks the recipients dividing the *remaining* excess

@@ -85,6 +85,12 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "unload-transport";
     case CommandKind::Ferry:
         return "ferry";
+    case CommandKind::SiloBuildTactical:
+        return "silo-build-tactical";
+    case CommandKind::SiloBuildNuke:
+        return "silo-build-nuke";
+    case CommandKind::ToggleSiloAuto:
+        return "toggle-silo-auto";
     }
     return "stop";
 }

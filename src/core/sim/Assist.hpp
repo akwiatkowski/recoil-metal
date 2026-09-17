@@ -4,6 +4,7 @@
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
 
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <span>
@@ -56,14 +57,35 @@ stationConstructionInReach(UnitIndex slot, const UnitStore& store, const UnitCat
                            std::span<const Construction> building,
                            std::span<const Army> armies) noexcept;
 
+/// One helper's contribution this tick: `helper` lent its rate to `building[work]`.
+///
+/// PRESENTATION STATE — the same facts the rate itself is recomputed from, kept so the
+/// HUD can draw a build stream from the unit actually helping rather than guessing who
+/// might be. Like `assistPerTick` it is rewritten every tick: a helper that walks away
+/// or dies drops out of the list the same beat it stops contributing.
+struct AssistLink {
+    UnitId helper{};
+    /// Index into the `building` span `applyAssistance` was given — a HINT, not an
+    /// identity. A row reaped after this pass (a dead upgrade's scaffold leaves the
+    /// list later in the same tick) shifts every index after it, so a consumer must
+    /// confirm the row still is the site `position` names before drawing.
+    std::size_t work = 0;
+    /// The site the helper lent its rate to — the link's identity across a `building`
+    /// vector that may be shortened before the HUD reads it. Two constructions cannot
+    /// share a cell, so the position is unambiguous.
+    std::array<Fx, 3> position{};
+};
+
 /// Recomputes every construction's `assistPerTick` from who is currently helping: every
 /// standing Assist/Guard order in reach of its builder, then every idle engineering station
 /// with a project in reach. Returns how many helpers contributed this tick — the outward
-/// sign the order works.
+/// sign the order works. `links`, when given, is cleared and refilled with one entry per
+/// helper — presentation output, excluded from saves and state hashes.
 std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
                             std::vector<Construction>& building,
                             std::span<const Army> armies = {}, const Intel* intel = nullptr,
                             const PlayableRect* playableRect = nullptr,
-                            TickIndex tick = 0, TickRate rate = TickRate{});
+                            TickIndex tick = 0, TickRate rate = TickRate{},
+                            std::vector<AssistLink>* links = nullptr);
 
 } // namespace rm::sim

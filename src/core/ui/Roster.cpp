@@ -150,11 +150,13 @@ InfoCard rosterTileCard(const RosterTile& tile) {
     }
     if (tile.siloStock) {
         // The one number a launch order cares about; empty reads as a warning because
-        // the order will sit and wait on it.
+        // the order will sit and wait on it. Queued builds show as "+N" on the stored
+        // half — they count against capacity but are not in the tubes yet.
         card.rows.push_back(InfoRow{
             .label = "MISSILES",
-            .value = std::to_string(tile.siloStock->first) + " / "
-                     + std::to_string(tile.siloStock->second),
+            .value = std::to_string(tile.siloStock->first)
+                     + (tile.siloQueued > 0 ? "+" + std::to_string(tile.siloQueued) : "")
+                     + " / " + std::to_string(tile.siloStock->second),
             .tint = tile.siloStock->first > 0 ? kGain : kWarn});
     }
     // The X-key setting rides the CORNER, not a row: the card caps at three rows

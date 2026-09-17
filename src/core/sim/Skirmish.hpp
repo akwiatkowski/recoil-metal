@@ -2,6 +2,7 @@
 
 #include "core/map/HeightField.hpp"
 #include "core/sim/Army.hpp"
+#include "core/sim/Assist.hpp"
 #include "core/sim/Combat.hpp"
 #include "core/sim/Capture.hpp"
 #include "core/sim/Command.hpp"
@@ -93,6 +94,11 @@ struct Match {
     /// CAiSiloBuildImpl-shaped state, separate from UnitStore (`C-081`).
     std::vector<SiloAmmo>* siloAmmo = nullptr;
 
+    /// The silo build queues — `CAiSiloBuildImpl+0x20` (`C-081`). Entries die with their
+    /// owner alongside the records, and the tick drives each queue's head through the
+    /// economy. Null for a scene with no silos.
+    std::vector<SiloBuild>* siloQueue = nullptr;
+
     /// Continuous self-upgrade work; dispatch advances it, economy grants its resources.
     std::vector<EnhancementWork>* enhancements = nullptr;
 
@@ -169,6 +175,11 @@ struct Match {
 
     /// Optional presentation/debug output; excluded from saves and state hashes.
     std::vector<UnitResourceFlow>* resourceFlows = nullptr;
+
+    /// Who lent build power to what this tick — optional presentation output the same
+    /// scan that adds the rate fills in (`applyAssistance`). Cleared and rewritten every
+    /// tick; excluded from saves and state hashes like `resourceFlows`.
+    std::vector<AssistLink>* assistLinks = nullptr;
 
     /// What each alliance can see (ADR-037), or null for a scene with no fog of war.
     ///

@@ -1229,7 +1229,27 @@ int runWindowed(const Session& session) {
             if (rm::ui::insideCommandRack(commandRack, hudPoint[0], hudPoint[1])) {
                 const std::optional<std::size_t> slot =
                     rm::ui::commandSlotAt(commandRack, hudPoint[0], hudPoint[1]);
+                const auto siloBuildCell = [&]() -> bool {
+                    // Retail's BuildOrderBehavior: left click queues one missile, right
+                    // click flips auto-mode (`SetAutoMode`) — on the SAME button.
+                    return slot
+                           && (commandPage[*slot].order
+                                  == rm::sim::CommandKind::SiloBuildTactical
+                               || commandPage[*slot].order
+                                      == rm::sim::CommandKind::SiloBuildNuke);
+                };
                 if (button == rm::MouseButton::Right) {
+                    if (siloBuildCell()) {
+                        (void)submitCommand(units, rm::sim::CommandIssue{
+                            .tick = static_cast<rm::TickIndex>(matchTicks),
+                            .phase = rm::sim::CommandPhase::PreTick,
+                            .source = static_cast<rm::CommandSource>(
+                                playerDriving(units, units.playerArmy)),
+                            .player = playerDriving(units, units.playerArmy),
+                            .kind = rm::sim::CommandKind::ToggleSiloAuto,
+                            .units = selected,
+                        });
+                    }
                     armedCommand.reset();
                 } else if (const auto on = submitAutoExpandControl(
                                runner, selected, frame, hudPoint[0], hudPoint[1])) {
@@ -1262,7 +1282,9 @@ int runWindowed(const Session& session) {
                     const rm::sim::CommandKind kind =
                         commandPage[*slot].order.value_or(
                             *rm::ui::kCommandDescriptors[*slot].kind);
-                    if (kind == rm::sim::CommandKind::Stop || kind == rm::sim::CommandKind::Dive) {
+                    if (kind == rm::sim::CommandKind::Stop || kind == rm::sim::CommandKind::Dive
+                        || kind == rm::sim::CommandKind::SiloBuildTactical
+                        || kind == rm::sim::CommandKind::SiloBuildNuke) {
                         (void)submitCommand(units, rm::sim::CommandIssue{
                             .tick = static_cast<rm::TickIndex>(matchTicks),
                             .phase = rm::sim::CommandPhase::PreTick,
@@ -1688,6 +1710,12 @@ int runWindowed(const Session& session) {
                 if (!guards.empty()) {
                     (void)issueGuard(units, guards, playerDriving(units, units.playerArmy),
                                      static_cast<rm::TickIndex>(matchTicks), *allyHit, mods.shift);
+                    const rm::sim::Transform& at = units.store.transforms()[allyHit->index];
+                    orderMarks.push_back(OrderMark{
+                        .position = {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                                     rm::sim::fxToFloat(at.z)},
+                        .age = 0.0f,
+                    });
                     armedCommand.reset();
                 }
                 return;
@@ -1757,6 +1785,11 @@ int runWindowed(const Session& session) {
                 (void)(movers.empty()
                            || issueMove(units, movers, player, tick, at.x, at.z, mods.shift));
                 if (repairing && !builders.empty()) {
+                    orderMarks.push_back(OrderMark{
+                        .position = {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                                     rm::sim::fxToFloat(at.z)},
+                        .age = 0.0f,
+                    });
                     std::printf("repair: %zu builder(s) submitted\n", builders.size());
                 }
                 if (explicitRepair) {
@@ -1794,6 +1827,11 @@ int runWindowed(const Session& session) {
                     (void)(movers.empty()
                                || issueMove(units, movers, player, tick, at.x, at.z, mods.shift));
                     if (assisting && !builders.empty()) {
+                        orderMarks.push_back(OrderMark{
+                            .position = {rm::sim::fxToFloat(at.x), rm::sim::fxToFloat(at.y),
+                                         rm::sim::fxToFloat(at.z)},
+                            .age = 0.0f,
+                        });
                         std::printf("assist: %zu builder(s) submitted for %s\n", builders.size(),
                                     targetDef->name.c_str());
                     }
@@ -1838,6 +1876,12 @@ int runWindowed(const Session& session) {
                                            : 0;
                         }
                         if (ordered > 0) {
+                            orderMarks.push_back(OrderMark{
+                                .position = {rm::sim::fxToFloat(site->position[0]),
+                                             rm::sim::fxToFloat(site->position[1]),
+                                             rm::sim::fxToFloat(site->position[2])},
+                                .age = 0.0f,
+                            });
                             std::printf("assist: %zu builder(s) ordered onto the site\n",
                                         ordered);
                         }
@@ -2380,7 +2424,16 @@ int runWindowed(const Session& session) {
                 }
             }
             commandAvailable = rm::ui::commandAvailability(commandSelection);
-            commandPage = rm::ui::commandPage(commandSelection);
+            // The silo-build cells key on the SELECTION's records — a silo that is not
+            // selected neither places a cell nor answers for fullness.
+            std::vector<rm::sim::SiloAmmo> selectedSilos;
+            for (const rm::sim::SiloAmmo& record : units.siloAmmo) {
+                if (std::ranges::find(selected, record.owner) != selected.end()) {
+                    selectedSilos.push_back(record);
+                }
+            }
+            commandPage = rm::ui::commandPage(
+                commandSelection, selectedSilos, units.siloQueue);
             // Per-selection pause flags, aligned with `commandSelection`: the production
             // toggle's lit cell and its inspector card both read them.
             productionPaused.clear();
@@ -2419,6 +2472,27 @@ int runWindowed(const Session& session) {
                     if (i < productionPaused.size() && productionPaused[i]) ++held;
                 }
                 commandEngaged[rackSlot] = producers > 0 && held == producers;
+            }
+            // Auto-build lights a silo-build cell the way auto-expand lights AUTO MEX:
+            // every silo record the cell covers is set to refill itself.
+            for (std::size_t rackSlot = 0; rackSlot < commandPage.size(); ++rackSlot) {
+                const auto kind = commandPage[rackSlot].order;
+                if (kind != rm::sim::CommandKind::SiloBuildTactical
+                    && kind != rm::sim::CommandKind::SiloBuildNuke) {
+                    continue;
+                }
+                const std::uint8_t siloSlot =
+                    kind == rm::sim::CommandKind::SiloBuildNuke ? 1 : 0;
+                std::size_t silos = 0, autos = 0;
+                for (const rm::sim::SiloAmmo& record : units.siloAmmo) {
+                    if (record.slot != siloSlot
+                        || std::ranges::find(selected, record.owner) == selected.end()) {
+                        continue;
+                    }
+                    ++silos;
+                    if (record.autoBuild) ++autos;
+                }
+                commandEngaged[rackSlot] = silos > 0 && autos == silos;
             }
             // Advance page ownership with the tiles, not with input. A control-group key can
             // change `selected` between display callbacks; until this rebuild, clicks must keep

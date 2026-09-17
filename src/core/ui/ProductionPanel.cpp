@@ -151,16 +151,16 @@ void appendProductionPanel(Geometry& out, const text::Font& labelFont,
     const float cornerWidth = readoutFont.usable()
                                 ? text::measureText(readoutFont.glyphs, corner)
                                 : 0.0f;
-    // Who is helping, left of the corner: "ASSIST +20/S" is the production panel's only
-    // evidence that an Assist order or an idle engineering station is lending its rate.
+    // Who is helping: "ASSIST +20/S" is the production panel's only evidence that an
+    // Assist order or an idle engineering station is lending its rate. It gets its own
+    // line below — the header's priority and repeat cells already claim its right edge,
+    // and squeezing the readout in beside them printed it on top of "NORMAL".
     const std::string assist = view.building && view.assistRate > 0.0f && readoutFont.usable()
         ? "ASSIST +" + std::to_string(static_cast<int>(std::lround(view.assistRate))) + "/S"
         : std::string{};
-    const float assistWidth = assist.empty() ? 0.0f
-        : text::measureText(readoutFont.glyphs, assist) + kInset;
     // The header's right edge is claimed by the repeat cell and the priority cell
     // beside it — the title stops short of both.
-    const float titleWidth = std::max(0.0f, rect.width - 192.0f - assistWidth);
+    const float titleWidth = std::max(0.0f, rect.width - 192.0f);
     const std::string title = fitLine(labelFont.glyphs, view.factoryName, titleWidth);
     (void)text::appendText(out.label, labelFont.glyphs, title, rect.x + kInset,
                            titleBaseline, kInk);
@@ -168,11 +168,6 @@ void appendProductionPanel(Geometry& out, const text::Font& labelFont,
         (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, corner,
                                rect.right() - kInset - cornerWidth, titleBaseline,
                                kInk);
-        if (!assist.empty()) {
-            (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, assist,
-                                   rect.right() - kInset - cornerWidth - assistWidth,
-                                   titleBaseline, theme.label);
-        }
     }
 
     // The progress of the build under way: a well the full width, filled from the left. An
@@ -215,6 +210,16 @@ void appendProductionPanel(Geometry& out, const text::Font& labelFont,
 
     // The orders, current first, one row each: the name on the left, the count on the right.
     const std::size_t room = productionRowsFor(rect);
+    // The assist readout anchors at the BOTTOM row slot — a fixed spot rather than one that
+    // drifts as the queue grows. A queue that fills every row leaves no line for it, and it
+    // drops rather than overwrite a queued order's name.
+    if (!assist.empty() && page.shown < room) {
+        (void)text::appendText(out.foregroundReadout, readoutFont.glyphs, assist,
+                               rect.x + kInset,
+                               rect.y + kFirstRowBaseline
+                                   + static_cast<float>(room - 1) * kRowPitch,
+                               theme.label);
+    }
     float baseline = rect.y + kFirstRowBaseline;
     if (view.queue.empty()) {
         if (room > 0) {

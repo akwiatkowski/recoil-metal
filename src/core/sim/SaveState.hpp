@@ -44,6 +44,9 @@ struct SaveState {
     std::uint64_t pathServiceBeats{};
     UnitStore::Snapshot units{};
     std::vector<SiloAmmo> siloAmmo;
+    /// The per-unit missile build queues (`C-241`), from v33. Older saves decode with no
+    /// queued builds — the records' auto-refill restocks them on the first tick.
+    std::vector<SiloBuild> siloQueue;
     std::vector<MissileRedirect> redirects;
     std::optional<EconomyArmyState> economyArmies;
     std::vector<EnhancementWork> enhancements;

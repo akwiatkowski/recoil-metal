@@ -92,6 +92,59 @@ MissileRedirect makeMissileRedirect(UnitId owner, Fx radiusElmos,
                            .cooldownTicks = cooldownTicks};
 }
 
+bool queueSiloBuild(std::vector<SiloBuild>& queue, std::span<const SiloAmmo> ammo,
+                    UnitId owner, std::uint8_t slot) noexcept {
+    const SiloAmmo* record = nullptr;
+    for (const SiloAmmo& value : ammo) {
+        if (value.owner == owner && value.slot == slot) {
+            record = &value;
+            break;
+        }
+    }
+    // SiloAddBuild's gates (`0x005d5a90`): the slot weapon and a projectile blueprint
+    // behind it — a record that could not derive a production length has neither.
+    if (record == nullptr || record->totalTicks == 0 || record->costPerTick.mass < Mag{}
+        || record->costPerTick.energy < Mag{}) {
+        return false;
+    }
+    // SiloIsFull(type): the queued builds count against capacity, not just the tube.
+    const auto pending = static_cast<int>(std::count_if(
+        queue.begin(), queue.end(),
+        [&](const SiloBuild& entry) { return entry.owner == owner && entry.slot == slot; }));
+    if (record->stored + pending >= record->capacity) {
+        return false;
+    }
+    queue.push_back(SiloBuild{.owner = owner, .slot = slot});
+    return true;
+}
+
+bool siloHeadActive(const SiloAmmo& ammo, std::span<const SiloBuild> queue) noexcept {
+    // One CEconomyEvent per unit: the head of ITS queue builds, nothing else does.
+    const auto head = std::ranges::find_if(
+        queue, [&](const SiloBuild& entry) { return entry.owner == ammo.owner; });
+    return head != queue.end() && head->slot == ammo.slot;
+}
+
+bool siloAutoRefill(std::vector<SiloBuild>& queue, std::span<const SiloAmmo> ammo,
+                    UnitId owner) noexcept {
+    // State 0 means the queue is empty — anything queued is already a build in flight.
+    if (std::ranges::any_of(queue, [&](const SiloBuild& entry) {
+            return entry.owner == owner;
+        })) {
+        return false;
+    }
+    // AutoMode off or production paused leaves the idle silo idle (`SetAutoMode` in the
+    // orders UI; the pause mirror keeps a held silo from topping itself up).
+    const auto self = std::ranges::find_if(
+        ammo, [&](const SiloAmmo& record) { return record.owner == owner; });
+    if (self == ammo.end() || !self->autoBuild || self->paused) {
+        return false;
+    }
+    // Tactical first; the nuke slot only when the tactical push could not take — the
+    // exact `0x005d5d60`–`0x005d5d78` ordering C-241 records.
+    return queueSiloBuild(queue, ammo, owner, 0) || queueSiloBuild(queue, ammo, owner, 1);
+}
+
 void advanceConstruction(Construction& work) noexcept {
     if (work.paused || work.finished()) {
         // A paused build stamps nothing: it was not worked this beat, and billing for it
@@ -118,7 +171,8 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<RepairWork> repairs, std::span<SiloAmmo> siloAmmo, bool deferOverflow,
                   std::span<UnitResourceFlow> flows, int armyIndex,
                   std::span<EnhancementWork> enhancements, std::span<CaptureWork> captures,
-                  std::span<const BuildPriority> priorities) {
+                  std::span<const BuildPriority> priorities,
+                  std::vector<SiloBuild>* siloQueue) {
     // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
     // pass, so its over-cap excess is still lost rather than becoming a hidden reserve.
     economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
@@ -196,15 +250,24 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         wanted += demand;
         bucket(outstanding(demand, work.allocated), tierAt(work.owner.index));
     }
-    const auto autoBuilding = [&siloAmmo](const SiloAmmo& ammo) {
-        if (!ammo.building()) return false;
-        // C-241 starts tactical first; nuke is considered only when tactical could not queue.
-        return ammo.slot == 0 || std::none_of(siloAmmo.begin(), siloAmmo.end(),
-            [&ammo](const SiloAmmo& other) { return other.owner == ammo.owner && other.slot == 0
-                                                      && other.building(); });
+    // C-241's state 0, run once per owner before demand is counted: an idle auto-mode
+    // silo enqueues its next round — tactical first, nuke only if the tactical push
+    // could not take — so a fresh queue entry bills the tick it was made.
+    if (siloQueue != nullptr) {
+        for (const SiloAmmo& ammo : siloAmmo) {
+            (void)siloAutoRefill(*siloQueue, siloAmmo, ammo.owner);
+        }
+    }
+    // Head lookups read the queue live, and the queue does not shrink during this pass:
+    // a spent head's erase is deferred to `siloSpent` below, so the entry that completed
+    // stays head until every tier pass is done and a promoted entry cannot bill a beat
+    // whose demand was counted without it.
+    const auto headActive = [&siloQueue](const SiloAmmo& ammo) {
+        return siloQueue != nullptr && siloHeadActive(ammo, *siloQueue);
     };
     for (const SiloAmmo& ammo : siloAmmo) {
-        if (!ammo.paused && autoBuilding(ammo)) {
+        // Only the owner's queue HEAD builds — one economy event per unit (`C-081`).
+        if (!ammo.paused && headActive(ammo)) {
             wanted += ammo.costPerTick;
             bucket(outstanding(ammo.costPerTick, ammo.delivered),
                    tierAt(ammo.owner.index));
@@ -262,6 +325,8 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     Fx lowestR1 = kFxOne;
     Fx lowestR2 = kFxOne;
     bool lowestBinds = false;
+    // Queue entries whose builds land this beat, erased after every tier pass (below).
+    std::vector<SiloBuild> siloSpent;
     for (std::size_t tier = multi.size(); tier-- > 0;) {  // High → Normal → Low
         const Resources total{.mass = multi[tier].mass + single[tier].mass,
                               .energy = multi[tier].energy + single[tier].energy};
@@ -398,7 +463,7 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
             }
         }
         for (SiloAmmo& ammo : siloAmmo) {
-            if (ammo.paused || !autoBuilding(ammo) || tierAt(ammo.owner.index) != tier) {
+            if (ammo.paused || !headActive(ammo) || tierAt(ammo.owner.index) != tier) {
                 continue;
             }
             // C-084: this is an event delivery accumulator, not Construction's lagged ratio.
@@ -416,12 +481,30 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
                 if (ammo.elapsedTicks >= ammo.totalTicks) {
                     ++ammo.stored;
                     ammo.elapsedTicks = 0;
+                    // The build just landed in the tube — its queue entry is spent, and
+                    // the next one becomes the head the NEXT beat reads. Erasing here
+                    // would promote it mid-beat: a later record of the same owner would
+                    // then see the new head and draw a grant whose demand was never
+                    // counted in `wanted`. The spent entry stays head until the pass
+                    // ends — one economy event per unit per beat (`C-081`).
+                    siloSpent.push_back(SiloBuild{.owner = ammo.owner, .slot = ammo.slot});
                 }
             }
         }
 
         supply.mass = std::max(Mag{}, supply.mass - (granted.mass - passStart.mass));
         supply.energy = std::max(Mag{}, supply.energy - (granted.energy - passStart.energy));
+    }
+
+    // The spent heads leave only now that every tier pass is done — next beat's demand
+    // pass is the first to see the promoted head. Each spent entry is still its owner's
+    // head: nothing else shortened the queue since the grant that spent it.
+    for (const SiloBuild& spent : siloSpent) {
+        const auto head = std::ranges::find_if(
+            *siloQueue, [&](const SiloBuild& entry) { return entry.owner == spent.owner; });
+        if (head != siloQueue->end() && head->slot == spent.slot) {
+            siloQueue->erase(head);
+        }
     }
     economy.multiResourceFunded = lowestR1;
     economy.singleResourceFunded = lowestR2;

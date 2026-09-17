@@ -95,6 +95,10 @@ struct RosterTile {
     /// type carries a silo (`SiloAmmo` is match-owned, so this is gathered, not read).
     std::optional<std::pair<int, int>> siloStock;
 
+    /// Missiles the group's silos are still building — the `SiloBuild` queue entries,
+    /// summed like `siloStock`. Zero means nothing is queued, so the card stays quiet.
+    int siloQueued = 0;
+
     /// The group's shared target focus (#15809), when every unit of the type
     /// agrees on a non-Default one — the card stays silent while the group is
     /// unfocused, the same way the underbar is silent at full health. `focusMixed`

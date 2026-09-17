@@ -672,7 +672,9 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                                  std::vector<Construction>* building, EventQueue* events,
                                  const FeatureStore* features, PathService* pathService,
                                  ScriptTaskHost* scriptTasks,
-                                 const CommandGridForUnit& approachGridForUnit) {
+                                 const CommandGridForUnit& approachGridForUnit,
+                                 std::vector<SiloAmmo>* siloAmmo,
+                                 std::vector<SiloBuild>* siloQueue) {
     const CommandIssue issue = onBuildGrid(issued, catalog, terrain);
     ApplyCommandResult result;
     if (!validCancellation(issue) || issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
@@ -926,6 +928,58 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         }
         return result;
     }
+    if (issue.kind == CommandKind::SiloBuildTactical
+        || issue.kind == CommandKind::SiloBuildNuke) {
+        // `IssueSiloBuildTactical/Nuke` reach the same `SiloAddBuild` the idle refill
+        // uses (`C-241`): the slot exists, its round is buildable, and stored plus
+        // queued is below capacity — anything else refuses.
+        const std::uint8_t slot =
+            issue.kind == CommandKind::SiloBuildTactical ? 0 : 1;
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit)) {
+                continue;
+            }
+            const Player* player = playerFor(issue.player, players);
+            if (player == nullptr || !authorised(*player, store, unit, armies)
+                || siloAmmo == nullptr || siloQueue == nullptr
+                || !queueSiloBuild(*siloQueue, *siloAmmo, unit, slot)) {
+                continue;
+            }
+            result.accepted.push_back(unit);
+        }
+        return result;
+    }
+    if (issue.kind == CommandKind::ToggleSiloAuto) {
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit)) {
+                continue;
+            }
+            const Player* player = playerFor(issue.player, players);
+            if (player == nullptr || !authorised(*player, store, unit, armies)
+                || siloAmmo == nullptr) {
+                continue;
+            }
+            // Retail's AutoMode is one flag on the unit; the records are this model's
+            // unit, so the toggle sets every record the owner carries at once.
+            bool found = false;
+            bool enable = true;
+            for (SiloAmmo& ammo : *siloAmmo) {
+                if (ammo.owner != unit) {
+                    continue;
+                }
+                if (!found) {
+                    enable = !ammo.autoBuild;
+                }
+                found = true;
+                ammo.autoBuild = enable;
+            }
+            if (!found) {
+                continue;
+            }
+            result.accepted.push_back(unit);
+        }
+        return result;
+    }
     std::shared_ptr<SharedCommand> shared;
     for (std::size_t rank = 0; rank < canonical.size(); ++rank) {
         const UnitId unit = canonical[rank];
@@ -1010,7 +1064,9 @@ bool applyCommand(const Command& ordered, UnitStore& store, const UnitCatalog& c
                    const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
                    std::vector<Construction>* building, EventQueue* events,
                    const FeatureStore* features, PathService* pathService,
-                   ScriptTaskHost* scriptTasks) {
+                   ScriptTaskHost* scriptTasks,
+                   std::vector<SiloAmmo>* siloAmmo,
+                   std::vector<SiloBuild>* siloQueue) {
     const Command command = onBuildGrid(ordered, catalog, terrain);
     if (command.player >= static_cast<PlayerIndex>(kInvalidCommandSource)
         || command.kind == CommandKind::Script) {
@@ -1037,7 +1093,7 @@ bool applyCommand(const Command& ordered, UnitStore& store, const UnitCatalog& c
     const ApplyCommandResult result = applyCommand(
         issue, store, catalog, players, armies, terrain,
         [&grid](UnitId) { return &grid; }, rate, building, events, features, pathService,
-        scriptTasks);
+        scriptTasks, {}, siloAmmo, siloQueue);
     return result.acceptedUnit(command.unit);
 }
 

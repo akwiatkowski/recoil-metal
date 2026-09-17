@@ -329,6 +329,11 @@ struct UnitScene {
     /// Silo-build components are distinct from units, matching CAiSiloBuildImpl (`C-081`).
     std::vector<rm::sim::SiloAmmo> siloAmmo;
 
+    /// The per-unit missile build queues (`C-241`): entries name an owner and a slot and
+    /// run strictly head-first. Player `IssueSiloBuild*` clicks and the auto-refill share
+    /// the one `queueSiloBuild` admission rule.
+    std::vector<rm::sim::SiloBuild> siloQueue;
+
     /// Missile-redirector components, likewise distinct from units (`C-088`).
     std::vector<rm::sim::MissileRedirect> redirects;
 
@@ -563,6 +568,11 @@ struct UnitScene {
     /// rather than held per army, because a build is a thing in the world and belongs with
     /// the others rather than filed under its owner.
     std::vector<rm::sim::Construction> building;
+
+    /// Who lent build power to which `building` row this tick — the sim's own answer to
+    /// "is anyone helping", rewritten every tick. Presentation state the build streams
+    /// are drawn from; never saved or hashed.
+    std::vector<rm::sim::AssistLink> assistLinks;
 
     /// Funded unit-capture tasks, all armies together — the same world-thing reasoning
     /// as construction above. The sim reconciles, funds and applies them; the scene

@@ -335,7 +335,11 @@ run make test and make verify before updating FA-CMD.
 `CommandKind::Capture`, save v20); concurrent captors and general transfer parity stay
 open. The [minimum retail Capture specification](capture-implementation-spec.md) corrects
 earlier readings: the captor supplies the cost method, attached target children add
-costs, and `Unit+0x690` counts active capture tasks.
+costs, and `Unit+0x690` counts active capture tasks. `C-250` (2026-09-17) now supplies
+the retail approach/admission contract: a five-state task with per-tick legality
+preamble, footprint-edge distance gates at 5/10 elmos, and dispatcher-level retry via
+the `cmd+0x2C` status cell — the concurrency "guard" is a refcount that permits
+multiple near captors.
 Ordinary mobile construction now follows
 `C-248`: the active Build order routes the engineer toward the site and creates no construction
 until centre distance minus the builder's smaller footprint and target's larger skirt is within

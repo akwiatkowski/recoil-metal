@@ -148,8 +148,17 @@ orderOverrides(std::span<const unitdef::UnitDef* const> selection);
 /// toggles filling dead order slots at their retail preferred slot (first table entry
 /// wins a shared slot), overrides applied to both. A page must not outlive the
 /// selection's definitions.
+///
+/// `siloAmmo`/`siloQueue` are the SELECTION's silo records and the match's build queue
+/// (`siloQueue` entries are matched by owner, so it may be passed unfiltered). They place
+/// the two silo-build cells — `SiloBuildTactical` at retail's preferredSlot 9 (0-based 8,
+/// Repair's cell), `SiloBuildNuke` spilling to the next dead unit-slot — the same
+/// dead-cell borrowing the launch button uses on Reclaim's. Empty spans mean no silo
+/// cells: a silo the sim does not track has nothing to build.
 [[nodiscard]] CommandPage
-commandPage(std::span<const unitdef::UnitDef* const> selection) noexcept;
+commandPage(std::span<const unitdef::UnitDef* const> selection,
+            std::span<const sim::SiloAmmo> siloAmmo = {},
+            std::span<const sim::SiloBuild> siloQueue = {}) noexcept;
 
 /// The hover card for a toggle cell. The production toggle is backed by
 /// `UnitStore::productionPaused` — `paused` aligns with `selection` and reports how

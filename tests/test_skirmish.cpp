@@ -621,12 +621,14 @@ TEST_CASE("a dead silo's record is reaped before the economy pass and a recycled
         silo, 0, false, 7,
         {.mass = rm::test::mag(3600.0f), .energy = rm::test::mag(360000.0f)},
         rm::test::mag(259200.0f), rm::test::mag(108.0f))};
+    std::vector<rm::sim::SiloBuild> siloQueue;
 
     Match match{.armies = armies,
                 .economies = economies,
                 .projectiles = &projectiles,
                 .building = &building,
                 .siloAmmo = &siloAmmo,
+                .siloQueue = &siloQueue,
                 .commandersEver = commandersEver,
                 // The tick REBUILDS storage from baseStorage plus per-unit contributions
                 // (C-069/C-234), so a bare def would clamp an army's bank to zero.
@@ -650,6 +652,7 @@ TEST_CASE("a dead silo's record is reaped before the economy pass and a recycled
 
     (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
     CHECK(siloAmmo.empty());  // neither the dead silo nor its slot's new tenant owns a record
+    CHECK(siloQueue.empty());  // and its pending builds went with it
     CHECK(economies[0].stored.mass == massAfterFirstTick);  // and nothing was charged for it
 }
 

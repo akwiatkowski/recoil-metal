@@ -82,6 +82,10 @@ constexpr std::uint32_t kVersion31 = 31;
 // advance their aim by. Older saves decode with both zero — one tick of
 // unleaded aim before movement measures again.
 constexpr std::uint32_t kVersion32 = 32;
+// 33: the silo build queue (`C-241`'s CAiSiloBuildImpl+0x20 list) and each record's
+// `autoBuild` flag. Older saves decode with empty queues and auto-mode on — the
+// pre-queue refill behaviour by another name.
+constexpr std::uint32_t kVersion33 = 33;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -453,7 +457,7 @@ void writeCommandState(PayloadWriter& w, const UnitStore::Snapshot& s,
     }
 }
 
-void writeSiloAmmo(PayloadWriter& w, std::span<const SiloAmmo> ammo) {
+void writeSiloAmmo(PayloadWriter& w, std::span<const SiloAmmo> ammo, bool includesSiloQueue) {
     w.count(ammo.size());
     for (const SiloAmmo& value : ammo) {
         writeId(w, value.owner);
@@ -465,6 +469,15 @@ void writeSiloAmmo(PayloadWriter& w, std::span<const SiloAmmo> ammo) {
         w.u64(value.elapsedTicks);
         w.i64(value.costPerTick.mass.raw()); w.i64(value.costPerTick.energy.raw());
         w.i64(value.delivered.mass.raw()); w.i64(value.delivered.energy.raw());
+        if (includesSiloQueue) w.u8(value.autoBuild);
+    }
+}
+
+void writeSiloQueue(PayloadWriter& w, std::span<const SiloBuild> queue) {
+    w.count(queue.size());
+    for (const SiloBuild& entry : queue) {
+        writeId(w, entry.owner);
+        w.u8(entry.slot);
     }
 }
 
@@ -997,7 +1010,8 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool co
     return true;
 }
 
-[[nodiscard]] bool readSiloAmmo(PayloadReader& r, std::vector<SiloAmmo>& ammo) {
+[[nodiscard]] bool readSiloAmmo(PayloadReader& r, std::vector<SiloAmmo>& ammo,
+                                bool includesSiloQueue) {
     std::size_t count{};
     if (!r.count(count, 56)) return false;
     ammo.resize(count);
@@ -1015,6 +1029,20 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool co
         value.elapsedTicks = static_cast<TickCount>(elapsed);
         value.costPerTick = {.mass = Mag::fromRaw(mass), .energy = Mag::fromRaw(energy)};
         value.delivered = {.mass = Mag::fromRaw(deliveredMass), .energy = Mag::fromRaw(deliveredEnergy)};
+        std::uint8_t autoBuild = 1;
+        if (includesSiloQueue && !r.u8(autoBuild)) return false;
+        if (autoBuild > 1) return false;
+        value.autoBuild = autoBuild != 0;
+    }
+    return true;
+}
+
+[[nodiscard]] bool readSiloQueue(PayloadReader& r, std::vector<SiloBuild>& queue) {
+    std::size_t count{};
+    if (!r.count(count, 8)) return false;
+    queue.resize(count);
+    for (SiloBuild& entry : queue) {
+        if (!readId(r, entry.owner) || !r.u8(entry.slot) || entry.slot > 1) return false;
     }
     return true;
 }
@@ -1333,7 +1361,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                     version >= kVersion7, version >= kVersion7, version >= kVersion8,
                     version >= kVersion12, version >= kVersion26, version >= kVersion27,
                     version >= kVersion28, version >= kVersion29, version >= kVersion30);
-    if (version >= kVersion9) writeSiloAmmo(payloadWriter, state.siloAmmo);
+    if (version >= kVersion9)
+        writeSiloAmmo(payloadWriter, state.siloAmmo, version >= kVersion33);
     if (version >= kVersion10) writeRedirects(payloadWriter, state.redirects);
     if (version >= kVersion11) {
         writeAirMotion(payloadWriter, state.units.motion, version >= kVersion13,
@@ -1360,6 +1389,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion25) writeTurretPoseDual(payloadWriter, state.units.motion);
     if (version >= kVersion31) writeCongestion(payloadWriter, state.units.motion);
     if (version >= kVersion32) writeLeadStep(payloadWriter, state.units.motion);
+    if (version >= kVersion33) writeSiloQueue(payloadWriter, state.siloQueue);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -1400,7 +1430,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion25 && version != kVersion26
                && version != kVersion27 && version != kVersion28
                && version != kVersion29 && version != kVersion30
-               && version != kVersion31 && version != kVersion32)
+               && version != kVersion31 && version != kVersion32
+               && version != kVersion33)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -1436,7 +1467,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        version >= kVersion27, version >= kVersion28,
                        version >= kVersion29, version >= kVersion30)) return std::nullopt;
     std::vector<SiloAmmo> siloAmmo;
-    if (version >= kVersion9 && !readSiloAmmo(reader, siloAmmo)) return std::nullopt;
+    if (version >= kVersion9
+        && !readSiloAmmo(reader, siloAmmo, version >= kVersion33)) return std::nullopt;
     std::vector<MissileRedirect> redirects;
     if (version >= kVersion10 && !readRedirects(reader, redirects)) return std::nullopt;
     if (version >= kVersion11
@@ -1460,10 +1492,13 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion25 && !readTurretPoseDual(reader, units.motion)) return std::nullopt;
     if (version >= kVersion31 && !readCongestion(reader, units.motion)) return std::nullopt;
     if (version >= kVersion32 && !readLeadStep(reader, units.motion)) return std::nullopt;
+    std::vector<SiloBuild> siloQueue;
+    if (version >= kVersion33 && !readSiloQueue(reader, siloQueue)) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
                        .units = std::move(units), .siloAmmo = std::move(siloAmmo),
+                       .siloQueue = std::move(siloQueue),
                        .redirects = std::move(redirects), .economyArmies = std::move(economyArmies),
                        .enhancements = std::move(enhancements),
                        .captures = std::move(captures), .features = std::move(features)};
@@ -1491,7 +1526,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion32);
+    return rm::sim::encode(state, kVersion33);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

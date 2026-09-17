@@ -465,7 +465,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //     (`core/sim/Assist.hpp`).
     if (match.building != nullptr) {
         (void)applyAssistance(store, catalog, *match.building, match.armies, match.intel,
-            match.playableRect ? &*match.playableRect : nullptr, tickIndex, rate);
+            match.playableRect ? &*match.playableRect : nullptr, tickIndex, rate,
+            match.assistLinks);
     }
 
     // 0. THE ORDER QUEUES, before anything moves (§7 P4.1). A unit that finished its order last
@@ -767,6 +768,12 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             return !store.alive(ammo.owner);
         });
     }
+    // The queue is the same component: a dead owner's pending builds die with the silo.
+    if (match.siloQueue != nullptr) {
+        std::erase_if(*match.siloQueue, [&store](const SiloBuild& entry) {
+            return !store.alive(entry.owner);
+        });
+    }
     // Redirectors die with their owners for the same reason (`C-088`).
     if (match.redirects != nullptr) {
         std::erase_if(*match.redirects, [&store](const MissileRedirect& redirect) {
@@ -839,7 +846,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                     : std::span<UnitResourceFlow>{}, static_cast<int>(army), enhancementMine,
                 match.captures != nullptr ? std::span<CaptureWork>{captureMine}
                                           : std::span<CaptureWork>{},
-                store.buildPriorities());
+                store.buildPriorities(), match.siloQueue);
 
             // Written back over this army's entries, in order — the two lists were built
             // by the same filter in the same pass, so the nth of `mine` is the nth of

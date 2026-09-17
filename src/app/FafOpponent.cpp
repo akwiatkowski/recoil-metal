@@ -201,6 +201,14 @@ function GetArmyUnitCostTotal(armyIndex)
 end
 function GetArmyUnitCap() return 1000 end
 
+-- FAF seconds for this snapshot: the sim tick re-scaled to FAF's fixed 10 Hz.
+-- LastScouted stamps need a clock that also advances in the bare test sandbox,
+-- where the engine's own GetGameTimeSeconds binding reads a pump-driven tick
+-- that stays at zero; the snapshot's tick is the same clock the match pumps.
+local function fafGameSeconds(brain)
+    return (brain.snap.tick or 0) / (10 * (brain.fafTickScale or 1))
+end
+
 -- --- The brain: what a condition may ask ---------------------------------------------------
 --
 -- Methods close over the snapshot the C++ side refreshes before every decision pass.
@@ -522,6 +530,25 @@ function methods:AddScoutArea(location)
     end
     table.insert(self.InterestList.MustScout, { Position = location, TaggedBy = false })
 end
+-- medium-ai.lua:1387: stalest-first ordering for a priority list, main-base
+-- distance the tiebreak. Scout loops re-sort after each dispatch stamps
+-- LastScouted. The final x/z tiebreak only fires on exact distance ties and
+-- keeps the order total, which a lockstep replay needs.
+function methods:SortScoutingAreas(list)
+    local main = self.BuilderManagers.MAIN.Position
+    table.sort(list, function(a, b)
+        if a.LastScouted == b.LastScouted then
+            local distA = VDist2(main[1], main[3], a.Position[1], a.Position[3])
+            local distB = VDist2(main[1], main[3], b.Position[1], b.Position[3])
+            if distA ~= distB then return distA < distB end
+            if a.Position[1] ~= b.Position[1] then
+                return a.Position[1] < b.Position[1]
+            end
+            return a.Position[3] < b.Position[3]
+        end
+        return a.LastScouted < b.LastScouted
+    end)
+end
 function methods:GetEngineerManagerUnitsBeingBuilt(category)
     return EntityCategoryCount(category, self.snap.underway or {})
 end
@@ -676,14 +703,26 @@ function __rm_faf_boot(army, info)
     brain.fafTickScale = info.fafTickScale or 1
     brain.scoutSites = info.scoutSites or {}
     brain.scoutAssignments = {}
-    brain.scoutVisits = { land = 0, air = 0 }
     brain.scoutSerial = 0
-    -- Platoon air scouts checkout must-scout areas through GetUntaggedMustScoutArea,
-    -- which errors when this table is absent (medium-ai.lua:1240). Seeded empty at
-    -- boot like BuildScoutLocations seeds it; High/LowPriority stay unowned because
-    -- the adapter's own ScoutingAI plan serves exploration from scoutSites instead.
-    brain.InterestList = { MustScout = {} }
+    -- BuildScoutLocations (medium-ai.lua:1260): the three interest lists retail's
+    -- scout loops consume. C++ already ran the fixed-spawn branch — occupied enemy
+    -- starts arrive as `high` sites, vacant starts leaning enemy as low — so the
+    -- seeding here only files each site under its priority list. The lists hold
+    -- the SAME table objects scoutSites does: dispatch updates (visited, high,
+    -- LastScouted) show through both views.
+    brain.InterestList = { MustScout = {}, HighPriority = {}, LowPriority = {} }
+    for _, site in ipairs(brain.scoutSites) do
+        site.Position = { site.x, 0, site.z }
+        site.LastScouted = 0
+        table.insert(site.high and brain.InterestList.HighPriority
+                     or brain.InterestList.LowPriority, site)
+    end
+    -- The alternation counters platoon.lua's land/air scout loops read
+    -- (IntelData.HiPriScouts vs NumOpponents, AirHiPriScouts/AirLowPriScouts);
+    -- the adapter's own ScoutingAI walk below maintains them in retail's place.
+    brain.IntelData = { HiPriScouts = 0, AirHiPriScouts = 0, AirLowPriScouts = 0 }
     brain.numOpponents = info.numOpponents or math.max(1, info.armies - 1)
+    brain.NumOpponents = brain.numOpponents
     brain.mapSize = {info.sizeX, info.sizeZ}
 
     -- The condition cadence cache (see conditionsPass), keyed by spec table, with the
@@ -1695,15 +1734,43 @@ function __rm_faf_decide(army, snap)
             brain.scoutAssignments[h] = nil
         end
     end
+    -- ParseIntelThread (medium-ai.lua:1161) folded into the decision pass instead
+    -- of its 5-second fork: each observed enemy structure joins HighPriority
+    -- unless an entry already covers it within 100 ogrids, and a covered low
+    -- entry is promoted out of LowPriority. Retail reads the iMAP threat grid;
+    -- our snapshot's `enemies` is the same observed-foe set. Positions are
+    -- elmos, so the 100-ogrid radius arrives as 800 elmos squared.
     for _, enemy in ipairs(snap.enemies or {}) do
         if EntityCategoryContains(categories.STRUCTURE - categories.MASSEXTRACTION, enemy) then
-            local found = false
-            for _, site in ipairs(brain.scoutSites) do
-                if (site.x-enemy.x)^2 + (site.z-enemy.z)^2 < (100*8)^2 then
-                    site.high = true; found = true; break
+            local dupe = false
+            for _, loc in ipairs(brain.InterestList.HighPriority) do
+                if VDist2Sq(enemy.x, enemy.z, loc.Position[1], loc.Position[3]) < 640000 then
+                    loc.high = true
+                    dupe = true
+                    break
                 end
             end
-            if not found then table.insert(brain.scoutSites, {x=enemy.x,z=enemy.z,high=true}) end
+            if not dupe then
+                for i = 1, #brain.InterestList.LowPriority do
+                    local loc = brain.InterestList.LowPriority[i]
+                    if VDist2Sq(enemy.x, enemy.z, loc.Position[1], loc.Position[3]) < 640000 then
+                        table.remove(brain.InterestList.LowPriority, i)
+                        for j, site in ipairs(brain.scoutSites) do
+                            if site == loc then table.remove(brain.scoutSites, j) break end
+                        end
+                        break
+                    end
+                end
+                -- A freshly-seen position counts as just-scouted (retail stamps
+                -- LastScouted at insert), so it queues behind the stale entries.
+                local site = { x = enemy.x, z = enemy.z, high = true,
+                               Position = { enemy.x, 0, enemy.z },
+                               LastScouted = fafGameSeconds(brain),
+                               visited = brain.scoutSerial }
+                table.insert(brain.scoutSites, site)
+                table.insert(brain.InterestList.HighPriority, site)
+                brain:SortScoutingAreas(brain.InterestList.HighPriority)
+            end
         end
     end
     walkPriority(brain, 'PlatoonFormBuilder', function(item)
@@ -1722,11 +1789,39 @@ function __rm_faf_decide(army, snap)
             if u.idle and not u.scoutingBusy and not brain.scoutAssignments[u.h]
                 and EntityCategoryContains(squad[1], u) then
                 local air = EntityCategoryContains(categories.AIR, u)
-                local layer = air and 'air' or 'land'
-                local preferHigh = brain.scoutVisits[layer] < brain.numOpponents
+                -- platoon.lua alternation through the retail counters: land scouts
+                -- take NumOpponents high-priority sweeps then one low pass
+                -- (platoon.lua:1194); air adds the AirLowPriScouts<1 latch so a
+                -- low visit never repeats back-to-back (platoon.lua:1314).
+                local preferHigh
+                if air then
+                    -- Retail's else resets BOTH counters on the beat after a low
+                    -- visit, when the latch has left both branches blocked
+                    -- (platoon.lua:1336-1339). The adapter has no idle iteration to
+                    -- spend that beat on, so it is collapsed into this evaluation:
+                    -- a completed low pass re-arms the high sweep right here.
+                    if brain.IntelData.AirLowPriScouts >= 1 then
+                        brain.IntelData.AirHiPriScouts = 0
+                        brain.IntelData.AirLowPriScouts = 0
+                    end
+                    preferHigh = brain.IntelData.AirHiPriScouts < brain.NumOpponents
+                                 and brain.IntelData.AirLowPriScouts < 1
+                else
+                    preferHigh = brain.IntelData.HiPriScouts < brain.NumOpponents
+                end
                 local sites = {}
                 for _, site in ipairs(brain.scoutSites) do
                     if not reserved[site] then table.insert(sites, site) end
+                end
+                -- Retail's else-branches reset the alternation when no target
+                -- exists, so a drained list can't leave the counter pinned.
+                if #sites == 0 then
+                    if air then
+                        brain.IntelData.AirHiPriScouts = 0
+                        brain.IntelData.AirLowPriScouts = 0
+                    else
+                        brain.IntelData.HiPriScouts = 0
+                    end
                 end
                 table.sort(sites, function(a,b)
                     if a.high ~= b.high then return a.high == preferHigh end
@@ -1778,7 +1873,36 @@ function __rm_faf_decide(army, snap)
                     if #route > 0 then
                         brain.scoutSerial = brain.scoutSerial + 1
                         site.visited = brain.scoutSerial
-                        brain.scoutVisits[layer] = site.high and (brain.scoutVisits[layer]+1) or 0
+                        site.LastScouted = fafGameSeconds(brain)
+                        if air then
+                            -- platoon.lua branch 1 spends nothing: a must-scout checkout
+                            -- leaves the alternation counters alone — only InterestList
+                            -- dispatches move them (platoon.lua:1303-1330).
+                            if not site.mustLoc then
+                                if site.high then
+                                    -- preferHigh false here means the sweep budget was
+                                    -- spent and only high sites remained — retail's else
+                                    -- resets and retakes, which collapses to sweep 1.
+                                    brain.IntelData.AirHiPriScouts =
+                                        preferHigh and brain.IntelData.AirHiPriScouts + 1 or 1
+                                else
+                                    brain.IntelData.AirHiPriScouts = 0
+                                    brain.IntelData.AirLowPriScouts =
+                                        brain.IntelData.AirLowPriScouts + 1
+                                end
+                            end
+                        else
+                            brain.IntelData.HiPriScouts = site.high
+                                and (preferHigh and brain.IntelData.HiPriScouts + 1 or 1) or 0
+                        end
+                        -- The owning list re-sorts so external readers see the
+                        -- same stalest-first order retail leaves behind. mustLoc
+                        -- wrappers sit in no list and skip this.
+                        if site.Position then
+                            brain:SortScoutingAreas(site.high
+                                and brain.InterestList.HighPriority
+                                or brain.InterestList.LowPriority)
+                        end
                         brain.scoutAssignments[u.h] = {site=site, name=item.spec.BuilderName, tick=snap.tick or 0, mustScout=site.mustLoc}
                         table.insert(decisions, {kind='scout',builder=u.h,x=x,z=z,route=route,name=item.spec.BuilderName})
                         return true

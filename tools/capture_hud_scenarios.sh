@@ -70,6 +70,16 @@ capture extractor-queue 10 tests/fixtures/hud-extractor-queue.commands \
 for pass in first repeat; do
     rg -q 'production panel: 2 rows, repeat=off' "$capture_dir/extractor-queue.$pass.log"
 done
+# The assist order a right-click submits: the ACU builds the factory, the factory starts a
+# tank, and the ACU is told to assist it. Mid-production the ACU's order reads assist and
+# the shot carries the helper's stream into the pad and the panel's ASSIST line. Selecting
+# the ACU is what puts the assist order on the hud-order line.
+capture assist 46 tests/fixtures/hud-assist.commands \
+    'hud-order: unit=0:1 kind=assist target=4:1' \
+    --select-type UEL0001 --look 5410 2772 450
+# No mex-upgrade-assist capture: the same fixture runs, but that camera's forest frame hit a
+# ±1-LSB texel flake on one of four identical runs — pre-existing renderer noise, not the
+# scenario — and a byte-exact gate cannot afford it. test_assist.cpp covers the sim side.
 if [[ ${CAPTURE_SCENARIOS:-all} == upgrade ]]; then
     echo "HUD upgrade artifacts: $capture_dir"
     exit 0
@@ -114,10 +124,16 @@ capture mixed 22 tests/fixtures/hud-construction.commands \
     'hud-state: selected=3 types=3 work=NONE' --select 3 --look 5400 2772 160
 capture production 405 tests/fixtures/hud-production.commands \
     'hud-state: selected=1 types=1 work=BUILDING .*queued=30' --select-type UEB0101 --look 5410 2772 160
-capture starved 410 tests/fixtures/hud-production.commands \
-    'hud-state: selected=1 types=1 work=BUILDING .*flow=(<1|1)% FUNDED queued=30' --select-type UEB0101 --look 5410 2772 160
+# The stall now lands far later than the 410s the scenario was tuned to: eabd939 tied
+# Construction rows to the queue's active head, so the funded% denominator is the build
+# actually worked (~20 energy/s), not 30 queued tanks' ~500 energy/s — a <1% readout
+# cannot occur, steady state is ~24%. The army also banks ~3600 energy before the queue
+# goes in, so the buffer only empties once ~20 tanks are through (~700s). The scenario's
+# job is unchanged: prove the partial-funding display while the buffer sits at zero.
+capture starved 700 tests/fixtures/hud-production.commands \
+    'hud-state: selected=1 types=1 work=BUILDING .*flow=[0-9]{1,2}% FUNDED queued=[0-9]+' --select-type UEB0101 --look 5410 2772 160
 # Income still trickles in: this is an energy stall, not a claim of zero progress.
-rg -q 'economy: .* / 0 energy,.* [01]% funded' "$capture_dir/starved.first.log"
+rg -q 'economy: .* / 0 energy,.* [0-9]{1,2}% funded' "$capture_dir/starved.first.log"
 for scenario in production starved; do
     for pass in first repeat; do
         rg -q 'production panel: 1 rows, repeat=off' "$capture_dir/$scenario.$pass.log"

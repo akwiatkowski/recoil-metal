@@ -38,6 +38,9 @@ template <typename Order>
     case CommandKind::CycleRetreatThreshold:
     case CommandKind::CycleTargetFocus:
     case CommandKind::CancelFactoryBuild:
+    case CommandKind::SiloBuildTactical:
+    case CommandKind::SiloBuildNuke:
+    case CommandKind::ToggleSiloAuto:
         return false;
     case CommandKind::Move:
     case CommandKind::AttackMove:

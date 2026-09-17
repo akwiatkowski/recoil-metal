@@ -184,6 +184,18 @@ enum class CommandKind : std::uint8_t {
     /// High → Normal edge). Same authoritative-but-unqueued shape as
     /// `CycleBuildPriority`: it acts on intake, the same beat it was issued.
     SetBuildPriority = 25,
+    /// Queue one tactical-slot missile build — retail's `IssueSiloBuildTactical`
+    /// (`0x006faa30`), the left-click on the silo's build button reaching the same
+    /// `SiloAddBuild` the idle refill uses (`C-241`). Authoritative and unqueued like
+    /// `ToggleProduction`: it mutates the silo's build queue at intake, and a silo that
+    /// is full — stored plus queued at capacity — refuses it.
+    SiloBuildTactical = 26,
+    /// The strategic counterpart — `IssueSiloBuildNuke` (`0x006fab90`), slot 1.
+    SiloBuildNuke = 27,
+    /// Flip the silo's auto-mode (`SetAutoMode`, the build button's right-click): with it
+    /// off an idle silo stops re-queueing itself, while already-queued and manually
+    /// issued builds still run. Same intake-immediate shape as `ToggleProduction`.
+    ToggleSiloAuto = 28,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {
@@ -410,7 +422,9 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
                                    EventQueue* events = nullptr,
                                    const FeatureStore* features = nullptr,
                                    PathService* pathService = nullptr,
-                                   ScriptTaskHost* scriptTasks = nullptr);
+                                   ScriptTaskHost* scriptTasks = nullptr,
+                                   std::vector<SiloAmmo>* siloAmmo = nullptr,
+                                   std::vector<SiloBuild>* siloQueue = nullptr);
 
 /// Applies one semantic issue to a canonicalized unit set.
 ///
@@ -419,6 +433,11 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// once when the first member accepts the issue, not once per selected unit.
 /// `gridForUnit` validates the command's site. For Build, `approachGridForUnit`
 /// supplies the builder's movement domain; single-grid callers may omit it.
+///
+/// `siloAmmo`/`siloQueue` give the silo-build kinds (`SiloBuildTactical`, `SiloBuildNuke`,
+/// `ToggleSiloAuto`) the state they act on — the records for the full check and the queue
+/// the accepted build lands in. Either being null refuses those kinds outright, which is
+/// what a scene with no silos should do.
 [[nodiscard]] ApplyCommandResult applyCommand(
     const CommandIssue& issue, UnitStore& store, const UnitCatalog& catalog,
     std::span<const Player> players, std::span<const Army> armies, const Terrain& terrain,
@@ -426,7 +445,9 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
     std::vector<Construction>* building = nullptr, EventQueue* events = nullptr,
     const FeatureStore* features = nullptr, PathService* pathService = nullptr,
     ScriptTaskHost* scriptTasks = nullptr,
-    const CommandGridForUnit& approachGridForUnit = {});
+    const CommandGridForUnit& approachGridForUnit = {},
+    std::vector<SiloAmmo>* siloAmmo = nullptr,
+    std::vector<SiloBuild>* siloQueue = nullptr);
 
 /// Publishes a finished asynchronous plain-move route through the command authority.
 ///

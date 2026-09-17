@@ -354,8 +354,15 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                         units.catalog.def(units.store.typeAt(id.index)));
                 }
             }
+            std::vector<rm::sim::SiloAmmo> shotSilos;
+            for (const rm::sim::SiloAmmo& record : units.siloAmmo) {
+                if (std::ranges::find(capturedSelection, record.owner)
+                    != capturedSelection.end()) {
+                    shotSilos.push_back(record);
+                }
+            }
             const rm::ui::CommandPage shotCommandPage =
-                rm::ui::commandPage(shotCommandSelection);
+                rm::ui::commandPage(shotCommandSelection, shotSilos, units.siloQueue);
             const std::size_t hoverAt = parseCount(argc, argv, "--hover");
             const std::optional<std::size_t> shotHovered =
                 hoverAt > 0 && hoverAt <= shotOptions.size()

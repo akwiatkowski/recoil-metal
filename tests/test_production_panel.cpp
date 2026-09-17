@@ -173,6 +173,46 @@ TEST_CASE("a helped build says who is lending rate, in the title line", "[ui][pr
     CHECK(glyphsIn(alone.foregroundReadout) == 10 + 2);
 }
 
+TEST_CASE("the assist readout stays clear of the priority cell", "[ui][production]") {
+    const std::vector<rm::text::Glyph> glyphs = boxGlyphs();
+    const rm::text::Font font = fontOver(glyphs);
+    rm::ui::ProductionView view = factoryWith(1);
+    view.building = true;
+    view.progress = 0.25f;
+    view.assistRate = 20.0f;
+
+    constexpr rm::ui::Rect panel{0, 0, 320, 154};
+    rm::ui::Geometry out;
+    rm::ui::appendProductionPanel(out, font, font, rm::ui::neutralTheme(), panel, view);
+
+    // The readout layer leads with "REPEAT OFF" (10 glyphs); "ASSIST +20/S" (12) follows,
+    // then the queue counts. The header's right edge is the priority and repeat cells'
+    // — too narrow a shelf for the readout — so it lives on a free row slot below, still
+    // inside the panel. Sharing the title line with "NORMAL" is what "ASSINORMA" was.
+    const auto first = out.foregroundReadout.begin() + 10 * 6;
+    const auto last = first + 12 * 6;
+    float assistTop = std::numeric_limits<float>::max();
+    float assistLeft = std::numeric_limits<float>::max();
+    float assistRight = 0.0f;
+    for (auto it = first; it != last; ++it) {
+        assistTop = std::min(assistTop, it->position[1]);
+        assistLeft = std::min(assistLeft, it->position[0]);
+        assistRight = std::max(assistRight, it->position[0]);
+    }
+    CHECK(assistTop > panel.y + 21.0f);   // below the header line
+    CHECK(assistLeft >= panel.x);
+    CHECK(assistRight <= panel.right());
+
+    // A queue that fills every row leaves no slot, and the readout drops rather than
+    // write over an order's name.
+    auto full = factoryWith(5);
+    full.building = true;
+    full.assistRate = 20.0f;
+    rm::ui::Geometry crowded;
+    rm::ui::appendProductionPanel(crowded, font, font, rm::ui::neutralTheme(), panel, full);
+    CHECK(glyphsIn(crowded.foregroundReadout) == 10 + 5 * 2);
+}
+
 TEST_CASE("orders past the room expose page controls instead of losing cancellation", "[ui][production]") {
     const std::vector<rm::text::Glyph> glyphs = boxGlyphs();
     const rm::text::Font font = fontOver(glyphs);
