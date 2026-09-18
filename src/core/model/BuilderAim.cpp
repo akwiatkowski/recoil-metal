@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <limits>
 #include <numbers>
 
 namespace {
@@ -360,8 +361,14 @@ std::array<float, 3> builderTargetInModel(const std::array<float, 3>& world,
     return instance.scale != 0.0f ? scale(point, 1.0f / instance.scale) : Vec3{};
 }
 
-std::vector<std::uint32_t> resolveRecoilFlags(const Model& model,
-                                              std::string_view boneName) {
+namespace {
+
+/// The shared subtree walk behind resolveRecoilFlags/resolveTelescopeFlags:
+/// the named bone and everything descending from it, flagged with `bit`.
+/// Empty when the name resolves to nothing. Case-insensitive like the turret.
+[[nodiscard]] std::vector<std::uint32_t> subtreeFlags(const Model& model,
+                                                    std::string_view boneName,
+                                                    std::uint32_t bit) {
     if (boneName.empty() || model.bones.empty()) {
         return {};
     }
@@ -386,14 +393,88 @@ std::vector<std::uint32_t> resolveRecoilFlags(const Model& model,
     std::vector<std::uint32_t> flags(model.bones.size(), 0U);
     for (std::size_t bone = 0; bone < model.bones.size(); ++bone) {
         if (descendsFrom(model, bone, root)) {
-            flags[bone] |= kBuilderRecoilBone;
+            flags[bone] |= bit;
         }
     }
     return flags;
 }
 
+} // namespace
+
+std::vector<std::uint32_t> resolveRecoilFlags(const Model& model,
+                                              std::string_view boneName) {
+    return subtreeFlags(model, boneName, kBuilderRecoilBone);
+}
+
+std::vector<std::uint32_t> resolveTelescopeFlags(const Model& model,
+                                                 std::string_view boneName) {
+    return subtreeFlags(model, boneName, kBuilderTelescopeBone);
+}
+
 float stepRecoil(float amount, float returnPerStep) noexcept {
     return amount <= returnPerStep ? 0.0f : amount - returnPerStep;
+}
+
+RecoilSpec resolveRecoilSpec(const unitdef::Weapon& weapon, float meshToElmos,
+                             float ticksPerSecond) noexcept {
+    RecoilSpec spec;
+    // The authored distance is SIGNED — negative is backwards along the rack,
+    // positive forwards (UEL0203's +0.1) — so the elmos figure keeps the sign
+    // and only the travel magnitude feeds the return-rate math. A `> 0` check
+    // here once deleted every retail rack at once, because the corpus signs
+    // backwards travel negative (the Titan's is -0.2).
+    const float rackTravelMesh = std::abs(weapon.recoilDistanceMesh);
+    spec.rackDistanceElmos = weapon.recoilDistanceMesh * meshToElmos;
+    // `TelescopeRecoilDistance or RackRecoilDistance` (defaultweapons.lua:283):
+    // absent falls back to the rack distance; an authored value — even zero —
+    // stands. No telescope bone, no channel at all.
+    const float telescopeMesh =
+        weapon.telescopeBone.empty()
+            ? 0.0f
+            : weapon.telescopeDistanceMesh.value_or(weapon.recoilDistanceMesh);
+    spec.telescopeDistanceElmos = telescopeMesh * meshToElmos;
+    const float telescopeTravelMesh = std::abs(telescopeMesh);
+    if (rackTravelMesh <= 0.0f) {
+        // `bp.RackRecoilDistance != 0` gates the whole sequence in retail —
+        // no kick, no sliders, no return.
+        spec.rackDistanceElmos = 0.0f;
+        spec.telescopeDistanceElmos = 0.0f;
+        return spec;
+    }
+
+    // The return speed, authored or derived (defaultweapons.lua:54-62): the
+    // LARGER travel over the firing interval minus the charge delay, padded
+    // 25% so the slide is home before the next shot. Only 6 weapons state
+    // `RackRecoilReturnSpeed`; the other ~200 ride this formula.
+    float speedMeshPerSecond = weapon.recoilReturnSpeedMeshPerSecond;
+    if (speedMeshPerSecond <= 0.0f) {
+        const float dist = std::max(rackTravelMesh, telescopeTravelMesh);
+        const float window = weapon.rateOfFire > 0.0f
+            ? 1.0f / weapon.rateOfFire - weapon.muzzleChargeDelaySeconds
+            : std::numeric_limits<float>::infinity();
+        // Lua's arithmetic, edge cases included: a zero window divides to inf
+        // (instant return), a negative one flips the sign and `math.abs`
+        // recovers a large finite speed (a charge delay past the interval
+        // returns FASTER), and a zero RateOfFire makes the whole expression
+        // 0 (the slide never returns).
+        speedMeshPerSecond = weapon.rateOfFire > 0.0f
+            ? std::abs(dist / window) * 1.25f
+            : 0.0f;
+    }
+    const float speedElmosPerTick =
+        speedMeshPerSecond * meshToElmos / std::max(ticksPerSecond, 1.0f);
+    const auto fractionPerTick = [speedElmosPerTick](float travelElmos) {
+        if (travelElmos <= 0.0f) {
+            return 0.0f;
+        }
+        const float perTick = speedElmosPerTick / travelElmos;
+        // inf (or a speed past the whole travel) is a one-step return.
+        return perTick > 1.0f ? 1.0f : perTick;
+    };
+    spec.rackReturnPerTick = fractionPerTick(std::abs(spec.rackDistanceElmos));
+    spec.telescopeReturnPerTick =
+        fractionPerTick(std::abs(spec.telescopeDistanceElmos));
+    return spec;
 }
 
 } // namespace rm

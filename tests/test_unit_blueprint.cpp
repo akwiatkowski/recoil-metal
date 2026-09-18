@@ -1044,6 +1044,7 @@ TEST_CASE("weapon manipulator specs arrive as authored", "[unitbp][manipulators]
                     },
                     RackRecoilDistance = -2,
                     RackRecoilReturnSpeed = 10,
+                    MuzzleChargeDelay = 0.4,
                     AnimationReload = '/units/x/x_areload.sca',
                     WeaponUnpackAnimation = '/units/x/x_Aopen.sca',
                     WeaponUnpackAnimationRate = 0.4,
@@ -1064,7 +1065,11 @@ TEST_CASE("weapon manipulator specs arrive as authored", "[unitbp][manipulators]
     CHECK(gun.recoilDistanceMesh == Catch::Approx(-2.0f));
     CHECK(gun.recoilReturnSpeedMeshPerSecond == Catch::Approx(10.0f));
     CHECK(gun.telescopeBone == "Turret_Barrel_Tele");
-    CHECK(gun.telescopeDistanceMesh == Catch::Approx(-6.0f));
+    REQUIRE(gun.telescopeDistanceMesh.has_value());
+    CHECK(*gun.telescopeDistanceMesh == Catch::Approx(-6.0f));
+    // Raw authored seconds for the recoil-return formula — NOT the
+    // faWaitSeconds-corrected duration a charge phase would consume.
+    CHECK(gun.muzzleChargeDelaySeconds == Catch::Approx(0.4f));
     CHECK(gun.animationReload == "/units/x/x_areload.sca");
     CHECK(gun.weaponUnpackAnimation == "/units/x/x_Aopen.sca");
     CHECK(gun.weaponUnpackAnimationRate == Catch::Approx(0.4f));

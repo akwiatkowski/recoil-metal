@@ -43,6 +43,7 @@ struct UnitInstanceIn {
     float turretYaw2;       // dual manipulator's own yaw — MoveState::turretYaw2
     float turretPitch2;     // dual manipulator's own pitch — MoveState::turretPitch2
     float recoil;           // 0 at rest to 1 fully kicked, times recoilDistance
+    float recoilTelescope;  // the telescope channel's own scalar, times telescopeDistance
 };
 
 // Everything the vertex shader needs to find one instance's pose inside the
@@ -60,7 +61,8 @@ struct PoseUniforms {
     float duration;   // seconds; 0 when the batch does not animate
     float time;       // the batch clock, in seconds
     uint builderAim;
-    float recoilDistance;   // full slide travel, elmos; 0 when the type has no rack
+    float recoilDistance;   // SIGNED rack slide travel, elmos; 0 when the type has no rack
+    float telescopeDistance;// SIGNED telescope slide travel, elmos; 0 without a telescope bone
     uint unpackOneshot;     // play once and hold the last frame, for deploy anims
     uint turretAim;
     float4 yawPivot;    // xyz pivot; w unused
@@ -134,11 +136,14 @@ static float3 applyBuilderAim(float3 point, BoneTransformIn bone, UnitInstanceIn
             point = pivot + rotateBuilderAxis(point - pivot, p.yawAxis.xyz, inst.builderYaw);
         }
     }
-    // The recoil slide, AFTER the aim rotations: the barrel travels back along
+    // The recoil slide, AFTER the aim rotations: the barrel travels along
     // where it is pointing, not where it rested. inst.recoil is 0..1 of the
-    // batch's travel; the direction rebuilds the aimed +Z from the same angles —
-    // the TURRET's when this bone rides the ring, the arm's when it does not.
-    if ((f & 4u) != 0u && inst.recoil > 0.0) {
+    // batch's SIGNED travel — adding it along the barrel reproduces retail's
+    // `SetGoal(0,0,RackRecoilDistance)`: negative kicks backwards (the corpus's
+    // convention), positive forwards (UEL0203's +0.1). The direction rebuilds
+    // the aimed +Z from the same angles — the TURRET's when this bone rides
+    // the ring, the arm's when it does not.
+    if ((f & (4u | 128u)) != 0u) {
         const bool turreted = p.turretAim != 0 && (f & (8u | 16u | 32u | 64u)) != 0u;
         // A rack bone on the SECOND arm rides that arm's own angles — the dual
         // manipulator's trunnion carries bit 32's pitch and bit 64's yaw.
@@ -156,7 +161,17 @@ static float3 applyBuilderAim(float3 point, BoneTransformIn bone, UnitInstanceIn
         const float3 barrel =
             rotateBuilderAxis(rotateBuilderAxis(float3(0.0, 0.0, 1.0), pitchAxis, pitch),
                               yawAxis, yaw);
-        point -= barrel * (inst.recoil * p.recoilDistance);
+        // Two channels, two goals — retail's stacked CSlideManipulators. A
+        // telescope inside the rack's subtree carries both bits and slides by
+        // the sum, which is exactly what the two manipulators produce.
+        float travel = 0.0;
+        if ((f & 4u) != 0u) {
+            travel += inst.recoil * p.recoilDistance;
+        }
+        if ((f & 128u) != 0u) {
+            travel += inst.recoilTelescope * p.telescopeDistance;
+        }
+        point += barrel * travel;
     }
     return point;
 }

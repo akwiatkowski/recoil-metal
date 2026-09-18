@@ -100,22 +100,29 @@ turretSpecFor(const rm::unitdef::UnitDef& def) {
     }
     TurretRig turret{.rig = std::move(rig), .weapon = spec->second};
     const rm::unitdef::Weapon& weapon = def->weapons[spec->second];
+    // The recoil slide: rack subtree flags, then the telescope's own channel
+    // OR'd in beside them — retail gives each its own CSlideManipulator with
+    // its own goal (defaultweapons.lua:270-287). The distances stay SIGNED:
+    // negative slides backwards along the barrel (the corpus's convention —
+    // the Titan's is -0.2), positive forwards (UEL0203's +0.1).
     turret.recoilFlags = rm::resolveRecoilFlags(model, weapon.recoilBone);
-    // The same weapon's recoil slide: rack subtree, travel converted to elmos,
-    // return as travel fraction per tick. No rack, no kick. The authored distance
-    // is SIGNED — negative is backwards along the rack, which is the only way the
-    // slide goes (the shader subtracts along the barrel) — so the magnitude is
-    // what travels. A `> 0` check here deleted every retail rack at once, because
-    // the corpus signs backwards travel negative (the Titan's is -0.2).
-    const float travelMesh = std::abs(weapon.recoilDistanceMesh);
-    if (!turret.recoilFlags.empty() && travelMesh > 0.0f) {
-        turret.recoilDistanceElmos = travelMesh * def->meshToElmos;
-        const float perSecond =
-            weapon.recoilReturnSpeedMeshPerSecond * def->meshToElmos / travelMesh;
-        turret.recoilReturnPerTick = perSecond > 0.0f
-            ? perSecond / static_cast<float>(rm::app::gAppTickRate.ticksPerSecond())
-            : 1.0f;
+    const std::vector<std::uint32_t> telescopeFlags =
+        rm::resolveTelescopeFlags(model, weapon.telescopeBone);
+    if (!telescopeFlags.empty()) {
+        if (turret.recoilFlags.size() < telescopeFlags.size()) {
+            turret.recoilFlags.resize(telescopeFlags.size(), 0U);
+        }
+        for (std::size_t bone = 0; bone < telescopeFlags.size(); ++bone) {
+            turret.recoilFlags[bone] |= telescopeFlags[bone];
+        }
     }
+    const rm::RecoilSpec recoil =
+        rm::resolveRecoilSpec(weapon, def->meshToElmos,
+                              static_cast<float>(rm::app::gAppTickRate.ticksPerSecond()));
+    turret.recoilDistanceElmos = recoil.rackDistanceElmos;
+    turret.recoilReturnPerTick = recoil.rackReturnPerTick;
+    turret.telescopeDistanceElmos = recoil.telescopeDistanceElmos;
+    turret.telescopeReturnPerTick = recoil.telescopeReturnPerTick;
     return turret;
 }
 
@@ -797,6 +804,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 .recoilFlags = std::move(turretRig.recoilFlags),
                 .recoilDistanceElmos = turretRig.recoilDistanceElmos,
                 .recoilReturnPerTick = turretRig.recoilReturnPerTick,
+                .telescopeDistanceElmos = turretRig.telescopeDistanceElmos,
+                .telescopeReturnPerTick = turretRig.telescopeReturnPerTick,
                 .unpackAnimation = unpack,
                 .unpackOneshot = unpack != nullptr,
                 .animationDrivenByInstance = walk != nullptr,
@@ -988,6 +997,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             .recoilFlags = std::move(turretRig.recoilFlags),
             .recoilDistanceElmos = turretRig.recoilDistanceElmos,
             .recoilReturnPerTick = turretRig.recoilReturnPerTick,
+            .telescopeDistanceElmos = turretRig.telescopeDistanceElmos,
+            .telescopeReturnPerTick = turretRig.telescopeReturnPerTick,
             .unpackAnimation = unpack,
             .unpackOneshot = unpack != nullptr,
             .animationDrivenByInstance = walk != nullptr,
@@ -1048,6 +1059,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                             .recoilFlags = std::move(turretLod.recoilFlags),
                             .recoilDistanceElmos = turretLod.recoilDistanceElmos,
                             .recoilReturnPerTick = turretLod.recoilReturnPerTick,
+                            .telescopeDistanceElmos = turretLod.telescopeDistanceElmos,
+                            .telescopeReturnPerTick = turretLod.telescopeReturnPerTick,
                         });
                         scene.lodOfType[type] = UnitScene::LodLevel{
                             .batch = scene.batches.size() - 1,
@@ -1877,6 +1890,8 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             .recoilFlags = std::move(turretRig.recoilFlags),
             .recoilDistanceElmos = turretRig.recoilDistanceElmos,
             .recoilReturnPerTick = turretRig.recoilReturnPerTick,
+            .telescopeDistanceElmos = turretRig.telescopeDistanceElmos,
+            .telescopeReturnPerTick = turretRig.telescopeReturnPerTick,
             .unpackAnimation = unpack,
             .unpackOneshot = unpack != nullptr,
         });

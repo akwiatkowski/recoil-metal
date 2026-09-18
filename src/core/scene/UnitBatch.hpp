@@ -66,11 +66,18 @@ struct UnitBatch {
     std::size_t turretWeapon = 0;
 
     /// Recoil slide for the primary weapon: subtree flags OR'd into the bone
-    /// buffer, travel in elmos, and the fraction of travel recovered per tick.
-    /// Empty flags mean no authored rack — the gun does not kick.
+    /// buffer (rack AND telescope bits), SIGNED travel in elmos (negative =
+    /// backwards along the barrel, as authored), and the fraction of travel
+    /// recovered per tick. Empty flags mean no authored rack — the gun does
+    /// not kick.
     std::vector<std::uint32_t> recoilFlags;
     float recoilDistanceElmos = 0.0f;
     float recoilReturnPerTick = 0.0f;
+    /// The telescope channel of the same slide — its own manipulator and goal
+    /// in retail (`TelescopeRecoilDistance`, falling back to the rack
+    /// distance). Zero distance, no channel.
+    float telescopeDistanceElmos = 0.0f;
+    float telescopeReturnPerTick = 0.0f;
 
     /// A deploy animation (a fold/unfold/open .sca) played once when the unit is
     /// built, then held. Used only when the batch has no looping request

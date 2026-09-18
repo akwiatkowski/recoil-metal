@@ -82,9 +82,19 @@ struct VfsUnit {
 struct TurretRig {
     rm::BuilderAimRig rig;
     std::size_t weapon = 0;
+    /// Rack AND telescope subtree flags OR'd together — `kBuilderRecoilBone`
+    /// and `kBuilderTelescopeBone` bits. Empty when neither bone resolves.
     std::vector<std::uint32_t> recoilFlags;
+    /// Signed rack travel in elmos (negative = backwards, as authored).
     float recoilDistanceElmos = 0.0f;
+    /// Fraction of the rack's travel returned per tick.
     float recoilReturnPerTick = 0.0f;
+    /// Signed telescope travel in elmos — `TelescopeRecoilDistance` or the
+    /// rack distance when the field is absent. Zero without a telescope bone.
+    float telescopeDistanceElmos = 0.0f;
+    /// Fraction of the telescope's travel returned per tick — the same speed
+    /// as the rack's, so a longer telescope travel takes proportionally longer.
+    float telescopeReturnPerTick = 0.0f;
 };
 
 /// The primary turret's aim spec from the first turreted weapon, or nothing when the

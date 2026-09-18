@@ -17,6 +17,12 @@ inline constexpr std::uint32_t kBuilderPitchBone = 1U << 1U;
 /// A recoiling bone and everything bolted to it. A third bit, because a barrel
 /// both aims (yaw/pitch bits from its turret rig) and slides (this bit).
 inline constexpr std::uint32_t kBuilderRecoilBone = 1U << 2U;
+/// The telescope bone of the same rack — retail gives it its OWN
+/// `CSlideManipulator` with its own goal (`TelescopeRecoilDistance`, falling
+/// back to `RackRecoilDistance`), so it needs its own bit and its own travel
+/// rather than sharing the rack's. UES0302's muzzle IS this bone: without the
+/// channel its gun kicks and its muzzle stays home.
+inline constexpr std::uint32_t kBuilderTelescopeBone = 1U << 7U;
 
 /// The turret rig's bits, deliberately DISJOINT from the builder's three: a unit
 /// can carry both an arm and a ring (the ACU does), and one bone buffer has to
@@ -122,9 +128,61 @@ struct TurretAimSpec {
 [[nodiscard]] std::vector<std::uint32_t> resolveRecoilFlags(const Model& model,
                                                             std::string_view boneName);
 
+/// The telescope twin of resolveRecoilFlags: same subtree walk, the telescope
+/// bit instead of the rack's. A rack's telescope is usually INSIDE the rack's
+/// subtree, so a bone can carry both bits and slide by the sum — exactly what
+/// retail's two stacked `CSlideManipulator`s produce.
+[[nodiscard]] std::vector<std::uint32_t> resolveTelescopeFlags(
+    const Model& model, std::string_view boneName);
+
 /// One decay step toward rest: linear, clamped at zero, in fractions of full travel.
 [[nodiscard]] float stepRecoil(float amount, float returnPerStep) noexcept;
 
+/// The recoil slide resolved for one weapon: signed travels in elmos and the
+/// return rate as a fraction of full travel per tick, per channel.
+///
+/// THE RETAIL LAW (mohodata `lua/sim/defaultweapons.lua:270-298`): on fire,
+/// `PlayRackRecoil` creates a `CSlideManipulator` per rack/telescope bone,
+/// `SetGoal(0,0,RackRecoilDistance)` with `SetSpeed(-1)` — an INSTANT kick to
+/// the full distance along the bone's local Z. `PlayRackRecoilReturn` waits
+/// one tick, then `SetGoal(0,0,0)` at `RackRecoilReturnSpeed` — a linear run
+/// home. The kick lands on the `WeaponFired` tick; the decay-then-kick order
+/// in advanceMatch is what the `WaitTicks(1)` hold becomes here.
+///
+/// THE DEFAULT RETURN SPEED (`defaultweapons.lua:62`) is the field most
+/// blueprints leave out — only 6 of ~206 recoil weapons author one:
+///
+///     speed = abs(dist / ((1/RateOfFire) - MuzzleChargeDelay)) * 1.25
+///
+/// "so that it finishes returning just as the next shot is ready" (the file's
+/// own comment), with `dist` the LARGER of the rack and telescope travels.
+/// Lua edge cases this reproduces: `RateOfFire = 0` divides by zero and yields
+/// speed 0 (the slide stays kicked forever); a charge delay at or past the
+/// firing interval yields inf (an instant return).
+struct RecoilSpec {
+    /// Signed rack travel in elmos — the sign is authored and real: negative
+    /// slides backwards along the barrel (the Titan's -0.2), positive forwards
+    /// (UEL0203's +0.1). Zero when the weapon authors no `RackRecoilDistance`.
+    float rackDistanceElmos = 0.0f;
+    /// Signed telescope travel in elmos — `TelescopeRecoilDistance` when
+    /// authored, the rack distance otherwise (the Lua `or` fallback). Zero
+    /// when the rack names no `TelescopeBone`.
+    float telescopeDistanceElmos = 0.0f;
+    /// Fraction of each channel's own travel returned per tick. Both sliders
+    /// run home at the SAME speed in retail, so the channel with the longer
+    /// travel takes proportionally longer — the fractions differ.
+    float rackReturnPerTick = 0.0f;
+    float telescopeReturnPerTick = 0.0f;
+};
+
+/// Resolves a weapon's recoil spec: signed distances converted by
+/// `meshToElmos`, the return speed (authored or the default formula above)
+/// converted to per-tick travel fractions at `ticksPerSecond`.
+[[nodiscard]] RecoilSpec resolveRecoilSpec(const unitdef::Weapon& weapon,
+                                           float meshToElmos,
+                                           float ticksPerSecond) noexcept;
+
+/// The clamped two-axis pose that points the rig at a model-space target.
 /// The clamped two-axis pose that points the rig at a model-space target.
 [[nodiscard]] BuilderAimAngles builderAimAt(const BuilderAimRig& rig,
                                             const std::array<float, 3>& target) noexcept;

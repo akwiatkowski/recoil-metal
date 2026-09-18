@@ -1564,17 +1564,23 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // construction: `retireDead` fills one from the other.
     // The run home FIRST, before this tick's events set new kicks: a slide kicked
     // this tick must survive to the frame, and decaying first is what guarantees
-    // it. Fixed ticks, so a headless capture sees the same slide every run.
+    // it — this ordering is retail's `WaitTicks(1)` in `PlayRackRecoilReturn`
+    // (defaultweapons.lua:292), the one-tick hold at full travel. Fixed ticks,
+    // so a headless capture sees the same slide every run.
+    // Each channel decays at its own fraction of travel — the two retail
+    // sliders share a SPEED, so the longer travel takes proportionally longer.
     // Entries that arrive at rest leave, rather than riding the map as zeroes.
     for (auto it = scene.recoilShown.begin(); it != scene.recoilShown.end();) {
         const rm::UnitTypeIndex type = scene.store.typeAt(it->first);
         const std::size_t batch = scene.batchOf(type);
-        const float perTick = batch != rm::app::UnitScene::kNoBatch
-                && batch < scene.batches.size()
-            ? scene.batches[batch].recoilReturnPerTick
-            : 1.0f;
-        it->second = rm::stepRecoil(it->second, perTick);
-        if (it->second <= 0.0f) {
+        const bool have = batch != rm::app::UnitScene::kNoBatch
+                          && batch < scene.batches.size();
+        it->second.rack = rm::stepRecoil(
+            it->second.rack, have ? scene.batches[batch].recoilReturnPerTick : 1.0f);
+        it->second.telescope = rm::stepRecoil(
+            it->second.telescope,
+            have ? scene.batches[batch].telescopeReturnPerTick : 1.0f);
+        if (!it->second.kicked()) {
             it = scene.recoilShown.erase(it);
         } else {
             ++it;
@@ -1653,13 +1659,21 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             noteImpactMark(scene, rm::sim::fxToFloat(event.at[0]),
                            rm::sim::fxToFloat(event.at[2]));
         } else if (event.kind == rm::sim::EventKind::WeaponFired) {
-            // The kick: a full slide the tick the shot leaves. Only types with an
-            // authored rack keep one — the batch resolved that at upload.
+            // The kick: a full slide the tick the shot leaves — retail's
+            // `SetSpeed(-1)` instant goal (defaultweapons.lua:276). Gated on
+            // the rack distance like retail's `bp.RackRecoilDistance != 0`
+            // (the flags alone would also kick a telescope-only rig, which
+            // retail never builds). Each channel kicks only when it has
+            // travel to kick through.
             const rm::UnitTypeIndex shooterType = scene.store.typeAt(event.unit.index);
             const std::size_t batch = scene.batchOf(shooterType);
             if (batch != rm::app::UnitScene::kNoBatch && batch < scene.batches.size()
-                && !scene.batches[batch].recoilFlags.empty()) {
-                scene.recoilShown[event.unit.index] = 1.0f;
+                && scene.batches[batch].recoilDistanceElmos != 0.0f) {
+                rm::RecoilSlide& slide = scene.recoilShown[event.unit.index];
+                slide.rack = 1.0f;
+                if (scene.batches[batch].telescopeDistanceElmos != 0.0f) {
+                    slide.telescope = 1.0f;
+                }
             }
         }
     }

@@ -71,8 +71,13 @@ struct UnitInstance {
     float turretPitch2 = 0.0f;
 
     /// Per-instance recoil slide, 0 at rest to 1 fully kicked. Multiplied by the
-    /// batch's travel distance in the vertex shader; zero leaves every bone put.
+    /// batch's SIGNED travel distance in the vertex shader; zero leaves every
+    /// bone put.
     float recoil = 0.0f;
+    /// The telescope channel of the same slide — its own scalar because retail
+    /// gives it its own manipulator and goal (`TelescopeRecoilDistance`), and
+    /// both run home at the same SPEED rather than the same fraction.
+    float recoilTelescope = 0.0f;
 
     /// CPU measurement of the current drawn barrel versus a world-space direction
     /// (e.g. initial projectile velocity): 0 degrees aligned, 180 reversed.
@@ -88,9 +93,21 @@ struct UnitInstance {
         const std::array<float, 3>& worldDirection) const noexcept;
 };
 
-static_assert(sizeof(UnitInstance) == 76,
+static_assert(sizeof(UnitInstance) == 80,
               "UnitInstance must stay tightly packed — the shader reads it as a "
-              "packed_float3, two floats, a packed_float4 and ten floats");
+              "packed_float3, two floats, a packed_float4 and eleven floats");
+
+/// The drawn recoil slide per unit slot: one scalar per channel (rack and
+/// telescope), 0 at rest to 1 fully kicked. Two channels because retail runs
+/// two `CSlideManipulator`s — one per bone — that share only the return speed.
+struct RecoilSlide {
+    float rack = 0.0f;
+    float telescope = 0.0f;
+
+    [[nodiscard]] bool kicked() const noexcept {
+        return rack > 0.0f || telescope > 0.0f;
+    }
+};
 
 // Scatters instances across the map's land, sitting on the terrain.
 //

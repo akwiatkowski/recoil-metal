@@ -1332,6 +1332,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             pose.time = batch.animationDrivenByInstance ? 0.0f : animationTime_;
             setAimUniforms(pose, batch.builderAim, batch.turretAim);
             pose.recoilDistance = batch.recoilDistance;
+            pose.telescopeDistance = batch.telescopeDistance;
             pose.unpackOneshot = batch.unpackOneshot ? 1u : 0u;
             encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
 
@@ -1435,6 +1436,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             // Zero hands the whole decision to the instances — see UnitBatch.
             setAimUniforms(pose, batch.builderAim, batch.turretAim);
             pose.recoilDistance = batch.recoilDistance;
+            pose.telescopeDistance = batch.telescopeDistance;
             pose.unpackOneshot = batch.unpackOneshot ? 1u : 0u;
             encoder->setVertexBytes(&pose, sizeof(pose), kPoseUniformBufferIndex);
 

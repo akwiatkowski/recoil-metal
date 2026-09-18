@@ -875,9 +875,13 @@ private:
         BuilderAimRig turretAim;
 
         /// Recoil slide for the primary weapon: subtree flags OR'd into the bone
-        /// buffer at upload, travel distance for PoseUniforms. The return rate
-        /// stays scene-side (UnitBatch), where the per-tick decay runs.
+        /// buffer at upload, SIGNED travel distances for PoseUniforms (negative
+        /// = backwards along the barrel, as authored). The return rates stay
+        /// scene-side (UnitBatch), where the per-tick decay runs.
         float recoilDistance = 0.0f;
+        /// The telescope channel's own signed travel — retail's second
+        /// CSlideManipulator with its own goal.
+        float telescopeDistance = 0.0f;
         /// Subtree flags for the slide, OR'd into the bone buffer at upload.
         std::vector<std::uint32_t> recoilFlags;
 

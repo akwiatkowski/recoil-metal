@@ -366,6 +366,7 @@ void Renderer::setUnits(std::span<const dds::Texture> textures, std::span<const 
         uploaded.turretAim = batch.turretAim;
         uploaded.recoilFlags = batch.recoilFlags;
         uploaded.recoilDistance = batch.recoilDistanceElmos;
+        uploaded.telescopeDistance = batch.telescopeDistanceElmos;
         uploaded.vertexBuffer =
             device_->newBuffer(model.vertices.data(), model.vertices.size() * sizeof(ModelVertex),
                                MTL::ResourceStorageModeShared);

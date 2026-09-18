@@ -297,13 +297,24 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
             const lua::Value& rack = racks->items.front();
             weapon.recoilBone = std::string{rack.stringAt("RackBone").value_or("")};
             weapon.telescopeBone = std::string{rack.stringAt("TelescopeBone").value_or("")};
-            weapon.telescopeDistanceMesh = numberOr(rack, "TelescopeRecoilDistance", 0.0f);
+            // Presence, not the value: `TelescopeRecoilDistance or RackRecoilDistance`
+            // in Lua falls back only when the field is ABSENT — an authored zero
+            // is truthy and would mean "the telescope does not slide".
+            if (const lua::Value* distance = rack.find("TelescopeRecoilDistance");
+                distance != nullptr) {
+                weapon.telescopeDistanceMesh =
+                    static_cast<float>(distance->asNumber().value_or(0.0));
+            }
         }
         // Weapon-level like `RackBones`' sibling fields (`XSS0302`): the distance the
         // current rack's bone travels and how fast it returns.
         weapon.recoilDistanceMesh = numberOr(entry, "RackRecoilDistance", 0.0f);
         weapon.recoilReturnSpeedMeshPerSecond =
             std::max(0.0f, numberOr(entry, "RackRecoilReturnSpeed", 0.0f));
+        // Raw seconds for the recoil-return formula — see the field. The fire
+        // sequence's `WaitSeconds(MuzzleChargeDelay)` is a different consumer.
+        weapon.muzzleChargeDelaySeconds =
+            std::max(0.0f, numberOr(entry, "MuzzleChargeDelay", 0.0f));
         weapon.animationReload = std::string{entry.stringAt("AnimationReload").value_or("")};
         weapon.animationCharge = std::string{entry.stringAt("AnimationCharge").value_or("")};
         weapon.weaponUnpackAnimation =

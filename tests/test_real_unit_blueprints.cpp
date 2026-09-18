@@ -313,7 +313,7 @@ TEST_CASE("the UEF commander's numbered walk clip arrives by declaration", "[cor
 TEST_CASE("retail weapons carry their manipulator specs", "[corpus][manipulators]") {
     // The data `defaultweapons.lua` rack sequences consume: turret bones and slew
     // rates, first-rack recoil/telescope bones and mesh-unit distances, animation
-    // paths. Nothing poses bones yet; this pins the specs for the effect host.
+    // paths. The recoil slide poses from these — the pins stay honest.
     if (!std::filesystem::exists(unitRoot() / "UEL0201/UEL0201_unit.bp")) {
         SKIP("no retail unit corpus at " + unitRoot().string());
     }
@@ -333,7 +333,7 @@ TEST_CASE("retail weapons carry their manipulator specs", "[corpus][manipulators
               == Catch::Approx(60.0f * std::numbers::pi_v<float> / 180.0f));
         CHECK(gun->recoilBone == "Turret_Barrel");
         CHECK(gun->recoilDistanceMesh == Catch::Approx(-2.0f));
-        CHECK(gun->telescopeBone.empty());
+        CHECK_FALSE(gun->telescopeDistanceMesh.has_value());
     }
     {
         const auto def = rm::unitbp::loadFile(unitRoot() / "XSL0111/XSL0111_unit.bp");
@@ -341,6 +341,10 @@ TEST_CASE("retail weapons carry their manipulator specs", "[corpus][manipulators
         const auto rack = findWeapon(*def, "MissileRack");
         REQUIRE(rack != def->weapons.end());
         CHECK(rack->animationReload == "/units/xsl0111/xsl0111_areload.sca");
+        // The charge delay feeds the recoil-return formula raw — 0.1s off the
+        // 6.67s firing interval (RateOfFire 0.15).
+        CHECK(rack->muzzleChargeDelaySeconds == Catch::Approx(0.1f));
+        CHECK(rack->rateOfFire == Catch::Approx(0.15f));
     }
     {
         const auto def = rm::unitbp::loadFile(unitRoot() / "UAB4201/UAB4201_unit.bp");
@@ -358,7 +362,8 @@ TEST_CASE("retail weapons carry their manipulator specs", "[corpus][manipulators
         CHECK(gun->recoilBone == "Turret_Barrel_B01");
         CHECK(gun->recoilDistanceMesh == Catch::Approx(-15.0f));
         CHECK(gun->telescopeBone == "Turret_Barrel_B02");
-        CHECK(gun->telescopeDistanceMesh == Catch::Approx(-20.0f));
+        REQUIRE(gun->telescopeDistanceMesh.has_value());
+        CHECK(*gun->telescopeDistanceMesh == Catch::Approx(-20.0f));
     }
 }
 TEST_CASE("retail T1 air factories expose scouts, interceptors and bombers", "[corpus]") {

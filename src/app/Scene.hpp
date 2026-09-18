@@ -148,6 +148,7 @@ struct UnitScene {
                     std::uint32_t flags =
                         second ? rm::kTurretYawBone | rm::kTurretPitch2Bone
                                : rm::kTurretYawBone | rm::kTurretPitchBone;
+                    std::size_t muzzleBone = drawn.model->bones.size();
                     if (!boneName.empty()) {
                         for (std::size_t bone = 0; bone < drawn.model->bones.size();
                              ++bone) {
@@ -161,6 +162,7 @@ struct UnitScene {
                                 if (bone < drawn.turretAim.boneFlags.size()) {
                                     flags = drawn.turretAim.boneFlags[bone];
                                 }
+                                muzzleBone = bone;
                                 break;
                             }
                         }
@@ -183,13 +185,31 @@ struct UnitScene {
                     std::array<float,3> posed =
                         rm::applyBuilderAim(mesh, flags, drawn.turretAim, angles);
                     // The slide, along the aimed barrel: the trunnion posed
-                    // identically, so their difference is the barrel.
-                    float kick = 0.0f;
+                    // identically, so their difference is the barrel. Each
+                    // channel contributes only when the muzzle's bone carries
+                    // its flag — a muzzle outside the rack subtree does not
+                    // ride the slide. The distances are SIGNED: adding the
+                    // signed travel along the barrel reproduces retail's
+                    // `SetGoal(0,0,RackRecoilDistance)`, where negative kicks
+                    // backwards and positive forwards.
+                    const rm::RecoilSlide* slide = nullptr;
                     if (const auto slid = recoilShown.find(id.index);
                         slid != recoilShown.end()) {
-                        kick = slid->second;
+                        slide = &slid->second;
                     }
-                    if (kick > 0.0f && drawn.recoilDistanceElmos > 0.0f) {
+                    const std::uint32_t recoilBits =
+                        muzzleBone < drawn.recoilFlags.size()
+                            ? drawn.recoilFlags[muzzleBone]
+                            : 0U;
+                    const float travel =
+                        (slide != nullptr && (recoilBits & rm::kBuilderRecoilBone) != 0U
+                             ? slide->rack * drawn.recoilDistanceElmos
+                             : 0.0f)
+                        + (slide != nullptr
+                               && (recoilBits & rm::kBuilderTelescopeBone) != 0U
+                               ? slide->telescope * drawn.telescopeDistanceElmos
+                               : 0.0f);
+                    if (travel != 0.0f) {
                         const std::array<float,3> tru = rm::applyBuilderAim(
                             second ? drawn.turretAim.pitch2Pivot
                                    : drawn.turretAim.pitchPivot,
@@ -200,11 +220,10 @@ struct UnitScene {
                         const float len =
                             std::sqrt(dx * dx + dy * dy + dz * dz);
                         if (len > 1e-6f) {
-                            const float slide = kick * drawn.recoilDistanceElmos * inv
-                                                / len;
-                            posed[0] -= dx * slide;
-                            posed[1] -= dy * slide;
-                            posed[2] -= dz * slide;
+                            const float amount = travel * inv / len;
+                            posed[0] += dx * amount;
+                            posed[1] += dy * amount;
+                            posed[2] += dz * amount;
                         }
                     }
                     local = {posed[0] * scale, posed[1] * scale, posed[2] * scale};
@@ -433,13 +452,12 @@ struct UnitScene {
     // rates and returns to rest when work ends, then is forgotten.
     std::unordered_map<rm::UnitIndex, std::array<float, 3>> builderTarget;
     std::unordered_map<rm::UnitIndex, rm::BuilderAimAngles> builderShownAim;
-    /// The turret pose lives in `MoveState` now — the sim slews it, the snapshot
-    /// carries it, and this layer keeps no second map for it. The build arm
     /// remains presentation-only and keeps `builderShownAim` above.
-    /// The drawn recoil slide per slot, 0 at rest to 1 fully kicked. Kicked to 1
-    /// by WeaponFired in advanceMatch, decayed there every tick at the batch's
-    /// return rate — presentation only, forgotten with the slot.
-    std::unordered_map<rm::UnitIndex, float> recoilShown;
+    /// The drawn recoil slide per slot — one `RecoilSlide` (rack + telescope
+    /// channels), each 0 at rest to 1 fully kicked. Kicked by WeaponFired in
+    /// advanceMatch, decayed there every tick at the batch's per-channel
+    /// return rates — presentation only, forgotten with the slot.
+    std::unordered_map<rm::UnitIndex, rm::RecoilSlide> recoilShown;
     /// The tick each slot's unit deployed (construction finished), for one-shot
     /// deploy animations. Absent means match start — pre-placed units unfold as
     /// the match opens. Erased with the slot, like every other per-slot map.
@@ -1187,7 +1205,7 @@ struct UnitScene {
     /// every other angle, and the shader reads its own instance fields.
     /// applyBuilderArm keeps its map: the build arm is still presentation-only.
 
-    /// Copies the drawn recoil slide onto the instance. The amount lives in
+    /// Copies the drawn recoil slide onto the instance. The amounts live in
     /// `recoilShown`, kicked and decayed in advanceMatch — gather only reads,
     /// the way the turret applier only reads its own map after slewing it.
     void applyRecoil(rm::UnitInstance& instance, const rm::DrawUnit& unit,
@@ -1196,9 +1214,11 @@ struct UnitScene {
             return;
         }
         const auto shownIt = recoilShown.find(unit.id.index);
-        instance.recoil = shownIt != recoilShown.end() ? shownIt->second : 0.0f;
+        if (shownIt != recoilShown.end()) {
+            instance.recoil = shownIt->second.rack;
+            instance.recoilTelescope = shownIt->second.telescope;
+        }
     }
-
     /// The unit behind a drawn instance, or nothing when the pair names nothing drawn.
     [[nodiscard]] std::optional<rm::sim::UnitId> unitDrawnAt(std::size_t batch,
                                                              std::size_t index) const {

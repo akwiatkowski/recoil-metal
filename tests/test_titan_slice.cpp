@@ -227,9 +227,10 @@ TEST_CASE("the Titan's recoil resolves with authored travel", "[slice][recoil]")
     const rm::app::TurretRig rig = rm::app::resolveTurretRig(*model, &*def);
     REQUIRE_FALSE(rig.recoilFlags.empty());
     REQUIRE(rig.recoilFlags.size() == model->bones.size());
-    // RackRecoilDistance -0.2 mesh units, converted once at resolve.
+    // RackRecoilDistance -0.2 mesh units, SIGNED and converted once at resolve:
+    // negative slides backwards along the barrel, as the corpus authors it.
     CHECK(rig.recoilDistanceElmos
-          == Approx(0.2f * def->meshToElmos).margin(1e-4));
+          == Approx(-0.2f * def->meshToElmos).margin(1e-4));
     CHECK(rig.recoilReturnPerTick > 0.0f);
 }
 
@@ -381,7 +382,7 @@ TEST_CASE("the Titan aims, kicks and strides in a live tick", "[slice][behavior]
     for (int tick = 0; tick < 30; ++tick) {
         (void)rm::app::advanceMatch(runner, tick, 0.0f);
         const auto shown = scene.recoilShown.find(shooter.index);
-        kicked = kicked || (shown != scene.recoilShown.end() && shown->second > 0.0f);
+        kicked = kicked || (shown != scene.recoilShown.end() && shown->second.kicked());
         // Harvest while flying: fast bolts land within ticks, so an end-of-run
         // read finds nothing. Velocities never change in flight (flat direct
         for (const rm::sim::Projectile& shot : scene.projectiles) {

@@ -251,13 +251,20 @@ struct PoseUniforms {
     float duration = 0.0f;
     float time = 0.0f;
     std::uint32_t builderAim = 0;
-    /// Full recoil travel in elmos for this batch. Zero when the type has no rack.
+    /// SIGNED rack slide travel in elmos for this batch (negative = backwards,
+    /// as authored). Zero when the type has no rack.
     float recoilDistance = 0.0f;
+    /// SIGNED telescope slide travel in elmos — the second channel of the same
+    /// slide. Zero without a telescope bone.
+    float telescopeDistance = 0.0f;
     /// Nonzero when the batch animation plays once and holds its last frame.
     std::uint32_t unpackOneshot = 0;
     /// Nonzero when the batch carries a resolved TURRET rig — the second pivot
     /// set below is then live and the shader aims bits 3-5 of each bone's flags.
     std::uint32_t turretAim = 0;
+    /// MSL pads the header to float4 alignment before yawPivot; C++ needs the
+    /// pad written out because std::array<float,4> is only 4-aligned.
+    float pad[3] = {};
     std::array<float, 4> yawPivot{};
     std::array<float, 4> yawAxis{};
     std::array<float, 4> pitchPivot{};
@@ -269,9 +276,9 @@ struct PoseUniforms {
     std::array<float, 4> turretPitch2Pivot{};
     std::array<float, 4> turretPitch2Axis{};
 };
-static_assert(sizeof(PoseUniforms) == 192, "PoseUniforms must match the MSL layout");
-static_assert(offsetof(PoseUniforms, yawPivot) == 32, "builder vectors start on float4 alignment");
-static_assert(offsetof(PoseUniforms, turretYawPivot) == 96,
+static_assert(sizeof(PoseUniforms) == 208, "PoseUniforms must match the MSL layout");
+static_assert(offsetof(PoseUniforms, yawPivot) == 48, "builder vectors start on float4 alignment");
+static_assert(offsetof(PoseUniforms, turretYawPivot) == 112,
               "turret vectors start on float4 alignment");
 
 // One batch, TWO aim rigs: the builder arm owns bits 0-2 and instance angles

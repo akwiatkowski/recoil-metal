@@ -33,6 +33,8 @@ namespace {
                       .globalOffset = {{0.0f, 1.0f, 3.0f}}},
         rm::ModelBone{.name = "Rack", .parent = 2, .offset = {{0.5f, 0.0f, 1.0f}},
                       .globalOffset = {{0.5f, 1.0f, 1.0f}}},
+        rm::ModelBone{.name = "Tele", .parent = 4, .offset = {{0.0f, 0.0f, 0.5f}},
+                      .globalOffset = {{0.5f, 1.0f, 1.5f}}},
     };
     return model;
 }
@@ -41,12 +43,15 @@ namespace {
 
 TEST_CASE("a recoil rig marks only the rack subtree", "[recoil]") {
     const std::vector<std::uint32_t> flags = rm::resolveRecoilFlags(gunModel(), "Rack");
-    REQUIRE(flags.size() == 5);
+    REQUIRE(flags.size() == 6);
     CHECK(flags[0] == 0U);
     CHECK(flags[1] == 0U);
     CHECK(flags[2] == 0U);
     CHECK(flags[3] == 0U);
     CHECK(flags[4] == rm::kBuilderRecoilBone);
+    // The telescope descends from the rack: it rides the rack's slide AND
+    // carries its own channel — retail's two stacked manipulators.
+    CHECK(flags[5] == rm::kBuilderRecoilBone);
 }
 
 TEST_CASE("recoil bone names match case-insensitively", "[recoil]") {
@@ -54,7 +59,7 @@ TEST_CASE("recoil bone names match case-insensitively", "[recoil]") {
     rm::Model model = gunModel();
     model.bones[4].name = "rack";
     const std::vector<std::uint32_t> flags = rm::resolveRecoilFlags(model, "Rack");
-    REQUIRE(flags.size() == 5);
+    REQUIRE(flags.size() == 6);
     CHECK(flags[4] == rm::kBuilderRecoilBone);
 }
 
@@ -64,6 +69,100 @@ TEST_CASE("recoil decays linearly home and never goes negative", "[recoil]") {
     CHECK(rm::stepRecoil(0.75f, 0.25f) == Approx(0.5f));
     CHECK(rm::stepRecoil(0.1f, 0.25f) == 0.0f);
     CHECK(rm::stepRecoil(0.0f, 0.25f) == 0.0f);
+}
+
+TEST_CASE("a telescope rig marks its own subtree with its own bit", "[recoil]") {
+    // The telescope is a second CSlideManipulator in retail, not a second
+    // distance on the rack's — its subtree carries bit 7 beside the rack's
+    // bit 2, and a bone inside both subtrees slides by the sum.
+    const std::vector<std::uint32_t> flags =
+        rm::resolveTelescopeFlags(gunModel(), "Rack");
+    REQUIRE(flags.size() == 6);
+    CHECK(flags[4] == rm::kBuilderTelescopeBone);
+    CHECK(flags[5] == rm::kBuilderTelescopeBone);
+    CHECK(rm::resolveTelescopeFlags(gunModel(), "NoSuchBone").empty());
+    CHECK(rm::resolveTelescopeFlags(gunModel(), "").empty());
+}
+
+TEST_CASE("the default return speed finishes the slide inside the firing interval",
+          "[recoil]") {
+    // defaultweapons.lua:62 — only 6 of ~206 recoil weapons author
+    // RackRecoilReturnSpeed; the rest ride
+    //   abs(dist / ((1/RateOfFire) - MuzzleChargeDelay)) * 1.25
+    // "so that it finishes returning just as the next shot is ready".
+    //
+    // UEL0201's Striker: dist 2 mesh, RoF 1, no charge delay → 2.5 mesh/s,
+    // which is 1.25 of the 2-mesh travel per second → 0.125 of travel per
+    // 10 Hz tick (home in 8 ticks, 80% of the 1 s interval).
+    rm::unitdef::Weapon striker;
+    striker.recoilDistanceMesh = -2.0f;
+    striker.rateOfFire = 1.0f;
+    const rm::RecoilSpec strikerSpec =
+        rm::resolveRecoilSpec(striker, 1.0f, 10.0f);
+    CHECK(strikerSpec.rackDistanceElmos == Approx(-2.0f));  // SIGNED, as authored
+    CHECK(strikerSpec.rackReturnPerTick == Approx(0.125f));
+    CHECK(strikerSpec.telescopeDistanceElmos == 0.0f);      // no telescope bone
+
+    // XSL0111's missile rack: dist 1, RoF 0.15, charge delay 0.1 →
+    // 1/(6.667-0.1)*1.25 = 0.1903 mesh/s → 0.019 of travel per tick.
+    rm::unitdef::Weapon rack;
+    rack.recoilDistanceMesh = -1.0f;
+    rack.rateOfFire = 0.15f;
+    rack.muzzleChargeDelaySeconds = 0.1f;
+    const rm::RecoilSpec rackSpec = rm::resolveRecoilSpec(rack, 1.0f, 10.0f);
+    CHECK(rackSpec.rackReturnPerTick == Approx(0.019034f).epsilon(0.001));
+
+    // An authored speed wins over the formula (the 6 weapons that state one).
+    rm::unitdef::Weapon authored = striker;
+    authored.recoilReturnSpeedMeshPerSecond = 10.0f;
+    CHECK(rm::resolveRecoilSpec(authored, 1.0f, 10.0f).rackReturnPerTick
+          == Approx(0.5f));  // 10 mesh/s over 2 mesh of travel, per 10 Hz tick
+
+    // Lua edge cases: RateOfFire 0 divides by zero and yields speed 0 — the
+    // slide stays kicked forever; a charge delay past the interval yields inf
+    // — the slide snaps home in one step.
+    rm::unitdef::Weapon frozen = striker;
+    frozen.rateOfFire = 0.0f;
+    CHECK(rm::resolveRecoilSpec(frozen, 1.0f, 10.0f).rackReturnPerTick == 0.0f);
+    rm::unitdef::Weapon instant = striker;
+    instant.muzzleChargeDelaySeconds = 1.0f;  // window 0 → inf speed
+    CHECK(rm::resolveRecoilSpec(instant, 1.0f, 10.0f).rackReturnPerTick == 1.0f);
+}
+
+TEST_CASE("the telescope channel takes the rack distance when unstated", "[recoil]") {
+    // `v.TelescopeRecoilDistance or bp.RackRecoilDistance` (defaultweapons.lua:283):
+    // absent falls back to the rack's goal; authored stands on its own — and
+    // both channels run home at the SAME speed, so the longer travel takes
+    // proportionally longer per tick.
+    rm::unitdef::Weapon gun;
+    gun.recoilDistanceMesh = -15.0f;
+    gun.rateOfFire = 0.1f;
+    gun.telescopeBone = "Barrel_B02";
+    const rm::RecoilSpec fallback = rm::resolveRecoilSpec(gun, 1.0f, 10.0f);
+    CHECK(fallback.telescopeDistanceElmos == Approx(-15.0f));
+    CHECK(fallback.telescopeReturnPerTick == Approx(fallback.rackReturnPerTick));
+
+    gun.telescopeDistanceMesh = -20.0f;  // UEB2302's authored telescope
+    const rm::RecoilSpec spec = rm::resolveRecoilSpec(gun, 1.0f, 10.0f);
+    CHECK(spec.telescopeDistanceElmos == Approx(-20.0f));
+    // The formula uses the LARGER travel: dist = max(15,20) = 20 →
+    // 20/(10-0)*1.25 = 2.5 mesh/s for BOTH sliders. Per tick: rack returns
+    // 2.5/15/10 of its travel, the telescope 2.5/20/10 — the longer travel
+    // takes proportionally longer, exactly like retail's shared SetSpeed.
+    CHECK(spec.rackReturnPerTick == Approx(0.016667f).epsilon(0.001));
+    CHECK(spec.telescopeReturnPerTick == Approx(0.0125f));
+}
+
+TEST_CASE("a positive recoil distance keeps its sign — the slide goes forwards",
+          "[recoil]") {
+    // UEL0203 authors +0.1: the sign is data, not a convention. The old
+    // magnitude-only path would have kicked it backwards like every other gun.
+    rm::unitdef::Weapon gun;
+    gun.recoilDistanceMesh = 0.1f;
+    gun.rateOfFire = 3.0f;
+    const rm::RecoilSpec spec = rm::resolveRecoilSpec(gun, 0.56f, 10.0f);
+    CHECK(spec.rackDistanceElmos == Approx(0.056f));
+    CHECK(spec.rackDistanceElmos > 0.0f);
 }
 
 TEST_CASE("a fired gun draws its barrel back, then runs it home", "[recoil]") {
@@ -102,8 +201,10 @@ TEST_CASE("a fired gun draws its barrel back, then runs it home", "[recoil]") {
     gun.turretYawSpeedRadPerSecond = 2.0f;
     gun.turretPitchSpeedRadPerSecond = 1.5f;
     gun.recoilBone = "Rack";
-    gun.recoilDistanceMesh = 2.0f;
+    gun.recoilDistanceMesh = -2.0f;   // signed, as the corpus authors it
     gun.recoilReturnSpeedMeshPerSecond = 2.0f;
+    gun.telescopeBone = "Tele";
+    gun.telescopeDistanceMesh = -4.0f;
     tank.weapons.push_back(gun);
     scene.definitions.push_back(tank);
     const rm::UnitTypeIndex type =
@@ -122,9 +223,21 @@ TEST_CASE("a fired gun draws its barrel back, then runs it home", "[recoil]") {
                                               .pitchSlew = 1.5f,
                                           }),
         .turretWeapon = 0,
-        .recoilFlags = rm::resolveRecoilFlags(scene.models.back(), "Rack"),
-        .recoilDistanceElmos = 2.0f,
+        .recoilFlags = [&] {
+            // Rack AND telescope channels, OR'd like resolveTurretRig does.
+            std::vector<std::uint32_t> flags =
+                rm::resolveRecoilFlags(scene.models.back(), "Rack");
+            const std::vector<std::uint32_t> tele =
+                rm::resolveTelescopeFlags(scene.models.back(), "Tele");
+            for (std::size_t bone = 0; bone < tele.size(); ++bone) {
+                flags[bone] |= tele[bone];
+            }
+            return flags;
+        }(),
+        .recoilDistanceElmos = -2.0f,   // signed, as authored
         .recoilReturnPerTick = 0.1f,
+        .telescopeDistanceElmos = -4.0f,
+        .telescopeReturnPerTick = 0.05f,  // same speed, twice the travel
     });
     REQUIRE(!scene.batches.back().recoilFlags.empty());
     scene.setBatchForType(type, 0);
@@ -147,24 +260,53 @@ TEST_CASE("a fired gun draws its barrel back, then runs it home", "[recoil]") {
     rm::app::MatchRunner runner =
         rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
     runner.scripts.clear();
+    // Sample the slide EVERY tick: retail's law is kick-to-full on the fire
+    // tick (`SetSpeed(-1)`), one tick held (`WaitTicks(1)`), then the run home
+    // — the decay-then-kick order in advanceMatch is what makes a slide
+    // kicked this tick read exactly 1.0 before it starts back.
+    float firstKick = -1.0f;
+    float afterHold = -1.0f;
+    float teleKick = -1.0f;
     for (int tick = 0; tick < 8; ++tick) {
         (void)rm::app::advanceMatch(runner, tick, 0.0f);
+        for (const auto& kv : scene.recoilShown) {
+            const rm::RecoilSlide& slide = kv.second;
+            if (slide.rack > 0.0f && firstKick < 0.0f) {
+                firstKick = slide.rack;
+                teleKick = slide.telescope;
+            } else if (firstKick >= 0.0f && afterHold < 0.0f
+                       && slide.rack < firstKick) {
+                afterHold = slide.rack;
+            }
+        }
     }
     REQUIRE(runner.shotsFired > 0);
+    // The instant kick: full travel the tick the shot leaves, both channels.
+    CHECK(firstKick == Approx(1.0f));
+    CHECK(teleKick == Approx(1.0f));
+    // The run home at the authored rate: 0.1 of travel per tick, so the first
+    // decayed sample reads 0.9 — the one-tick hold is the 1.0 above surviving
+    // its own tick's decay pass.
+    CHECK(afterHold == Approx(0.9f));
 
     scene.publish(7);
     scene.publish(7);
     scene.gatherForDrawing(1.0f, nullptr, {}, 0.0f);
     REQUIRE(scene.batches[0].instances.size() == 2);
     // Kicked but not yet home: a shot left within the last second and the
-    // return takes a full one.
+    // return takes a full one. The telescope channel rides beside the rack's.
     bool kicked = false;
+    bool teleKicked = false;
     for (const rm::UnitInstance& instance : scene.batches[0].instances) {
         if (instance.recoil > 0.0f) {
             kicked = true;
         }
+        if (instance.recoilTelescope > 0.0f) {
+            teleKicked = true;
+        }
     }
     CHECK(kicked);
+    CHECK(teleKicked);
 }
 
 TEST_CASE("a built unit plays its unfold once from completion", "[recoil]") {
