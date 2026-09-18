@@ -184,6 +184,7 @@ excluded from the headline.
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 99% | 85% | 90% | Universal leading in (`55c31de`, `06390d1`) — radar keeps its error; manual silo-launch orders landed under FA-MISSILES. Next is the C-157 engineer reclaim/capture target-exemption wiring. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 85% | 45% | 95% | Full cargo stack in and retail-validated: capacity/attach-cost from shipped blueprints (UEA0107: 10 slots, class2=2, class3=4), load/unload, ferry, auto-embark, carrier-death (`c538105`). Next is attach-bone retail observation and the unload beacon's exact retail semantics. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 70% | 45% | 95% | Manual missile-launch orders in with UI wiring and tests (`8d33735`); interceptor lead landed earlier. Next is the missile build queue and tactical/nuke UI. |
+| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 80% | 55% | 85% | Ordinary bubbles and personal UnitShield boxes share the collidable shield path; `CollisionCenter*`/`CollisionSize*` drive box containment and sweeps. Remaining: owner's armour multiplier (C-143), PersonalBubble and transport-shield boundary. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-omni-cloak-stealth-jamming) | Vision, radar, sonar, omni, cloak, stealth, jamming | `WP-33` | 60% | 30% | 85% | **Analyzed 2026-09-18 (C-276–C-285):** no temporal blip expiry; stale contacts die by confirmed-dead/ally/last-reference reaping. Counter-intel is a post-coverage flag filter (omni unmaskable; cloak anti-vision; stealth anti-radar/sonar; fields projected as grids). Sonar detects submerged, water-vision identifies. Jammer fakes are fixed random offsets that track the jammer. Recon DBs are per-army, intel sharing is flag-level ally OR. Lua `OnIntelChange` and `OnDetectedBy` events mapped; `IntelWatchThread` disables intel on brownout. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 45% | 30% | 85% | **Analyzed 2026-09-18 (C-251–C-265, C-376–C-381):** WP-34 fully specified — `EnhanceTask.lua` state machine (Stopping→Enhancing→Done), `GetResourceConsumed`-driven progress, `GetConstructEconomyModel` cost, slot/prereq rules, UI replace = two `UNITCOMMAND_Script` clear=true commands (`XxxRemove` then new) → `ClearCommandQueue` `0x006f4d50`, cancellation = `OnWorkFail` no refund, registry = `SimUnitEnhancements` in schook `SimSync.lua`, mutation = per-script `CreateEnhancement` overrides. WP-35 closed: `OnBrainUnitVeterancyLevel` scenario triggers only, Regen buffs overwrite direct `SetRegenRate`, zero native veterancy surface. WP-36: all experimental abilities shipped Lua — GC claw is `TractorThread` slider+`AttachBoneTo`+`Kill` (native-drag refuted), Megalith eggs via `CConstructionEggUnit`, Paragon deficit loop, Ythotha→Othuy spawn, Salem transform, Scathis rotators. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 15% | 85% | **Analyzed 2026-09-18 (C-286–C-292):** `FlattenMapRect` writes uniform u16 elevation, dirty render heightfield, re-seats Land/Seabed entities — no pathing/ogrid. Wrecks use footprint-less `DefaultWreckage_prop.bp` and never block; `Physics.BlockPath` is a dead key. Terrain types gate pathing only via `Blocking` flag; `Slippery`/`Bumpiness`/`HealthEffectPerSecond` are dead. Scorch is visual-only, 28 corpus files, gated on `layer=='Land'`/`targetType=='Terrain'|'Prop'`, no underwater. |
@@ -191,6 +192,53 @@ excluded from the headline.
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 85% | 5% | 85% | **Analyzed 2026-09-18 (C-329–C-346, C-363–C-369):** every UI→sim mutation crosses the `0x112626c` command sink — `CMarshaller`'s 24-message vtable is the complete wire alphabet (`ProcessInfoPair` named commands, `IssueCommand`/`IssueFactoryCommand` UNITCOMMAND records, `LuaSimCallback`). Full RULEUCC→UNITCOMMAND map recovered (`0x827af0`); silo-build types 5/6 rewrite to named `("add","SiloBuildTactical|Nuke",bpid)`; `ProcessInfo` is an unfiltered forwarder; `UI_SelectByCategory` flags = `+add +nearest +idle +inview +goto +excludeengineers`; `GetUnitCommandData` = unioned CommandCaps(0-22)/ToggleCaps(0-8)/Categories+BuildableCategories; selection is client-local; `UnitData`/`Sync` is the sim→UI mirror; taunts/templates ride chat; self-destruct/pings/diplomacy are SimCallbacks. |
 | [`FA-PRESENT`](#fa-present---rendering-effects-audio-and-lod) | Rendering, effects, audio, LOD | `WP-41`-`42` | 75% | 45% | 85% | **Analyzed 2026-09-18 (C-293–C-304, C-370–C-375):** 11 `IAniManipulator` subclasses + `MotorFallDown` sim-serialized, ticked solely from `Unit::MotionTick`; `CAniPoseBone` flag map (enabled/dirty/visibility/skip-interp); `CCollisionManipulator` fires `OnAnimTerrainCollision`/`OnNotAnimTerrainCollision`/`OnAnimCollision` (footfall into Unit.lua:2289); effects manager at `Sim+0x8C0` with per-army visibility-mask emission gating (`EmitIfVisible`/`CatchupEmit`); LOD is a cached screen-space pixel scale (`min(vpW,vpH) × LODScale × FOV factor`); `SAudioRequest` wire laid out, `CSimSoundManager` at `Sim+0x8C4`, `CUserSoundManager` drains per Frame; `SetPivot` is a dead attached-entity pivot API. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 75% | 30% | 90% | Wreck pool in save v23 with mid-reclaim continued-hash proof (tested); golden re-recorded for the P10.4 route change and MATCHing (`a85c690`). Projectiles next, then intel/path. |
+
+
+## Claim-level test coverage (2026-09-18 audit)
+
+Every claim in the ledger was classified against the test suite (1,879 tests, 133
+files) by sixteen parallel auditors; per-claim detail lives in
+`build/re-fa/coverage/FA-*.md` (gitignored). Statuses: **TESTED** a test asserts the
+claim's behavior; **PARTIAL** tests pin only part of the specifics; **UNTESTED**
+implemented but unpinned; **NOT_IMPL** no implementation; **N/A** analysis-artifact
+claims (provenance, layouts, naming) excluded from the percentage. Coverage% =
+(TESTED + ½·PARTIAL) / implementable claims.
+
+| Subsystem | Tested | Partial | Untested | Not impl | N/A | Coverage |
+|---|---:|---:|---:|---:|---:|---:|
+| FA-FOUND | 4 | 1 | 0 | 0 | 33 | 90% |
+| FA-CONTENT | 1 | 9 | 0 | 5 | 7 | 37% |
+| FA-LUA | 4 | 5 | 0 | 7 | 1 | 41% |
+| FA-MATCH | 1 | 0 | 0 | 1 | 2 | 50% |
+| FA-CMD | 10 | 2 | 1 | 0 | 5 | 85% |
+| FA-ECON | 28 | 16 | 0 | 6 | 5 | 72% |
+| FA-LAND | 3 | 10 | 0 | 0 | 4 | 62% |
+| FA-AIR | 5 | 6 | 0 | 0 | 0 | 73% |
+| FA-NAVY | 5 | 6 | 0 | 4 | 0 | 53% |
+| FA-TRANSPORT | 1 | 5 | 0 | 0 | 0 | 58% |
+| FA-WEAPONS | 7 | 9 | 0 | 0 | 6 | 72% |
+| FA-MISSILES | 8 | 2 | 0 | 0 | 0 | 90% |
+| FA-DAMAGE | 3 | 8 | 0 | 0 | 9 | 64% |
+| FA-INTEL | 1 | 9 | 0 | 5 | 0 | 37% |
+| FA-PROGRESS | 7 | 10 | 0 | 7 | 2 | 50% |
+| FA-TERRAIN | 0 | 4 | 0 | 3 | 0 | 29% |
+| FA-AI | 0 | 4 | 0 | 5 | 2 | 22% |
+| FA-UI | 6 | 14 | 0 | 3 | 2 | 57% |
+| FA-PRESENT | 1 | 8 | 0 | 10 | 0 | 26% |
+| FA-PERSIST | 2 | 2 | 0 | 1 | 5 | 60% |
+| **Total** | **97** | **130** | **1** | **57** | **83** | **~57%** |
+
+Read it as: of 285 implementable claims, 97 are test-pinned and 130 more are
+half-pinned — the suite covers roughly 57% of the recovered retail contract. The
+weakest rows are the subsystems analyzed most recently (FA-AI 22%, FA-PRESENT 26%,
+FA-TERRAIN 29%, FA-INTEL 37%, FA-CONTENT 37%, FA-LUA 41%): their specs landed today
+and the implementation/tests have not caught up. FA-CMD (85%), FA-MISSILES (90%) and
+FA-FOUND (90%) are the strongest. Notable divergences the audit surfaced: our VFS is
+last-mount-wins where retail is first-wins (C-267, outcome-equivalent via mount
+ordering); transport cargo death has no 99% roll (C-197); ferry beacon is a position
+not a spawned unit (C-199); `AboveWater*`/`BelowWater*` weapon flags are unparsed
+(C-321/322); `AutoSurfaceMode` is absent (C-203); guard attack picks nearest prey,
+not retail's longest-range-capable weapon (C-350).
 
 ## Starting Work
 
