@@ -173,7 +173,7 @@ excluded from the headline.
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 80% | 60% | 90% | Single-captor Capture slice is in (funded progress, transfer identity, cancellation, replay, save/load); concurrent captors and general transfer parity stay open. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 95% | 35% | 95% | P10 run complete: deterministic threading, congestion yield/reroute, shared flow fields and the per-cell speed divisor (golden re-recorded for the intended route change). Formation rotation stays engine-native without a Lua source. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Retail winged controller (C-221/222/223/244–247) with states 1–7, banking and staging-pad refuel; a takeoff committed to a sub-tick hop no longer strands `Down` on the deck (`c538105`). Three-axis solver, cargo inertia, bomb prediction, carrier docking stay open. |
-| [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 60% | 25% | 75% | Depth-aware navigation in (`3d607cd`): a submerged sub routes on its own layer — footprint MinWaterDepth vs surfaced draft — and ships route by draft (`fd3c5a7`). Underwater intel/targetability and attack-driven surfacing stay open. |
+| [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 60% | 25% | 85% | **Analyzed 2026-09-18 (C-320-C-328):** `CalcMoveWater` is the shared `CalcMoveCommon` plus dive/surface stepper, `speed²>1e-6` orientation gate, and platform→water `OnLayerChange`; weapon water gating fully mapped (firer caps vs target layer, fire-only vs own `Elevation`, targets-only as Seabed-only bone test, `FlyInWater` hard reject); `AutoSurfaceMode` defaults OFF and only `CUnitAttackTargetTask` consumes it; spawn layer computed by `0x631800`; shoreline/waves render-side only; naval pathing is `CAiNavigatorLand` + `gpg::HaStar` on per-footprint-spec grids. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 99% | 85% | 90% | Universal leading in (`55c31de`, `06390d1`) — radar keeps its error; manual silo-launch orders landed under FA-MISSILES. Next is the C-157 engineer reclaim/capture target-exemption wiring. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 85% | 45% | 95% | Full cargo stack in and retail-validated: capacity/attach-cost from shipped blueprints (UEA0107: 10 slots, class2=2, class3=4), load/unload, ferry, auto-embark, carrier-death (`c538105`). Next is attach-bone retail observation and the unload beacon's exact retail semantics. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 70% | 45% | 95% | Manual missile-launch orders in with UI wiring and tests (`8d33735`); interceptor lead landed earlier. Next is the missile build queue and tactical/nuke UI. |
@@ -429,9 +429,9 @@ while the surfaced hull pays its `Elevation` draft, so a diving sub crosses shel
 ground it surfaced; the pick follows `MoveState::submerged` through orders, movement,
 congestion and the match's per-type grid tables. Ships route by draft (`fd3c5a7`).
 
-**Largest gap:** underwater vision/sonar target acquisition,
-projectile collision/splash layer parity, attack-driven auto-surfacing, experimental default
-spawn-layer rules and underwater presentation remain outside this bounded slice.
+**Largest gap:** underwater vision/sonar target acquisition and projectile collision/splash
+layer parity remain outside this bounded slice; attack-driven auto-surfacing and spawn-layer
+rules are now specified (`C-323`–`C-324`) but not implemented.
 
 ```text
 /goal Extend the tested SurfacingSub slice with retail underwater intel and targetability.
