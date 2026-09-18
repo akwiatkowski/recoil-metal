@@ -434,6 +434,26 @@ if(BUILD_TESTING)
         tests/test_audio.cpp
         tests/test_initial_economy_ui.cpp
         tests/test_scenario_save.cpp
+        tests/test_fa_found.cpp
+        tests/test_fa_content.cpp
+        tests/test_fa_lua.cpp
+        tests/test_fa_match.cpp
+        tests/test_fa_cmd.cpp
+        tests/test_fa_econ.cpp
+        tests/test_fa_land.cpp
+        tests/test_fa_air.cpp
+        tests/test_fa_navy.cpp
+        tests/test_fa_transport.cpp
+        tests/test_fa_weapons.cpp
+        tests/test_fa_missiles.cpp
+        tests/test_fa_damage.cpp
+        tests/test_fa_intel.cpp
+        tests/test_fa_progress.cpp
+        tests/test_fa_terrain.cpp
+        tests/test_fa_ai.cpp
+        tests/test_fa_ui.cpp
+        tests/test_fa_present.cpp
+        tests/test_fa_persist.cpp
         tests/support/SmfWriter.cpp
         tests/support/S3oWriter.cpp)
     # tests/ on the include path so fixtures resolve as "support/SmfWriter.hpp",

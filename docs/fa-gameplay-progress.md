@@ -207,38 +207,45 @@ claims (provenance, layouts, naming) excluded from the percentage. Coverage% =
 | Subsystem | Tested | Partial | Untested | Not impl | N/A | Coverage |
 |---|---:|---:|---:|---:|---:|---:|
 | FA-FOUND | 4 | 1 | 0 | 0 | 33 | 90% |
-| FA-CONTENT | 1 | 9 | 0 | 5 | 7 | 37% |
-| FA-LUA | 4 | 5 | 0 | 7 | 1 | 41% |
+| FA-CONTENT | 4 | 6 | 0 | 5 | 7 | 47% |
+| FA-LUA | 7 | 3 | 0 | 6 | 1 | 53% |
 | FA-MATCH | 1 | 0 | 0 | 1 | 2 | 50% |
 | FA-CMD | 10 | 2 | 1 | 0 | 5 | 85% |
 | FA-ECON | 28 | 16 | 0 | 6 | 5 | 72% |
-| FA-LAND | 3 | 10 | 0 | 0 | 4 | 62% |
+| FA-LAND | 5 | 8 | 0 | 0 | 4 | 69% |
 | FA-AIR | 5 | 6 | 0 | 0 | 0 | 73% |
-| FA-NAVY | 5 | 6 | 0 | 4 | 0 | 53% |
-| FA-TRANSPORT | 1 | 5 | 0 | 0 | 0 | 58% |
+| FA-NAVY | 8 | 3 | 0 | 4 | 0 | 63% |
+| FA-TRANSPORT | 4 | 2 | 0 | 0 | 0 | 83% |
 | FA-WEAPONS | 7 | 9 | 0 | 0 | 6 | 72% |
 | FA-MISSILES | 8 | 2 | 0 | 0 | 0 | 90% |
-| FA-DAMAGE | 3 | 8 | 0 | 0 | 9 | 64% |
-| FA-INTEL | 1 | 9 | 0 | 5 | 0 | 37% |
-| FA-PROGRESS | 7 | 10 | 0 | 7 | 2 | 50% |
-| FA-TERRAIN | 0 | 4 | 0 | 3 | 0 | 29% |
-| FA-AI | 0 | 4 | 0 | 5 | 2 | 22% |
-| FA-UI | 6 | 14 | 0 | 3 | 2 | 57% |
-| FA-PRESENT | 1 | 8 | 0 | 10 | 0 | 26% |
-| FA-PERSIST | 2 | 2 | 0 | 1 | 5 | 60% |
-| **Total** | **97** | **130** | **1** | **57** | **83** | **~57%** |
+| FA-DAMAGE | 5 | 6 | 0 | 0 | 9 | 73% |
+| FA-INTEL | 8 | 3 | 0 | 5 | 0 | 59% |
+| FA-PROGRESS | 12 | 5 | 0 | 7 | 2 | 60% |
+| FA-TERRAIN | 3 | 1 | 0 | 3 | 0 | 50% |
+| FA-AI | 3 | 2 | 0 | 4 | 2 | 44% |
+| FA-UI | 13 | 7 | 0 | 3 | 2 | 72% |
+| FA-PRESENT | 4 | 5 | 0 | 10 | 0 | 34% |
+| FA-PERSIST | 3 | 1 | 0 | 1 | 5 | 70% |
+| **Total** | **142** | **88** | **1** | **55** | **83** | **~65%** |
 
-Read it as: of 285 implementable claims, 97 are test-pinned and 130 more are
-half-pinned — the suite covers roughly 57% of the recovered retail contract. The
-weakest rows are the subsystems analyzed most recently (FA-AI 22%, FA-PRESENT 26%,
-FA-TERRAIN 29%, FA-INTEL 37%, FA-CONTENT 37%, FA-LUA 41%): their specs landed today
-and the implementation/tests have not caught up. FA-CMD (85%), FA-MISSILES (90%) and
-FA-FOUND (90%) are the strongest. Notable divergences the audit surfaced: our VFS is
+Read it as: of 286 implementable claims, 142 are test-pinned and 88 more are
+half-pinned — the suite covers roughly 65% of the recovered retail contract after
+the 2026-09-18 player-perspective test wave (52 new TEST_CASEs in
+`tests/test_fa_*.cpp`, all green in the 1,878-case suite). The weakest rows remain
+the subsystems analyzed most recently (FA-PRESENT 34%, FA-AI 44%, FA-CONTENT 47%,
+FA-TERRAIN 50%, FA-LUA 53%): their specs landed the same day and implementation has
+not caught up. FA-MISSILES (90%), FA-FOUND (90%), FA-CMD (85%), FA-TRANSPORT (83%)
+are the strongest. Notable divergences the audit and test wave surfaced: our VFS is
 last-mount-wins where retail is first-wins (C-267, outcome-equivalent via mount
 ordering); transport cargo death has no 99% roll (C-197); ferry beacon is a position
 not a spawned unit (C-199); `AboveWater*`/`BelowWater*` weapon flags are unparsed
 (C-321/322); `AutoSurfaceMode` is absent (C-203); guard attack picks nearest prey,
-not retail's longest-range-capable weapon (C-350).
+not retail's longest-range-capable weapon (C-350); attached cargo absorbs shots
+harmlessly for its carrier (C-196); save/resume drops the path service's cached
+flow fields so a resumed match hashes differently (C-154); omni identifies contacts
+where retail leaves them unidentified (C-280); cloak defeats radar/sonar where
+retail's is anti-vision only (C-277); ours uses temporal blip expiry where retail
+reaps by confirmed-dead/ally/last-reference (C-276, deliberate).
 
 ## Starting Work
 
