@@ -65,11 +65,14 @@ inline constexpr Fx kFerryPickupRadius = Fx::fromInt(10);
 [[nodiscard]] bool hasRoomFor(const UnitStore& store, const UnitCatalog& catalog,
                               UnitId carrier, const unitdef::UnitDef& cargo) noexcept;
 
-/// Slings `cargo` under `carrier` at the next deterministic slot offset and
-/// attaches it. Caller checks room first (`hasRoomFor`). The attach offset is
-/// world-axis — a boneless child keeps its station under the hull rather than
-/// swinging with the carrier's heading.
-[[nodiscard]] bool attachCargo(UnitStore& store, const unitdef::UnitDef& carrier,
+/// Slings `cargo` under `carrier` and attaches it. When the catalog carries the
+/// carrier's `Attachpoint*` bones (`C-198`), the cargo is placed at the nearest
+/// free bone of its own class — class-1 bones when its class has none free —
+/// and rides it through `UnitStore::AttachBones`, so it swings with the hull.
+/// A carrier with no resolved bones keeps the deterministic sling row.
+/// Caller checks room first (`hasRoomFor`).
+[[nodiscard]] bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
+                               const unitdef::UnitDef& carrier,
                                UnitId carrierId, UnitId cargo) noexcept;
 
 /// Sets every child down on the deck around the carrier, in deterministic

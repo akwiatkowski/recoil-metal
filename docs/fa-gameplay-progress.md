@@ -541,9 +541,13 @@ values drive the behavior end-to-end in tests (`c538105`): a real C-6 Courier (U
 waits, and a loaded courier delivers. `CANTRANSPORTCOMMANDER` is deliberately unenforced —
 the attach-cost table already excludes every shipped carrier lacking the flag.
 
-**Largest gap:** the attach/unload beacon's exact retail semantics (where retail places the
-pickup ring and how it sequences multi-unit loads), attached-cargo bone placement versus
-the sling-row approximation, and transport shields' cargo coverage stay open.
+**Largest gap:** cargo now hangs from the carrier's `Attachpoint*` bones (`C-198`):
+the catalog carries per-class bone lists resolved from the mesh, `attachCargo`
+places each unit at the nearest free bone of its class, and the attachment is
+bone-indexed so cargo swings with the hull (`[fa-transport]`, tested). Generic
+cargo pricing corrected to retail's one-slot rule (`ClassGenericUpTo` path).
+Still open: the pickup beacon's exact retail semantics and transport shields'
+cargo coverage.
 
 ```text
 /goal Advance FA-TRANSPORT by comparing the implemented load/unload sequence with retail

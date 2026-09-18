@@ -778,7 +778,10 @@ struct UnitDef {
             return 0;
         }
         if (transport.classGenericUpTo > 0) {
-            return cargoClass <= transport.classGenericUpTo ? cargoClass : 0;
+            // `C-198`: a generic cargo (class ≤ ClassGenericUpTo) takes ONE
+            // class-1 point whatever its class — the generic list is the
+            // class-1 list and `slots` is 1, not the cargo's class number.
+            return cargoClass <= transport.classGenericUpTo ? 1 : 0;
         }
         switch (cargoClass) {
         case 1: return 1;

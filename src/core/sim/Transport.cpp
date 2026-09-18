@@ -120,7 +120,8 @@ bool hasRoomFor(const UnitStore& store, const UnitCatalog& catalog, UnitId carri
            <= carrierDef->transportCapacity();
 }
 
-bool attachCargo(UnitStore& store, const unitdef::UnitDef& /*carrier*/, UnitId carrierId,
+bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
+                 const unitdef::UnitDef& /*carrier*/, UnitId carrierId,
                  UnitId cargo) noexcept {
     const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
@@ -138,9 +139,68 @@ bool attachCargo(UnitStore& store, const unitdef::UnitDef& /*carrier*/, UnitId c
         return false;
     }
 
-    // The slot pattern: cargo slings in a row under the hull, 3 elmos apart,
-    // first outboard then filling toward the keel. The offset is captured by
-    // `attach` from where the child stands, so the child is PLACED first.
+    // `C-198`: cargo hangs from a named `Attachpoint*` bone, not a slot number.
+    // The bone's class list is the cargo's own; a class with no free bone falls
+    // back to the class-1 list — the one `TransportHasSpaceFor` always prices
+    // against. Nearest free bone to where the cargo stands wins, so a squad
+    // boarding from one side fills that side first.
+    const unitdef::UnitDef* cargoDef = catalog.def(store.typeAt(cargo.index));
+    const int cargoClass =
+        cargoDef != nullptr ? cargoDef->transportCargoClass() : 1;
+    const std::span<const UnitCatalog::AttachBone> bones =
+        catalog.attachBones(store.typeAt(carrierId.index));
+    const auto boneFree = [&](const UnitCatalog::AttachBone& bone) {
+        for (const UnitId child : store.childrenOf(carrierId)) {
+            if (store.attachmentBonesOf(child).parent == bone.bone) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const UnitCatalog::AttachBone* best = nullptr;
+    Fx bestDist{};
+    for (const int klass : {cargoClass, 1}) {
+        for (const UnitCatalog::AttachBone& bone : bones) {
+            if (bone.cargoClass != klass || !boneFree(bone)) {
+                continue;
+            }
+            // Distance in the carrier's rest frame: rotate the bone into world
+            // axes by the hull's heading, then measure to the cargo.
+            const std::array<Fx, 2> world = rotateByHeading(
+                transforms[carrierId.index].heading, {bone.rest[0], bone.rest[2]});
+            const Fx bx = transforms[carrierId.index].x + world[0];
+            const Fx bz = transforms[carrierId.index].z + world[1];
+            const Fx ddx = transforms[cargo.index].x - bx;
+            const Fx ddz = transforms[cargo.index].z - bz;
+            const Fx dist = ddx * ddx + ddz * ddz;
+            if (best == nullptr || dist < bestDist) {
+                best = &bone;
+                bestDist = dist;
+            }
+        }
+        if (best != nullptr) {
+            break;
+        }
+    }
+
+    if (best != nullptr) {
+        // Pre-place the cargo exactly on the bone so `attach` captures a zero
+        // residual — the child rides the bone, not the spot it walked up from.
+        const std::array<Fx, 2> world = rotateByHeading(
+            transforms[carrierId.index].heading, {best->rest[0], best->rest[2]});
+        Transform& at = transforms[cargo.index];
+        at.x = transforms[carrierId.index].x + world[0];
+        at.z = transforms[carrierId.index].z + world[1];
+        at.y = transforms[carrierId.index].y + best->rest[1];
+        return store.attach(carrierId, cargo,
+                            UnitStore::AttachBones{.parent = best->bone,
+                                                   .parentRest = {best->rest[0], best->rest[2]},
+                                                   .parentRestHeight = best->rest[1]});
+    }
+
+    // No bones resolved (a test catalog, or a carrier whose mesh was never
+    // loaded): the slot pattern — cargo slings in a row under the hull, 3 elmos
+    // apart, first outboard then filling toward the keel.
     const std::size_t slot = store.childrenOf(carrierId).size();
     constexpr int kStep = 3;
     Transform& at = transforms[cargo.index];
@@ -250,7 +310,7 @@ void advanceLoading(UnitStore& store, const UnitCatalog& catalog, const Terrain&
     const Fx gap = groundDistanceElmos(positionOf(cargoAt), positionOf(carrierAt));
     if (gap <= loadReach(carrierMotion, store.motion()[slot])) {
         if (hasRoomFor(store, catalog, carrier, *cargoDef)
-            && attachCargo(store, *carrierDef, carrier, self)) {
+            && attachCargo(store, catalog, *carrierDef, carrier, self)) {
             finish();
         }
         return;  // full: stand here until a slot frees or the order is cleared
@@ -306,7 +366,7 @@ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terra
                 || carrierDef == nullptr || !hasRoomFor(store, catalog, self, *def)) {
                 continue;
             }
-            if (attachCargo(store, *carrierDef, self, store.idAt(other))) {
+            if (attachCargo(store, catalog, *carrierDef, self, store.idAt(other))) {
                 // The order that brought it here — a Move to the beacon — is
                 // fulfilled by the pickup, so its queue head retires.
                 CommandQueue& queue = store.orders()[other];

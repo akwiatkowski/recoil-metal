@@ -185,6 +185,7 @@ public:
     [[nodiscard]] Fx attachmentHeightOf(UnitId child) const noexcept;
     [[nodiscard]] AttachBones attachmentBonesOf(UnitId child) const noexcept;
 
+
     /// Updates attached children from their parents' current transforms. The hierarchy is
     /// traversed parent before child so an attached chain receives one coherent transform.
     void propagateAttachments();
@@ -379,5 +380,12 @@ private:
     /// Not parallel to the arrays above: a sorted index INTO them, rebuilt by `reindex`.
     SpatialGrid space_;
 };
+
+/// Rotates a model-space X/Z offset into world axes by a heading — the same
+/// composition `attach`/`propagateAttachments` apply to bone rest offsets.
+/// Free-standing so the transport attach path can pre-place cargo exactly
+/// where the bone will hold it.
+[[nodiscard]] std::array<Fx, 2> rotateByHeading(Brad heading,
+                                                std::array<Fx, 2> local) noexcept;
 
 } // namespace rm::sim

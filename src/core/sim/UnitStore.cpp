@@ -202,16 +202,11 @@ UnitId UnitStore::spawn(const Spawn& request) {
 
 void UnitStore::reindex(Fx cellSize) { space_.rebuild(*this, cellSize); }
 
-namespace {
-// Rotates a carrier-local (x, z) offset into world axes by the carrier's heading.
-// Bearings run from +Z toward +X, so local forward (0, 1) lands on (sin h, cos h):
-// wx = lx*cos h + lz*sin h, wz = -lx*sin h + lz*cos h.
-[[nodiscard]] std::array<Fx, 2> rotateByHeading(Brad heading, std::array<Fx, 2> local) noexcept {
+std::array<Fx, 2> rotateByHeading(Brad heading, std::array<Fx, 2> local) noexcept {
     const Fx c = fxCos(heading);
     const Fx s = fxSin(heading);
     return {local[0] * c + local[1] * s, local[1] * c - local[0] * s};
 }
-} // namespace
 
 bool UnitStore::attach(UnitId parent, UnitId child) {
     return attach(parent, child, AttachBones{});

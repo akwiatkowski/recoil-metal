@@ -199,14 +199,17 @@ TEST_CASE("cargo class comes from TransportClass and defaults to one", "[transpo
     CHECK_FALSE(uncarriable.transportable());   // no CallTransport cap
 
     // The one-unit carriers say `ClassGenericUpTo` instead of per-class sizes:
-    // a class-N unit costs N slots and nothing above the cap rides.
+    // a generic cargo (class ≤ the cap) costs ONE slot whatever its class —
+    // `C-198`'s `TransportHasSpaceFor` uses the class-1 list with `slots = 1`
+    // on this path. URA0401 ships `ClassGenericUpTo = 2, TransportClass = 10`
+    // and carries ten class-2 units, which only this reading makes possible.
     UnitDef stinger = transportDef();
     stinger.transport.class2AttachSize = 0;
     stinger.transport.class3AttachSize = 0;
     stinger.transport.classGenericUpTo = 2;
     stinger.transport.transportClass = 2;
     CHECK(stinger.transportAttachCost(1) == 1);
-    CHECK(stinger.transportAttachCost(2) == 2);
+    CHECK(stinger.transportAttachCost(2) == 1);
     CHECK(stinger.transportAttachCost(3) == 0);
 }
 

@@ -421,6 +421,39 @@ public:
     /// second call overwrites, so coarse meshes must not.
     void setTurretMount(UnitTypeIndex type, const TurretMountSpec& spec);
 
+    /// One `Attachpoint*` bone on a carrier's mesh, in model-space elmos at
+    /// rest (`C-198`): the point cargo hangs from while attached. `bone` is the
+    /// model's bone index, kept so `UnitStore::AttachBones` can record the real
+    /// index; `rest` is the bone's accumulated rest offset from the origin.
+    /// `cargoClass` is the class list the bone files into — `Attachpoint_Spr`
+    /// is 4, `_Lrg` 3, `_Med` 2, and every other `Attachpoint` 1, matched as a
+    /// SUBSTRING because shipped meshes prefix them (`Left_Attachpoint_sml_01`).
+    struct AttachBone {
+        std::int32_t bone = 0;
+        int cargoClass = 1;
+        std::array<Fx, 3> rest{};
+    };
+
+    /// What `setAttachBones` takes, in model-space FLOATS — the same content
+    /// boundary `TurretMountSpec` sits on.
+    struct AttachBoneSpec {
+        std::int32_t bone = 0;
+        int cargoClass = 1;
+        std::array<float, 3> rest{};
+    };
+
+    /// The carrier's attach bones, or empty when nobody resolved a model
+    /// (tests, types with no transport mesh). Empty means the sling-row
+    /// fallback in `attachCargo`, exactly as before.
+    [[nodiscard]] std::span<const AttachBone> attachBones(UnitTypeIndex type) const noexcept {
+        return type < attachBones_.size() ? std::span<const AttachBone>{attachBones_[type]}
+                                        : std::span<const AttachBone>{};
+    }
+
+    /// Records the resolved attach bones for a type. Converts with fxFromFloat
+    /// (exact) like `setTurretMount`; a second call overwrites.
+    void setAttachBones(UnitTypeIndex type, std::span<const AttachBoneSpec> bones);
+
     /// The definition for a type, or null — for an unregistered index as well as for a type
     /// registered without one. A pass that reads this must handle null either way, so
     /// bounds-checking to the same answer costs nothing and removes a crash.
@@ -447,6 +480,7 @@ private:
     std::vector<AdjacencyInfo> adjacency_;
     std::vector<ShieldInfo> shields_;
     std::vector<TurretMount> turrets_;
+    std::vector<std::vector<AttachBone>> attachBones_;
     Fx largestShieldRadius_{};
 
     /// The content's armour classes and Supreme Commander's multiplier table. Both empty of

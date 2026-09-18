@@ -386,6 +386,41 @@ void resolveMuzzleBones(rm::unitdef::UnitDef& def, const rm::Model& model) {
     }
 }
 
+/// Files a model's `Attachpoint*` bones into the catalog's per-class lists
+/// (`C-198`): `Attachpoint_Spr` is class 4, `_Lrg` 3, `_Med` 2, and every other
+/// `Attachpoint` 1 — matched as a SUBSTRING because shipped meshes prefix them
+/// (`Left_Attachpoint_sml_01` on the C-6 Courier). `Launchpoint` and
+/// `AttachSpecial` are staging/special machinery, not cargo points, and are
+/// skipped. Rest offsets scale to elmos here, at the content boundary.
+[[nodiscard]] std::vector<rm::sim::UnitCatalog::AttachBoneSpec>
+resolveAttachBones(const rm::Model& model, const rm::unitdef::UnitDef& def) {
+    std::vector<rm::sim::UnitCatalog::AttachBoneSpec> bones;
+    for (std::size_t i = 0; i < model.bones.size(); ++i) {
+        const rm::ModelBone& bone = model.bones[i];
+        const std::string_view name{bone.name};
+        int cargoClass = 0;
+        if (name.find("Attachpoint_Spr") != std::string_view::npos) {
+            cargoClass = 4;
+        } else if (name.find("Attachpoint_Lrg") != std::string_view::npos) {
+            cargoClass = 3;
+        } else if (name.find("Attachpoint_Med") != std::string_view::npos) {
+            cargoClass = 2;
+        } else if (name.find("Attachpoint") != std::string_view::npos) {
+            cargoClass = 1;
+        }
+        if (cargoClass == 0) {
+            continue;
+        }
+        bones.push_back(rm::sim::UnitCatalog::AttachBoneSpec{
+            .bone = static_cast<std::int32_t>(i),
+            .cargoClass = cargoClass,
+            .rest = {bone.globalOffset[0] * def.meshToElmos,
+                     bone.globalOffset[1] * def.meshToElmos,
+                     bone.globalOffset[2] * def.meshToElmos}});
+    }
+    return bones;
+}
+
 
 
 /// Resolves a `--units` argument that names a unit DEFINITION rather than a
@@ -773,6 +808,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             resolveMuzzleBones(scene.definitions.back(), scene.models.back());
             const rm::UnitTypeIndex type =
                 scene.catalog.add(&scene.definitions.back(), gAppTickRate);
+            scene.catalog.setAttachBones(
+                type, resolveAttachBones(scene.models.back(), unit->def));
             // The type draws with the batch just pushed. A MAP now rather than an identity —
             // see `Scene::batchForType` for why the two numbers had to come apart (`#3090`).
             scene.setBatchForType(type, scene.batches.size() - 1);
@@ -959,6 +996,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         resolveMuzzleBones(scene.definitions.back(), scene.models.back());
         const rm::UnitTypeIndex type =
             scene.catalog.add(&scene.definitions.back(), gAppTickRate);
+        scene.catalog.setAttachBones(
+            type, resolveAttachBones(scene.models.back(), unit->def));
         scene.setBatchForType(type, scene.batches.size() - 1);
         scene.setPathForType(type, blueprintPath);
         scene.setTypeTraits(type, move, unit->def.meshToElmos);
@@ -1786,6 +1825,8 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         if (def) {
             scene.definitions.push_back(*def);
             type = scene.catalog.add(&scene.definitions.back(), gAppTickRate);
+            scene.catalog.setAttachBones(
+                type, resolveAttachBones(scene.models.back(), *def));
         } else {
             type = scene.catalog.add(nullptr);  // a bare model: it neither fires nor dies
         }

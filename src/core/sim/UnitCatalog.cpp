@@ -169,6 +169,7 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
     }
     shields_.push_back(shield);
     turrets_.push_back(TurretMount{});
+    attachBones_.emplace_back();
 
     std::vector<WeaponRates> weapons;
     if (def != nullptr) {
@@ -273,6 +274,23 @@ void UnitCatalog::setTurretMount(UnitTypeIndex type, const TurretMountSpec& spec
     const Fx len = fxHypot(flat, dy);
     mount.restPitch = len > Fx{} ? fxAsin(dy / len) : Brad{0};
     turrets_[static_cast<std::size_t>(type)] = std::move(mount);
+}
+
+void UnitCatalog::setAttachBones(UnitTypeIndex type,
+                                 std::span<const AttachBoneSpec> bones) {
+    if (static_cast<std::size_t>(type) >= attachBones_.size()) {
+        return;
+    }
+    std::vector<AttachBone> resolved;
+    resolved.reserve(bones.size());
+    for (const AttachBoneSpec& spec : bones) {
+        resolved.push_back(AttachBone{.bone = spec.bone,
+                                      .cargoClass = spec.cargoClass,
+                                      .rest = {fxFromFloat(spec.rest[0]),
+                                               fxFromFloat(spec.rest[1]),
+                                               fxFromFloat(spec.rest[2])}});
+    }
+    attachBones_[static_cast<std::size_t>(type)] = std::move(resolved);
 }
 
 } // namespace rm::sim

@@ -431,3 +431,55 @@ TEST_CASE("C-183: a transport guarding a ferry beacon flies its route",
     REQUIRE(head != nullptr);
     CHECK(head->kind() == CommandKind::Guard);
 }
+
+TEST_CASE("C-198: cargo hangs from its class's nearest free attach bone",
+          "[fa-transport]") {
+    // Retail files a carrier's `Attachpoint*` bones into per-class lists and
+    // hangs each cargo at the nearest free bone of its class (0x005eb450,
+    // 0x005ed740). The player-visible half: a tank slung aboard sits at the
+    // authored hook under the hull — not a slot number — and swings with the
+    // carrier's heading, because the attachment is bone-indexed.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    // Two class-1 hooks and one class-2, in model-space elmos — the courier's
+    // `Left_Attachpoint_sml_02`/`_Med_01` pattern, shrunk.
+    const std::array<rm::sim::UnitCatalog::AttachBoneSpec, 3> bones{{
+        {.bone = 19, .cargoClass = 1, .rest = {4.0f, 7.0f, -1.0f}},
+        {.bone = 20, .cargoClass = 1, .rest = {-4.0f, 7.0f, -1.0f}},
+        {.bone = 23, .cargoClass = 2, .rest = {4.0f, 7.0f, -14.0f}},
+    }};
+    roster.catalog.setAttachBones(transportType, bones);
+
+    const UnitId transport = landedTransport(roster, transportType, 100.0f, 100.0f);
+    // The cargo walks up on the +x side, so the +x hook is its nearest.
+    const UnitId cargo = roster.add(cargoType, 106.0f, 100.0f, 0, 500.0f);
+
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog,
+                                 *roster.catalog.def(transportType), transport, cargo));
+
+    // Placed ON the bone: carrier origin plus the rest offset, heading zero.
+    CHECK(roster.transform(cargo).x - roster.transform(transport).x == Fx::fromInt(4));
+    CHECK(roster.transform(cargo).z - roster.transform(transport).z == Fx::fromInt(-1));
+    CHECK(roster.transform(cargo).y - roster.transform(transport).y == Fx::fromInt(7));
+    // And the attachment records the real bone index, not a slot number.
+    CHECK(roster.store.attachmentBonesOf(cargo).parent == 19);
+
+    // A second class-1 cargo cannot take the same hook: it lands on the -x one.
+    const UnitId cargo2 = roster.add(cargoType, 94.0f, 100.0f, 0, 500.0f);
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog,
+                                 *roster.catalog.def(transportType), transport, cargo2));
+    CHECK(roster.transform(cargo2).x - roster.transform(transport).x == Fx::fromInt(-4));
+    CHECK(roster.store.attachmentBonesOf(cargo2).parent == 20);
+
+    // The bone rides the carrier's swing: turn the hull a quarter-circle and
+    // the cargo's world offset rotates with it (rotateByHeading, C-196).
+    roster.transform(transport).heading = static_cast<rm::Brad>(16384);  // 90°
+    roster.store.propagateAttachments();
+    // 90° maps +x→+z: the (4,-1) rest offset becomes (-1,-4) in world axes.
+    CHECK(roster.transform(cargo).x - roster.transform(transport).x == Fx::fromInt(-1));
+    CHECK(roster.transform(cargo).z - roster.transform(transport).z == Fx::fromInt(-4));
+}
