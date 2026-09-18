@@ -459,7 +459,9 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     // V34 trails the army-stat store (one absent byte, null in this fixture) and
     // the self-destruct countdowns (one count word, empty here).
     constexpr std::size_t kV34Bytes = sizeof(std::uint8_t) + sizeof(std::uint32_t);
-    v7.resize(v7.size() - kV34Bytes - kV33SiloQueueBytes - kV32LeadStepBytes - kV31CongestionBytes - kV30FocusBytes - kV28RetreatBytes - kV27PriorityBytes - kV26ProductionPausedBytes - kV25DualPoseBytes - kV24TurretPoseBytes - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+    // V35 trails the projectile pool: one absent byte, null in this fixture.
+    constexpr std::size_t kV35AbsentProjectileBytes = sizeof(std::uint8_t);
+    v7.resize(v7.size() - kV35AbsentProjectileBytes - kV34Bytes - kV33SiloQueueBytes - kV32LeadStepBytes - kV31CongestionBytes - kV30FocusBytes - kV28RetreatBytes - kV27PriorityBytes - kV26ProductionPausedBytes - kV25DualPoseBytes - kV24TurretPoseBytes - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
     writeU32(v7, 4, 7);
     writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
@@ -830,5 +832,67 @@ TEST_CASE("a save without wrecks keeps null features", "[save-state]") {
     const auto restored = SaveState::decode(bytes);
     REQUIRE(restored.has_value());
     CHECK_FALSE(restored->features.has_value());
+    CHECK(SaveState::encode(*restored) == bytes);
+}
+
+TEST_CASE("a current save round-trips the projectile pool", "[save-state]") {
+    // The v35 section carries every field the state hash walks, so a shot
+    // saved mid-flight restores byte-identical — and a scene with no
+    // projectile list keeps the null-vs-empty distinction `features` made.
+    RandomStream random{std::uint32_t{1}};
+    SaveState state{.tick = 42,
+                    .random = random.snapshot(),
+                    .units = rm::sim::UnitStore{}.snapshot()};
+    state.projectiles = std::vector<rm::sim::Projectile>{{
+        .position = {rm::sim::Fx::fromInt(10), rm::sim::Fx::fromInt(3),
+                     rm::sim::Fx::fromInt(-7)},
+        .velocity = {rm::sim::Fx::fromInt(4), rm::sim::Fx::fromInt(-1),
+                     rm::sim::Fx::fromInt(2)},
+        .damage = rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40)),
+        .damageRadiusElmos = rm::sim::Fx::fromInt(2),
+        .targetLayers = rm::unitdef::TargetLayerMask::Both,
+        .firedBy = rm::sim::UnitId{.index = 5, .generation = 3},
+        .guidanceTarget = rm::sim::UnitId{.index = 9, .generation = 1},
+        .turnPerTick = 512,
+        .accelerationPerTickSquared = rm::sim::Fx::fromRatio(1, 4),
+        .maxSpeedPerTick = rm::sim::Fx::fromInt(8),
+        .firedByArmy = 1,
+        .interceptor = true,
+        .arc = rm::unitdef::BallisticArc::High,
+        .ticksRemaining = 17,
+        .pendingImpact = rm::sim::ImpactType::Unit,
+        .maxHealth = rm::sim::Mag::fromInt(25),
+        .health = rm::sim::Mag::fromInt(11),
+        .categories = {"MISSILE", "TACTICAL"},
+        .impactTarget = rm::sim::UnitId{.index = 9, .generation = 1},
+    }};
+    const auto bytes = SaveState::encode(state);
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    REQUIRE(restored->projectiles.has_value());
+    REQUIRE(restored->projectiles->size() == 1);
+    const rm::sim::Projectile& shot = restored->projectiles->front();
+    CHECK(shot.position[0] == rm::sim::Fx::fromInt(10));
+    CHECK(shot.velocity[2] == rm::sim::Fx::fromInt(2));
+    CHECK(shot.damage.base == rm::sim::Mag::fromInt(40));
+    CHECK(shot.guidanceTarget == rm::sim::UnitId{.index = 9, .generation = 1});
+    CHECK(shot.turnPerTick == 512);
+    CHECK(shot.interceptor);
+    CHECK(shot.arc == rm::unitdef::BallisticArc::High);
+    CHECK(shot.pendingImpact == rm::sim::ImpactType::Unit);
+    CHECK(shot.maxHealth == rm::sim::Mag::fromInt(25));
+    CHECK(shot.health == rm::sim::Mag::fromInt(11));
+    CHECK(shot.categories == std::vector<std::string>{"MISSILE", "TACTICAL"});
+    CHECK(shot.impactTarget == rm::sim::UnitId{.index = 9, .generation = 1});
+    CHECK(SaveState::encode(*restored) == bytes);
+}
+
+TEST_CASE("a save without projectiles keeps the null pool", "[save-state]") {
+    RandomStream random{std::uint32_t{1}};
+    const auto bytes = SaveState::encode(
+        {.tick = 42, .random = random.snapshot(), .units = rm::sim::UnitStore{}.snapshot()});
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    CHECK_FALSE(restored->projectiles.has_value());
     CHECK(SaveState::encode(*restored) == bytes);
 }

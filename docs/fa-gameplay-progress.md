@@ -892,16 +892,16 @@ slice. Write tests on the retail corpus, run make test, update WP-41 and FA-PRES
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume
 
-**Current slice:** SaveState v23 retains all older readers and adds the wreck pool
-(allocator, generations, tombstones, revision) as a nullable trailing section, alongside
-the v16 economy/army envelope and the v17–v22 additions (commands, capture, bank tuning,
-bone records). A mid-reclaim save carries units, features and economies through the
-envelope and both sides hash — and harvest — identically for four further ticks (tested).
-Restore owns the arrays and rebinds match spans.
+**Current slice:** SaveState v35 retains all older readers and adds the in-flight
+projectile pool (nullable trailing section, every field the state hash walks),
+alongside the v23 wreck pool, the v16 economy/army envelope and the v17–v34
+additions. A mid-flight save carries units, shots and economies through the
+envelope and both sides hash identically for the rest of the flight (tested —
+`[save-state][skirmish]`). Restore owns the arrays and rebinds match spans.
 
-**Largest gap:** this is not yet a general mid-combat app save. Projectile pools, pending
-path searches, intel history, external input and the opponent VM remain outside the
-envelope. Replay is a separate compatibility boundary.
+**Largest gap:** this is not yet a general mid-combat app save. Pending
+path searches, intel history, external input and the opponent VM remain outside
+the envelope. Replay is a separate compatibility boundary.
 
 ```text
 /goal Continue the pool-by-pool envelope: projectiles next, each with its continued-hash

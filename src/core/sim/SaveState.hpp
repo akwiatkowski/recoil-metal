@@ -61,6 +61,9 @@ struct SaveState {
     /// Wreck pool, when the scene leaves anything behind. Null scenes (and old readers)
     /// keep no features, exactly like the match's null-vs-empty distinction.
     std::optional<FeatureStore::Snapshot> features;
+    /// In-flight shots, when the match owns a projectile list. Null scenes (and
+    /// old readers) keep none, exactly like `features` — v35.
+    std::optional<std::vector<Projectile>> projectiles;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);
@@ -74,6 +77,7 @@ struct SaveState {
     /// V23 adds the wreck pool (nullable, trailing).
     /// V24 adds the turret pose: ring yaw, trunnion pitch and the dual-muzzle phase.
     /// V25 adds the dual manipulator's own angles (the second arm's aim).
+    /// V35 adds the in-flight projectile pool (nullable, trailing).
     [[nodiscard]] static std::vector<std::byte> encode(const SaveState& state);
     /// Decodes all supported save versions, including v1 and the published v2 format.
     [[nodiscard]] static std::optional<SaveState> decode(std::span<const std::byte> bytes);

@@ -90,6 +90,13 @@ constexpr std::uint32_t kVersion33 = 33;
 // statistics plus the pending one-shot triggers — and the self-destruct countdowns
 // (`C-345`). Older saves decode with no stat service and nothing counting down.
 constexpr std::uint32_t kVersion34 = 34;
+// 35: the in-flight projectile pool — every field the state hash walks, so a
+// mid-combat save resumes the same shots. `visualId`/`visualOrigin`/
+// `visualSerial` stay out: they are presentation identity, never hashed, and a
+// restored shot gets a fresh serial from ProjectileTrails like any new one.
+// Nullable like `features`: a scene with no projectile list saves the absent
+// byte, preserving the match's null-vs-empty distinction.
+constexpr std::uint32_t kVersion35 = 35;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -829,6 +836,118 @@ bool readSelfDestructs(PayloadReader& r, std::vector<SelfDestructWork>& work) {
     return true;
 }
 
+// V35's projectile pool: every field the state hash walks, in the same order
+// `StateHash.cpp` feeds them, so a restored shot hashes identically to the one
+// that was saved. `visualId`/`visualOrigin`/`visualSerial` are deliberately
+// absent — presentation identity, never hashed.
+void writeProjectiles(PayloadWriter& w,
+                      const std::optional<std::vector<Projectile>>& state) {
+    w.u8(state.has_value());
+    if (!state) {
+        return;
+    }
+    w.count(state->size());
+    for (const Projectile& shot : *state) {
+        for (const Fx v : shot.position) w.i32(v.raw());
+        for (const Fx v : shot.velocity) w.i32(v.raw());
+        writeId(w, shot.guidanceTarget);
+        w.i32(shot.turnPerTick);
+        w.i32(shot.accelerationPerTickSquared.raw());
+        w.i32(shot.maxSpeedPerTick.raw());
+        w.i64(shot.damage.base.raw());
+        w.u32(std::bit_cast<std::uint32_t>(shot.damage.paralyze.value));
+        w.u8(shot.damage.overrideCount);
+        for (std::uint8_t i = 0; i < shot.damage.overrideCount; ++i) {
+            w.u8(shot.damage.overrideArmor[i]);
+            w.i64(shot.damage.overrideDamage[i].raw());
+        }
+        w.i32(shot.damageRadiusElmos.raw());
+        w.u8(static_cast<std::uint8_t>(shot.targetLayers));
+        w.i32(shot.firedByArmy);
+        w.u8(shot.interceptor ? 1 : 0);
+        w.i64(shot.maxHealth.raw());
+        w.i64(shot.health.raw());
+        w.count(shot.categories.size());
+        for (const std::string& tag : shot.categories) w.text(tag);
+        writeId(w, shot.firedBy);
+        w.u8(static_cast<std::uint8_t>(shot.arc));
+        w.i32(shot.ticksRemaining);
+        w.u8(static_cast<std::uint8_t>(shot.pendingImpact));
+        writeId(w, shot.impactTarget);
+    }
+}
+
+bool readProjectiles(PayloadReader& r,
+                     std::optional<std::vector<Projectile>>& state) {
+    bool present{};
+    if (!readFlag(r, present)) return false;
+    if (!present) {
+        state.reset();
+        return true;
+    }
+    state.emplace();
+    std::size_t count{};
+    // 4 bytes of count per shot at minimum; each shot costs at least its
+    // fixed fields before any category text.
+    if (!r.count(count, 60)) return false;
+    state->resize(count);
+    for (Projectile& shot : *state) {
+        std::int32_t px{}, py{}, pz{}, vx{}, vy{}, vz{}, turn{}, accel{}, maxSpeed{},
+            radius{}, army{}, ticks{};
+        std::int64_t base{}, maxHealth{}, health{};
+        std::uint32_t paralyzeBits{};
+        std::uint8_t overrides{}, layers{}, interceptor{}, arc{}, impact{};
+        for (std::int32_t* v : {&px, &py, &pz, &vx, &vy, &vz}) {
+            if (!r.i32(*v)) return false;
+        }
+        if (!readId(r, shot.guidanceTarget) || !r.i32(turn) || !r.i32(accel)
+            || !r.i32(maxSpeed) || !r.i64(base) || !r.u32(paralyzeBits)
+            || !r.u8(overrides) || overrides > unitdef::DamageProfile::kMaxOverrides)
+            return false;
+        shot.position = {Fx::fromRaw(px), Fx::fromRaw(py), Fx::fromRaw(pz)};
+        shot.velocity = {Fx::fromRaw(vx), Fx::fromRaw(vy), Fx::fromRaw(vz)};
+        shot.turnPerTick = turn;
+        shot.accelerationPerTickSquared = Fx::fromRaw(accel);
+        shot.maxSpeedPerTick = Fx::fromRaw(maxSpeed);
+        shot.damage.base = Mag::fromRaw(base);
+        shot.damage.paralyze =
+            Seconds{std::bit_cast<decltype(Seconds{}.value)>(paralyzeBits)};
+        shot.damage.overrideCount = overrides;
+        for (std::uint8_t i = 0; i < overrides; ++i) {
+            std::uint8_t armor{};
+            std::int64_t damage{};
+            if (!r.u8(armor) || !r.i64(damage)) return false;
+            shot.damage.overrideArmor[i] = armor;
+            shot.damage.overrideDamage[i] = Mag::fromRaw(damage);
+        }
+        if (!r.i32(radius) || !r.u8(layers)
+            || layers > static_cast<std::uint8_t>(unitdef::TargetLayerMask::Both)
+            || !r.i32(army) || !r.u8(interceptor) || interceptor > 1
+            || !r.i64(maxHealth) || !r.i64(health)) return false;
+        shot.damageRadiusElmos = Fx::fromRaw(radius);
+        shot.targetLayers = static_cast<unitdef::TargetLayerMask>(layers);
+        shot.firedByArmy = army;
+        shot.interceptor = interceptor != 0;
+        shot.maxHealth = Mag::fromRaw(maxHealth);
+        shot.health = Mag::fromRaw(health);
+        if (!r.count(count, 1)) return false;
+        shot.categories.resize(count);
+        for (std::string& tag : shot.categories) {
+            if (!r.text(tag)) return false;
+        }
+        std::sort(shot.categories.begin(), shot.categories.end());
+        if (!readId(r, shot.firedBy) || !r.u8(arc)
+            || arc > static_cast<std::uint8_t>(unitdef::BallisticArc::High)
+            || !r.i32(ticks) || !r.u8(impact)
+            || impact > static_cast<std::uint8_t>(ImpactType::UnitUnderwater)
+            || !readId(r, shot.impactTarget)) return false;
+        shot.arc = static_cast<unitdef::BallisticArc>(arc);
+        shot.ticksRemaining = ticks;
+        shot.pendingImpact = static_cast<ImpactType>(impact);
+    }
+    return true;
+}
+
 void writeRedirects(PayloadWriter& w, std::span<const MissileRedirect> redirects) {
     w.count(redirects.size());
     for (const MissileRedirect& value : redirects) {
@@ -1495,6 +1614,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion33) writeSiloQueue(payloadWriter, state.siloQueue);
     if (version >= kVersion34) writeArmyStats(payloadWriter, state.armyStats);
     if (version >= kVersion34) writeSelfDestructs(payloadWriter, state.selfDestructs);
+    if (version >= kVersion35) writeProjectiles(payloadWriter, state.projectiles);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -1536,7 +1656,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion27 && version != kVersion28
                && version != kVersion29 && version != kVersion30
                && version != kVersion31 && version != kVersion32
-               && version != kVersion33 && version != kVersion34)
+               && version != kVersion33 && version != kVersion34 && version != kVersion35)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -1603,6 +1723,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion34 && !readArmyStats(reader, armyStats)) return std::nullopt;
     std::vector<SelfDestructWork> selfDestructs;
     if (version >= kVersion34 && !readSelfDestructs(reader, selfDestructs)) return std::nullopt;
+    std::optional<std::vector<Projectile>> projectiles;
+    if (version >= kVersion35 && !readProjectiles(reader, projectiles)) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
@@ -1612,7 +1734,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        .enhancements = std::move(enhancements),
                        .captures = std::move(captures), .armyStats = std::move(armyStats),
                        .selfDestructs = std::move(selfDestructs),
-                       .features = std::move(features)};
+                       .features = std::move(features),
+                       .projectiles = std::move(projectiles)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -1637,7 +1760,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion34);
+    return rm::sim::encode(state, kVersion35);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

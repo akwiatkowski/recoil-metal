@@ -14,6 +14,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/sim/Skirmish.hpp"
+#include "core/sim/SaveState.hpp"
+#include "core/sim/StateHash.hpp"
 
 #include "support/TestRoster.hpp"
 
@@ -725,4 +727,92 @@ TEST_CASE("match funds enhancement work only from its living owner's army", "[en
     work[0].owner.generation += 1; // Stale/recycled handles must never bill an army.
     (void)tickSkirmish(roster.store, roster.catalog, match, Terrain{field});
     CHECK(economies[1].stored.mass == Mag::fromInt(79));
+}
+
+TEST_CASE("a mid-flight save resumes the same shots", "[save-state][skirmish]") {
+    // The continued-hash proof for the v35 projectile pool: save while shots
+    // are in the air, restore into a twin running the same catalog numbering,
+    // and both sides must hash identically for the rest of the flight.
+    using namespace rm::sim;
+    const rm::HeightField field = flatField();
+    const Terrain terrain{field};
+
+    const auto makeDuel = [](Roster& roster) {
+        UnitDef gunner;
+        gunner.name = "test_gunner";
+        gunner.categories = {"LAND"};
+        Weapon gun;
+        gun.label = "test gun";
+        gun.role = WeaponRole::DirectFire;
+        gun.targetPriorities = {{"LAND"}};
+        gun.turreted = true;
+        gun.damage = rm::test::mag(10.0f);
+        gun.maxRange = rm::test::fx(400.0f);
+        gun.rateOfFire = 0.5f;                        // a shot every two seconds
+        gun.muzzleVelocityElmosPerSecond = 40.0f;     // slow: shots stay in flight
+        gunner.weapons.push_back(gun);
+        const rm::UnitTypeIndex type = roster.addType(gunner);
+        (void)roster.add(type, 0.0f, 0.0f, 0, 500.0f);
+        (void)roster.add(type, 200.0f, 0.0f, 1, 500.0f);
+    };
+
+    Roster roster;
+    makeDuel(roster);
+    std::vector<Army> armies = twoSides();
+    std::vector<Economy> economies(2);
+    std::vector<int> commandersEver(2, 0);
+    std::vector<Projectile> shots;
+    std::vector<Construction> building;
+    Match live{.armies = armies,
+               .economies = economies,
+               .projectiles = &shots,
+               .building = &building,
+               .commandersEver = commandersEver};
+
+    // Run until at least one shot is in the air, then a few ticks more so the
+    // save lands mid-flight rather than at the muzzle.
+    for (int i = 0; i < 40 && shots.empty(); ++i) {
+        (void)tickSkirmish(roster.store, roster.catalog, live, terrain);
+    }
+    REQUIRE_FALSE(shots.empty());
+    for (int i = 0; i < 4; ++i) {
+        (void)tickSkirmish(roster.store, roster.catalog, live, terrain);
+    }
+    REQUIRE_FALSE(shots.empty());
+
+    SaveState saved;
+    saved.tick = 0;
+    saved.random = live.random.snapshot();
+    saved.units = roster.store.snapshot();
+    saved.projectiles = shots;
+    saved.economyArmies = EconomyArmyState::capture(live);
+    const auto bytes = SaveState::encode(saved);
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    REQUIRE(restored->projectiles.has_value());
+    REQUIRE(restored->economyArmies.has_value());
+
+    Roster twin;
+    makeDuel(twin);
+    UnitStore store2{restored->units};
+    std::vector<Army> armies2 = twoSides();
+    std::vector<Economy> economies2;
+    std::vector<int> commanders2;
+    std::vector<Projectile> shots2 = *restored->projectiles;
+    std::vector<Construction> building2;
+    Match resumed{.armies = armies2,
+                  .random = RandomStream{restored->random},
+                  .economies = {},
+                  .projectiles = &shots2,
+                  .building = &building2,
+                  .commandersEver = commanders2};
+    restored->economyArmies->restore(resumed, economies2, commanders2);
+
+    CHECK(hashMatch(roster.store, live) == hashMatch(store2, resumed));
+    for (int i = 0; i < 8; ++i) {
+        (void)tickSkirmish(roster.store, roster.catalog, live, terrain);
+        (void)tickSkirmish(store2, twin.catalog, resumed, terrain);
+        INFO("tick " << i);
+        CHECK(hashMatch(roster.store, live) == hashMatch(store2, resumed));
+    }
 }
