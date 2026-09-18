@@ -208,6 +208,78 @@ TEST_CASE("a capture out of reach keeps its task but advances nothing", "[captur
     CHECK(f.roster.store.motion()[captor.index].moving); // still walking there
 }
 
+TEST_CASE("capture work admits inside the 10-ogrid edge while still closing", "[capture]") {
+    // `C-250`: the funded task works out to a 10-ogrid footprint-edge gap, but
+    // the approach only stops at 5 — a captor between the two keeps walking
+    // AND banks progress, the way the retail task's move outlives admission.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    // Test defs carry no footprint, so the edge gap is the centre gap: 70
+    // elmos is inside the 80-elmo work gate but outside the 40-elmo stop.
+    const UnitId target = f.roster.add(f.structureType, 270.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.capture(captor, target));
+    f.tick(3);
+    REQUIRE(f.captures.size() == 1);
+    CHECK(f.captures[0].inReach);
+    CHECK(f.captures[0].progress > 0);
+    CHECK(f.captures[0].demand.energy > rm::sim::Mag{});
+    CHECK(f.roster.store.motion()[captor.index].moving); // still closing to 5
+}
+
+TEST_CASE("capture footprint widens the edge gap against big targets", "[capture]") {
+    // `C-250`: each side's larger footprint subtracts WHOLE from the centre
+    // gap. A 2-square target (16 elmos) plus a 1-square captor (8) puts a
+    // 100-elmo centre gap at a 76-elmo edge — inside work range where the
+    // centre distance alone would refuse.
+    Fixture f;
+    rm::unitdef::UnitDef big = *f.roster.catalog.def(f.structureType);
+    big.name = "test_big";
+    big.footprintSquaresX = 2;
+    big.footprintSquaresZ = 2;
+    const auto bigType = f.roster.addType(big);
+    rm::unitdef::UnitDef walker = *f.roster.catalog.def(f.captorType);
+    walker.name = "test_walker";
+    walker.footprintSquaresX = 1;
+    walker.footprintSquaresZ = 1;
+    const auto walkerType = f.roster.addType(walker);
+    const UnitId captor = f.roster.add(walkerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(bigType, 300.0f, 200.0f, 1, 100.0f);
+    // Centre gap 100 elmos; edge 100 − 8 − 16 = 76 ≤ 80: in reach.
+    CHECK(rm::sim::captureEdgeDistance(f.roster.catalog, walkerType, bigType,
+                                       rm::sim::fxFromFloat(100.0f))
+          == rm::sim::fxFromFloat(76.0f));
+    REQUIRE(f.capture(captor, target));
+    f.tick(3);
+    REQUIRE(f.captures.size() == 1);
+    CHECK(f.captures[0].inReach);
+    CHECK(f.captures[0].progress > 0);
+}
+
+TEST_CASE("a capture outside the 10-ogrid edge advances nothing", "[capture]") {
+    // The same footprint arithmetic, refused: a 200-elmo centre gap is a
+    // 176-elmo edge — far past the 80-elmo work gate, and too far for the
+    // captor to close inside three ticks.
+    Fixture f;
+    rm::unitdef::UnitDef big = *f.roster.catalog.def(f.structureType);
+    big.name = "test_big";
+    big.footprintSquaresX = 2;
+    big.footprintSquaresZ = 2;
+    const auto bigType = f.roster.addType(big);
+    rm::unitdef::UnitDef walker = *f.roster.catalog.def(f.captorType);
+    walker.name = "test_walker";
+    walker.footprintSquaresX = 1;
+    walker.footprintSquaresZ = 1;
+    const auto walkerType = f.roster.addType(walker);
+    const UnitId captor = f.roster.add(walkerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(bigType, 400.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.capture(captor, target));
+    f.tick(3);
+    REQUIRE(f.captures.size() == 1);
+    CHECK_FALSE(f.captures[0].inReach);
+    CHECK(f.captures[0].progress == 0);
+    CHECK(f.captures[0].demand.energy == rm::sim::Mag{});
+}
+
 TEST_CASE("own guns spare a capture target", "[capture]") {
     Fixture f;
     rm::unitdef::UnitDef shooter = *f.roster.catalog.def(f.captorType);

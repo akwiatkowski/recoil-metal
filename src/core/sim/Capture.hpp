@@ -67,6 +67,23 @@ struct CaptureWork {
 /// The per-beat energy demand for one capture: the target's whole build energy
 /// cost spread evenly over its work budget. Mass costs nothing to capture.
 [[nodiscard]] Resources captureDemand(Mag targetBuildEnergy, int workTicks) noexcept;
+
+/// Retail's capture range is a FOOTPRINT-EDGE distance in ogrids, not the build
+/// reach (`C-250`): `sqrt(dx² + dz²) − max(captor Footprint.SizeX,Z) −
+/// max(target Footprint.SizeX,Z)`, each side's u8 footprint subtracted whole.
+/// The blueprint's `Footprint.SizeX/Z` are ogrid counts — the engine's world
+/// unit — so the gates below are ogrids × 8 elmos.
+[[nodiscard]] Fx captureEdgeDistance(const UnitCatalog& catalog, UnitTypeIndex captorType,
+                                     UnitTypeIndex targetType, Fx centreGap) noexcept;
+
+/// State 0 ends its approach once the edge gap is within 5 ogrids
+/// (`0x00E4D960`): the captor stops walking here.
+inline constexpr Fx kCaptureApproachEdgeElmos = Fx::fromInt(5 * 8);
+
+/// State 1 admits work at or inside 10 ogrids and aborts beyond it
+/// (`0x00E4E150`): the funded task draws demand and banks progress inside this
+/// edge gap — including while the captor is still closing from 10 to 5.
+inline constexpr Fx kCaptureWorkEdgeElmos = Fx::fromInt(10 * 8);
 /// Reconciles the persistent capture list with this tick's active Capture heads:
 /// drops entries whose order retired, retargeted or whose target died, and opens
 /// entries for new captures with computed budgets. An entry persists while its head

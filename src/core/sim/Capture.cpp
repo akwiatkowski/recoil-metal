@@ -2,6 +2,7 @@
 
 #include "core/sim/Command.hpp"
 #include "core/sim/Enhancement.hpp"
+#include "core/map/HeightField.hpp"
 #include "core/sim/Reclaim.hpp"
 
 #include <algorithm>
@@ -82,6 +83,25 @@ Resources captureDemand(Mag targetBuildEnergy, int workTicks) noexcept {
                                                 Mag::fromInt(workTicks))};
 }
 
+Fx captureEdgeDistance(const UnitCatalog& catalog, UnitTypeIndex captorType,
+                       UnitTypeIndex targetType, Fx centreGap) noexcept {
+    // `C-250`: the retail preamble subtracts each side's u8 footprint — the
+    // larger of `Footprint.SizeX`/`SizeZ`, whole — from the centre distance.
+    // `footprintSquaresX/Z` are those same ogrid counts (derived from
+    // `Physics.SizeX/Z` when the blueprint states no Footprint block), so the
+    // subtraction is `squares × kSquareSize` elmos per side.
+    const auto footprintElmos = [&catalog](UnitTypeIndex type) {
+        const unitdef::UnitDef* def = catalog.def(type);
+        if (def == nullptr) {
+            return Fx{};
+        }
+        return Fx::fromInt(std::max(def->footprintSquaresX, def->footprintSquaresZ)
+                           * kSquareSize);
+    };
+    return centreGap - footprintElmos(captorType) - footprintElmos(targetType);
+}
+
+
 void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
                      std::span<const Army> armies, std::vector<CaptureWork>& captures,
                      TickRate rate) {
@@ -109,14 +129,16 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
         }
         // Only an in-reach captor draws demand: the entry persists while its head
         // stays on the same target (progress is kept while walking back into
-        // reach), but unfunded beats advance nothing.
         const UnitId target = head->target();
         const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target.index));
         const Fx gap = groundDistanceElmos(positionOf(transforms[captor]),
                                            positionOf(transforms[target.index]));
+        // `C-250`: work admits inside a 10-ogrid footprint-edge gap — wider
+        // than the 5-ogrid approach stop, so a captor still closing banks
+        // funded progress on the way in, exactly like the retail task.
         const bool inReach =
-            gap <= repairReach(catalog, store.typeAt(captor), motion[captor],
-                               motion[target.index]);
+            captureEdgeDistance(catalog, store.typeAt(captor), store.typeAt(target.index),
+                                gap) <= kCaptureWorkEdgeElmos;
         // A production-paused captor asks for nothing, like one out of reach: the
         // task and its progress survive, but no funded beat accumulates under it.
         const bool funded = inReach && !store.productionPaused(store.idAt(captor));

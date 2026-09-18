@@ -203,7 +203,7 @@ excluded from the headline.
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 35% | 15% | 85% | **Analyzed 2026-09-18 (C-305–C-319):** `CTaskStage` two-ring FIFO scheduler with full status contract and `WaitTicks(n)` `n−1` quirk; `ForkThread`/`WaitFor` suspend/resume; script class resolution and `OnPreCreate`/`OnCreate`/`OnDestroy` order; Lua state serializes wholesale. Mod hooks: `doscript`/`import` concatenate original + `/schook` + mod `hookdir` matches into one chunk; `__active_mods` from `gameInfo.GameMods`; `shadow/` unimplemented; no sim/UI sandbox. Dialect = LuaPlus 5.0.1 + `#`/`!=`/`continue`/bare-`for`; no retail watchdog. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 90% | 75% | 85% | **Analyzed 2026-09-18 (C-347–C-351):** guard task flag block `+0x74..0x7a` decoded (which guard-ladder branches are enabled; `+0x78`/`+0x79` factory/FERRYBEACON pair); ferry contract is `CUnitFerryTask`/`CUnitWaitForFerryTask`/`CUnitCallTransport`/`CUnitCallAirStaging`/`CUnitCallLandTransport` on the `FERRYBEACON` blueprint category (UEB5102); `RULEUTC_` maps 1:1 to script bits 0-8 via `ToggleScriptBit` named command → `Unit:ToggleScriptBit` `0x006ce4b0`; `CAiAttackerImpl` guard attack rung prefers longest-range weapon that can hit; `IssueFactoryCommand` `0x006f8ce0`/`0x006f8e70` is the native factory intake. |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 75% | 35% | 85% | All four retail victory modes in with selector mapping, Annihilation counts and Sandbox endlessness (tested); scenario Options wiring stays open, no synthetic setting. |
-| [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 85% | 65% | 90% | Single-captor Capture slice is in (funded progress, transfer identity, cancellation, replay, save/load); concurrent captors and general transfer parity stay open. |
+| [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 85% | 65% | 90% | Capture now follows `C-250` end to end: footprint-edge gates (approach stops at 5 ogrids, work admits out to 10 — a closing captor banks progress on the way in), the concurrent-captor refcount, funded progress, transfer identity, cancellation, replay, save/load. Remaining: general transfer parity (attachments, enhancements, fuel, ammo, shields). |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 95% | 35% | 95% | P10 run complete: deterministic threading, congestion yield/reroute, shared flow fields and the per-cell speed divisor (golden re-recorded for the intended route change). Formation rotation stays engine-native without a Lua source. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Retail winged controller (C-221/222/223/244–247) with states 1–7, banking and staging-pad refuel; a takeoff committed to a sub-tick hop no longer strands `Down` on the deck (`c538105`). Three-axis solver, cargo inertia, bomb prediction, carrier docking stay open. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 65% | 30% | 85% | **Analyzed 2026-09-18 (C-320-C-328):** `CalcMoveWater` is the shared `CalcMoveCommon` plus dive/surface stepper, `speed²>1e-6` orientation gate, and platform→water `OnLayerChange`; weapon water gating fully mapped (firer caps vs target layer, fire-only vs own `Elevation`, targets-only as Seabed-only bone test, `FlyInWater` hard reject); `AutoSurfaceMode` defaults OFF and only `CUnitAttackTargetTask` consumes it; spawn layer computed by `0x631800`; shoreline/waves render-side only; naval pathing is `CAiNavigatorLand` + `gpg::HaStar` on per-footprint-spec grids. |
@@ -423,15 +423,14 @@ run make test and make verify before updating FA-CMD.
 
 ### FA-ECON - Economy, Construction, And Engineering
 
-**Largest gap:** the single-captor Capture slice is implemented (`core/sim/Capture.hpp`,
-`CommandKind::Capture`, save v20); concurrent captors and general transfer parity stay
-open. The [minimum retail Capture specification](capture-implementation-spec.md) corrects
+**Largest gap:** Capture now follows `C-250` end to end — footprint-edge gates
+(approach stops at 5 ogrids, work admits out to 10, so a closing captor banks
+progress on the way in), the concurrent-captor refcount, funded progress,
+transfer identity, cancellation, replay and save/load. General transfer parity
+(attachments, enhancements, fuel, ammo, shields) stays open. The
+[minimum retail Capture specification](capture-implementation-spec.md) corrects
 earlier readings: the captor supplies the cost method, attached target children add
-costs, and `Unit+0x690` counts active capture tasks. `C-250` (2026-09-17) now supplies
-the retail approach/admission contract: a five-state task with per-tick legality
-preamble, footprint-edge distance gates at 5/10 elmos, and dispatcher-level retry via
-the `cmd+0x2C` status cell — the concurrency "guard" is a refcount that permits
-multiple near captors.
+costs, and `Unit+0x690` counts active capture tasks.
 Ordinary mobile construction now follows
 `C-248`: the active Build order routes the engineer toward the site and creates no construction
 until centre distance minus the builder's smaller footprint and target's larger skirt is within
@@ -444,9 +443,9 @@ experimentals, while unenhanced ACUs keep the T1 menu until enhancements are mod
 extractor upgrade chains can be cancelled per tier (`[engineer-tiers]`, `make test-upgrade-ui`).
 
 ```text
-/goal Extend Capture past the single-captor slice: concurrent-captor races and general
-transfer parity (attachments, enhancements, fuel, ammo, shields). The minimum slice is
-in with headless funding, identity, cancellation, replay and save/load cover.
+/goal Extend Capture to general transfer parity: attachments, enhancements, fuel,
+ammo and shields on the target. The C-250 approach/admission contract and the
+concurrent-captor refcount are in with headless cover.
 ```
 
 ### FA-LAND - Land Navigation, Formations, And Spatial World

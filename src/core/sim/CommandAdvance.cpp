@@ -1141,6 +1141,20 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             // completes only when the target dies, which is exactly this block's rule.
             const bool missile = head->kind() == CommandKind::MissileLaunch;
             const bool manual = missile || head->kind() == CommandKind::Overcharge;
+            // `AutoSurfaceMode` (`C-203`/`C-323`): the attack task's one
+            // consumer of the Dive toggle's second state — retail's
+            // `CUnitAttackTargetTask` calls `SetNewTargetLayer(LAYER_Water)`
+            // when the mode is on and stays submerged when it is off
+            // (`0x005fa17c`), unconditionally, not only when a weapon already
+            // reaches the target. Our layer target is `diveTargetSubmerged`;
+            // the dive stepper walks the hull up and the layer commits at the
+            // endpoint, exactly like the manual Dive.
+            if (head->kind() == CommandKind::Attack) {
+                MoveState& surfacing = store.motion()[slot];
+                if (surfacing.submersible && surfacing.autoSurface) {
+                    surfacing.diveTargetSubmerged = false;
+                }
+            }
             const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
             Fx reach{};
             if (isGuardCommand(head->kind())) {
@@ -1160,17 +1174,6 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             }
             if (reach > Fx{}) {
                 MoveState& chase = store.motion()[slot];
-                // `AutoSurfaceMode` (`C-203`): the attack task's one consumer
-                // of the Dive toggle's second state — retail's
-                // `CUnitAttackTargetTask` calls `SetNewTargetLayer(LAYER_Water)`
-                // when the mode is on and stays submerged when it is off
-                // (`0x005fa17c`). Our layer target is `diveTargetSubmerged`;
-                // the dive stepper walks the hull up and the layer commits at
-                // the endpoint, exactly like the manual Dive.
-                if (head->kind() == CommandKind::Attack && chase.submersible
-                    && chase.autoSurface) {
-                    chase.diveTargetSubmerged = false;
-                }
                 const Transform& mine = store.transforms()[slot];
                 const Transform& theirs = store.transforms()[head->target().index];
                 if (head->kind() == CommandKind::Attack && chase.canFly && chase.airWinged) {
@@ -1384,8 +1387,12 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 const Transform& there = store.transforms()[head->target().index];
                 const Fx gap = groundDistanceElmos(positionOf(store.transforms()[slot]),
                                                    positionOf(there));
-                if (gap <= repairReach(catalog, store.typeAt(slot), mine,
-                                       store.motion()[head->target().index])) {
+                // `C-250`: the approach ends at a 5-ogrid footprint-edge gap —
+                // the captor holds here while the funded task works, which
+                // admits out to 10 ogrids.
+                if (captureEdgeDistance(catalog, store.typeAt(slot),
+                                        store.typeAt(head->target().index), gap)
+                    <= kCaptureApproachEdgeElmos) {
                     mine.moving = false;
                     mine.path.clear();
                     mine.pathIndex = 0;
@@ -1442,6 +1449,45 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                                 || head->kind() == CommandKind::UnloadTransport
                                 || head->kind() == CommandKind::Ferry)) {
             continue;
+        }
+
+        // THE FERRY-WAIT HOLD, `C-199`'s `CUnitWaitForFerryTask` by another
+        // name. A move whose destination sits inside a live same-army ferry's
+        // pickup ring does not complete on arrival — the unit is WAITING FOR
+        // THE FERRY, and the held-open order is the assignment the carrier's
+        // Loading phase reads (`waitingAtBeacon` in Transport.cpp). Without
+        // the hold the move would retire on arrival and a unit sent to the
+        // beacon would become indistinguishable from one merely parked there.
+        // The ring lives on the ferry order's `transportAnchor`, so a dead or
+        // cancelled ferry releases its waiters to ordinary completion.
+        if (const QueuedCommand* head = orders[slot].active();
+            head != nullptr && head->kind() == CommandKind::Move) {
+            const Transform& at = store.transforms()[slot];
+            bool waiting = false;
+            for (UnitIndex ferry = 0; ferry < orders.size() && !waiting; ++ferry) {
+                if (ferry == slot || !store.slotAlive(ferry)
+                    || store.motion()[ferry].armyIndex != motion[slot].armyIndex) {
+                    continue;
+                }
+                const QueuedCommand* route = orders[ferry].active();
+                if (route == nullptr || !route->transportAnchor()) {
+                    continue;  // no beacon: not a live ferry route
+                }
+                const std::array<Fx, 2>& beacon = *route->transportAnchor();
+                const Fx dx = head->targetX() - beacon[0];
+                const Fx dz = head->targetZ() - beacon[1];
+                if (dx * dx + dz * dz
+                    > rm::sim::kFerryPickupRadius * rm::sim::kFerryPickupRadius) {
+                    continue;  // the destination is not this ferry's pickup
+                }
+                const Fx px = at.x - beacon[0];
+                const Fx pz = at.z - beacon[1];
+                waiting = px * px + pz * pz
+                          <= rm::sim::kFerryPickupRadius * rm::sim::kFerryPickupRadius;
+            }
+            if (waiting) {
+                continue;
+            }
         }
 
         if (slot < motion.size() && motion[slot].moving) {
@@ -2052,9 +2098,12 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         }
         const Transform& at = store.transforms()[command.unit.index];
         const Transform& there = store.transforms()[command.target.index];
-        const Fx reach = repairReach(catalog, store.typeAt(command.unit.index), motion,
-                                     store.motion()[command.target.index]);
-        if (groundDistanceElmos(positionOf(at), positionOf(there)) <= reach) {
+        const Fx gap = groundDistanceElmos(positionOf(at), positionOf(there));
+        // `C-250`: the approach ends at a 5-ogrid footprint-edge gap; the
+        // funded task works out to 10.
+        if (captureEdgeDistance(catalog, store.typeAt(command.unit.index),
+                                store.typeAt(command.target.index), gap)
+            <= kCaptureApproachEdgeElmos) {
             teardownMovement(motion);
             return true;
         }
