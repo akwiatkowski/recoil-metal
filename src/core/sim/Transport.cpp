@@ -79,12 +79,15 @@ using AirState = MoveState::AirState;
     return routeToward(slot, x, z, store, terrain, gridForType);
 }
 
-/// Whether a unit is still on its way to a ferry beacon: transportable, not
+/// Whether the unit is still on its way to a ferry beacon: transportable, not
 /// already aboard, and holding an order whose destination is inside the pickup
-/// ring. An order DESTINATION, not the unit's position — a unit that already
-/// arrived is standing in the ring and gets picked up on the position rule.
+/// ring — or a `LoadTransport` aimed at this carrier, the other way a unit
+/// declares for the lift. An order DESTINATION, not the unit's position: a
+/// unit that already arrived is standing in the ring holding its move open
+/// (the ferry-wait hold in `advanceOrders`), and `waitingAtBeacon` owns it.
 [[nodiscard]] bool inboundToBeacon(const UnitStore& store, const UnitCatalog& catalog,
-                                   UnitIndex slot, std::array<Fx, 2> beacon) noexcept {
+                                   UnitIndex slot, std::array<Fx, 2> beacon,
+                                   UnitId carrier) noexcept {
     if (!store.slotAlive(slot) || store.motion()[slot].attached) {
         return false;
     }
@@ -97,9 +100,37 @@ using AirState = MoveState::AirState;
     if (head == nullptr) {
         return false;
     }
+    if (head->kind() == CommandKind::LoadTransport) {
+        return head->target() == carrier;
+    }
     const Fx dx = head->targetX() - beacon[0];
     const Fx dz = head->targetZ() - beacon[1];
     return dx * dx + dz * dz <= kFerryPickupRadius * kFerryPickupRadius;
+}
+
+/// Whether `slot` is a unit the ferry is responsible for: standing inside the
+/// pickup ring with an order whose destination is the beacon — the state
+/// `C-199`'s `CUnitWaitForFerryTask` marks natively. The sim has no wait task,
+/// so the held-open move IS the assignment: `advanceOrders` refuses to retire
+/// a move that arrived inside a live ferry's ring, and this is the other half
+/// of that handshake. A unit merely parked in the ring (queue empty, or bound
+/// somewhere else) is NOT waiting — retail's pickup is an assignment, "not a
+/// spatial scan" (C-199).
+[[nodiscard]] bool waitingAtBeacon(const UnitStore& store, UnitIndex slot,
+                                   std::array<Fx, 2> beacon) noexcept {
+    const Transform& at = store.transforms()[slot];
+    const Fx dx = at.x - beacon[0];
+    const Fx dz = at.z - beacon[1];
+    if (dx * dx + dz * dz > kFerryPickupRadius * kFerryPickupRadius) {
+        return false;
+    }
+    const QueuedCommand* head = store.orders()[slot].active();
+    if (head == nullptr) {
+        return false;
+    }
+    const Fx hx = head->targetX() - beacon[0];
+    const Fx hz = head->targetZ() - beacon[1];
+    return hx * hx + hz * hz <= kFerryPickupRadius * kFerryPickupRadius;
 }
 
 } // namespace
@@ -109,19 +140,94 @@ bool canEverCarry(const unitdef::UnitDef& carrier, const unitdef::UnitDef& cargo
     return cost > 0 && cost <= carrier.transportCapacity();
 }
 
+namespace {
+
+/// `C-198`'s generic attach list in fill order: the class-1 `Attachpoint`
+/// bones sorted by squared rest distance from the carrier's origin.
+/// `TransportHasSpaceFor` prices EVERY cargo class against this list — a
+/// class-N cargo consumes `ClassNAttachSize` class-1 points — and its only
+/// position reference is the transport's, because the check takes the
+/// candidate's blueprint, not the unit. DIVERGENCE (recorded): if the retail
+/// distance reference is the cargo's position rather than the carrier's, the
+/// fill order differs; the claim does not name the reference point, and
+/// origin-ordering is the only reading consistent with a blueprint-only
+/// signature.
+[[nodiscard]] std::vector<const UnitCatalog::AttachBone*> genericBoneOrder(
+    std::span<const UnitCatalog::AttachBone> bones) {
+    std::vector<const UnitCatalog::AttachBone*> order;
+    for (const UnitCatalog::AttachBone& bone : bones) {
+        if (bone.cargoClass == 1) {
+            order.push_back(&bone);
+        }
+    }
+    std::sort(order.begin(), order.end(), [](const UnitCatalog::AttachBone* a,
+                                             const UnitCatalog::AttachBone* b) {
+        const Fx da = a->rest[0] * a->rest[0] + a->rest[2] * a->rest[2];
+        const Fx db = b->rest[0] * b->rest[0] + b->rest[2] * b->rest[2];
+        return da < db;
+    });
+    return order;
+}
+
+/// Whether `bone` already has a child hanging from it — the union half of the
+/// taken set that covers attachments made outside `attachCargo` (a direct
+/// `UnitStore::attach` names its bone without consuming a prefix slot).
+[[nodiscard]] bool boneHasChild(const UnitStore& store, UnitId carrier,
+                                const UnitCatalog::AttachBone& bone) noexcept {
+    for (const UnitId child : store.childrenOf(carrier)) {
+        if (store.attachmentBonesOf(child).parent == bone.bone) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Free class-1 bones on `carrier`: the fill-order list minus the prefix the
+/// already-consumed slots occupy and minus any bone a child hangs from. A
+/// class-N child's reservation is implicit — its `ClassNAttachSize` cost
+/// extends the prefix, so the bones it reserves need no bookkeeping.
+[[nodiscard]] int freeGenericBones(const UnitStore& store, const UnitCatalog& catalog,
+                                   const unitdef::UnitDef& carrierDef, UnitId carrier,
+                                   std::span<const UnitCatalog::AttachBone* const> order)
+    noexcept {
+    const int used = slotsUsed(store, catalog, carrierDef, carrier);
+    int free = 0;
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        if (i < static_cast<std::size_t>(used)) {
+            continue;  // inside the consumed prefix
+        }
+        if (!boneHasChild(store, carrier, *order[i])) {
+            ++free;
+        }
+    }
+    return free;
+}
+
+} // namespace
+
 bool hasRoomFor(const UnitStore& store, const UnitCatalog& catalog, UnitId carrier,
                 const unitdef::UnitDef& cargo) noexcept {
     const unitdef::UnitDef* carrierDef = catalog.def(store.typeAt(carrier.index));
     if (carrierDef == nullptr || !canEverCarry(*carrierDef, cargo)) {
         return false;
     }
+    const int cost = carrierDef->transportAttachCost(cargo.transportCargoClass());
+    // `C-198`: when the carrier's bones are resolved, capacity IS the class-1
+    // bone list — the cargo needs `cost` free points, not an arithmetic slot.
+    // A resolved list with no class-1 points at all means no room, not a
+    // fallback: the arithmetic path is for carriers whose mesh was never read.
+    const std::span<const UnitCatalog::AttachBone> bones =
+        catalog.attachBones(store.typeAt(carrier.index));
+    if (!bones.empty()) {
+        const std::vector<const UnitCatalog::AttachBone*> order = genericBoneOrder(bones);
+        return freeGenericBones(store, catalog, *carrierDef, carrier, order) >= cost;
+    }
     const int used = slotsUsed(store, catalog, *carrierDef, carrier);
-    return used + carrierDef->transportAttachCost(cargo.transportCargoClass())
-           <= carrierDef->transportCapacity();
+    return used + cost <= carrierDef->transportCapacity();
 }
 
 bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
-                 const unitdef::UnitDef& /*carrier*/, UnitId carrierId,
+                 const unitdef::UnitDef& carrier, UnitId carrierId,
                  UnitId cargo) noexcept {
     const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
@@ -139,51 +245,40 @@ bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
         return false;
     }
 
-    // `C-198`: cargo hangs from a named `Attachpoint*` bone, not a slot number.
-    // The bone's class list is the cargo's own; a class with no free bone falls
-    // back to the class-1 list — the one `TransportHasSpaceFor` always prices
-    // against. Nearest free bone to where the cargo stands wins, so a squad
-    // boarding from one side fills that side first.
+    // `C-198`: cargo hangs from a named `Attachpoint` bone, and EVERY class
+    // prices against the class-1 list — `TransportHasSpaceFor` "replaces the
+    // list with the class-1 list", so `ClassNAttachSize` is literally how many
+    // class-1 points a class-N cargo consumes. The fill is a prefix of the
+    // origin-sorted list (see `genericBoneOrder`): the cargo takes the first
+    // free point and reserves `cost` of them. The `_Med`/`_Lrg`/`_Spr` lists
+    // are the staging pads' machinery (`C-225`), not the transport's.
     const unitdef::UnitDef* cargoDef = catalog.def(store.typeAt(cargo.index));
-    const int cargoClass =
-        cargoDef != nullptr ? cargoDef->transportCargoClass() : 1;
+    const int cost =
+        cargoDef != nullptr ? carrier.transportAttachCost(cargoDef->transportCargoClass())
+                            : 1;
     const std::span<const UnitCatalog::AttachBone> bones =
         catalog.attachBones(store.typeAt(carrierId.index));
-    const auto boneFree = [&](const UnitCatalog::AttachBone& bone) {
-        for (const UnitId child : store.childrenOf(carrierId)) {
-            if (store.attachmentBonesOf(child).parent == bone.bone) {
-                return false;
-            }
-        }
-        return true;
-    };
-    const UnitCatalog::AttachBone* best = nullptr;
-    Fx bestDist{};
-    for (const int klass : {cargoClass, 1}) {
-        for (const UnitCatalog::AttachBone& bone : bones) {
-            if (bone.cargoClass != klass || !boneFree(bone)) {
+    if (!bones.empty()) {
+        const std::vector<const UnitCatalog::AttachBone*> order = genericBoneOrder(bones);
+        const int used = slotsUsed(store, catalog, carrier, carrierId);
+        const UnitCatalog::AttachBone* best = nullptr;
+        int freeSeen = 0;
+        for (std::size_t i = 0; i < order.size(); ++i) {
+            const UnitCatalog::AttachBone* bone = order[i];
+            if (i < static_cast<std::size_t>(used)
+                || boneHasChild(store, carrierId, *bone)) {
                 continue;
             }
-            // Distance in the carrier's rest frame: rotate the bone into world
-            // axes by the hull's heading, then measure to the cargo.
-            const std::array<Fx, 2> world = rotateByHeading(
-                transforms[carrierId.index].heading, {bone.rest[0], bone.rest[2]});
-            const Fx bx = transforms[carrierId.index].x + world[0];
-            const Fx bz = transforms[carrierId.index].z + world[1];
-            const Fx ddx = transforms[cargo.index].x - bx;
-            const Fx ddz = transforms[cargo.index].z - bz;
-            const Fx dist = ddx * ddx + ddz * ddz;
-            if (best == nullptr || dist < bestDist) {
-                best = &bone;
-                bestDist = dist;
+            if (best == nullptr) {
+                best = bone;
+            }
+            if (++freeSeen >= cost) {
+                break;  // enough points reserved: `best` is where it hangs
             }
         }
-        if (best != nullptr) {
-            break;
+        if (freeSeen < cost || best == nullptr) {
+            return false;  // the class-1 list is the capacity — it is full
         }
-    }
-
-    if (best != nullptr) {
         // Pre-place the cargo exactly on the bone so `attach` captures a zero
         // residual — the child rides the bone, not the spot it walked up from.
         const std::array<Fx, 2> world = rotateByHeading(
@@ -212,6 +307,7 @@ bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
     at.y = transforms[carrierId.index].y + Fx::fromInt(-2);
     return store.attach(carrierId, cargo);
 }
+
 
 void detachCargo(UnitStore& store, const Terrain& terrain, UnitId carrier) noexcept {
     const std::vector<UnitId> children = store.childrenOf(carrier);
@@ -326,6 +422,14 @@ void advanceLoading(UnitStore& store, const UnitCatalog& catalog, const Terrain&
 /// A `drop` equal to the beacon means "no destination yet" — the carrier
 /// loads whatever waits at the beacon and holds, rather than flying a
 /// zero-length leg that would detach and re-attach the same cargo each pass.
+///
+/// `C-199` divergences, recorded: retail's beacon is a spawned `FERRYBEACON`
+/// unit held on the command (`CUnitCommand+0x158`); here it is the position
+/// the order started at. Retail's waiting unit retries its beacon every 10
+/// ticks; here pickup is event-driven each tick the carrier is in `Loading`.
+/// And retail's `CUnitFerryTask` recomputes its route when the order's target
+/// moves more than 1.0 — the guard-ferry path re-reads the beacon's command
+/// target every tick, which is the same behaviour for the only movable end.
 void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
                        std::span<const PassabilityGrid* const> gridForType, UnitIndex slot,
                        QueuedCommand& order, std::array<Fx, 2> beacon,
@@ -353,8 +457,12 @@ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terra
     }
     case TransportPhase::Loading: {
         const unitdef::UnitDef* carrierDef = catalog.def(store.typeAt(slot));
-        // Take aboard whatever is standing under the beacon and fits: the
-        // pickup is a zone, not an order match — a unit parked in it goes.
+        // `C-199`: the pickup is an ASSIGNMENT, "not a queue and not a spatial
+        // scan" — only units holding an order into this beacon's ring board.
+        // A unit merely parked under the carrier stays parked. Waiting units
+        // that are in the ring but out of sling reach are walked the rest of
+        // the way to the carrier — the observable half of retail's waiting
+        // formation, which is anchored at the transport (`0x005eca10`).
         for (UnitIndex other = 0; other < store.slotCount(); ++other) {
             if (other == slot || !store.slotAlive(other)
                 || store.motion()[other].attached
@@ -364,6 +472,9 @@ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terra
             const unitdef::UnitDef* def = catalog.def(store.typeAt(other));
             if (def == nullptr || !def->transportable()
                 || carrierDef == nullptr || !hasRoomFor(store, catalog, self, *def)) {
+                continue;
+            }
+            if (!waitingAtBeacon(store, other, beacon)) {
                 continue;
             }
             if (attachCargo(store, catalog, *carrierDef, self, store.idAt(other))) {
@@ -377,6 +488,12 @@ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terra
                         (void)queue.finish();
                     }
                 }
+                continue;
+            }
+            // In the ring but out of sling reach: converge on the carrier the
+            // way retail's transport-anchored waiting formation does.
+            if (!store.motion()[other].moving) {
+                (void)routeToward(other, at.x, at.z, store, terrain, gridForType);
             }
         }
         if (store.childrenOf(self).empty()) {
@@ -394,7 +511,7 @@ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terra
             return;
         }
         for (UnitIndex other = 0; other < store.slotCount(); ++other) {
-            if (inboundToBeacon(store, catalog, other, beacon)) {
+            if (inboundToBeacon(store, catalog, other, beacon, self)) {
                 return;  // someone is still coming
             }
         }

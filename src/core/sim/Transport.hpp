@@ -25,8 +25,10 @@ struct PassabilityGrid;
 ///   - `UnloadTransport` rides the TRANSPORT's queue: fly to the point, come
 ///     down, set every child on the ground. It retires when the hold empties.
 ///   - `Ferry` rides the transport's queue as a standing loop: beacon (where
-///     the order started) → load whatever was ordered to the beacon → drop
-///     point → back. It never retires; `Stop` ends it.
+///     the order started) → load whatever was ORDERED to the beacon → drop
+///     point → back. The pickup is an assignment, not a zone (`C-199`): a
+///     unit merely parked in the ring is left alone. It never retires;
+///     `Stop` ends it.
 ///
 /// Cargo rides on the generic attachment machinery (`C-195`/`C-196`): attached
 /// units do not move, do not collide, do not shoot, and are not shot at —
@@ -65,11 +67,12 @@ inline constexpr Fx kFerryPickupRadius = Fx::fromInt(10);
 [[nodiscard]] bool hasRoomFor(const UnitStore& store, const UnitCatalog& catalog,
                               UnitId carrier, const unitdef::UnitDef& cargo) noexcept;
 
-/// Slings `cargo` under `carrier` and attaches it. When the catalog carries the
-/// carrier's `Attachpoint*` bones (`C-198`), the cargo is placed at the nearest
-/// free bone of its own class — class-1 bones when its class has none free —
-/// and rides it through `UnitStore::AttachBones`, so it swings with the hull.
-/// A carrier with no resolved bones keeps the deterministic sling row.
+/// Slings `cargo` under `carrier` and attaches it. When the catalog carries
+/// the carrier's `Attachpoint*` bones (`C-198`), every class prices against
+/// the class-1 list — `ClassNAttachSize` class-1 points — and the cargo hangs
+/// from the first free point in origin-distance order, so the fill is a
+/// deterministic prefix of the list. A carrier with no resolved bones keeps
+/// the deterministic sling row.
 /// Caller checks room first (`hasRoomFor`).
 [[nodiscard]] bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
                                const unitdef::UnitDef& carrier,
