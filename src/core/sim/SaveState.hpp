@@ -64,6 +64,14 @@ struct SaveState {
     /// In-flight shots, when the match owns a projectile list. Null scenes (and
     /// old readers) keep none, exactly like `features` — v35.
     std::optional<std::vector<Projectile>> projectiles;
+    /// The path service's queues, counters and in-flight fields (`C-174`/`C-176`),
+    /// from v37 — null when the match has no path service, like `features`.
+    /// Requests rebind their grids through the caller's resolver on restore.
+    std::optional<PathService::Snapshot> pathService;
+    /// The intel history: retained contacts, seen-ever latches, brownout
+    /// recovery (`C-158`/`C-284`), from v37 — null when the match has no intel.
+    /// Grids re-stamp from unit positions on the first `update` after restore.
+    std::optional<Intel::Snapshot> intel;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);

@@ -489,6 +489,70 @@ void FlowField::stepUntil(std::span<const int> until, std::size_t budget) {
     }
 }
 
+void FlowField::stepToClosedCount(std::size_t target) {
+    // The frontier is deterministic — same grid, goal and overlay pop the same
+    // cells in the same order — so replaying the pop count reproduces the exact
+    // pre-save state, open-heap order included. `stepUntil` cannot express this:
+    // its early exit is keyed on requester cells, not on work done.
+    if (dead_ || stale_ || grid_ == nullptr) {
+        return;
+    }
+    const auto before = [](const PathSearchNode& a, const PathSearchNode& b) {
+        return a.f != b.f ? a.f > b.f : a.cell > b.cell;
+    };
+    static constexpr std::array<std::array<int, 2>, 8> kNeighbours{{
+        {{1, 0}}, {{-1, 0}}, {{0, 1}}, {{0, -1}},
+        {{1, 1}}, {{1, -1}}, {{-1, 1}}, {{-1, -1}},
+    }};
+    std::size_t closed = closedCount();
+    while (!open_.empty() && closed < target) {
+        std::pop_heap(open_.begin(), open_.end(), before);
+        const PathSearchNode node = open_.back();
+        open_.pop_back();
+        const std::size_t current = static_cast<std::size_t>(node.cell);
+        if (closed_[current] != 0) {
+            continue;
+        }
+        closed_[current] = 1;
+        ++closed;
+        const int x = node.cell % grid_->cellsX;
+        const int z = node.cell / grid_->cellsX;
+        for (const auto& step : kNeighbours) {
+            const int nx = x + step[0];
+            const int nz = z + step[1];
+            if (!standable(nx, nz)) {
+                continue;
+            }
+            const bool diagonal = step[0] != 0 && step[1] != 0;
+            if (diagonal && (!standable(x, z + step[1]) || !standable(x + step[0], z))) {
+                continue;
+            }
+            const std::size_t next = static_cast<std::size_t>(nz)
+                                       * static_cast<std::size_t>(grid_->cellsX)
+                                       + static_cast<std::size_t>(nx);
+            if (closed_[next] != 0) {
+                continue;
+            }
+            const Fx candidate = costs_[current]
+                                 + (diagonal ? kDiagonalCost : kFxOne)
+                                       * Fx::fromInt(grid_->divisorAt(nx, nz));
+            if (candidate >= costs_[next]) {
+                continue;
+            }
+            costs_[next] = candidate;
+            next_[next] = node.cell;
+            touched_[next] = 1;
+            open_.push_back(PathSearchNode{.f = candidate, .cell = static_cast<int>(next)});
+            std::push_heap(open_.begin(), open_.end(), before);
+        }
+    }
+}
+
+std::size_t FlowField::closedCount() const noexcept {
+    return static_cast<std::size_t>(
+        std::count(closed_.begin(), closed_.end(), std::uint8_t{1}));
+}
+
 int FlowField::escapeCell(int cell) const noexcept {
     if (!grid_->passableAt(cell % grid_->cellsX, cell / grid_->cellsX)) {
         return -1;

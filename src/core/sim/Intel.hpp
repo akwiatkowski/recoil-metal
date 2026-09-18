@@ -156,6 +156,9 @@ public:
     /// renderer uploads.
     [[nodiscard]] std::span<const std::uint16_t> counts() const noexcept { return counts_; }
 
+    /// Zeroes every count — the restore path's reset before emitters re-stamp.
+    void clear() noexcept { std::ranges::fill(counts_, std::uint16_t{0}); }
+
 private:
     int squaresX_ = 0;
     int squaresZ_ = 0;
@@ -343,6 +346,49 @@ public:
     /// number itself.
     [[nodiscard]] std::span<const TickCount> intelRecovery() const noexcept {
         return intelRecovery_;
+    }
+
+    /// The authoritative recon history in serializable form (SaveState v37):
+    /// retained contacts, the seen-ever latches and the brownout recovery
+    /// counts. Grids, placements and emitters are deliberately absent — the
+    /// next `update` re-stamps them from unit positions, and the script-bit
+    /// mask in the placement key makes even a toggled unit re-stamp correctly.
+    struct Snapshot {
+        std::vector<std::vector<RetainedRadarContact>> retained;
+        std::vector<std::vector<UnitId>> seenEver;
+        std::vector<TickCount> intelRecovery;
+        std::vector<UnitId> intelRecoveryUnit;
+    };
+
+    /// Captures the recon history a save must carry.
+    [[nodiscard]] Snapshot snapshot() const {
+        return {.retained = retainedRadarContacts_,
+                .seenEver = seenEver_,
+                .intelRecovery = intelRecovery_,
+                .intelRecoveryUnit = intelRecoveryUnit_};
+    }
+
+    /// Restores the recon history. Grids and placements stay empty until the
+    /// next `update` re-stamps them — the same state a fresh `configure` leaves.
+    void restore(const Snapshot& state) {
+        retainedRadarContacts_ = state.retained;
+        seenEver_ = state.seenEver;
+        intelRecovery_ = state.intelRecovery;
+        intelRecoveryUnit_ = state.intelRecoveryUnit;
+        // Whatever this object stamped before the restore belongs to a
+        // different match: clear the grids and the placement records so the
+        // next `update` withdraws nothing stale and re-stamps from the
+        // restored units. The grids are pure derived state — every emitter
+        // re-adds its squares on that pass.
+        for (IntelGrid& grid : grids_) {
+            grid.clear();
+        }
+        for (IntelGrid& grid : hiddenGrids_) {
+            grid.clear();
+        }
+        placements_.clear();
+        emitters_.clear();
+        hiddenEmitters_.clear();
     }
 
 private:

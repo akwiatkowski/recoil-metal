@@ -175,10 +175,9 @@ TEST_CASE("C-107: an incumbent holds an exact tie but loses to a nearer enemy",
 TEST_CASE("C-006/C-154: a resumed save continues the identical match", "[fa-persist]") {
     // The player-facing determinism contract: save mid-order, resume, and the
     // continued run is the same match — the guarantee retail's beat checksums
-    // exist to verify. Observable state is asserted per tick; the hash surface
-    // itself is asserted in the idle-save case below, because a mid-order save
-    // currently loses PathService's cached flow fields (hashed, not
-    // serialized — a recorded divergence, not a behaviour difference).
+    // exist to verify. Since v37 the path service's queues and in-flight flow
+    // fields ride the save, so the hash stream itself must match tick by tick,
+    // not just observable positions.
     Scenario live;
     const rm::unitdef::UnitDef tank = tankDef();
     const rm::sim::UnitId unit = live.spawn(tank, 300, 300);
@@ -201,7 +200,8 @@ TEST_CASE("C-006/C-154: a resumed save continues the identical match", "[fa-pers
         .random = runner.match.random.snapshot(),
         .pathServiceBeats = runner.pathService.serviceBeats(),
         .units = live.scene.store.snapshot(),
-        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match)}));
+        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+        .pathService = runner.pathService.snapshot()}));
     REQUIRE(saved);
 
     Scenario resumed;
@@ -212,16 +212,24 @@ TEST_CASE("C-006/C-154: a resumed save continues the identical match", "[fa-pers
                                   resumed.scene.commandersEver);
     continued.match.random = rm::sim::RandomStream{saved->random};
     continued.pathService.restoreServiceBeats(saved->pathServiceBeats);
+    // Requests rebind their movement grid through the same resolver the
+    // command intake uses — the twin scenario's grid is content-identical,
+    // so its fingerprint matches the saved one.
+    const auto gridFor = [&](rm::sim::UnitId unit) -> std::shared_ptr<const rm::sim::PassabilityGrid> {
+        if (!resumed.scene.store.alive(unit)) return nullptr;
+        const auto type = static_cast<std::size_t>(resumed.scene.store.typeAt(unit.index));
+        return std::shared_ptr<const rm::sim::PassabilityGrid>(
+            &continued.passability.gridFor(resumed.scene, type), [](const rm::sim::PassabilityGrid*) {});
+    };
+    continued.pathService.restore(*saved->pathService, gridFor);
     continued.match.pathService = &continued.pathService;
 
     // Every subsequent tick must produce identical observable state on both
     // timelines — the resumed match is not "close", it is the same match.
     for (int step = 0; step < 300; ++step) {
         INFO("continuation tick " << tick);
-        const auto a = live.scene.store.transforms()[unit.index];
-        const auto b = resumed.scene.store.transforms()[unit.index];
-        CHECK(a.x == b.x);
-        CHECK(a.z == b.z);
+        REQUIRE(rm::sim::hashMatch(live.scene.store, runner.match)
+                == rm::sim::hashMatch(resumed.scene.store, continued.match));
         (void)rm::app::advanceMatch(runner, tick, 0);
         (void)rm::app::advanceMatch(continued, tick, 0);
         ++tick;

@@ -461,7 +461,10 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     constexpr std::size_t kV34Bytes = sizeof(std::uint8_t) + sizeof(std::uint32_t);
     // V35 trails the projectile pool: one absent byte, null in this fixture.
     constexpr std::size_t kV35AbsentProjectileBytes = sizeof(std::uint8_t);
-    v7.resize(v7.size() - kV35AbsentProjectileBytes - kV34Bytes - kV33SiloQueueBytes - kV32LeadStepBytes - kV31CongestionBytes - kV30FocusBytes - kV28RetreatBytes - kV27PriorityBytes - kV26ProductionPausedBytes - kV25DualPoseBytes - kV24TurretPoseBytes - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
+    // V37 trails two more nullable sections — path service and intel — one
+    // absent byte each, both null in this fixture.
+    constexpr std::size_t kV37Bytes = 2 * sizeof(std::uint8_t);
+    v7.resize(v7.size() - kV37Bytes - kV35AbsentProjectileBytes - kV34Bytes - kV33SiloQueueBytes - kV32LeadStepBytes - kV31CongestionBytes - kV30FocusBytes - kV28RetreatBytes - kV27PriorityBytes - kV26ProductionPausedBytes - kV25DualPoseBytes - kV24TurretPoseBytes - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
     // v4 adds the offset collection, v5 adds DoNotTarget, v6 adds one automatic-target count
     // to every health record, and v7 adds attached motion plus the local height. Removing the

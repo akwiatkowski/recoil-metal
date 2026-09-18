@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -108,6 +109,61 @@ public:
     [[nodiscard]] std::uint64_t serviceBeats() const noexcept { return serviceBeats_; }
     /// Restores the match-owned beat clock before service resumes from a save state.
     void restoreServiceBeats(std::uint64_t beats) noexcept { serviceBeats_ = beats; }
+
+    /// The service's authoritative state in serializable form (SaveState v37).
+    /// Requests drop their grid pointer — the caller rebinds it on restore —
+    /// and each cached field reduces to (grid fingerprint, goal, overlay,
+    /// expansion count, stale flag): everything `FlowField` needs to replay
+    /// its deterministic frontier back to the pre-save state.
+    struct Snapshot {
+        struct SavedRequest {
+            UnitId unit{};
+            CommandId command = kInvalidCommandId;
+            int army = kNoArmy;
+            Fx fromX{};
+            Fx fromZ{};
+            Fx targetX{};
+            Fx targetZ{};
+        };
+        struct SavedField {
+            std::uint64_t grid = 0;
+            int goalX = 0;
+            int goalZ = 0;
+            std::uint64_t used = 0;
+            std::size_t closed = 0;
+            bool stale = false;
+            std::vector<std::uint8_t> blocked;
+        };
+        struct SavedActiveField {
+            int army = -1;
+            std::uint64_t gridFingerprint = 0;
+            int goalX = 0;
+            int goalZ = 0;
+            int startCell = -1;
+        };
+        std::vector<std::deque<SavedRequest>> admissions;
+        std::vector<std::deque<SavedRequest>> pending;
+        std::vector<std::optional<SavedRequest>> activeRequests;
+        std::vector<SavedActiveField> activeFields;
+        std::vector<std::size_t> retryWaits;
+        std::vector<std::size_t> failureCounts;
+        std::uint64_t serviceBeats = 0;
+        std::vector<SavedField> fields;
+        std::vector<std::pair<std::uint64_t, std::vector<std::uint8_t>>> blocked;
+        std::uint64_t fieldClock = 0;
+    };
+
+    /// Captures every queue, counter, cache and in-flight field — the state
+    /// `feedPathService` hashes, minus the grid pointers the caller rebinds.
+    [[nodiscard]] Snapshot snapshot() const;
+
+    /// Rebuilds the service from a snapshot. `gridFor` supplies each request's
+    /// passability grid by unit — the same content the request snapshotted, so
+    /// fingerprints match and restored fields keep sharing. Fields replay their
+    /// recorded expansion count before any request attaches, reproducing the
+    /// exact frontier the save interrupted.
+    void restore(const Snapshot& state,
+                 const std::function<std::shared_ptr<const PassabilityGrid>(UnitId)>& gridFor);
 
     /// How many fields the cache has ever built — the test hook for "N movers,
     /// one field".

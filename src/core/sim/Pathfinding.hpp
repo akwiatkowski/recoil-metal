@@ -191,6 +191,16 @@ public:
     /// armies can share one field and the step owes them all progress.
     void stepUntil(std::span<const int> until, std::size_t budget);
 
+    /// Expands until exactly `target` cells are closed — the save/resume replay:
+    /// a field's whole state is a pure function of (grid, goal, overlay,
+    /// expansions), so a restored field re-runs the deterministic Dijkstra the
+    /// same number of pops rather than serializing its frontier arrays.
+    void stepToClosedCount(std::size_t target);
+
+    /// How many cells the frontier has settled — the replay counter
+    /// `stepToClosedCount` restores toward.
+    [[nodiscard]] std::size_t closedCount() const noexcept;
+
     /// Whether `cell` (row-major index) is settled: reached once closed,
     /// unreachable once the frontier can never arrive — including a cell the
     /// grid or the overlay has always refused, which answers at once rather
@@ -212,6 +222,12 @@ public:
     /// field. A stale field stops spending budget and its owner re-attaches.
     [[nodiscard]] bool stale() const noexcept { return stale_; }
     void markStale() noexcept { stale_ = true; }
+
+    /// The overlay snapshot the field was built on — serialized so a restored
+    /// field replays against the same blocking it expanded with.
+    [[nodiscard]] const std::vector<std::uint8_t>& blocked() const noexcept {
+        return blocked_;
+    }
 
     [[nodiscard]] int goalX() const noexcept { return goalX_; }
     [[nodiscard]] int goalZ() const noexcept { return goalZ_; }

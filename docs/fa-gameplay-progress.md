@@ -217,7 +217,7 @@ excluded from the headline.
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 50% | 10% | 85% | **Analyzed 2026-09-18 (C-352–C-362):** full native AI object model enumerated — `CAiBrain`/`CPlatoon`/`CAiPersonality` script objects + per-unit attacker/navigator/builder/transport/silo/steering impls + per-army `CAiReconDBImpl`/`CInfluenceMap`; all managers pure Lua (no RTTI). `CArmyImpl` owns the stack (`+0x1ec` brain … `+0x21c` path queue; vtable[6]=GetInfluenceMap, vtable[7]=GetBrain). Threat grid: `float[14]` `SThreat` per army per cell, per-blip weighted `*ThreatLevel` contribution, 30-tick per-army decay stagger, region queries sum cells. Brain threads in three unnamed per-brain `CTaskStage`s; `ForkThread` links `CLuaTask` onto the object's Lua state. AIx cheats are Lua buffs; callback surface enumerated; `+0x38` is current-enemy `SimArmy*`. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 88% | 5% | 85% | **Analyzed 2026-09-18 (C-329–C-346, C-363–C-369):** every UI→sim mutation crosses the `0x112626c` command sink — `CMarshaller`'s 24-message vtable is the complete wire alphabet (`ProcessInfoPair` named commands, `IssueCommand`/`IssueFactoryCommand` UNITCOMMAND records, `LuaSimCallback`). Full RULEUCC→UNITCOMMAND map recovered (`0x827af0`); silo-build types 5/6 rewrite to named `("add","SiloBuildTactical|Nuke",bpid)`; `ProcessInfo` is an unfiltered forwarder; `UI_SelectByCategory` flags = `+add +nearest +idle +inview +goto +excludeengineers`; `GetUnitCommandData` = unioned CommandCaps(0-22)/ToggleCaps(0-8)/Categories+Buildable. **Implemented same day:** the five backed toggles (shield/jamming/intel/stealth/cloak) issue `ToggleScriptBit` through the semantic path with last-writer-wins upkeep (`C-350`); weapon/generic/special stay retail-accurate no-ops. |
 | [`FA-PRESENT`](#fa-present---rendering-effects-audio-and-lod) | Rendering, effects, audio, LOD | `WP-41`-`42` | 75% | 45% | 85% | **Analyzed 2026-09-18 (C-293–C-304, C-370–C-375):** 11 `IAniManipulator` subclasses + `MotorFallDown` sim-serialized, ticked solely from `Unit::MotionTick`; `CAniPoseBone` flag map (enabled/dirty/visibility/skip-interp); `CCollisionManipulator` fires `OnAnimTerrainCollision`/`OnNotAnimTerrainCollision`/`OnAnimCollision` (footfall into Unit.lua:2289); effects manager at `Sim+0x8C0` with per-army visibility-mask emission gating (`EmitIfVisible`/`CatchupEmit`); LOD is a cached screen-space pixel scale (`min(vpW,vpH) × LODScale × FOV factor`); `SAudioRequest` wire laid out, `CSimSoundManager` at `Sim+0x8C4`, `CUserSoundManager` drains per Frame; `SetPivot` is a dead attached-entity pivot API. |
-| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 77% | 30% | 90% | Wreck pool in save v23 and the in-flight projectile pool in v35, both with continued-hash proofs (tested); golden re-recorded for the P10.4 route change and MATCHing (`a85c690`). SaveState v36 adds the script-bit mask, upkeep flag and shield `rechargeRestoresFull`; command log v7 records the toggle bit. Next: intel/path state. |
+| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 80% | 30% | 90% | Wreck pool in save v23, in-flight projectiles in v35, and now the path service's queues, cached flow fields and intel recon history in v37 — a mid-order save resumes to an identical hash stream for 300 ticks (tested). SaveState v36 adds the script-bit mask, upkeep flag and shield `rechargeRestoresFull`; command log v7 records the toggle bit. Next: remaining intel grids and emitter state. |
 
 
 ## Claim-level test coverage (2026-09-18 audit)
@@ -267,8 +267,7 @@ ordering); transport cargo death has no 99% roll (C-197); ferry beacon is a posi
 not a spawned unit (C-199); `AboveWater*`/`BelowWater*` weapon flags are unparsed
 (C-321/322); `AutoSurfaceMode` is absent (C-203); guard attack picks nearest prey,
 not retail's longest-range-capable weapon (C-350); attached cargo absorbs shots
-harmlessly for its carrier (C-196); save/resume drops the path service's cached
-flow fields so a resumed match hashes differently (C-154); omni identifies contacts
+harmlessly for its carrier (C-196); omni identifies contacts
 where retail leaves them unidentified (C-280); cloak defeats radar/sonar where
 retail's is anti-vision only (C-277); ours uses temporal blip expiry where retail
 reaps by confirmed-dead/ally/last-reference (C-276, deliberate).
@@ -912,21 +911,22 @@ slice. Write tests on the retail corpus, run make test, update WP-41 and FA-PRES
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume
 
-**Current slice:** SaveState v35 retains all older readers and adds the in-flight
-projectile pool (nullable trailing section, every field the state hash walks),
-alongside the v23 wreck pool, the v16 economy/army envelope and the v17–v34
-additions. A mid-flight save carries units, shots and economies through the
-envelope and both sides hash identically for the rest of the flight (tested —
-`[save-state][skirmish]`). Restore owns the arrays and rebinds match spans.
+**Current slice:** SaveState v37 retains all older readers and adds the path
+service's queues, counters and in-flight flow fields plus the intel recon
+history (retained contacts, seen-ever latches, brownout recovery) as two
+nullable trailing sections. A saved FlowField reduces to its expansion count —
+the deterministic Dijkstra replays it on restore — and intel grids re-stamp
+from unit positions on the first update. A mid-order save now resumes to an
+identical hash stream for 300 ticks (tested — `[fa-persist]`).
 
-**Largest gap:** this is not yet a general mid-combat app save. Pending
-path searches, intel history, external input and the opponent VM remain outside
-the envelope. Replay is a separate compatibility boundary.
+**Largest gap:** this is not yet a general mid-combat app save. External input,
+the opponent VM and the intel grids/emitter placements remain outside the
+envelope. Replay is a separate compatibility boundary.
 
 ```text
-/goal Continue the pool-by-pool envelope: projectiles next, each with its continued-hash
-proof. Keep pending path searches and replay transport separate, preserve old readers,
-and update WP-44 and FA-PERSIST.
+/goal Continue the pool-by-pool envelope: intel grids and emitter placements next,
+each with its continued-hash proof. Keep external input and replay transport
+separate, preserve old readers, and update WP-44 and FA-PERSIST.
 ```
 
 ## Maintenance Contract

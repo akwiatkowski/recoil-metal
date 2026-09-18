@@ -102,6 +102,12 @@ constexpr std::uint32_t kVersion35 = 35;
 // inside each unit's health record. Older saves decode with every feature on
 // and maintenance consuming.
 constexpr std::uint32_t kVersion36 = 36;
+// 37: the path service's queues, counters and in-flight fields plus the intel
+// history (retained contacts, seen-ever latches, brownout recovery) as two
+// nullable trailing sections. A saved FlowField reduces to its expansion
+// count — the deterministic frontier replays on restore — and intel grids
+// re-stamp from unit positions on the first update.
+constexpr std::uint32_t kVersion37 = 37;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -953,6 +959,275 @@ bool readProjectiles(PayloadReader& r,
     return true;
 }
 
+// --- V37: path service and intel history --------------------------------------
+//
+// A saved FlowField is (grid fingerprint, goal, overlay, expansion count,
+// stale flag): the deterministic Dijkstra replays the count on restore and
+// reproduces the exact frontier — costs, next pointers, closed/touched maps
+// and the open-heap order the state hash feeds. Requests drop their grid
+// pointer; the caller rebinds it by unit on restore.
+
+void writeSavedRequest(PayloadWriter& w, const PathService::Snapshot::SavedRequest& r) {
+    writeId(w, r.unit);
+    w.u64(r.command);
+    w.i32(r.army);
+    w.i32(r.fromX.raw());
+    w.i32(r.fromZ.raw());
+    w.i32(r.targetX.raw());
+    w.i32(r.targetZ.raw());
+}
+
+[[nodiscard]] bool readSavedRequest(PayloadReader& r,
+                                    PathService::Snapshot::SavedRequest& out) {
+    std::uint64_t command{};
+    std::int32_t army{}, fx{}, fz{}, tx{}, tz{};
+    if (!readId(r, out.unit) || !r.u64(command) || !r.i32(army) || !r.i32(fx)
+        || !r.i32(fz) || !r.i32(tx) || !r.i32(tz)) {
+        return false;
+    }
+    out.command = static_cast<CommandId>(command);
+    out.army = army;
+    out.fromX = Fx::fromRaw(fx);
+    out.fromZ = Fx::fromRaw(fz);
+    out.targetX = Fx::fromRaw(tx);
+    out.targetZ = Fx::fromRaw(tz);
+    return true;
+}
+
+void writeRequestQueue(PayloadWriter& w,
+                       const std::deque<PathService::Snapshot::SavedRequest>& queue) {
+    w.count(queue.size());
+    for (const auto& request : queue) {
+        writeSavedRequest(w, request);
+    }
+}
+
+void writePathService(PayloadWriter& w, const std::optional<PathService::Snapshot>& state) {
+    w.u8(state.has_value());
+    if (!state) {
+        return;
+    }
+    w.count(state->admissions.size());
+    for (const auto& queue : state->admissions) writeRequestQueue(w, queue);
+    w.count(state->pending.size());
+    for (const auto& queue : state->pending) writeRequestQueue(w, queue);
+    w.count(state->activeRequests.size());
+    for (const auto& request : state->activeRequests) {
+        w.u8(request.has_value());
+        if (request) writeSavedRequest(w, *request);
+    }
+    w.count(state->activeFields.size());
+    for (const auto& field : state->activeFields) {
+        w.i32(field.army);
+        w.u64(field.gridFingerprint);
+        w.i32(field.goalX);
+        w.i32(field.goalZ);
+        w.i32(field.startCell);
+    }
+    w.count(state->retryWaits.size());
+    for (std::size_t wait : state->retryWaits) w.u64(wait);
+    w.count(state->failureCounts.size());
+    for (std::size_t count : state->failureCounts) w.u64(count);
+    w.u64(state->serviceBeats);
+    w.count(state->fields.size());
+    for (const auto& field : state->fields) {
+        w.u64(field.grid);
+        w.i32(field.goalX);
+        w.i32(field.goalZ);
+        w.u64(field.used);
+        w.u64(field.closed);
+        w.u8(field.stale ? 1 : 0);
+        w.count(field.blocked.size());
+        for (std::uint8_t cell : field.blocked) w.u8(cell);
+    }
+    w.count(state->blocked.size());
+    for (const auto& [fingerprint, layer] : state->blocked) {
+        w.u64(fingerprint);
+        w.count(layer.size());
+        for (std::uint8_t cell : layer) w.u8(cell);
+    }
+    w.u64(state->fieldClock);
+}
+
+[[nodiscard]] bool readRequestQueue(
+    PayloadReader& r, std::deque<PathService::Snapshot::SavedRequest>& queue) {
+    std::size_t count{};
+    if (!r.count(count, 28)) return false;
+    for (std::size_t i = 0; i < count; ++i) {
+        PathService::Snapshot::SavedRequest request;
+        if (!readSavedRequest(r, request)) return false;
+        queue.push_back(request);
+    }
+    return true;
+}
+
+[[nodiscard]] bool readPathService(PayloadReader& r,
+                                   std::optional<PathService::Snapshot>& state) {
+    bool present{};
+    if (!readFlag(r, present)) return false;
+    if (!present) {
+        state.reset();
+        return true;
+    }
+    state.emplace();
+    std::size_t armies{};
+    if (!r.count(armies, 4)) return false;
+    state->admissions.resize(armies);
+    for (auto& queue : state->admissions) {
+        if (!readRequestQueue(r, queue)) return false;
+    }
+    if (!r.count(armies, 4)) return false;
+    state->pending.resize(armies);
+    for (auto& queue : state->pending) {
+        if (!readRequestQueue(r, queue)) return false;
+    }
+    if (!r.count(armies, 4)) return false;
+    state->activeRequests.resize(armies);
+    for (auto& request : state->activeRequests) {
+        bool has{};
+        if (!readFlag(r, has)) return false;
+        if (has) {
+            PathService::Snapshot::SavedRequest saved;
+            if (!readSavedRequest(r, saved)) return false;
+            request = saved;
+        }
+    }
+    std::size_t fields{};
+    if (!r.count(fields, 24)) return false;
+    state->activeFields.resize(fields);
+    for (auto& field : state->activeFields) {
+        if (!r.i32(field.army) || !r.u64(field.gridFingerprint) || !r.i32(field.goalX)
+            || !r.i32(field.goalZ) || !r.i32(field.startCell)) {
+            return false;
+        }
+    }
+    std::size_t counters{};
+    if (!r.count(counters, 8)) return false;
+    state->retryWaits.resize(counters);
+    for (std::size_t& wait : state->retryWaits) {
+        std::uint64_t value{};
+        if (!r.u64(value)) return false;
+        wait = static_cast<std::size_t>(value);
+    }
+    if (!r.count(counters, 8)) return false;
+    state->failureCounts.resize(counters);
+    for (std::size_t& count : state->failureCounts) {
+        std::uint64_t value{};
+        if (!r.u64(value)) return false;
+        count = static_cast<std::size_t>(value);
+    }
+    if (!r.u64(state->serviceBeats)) return false;
+    if (!r.count(fields, 32)) return false;
+    state->fields.resize(fields);
+    for (auto& field : state->fields) {
+        std::uint64_t closed{};
+        std::uint8_t stale{};
+        if (!r.u64(field.grid) || !r.i32(field.goalX) || !r.i32(field.goalZ)
+            || !r.u64(field.used) || !r.u64(closed) || !r.u8(stale) || stale > 1) {
+            return false;
+        }
+        field.closed = static_cast<std::size_t>(closed);
+        field.stale = stale != 0;
+        std::size_t cells{};
+        if (!r.count(cells, 1)) return false;
+        field.blocked.resize(cells);
+        for (std::uint8_t& cell : field.blocked) {
+            if (!r.u8(cell)) return false;
+        }
+    }
+    std::size_t layers{};
+    if (!r.count(layers, 12)) return false;
+    state->blocked.resize(layers);
+    for (auto& [fingerprint, layer] : state->blocked) {
+        if (!r.u64(fingerprint)) return false;
+        std::size_t cells{};
+        if (!r.count(cells, 1)) return false;
+        layer.resize(cells);
+        for (std::uint8_t& cell : layer) {
+            if (!r.u8(cell)) return false;
+        }
+    }
+    return r.u64(state->fieldClock);
+}
+
+void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state) {
+    w.u8(state.has_value());
+    if (!state) {
+        return;
+    }
+    w.count(state->retained.size());
+    for (const auto& contacts : state->retained) {
+        w.count(contacts.size());
+        for (const RetainedRadarContact& contact : contacts) {
+            writeId(w, contact.unit);
+            w.i32(contact.x.raw());
+            w.i32(contact.z.raw());
+            w.u8(contact.maybeDead ? 1 : 0);
+            w.u32(contact.deadTicks);
+        }
+    }
+    w.count(state->seenEver.size());
+    for (const auto& seen : state->seenEver) {
+        w.count(seen.size());
+        for (UnitId unit : seen) writeId(w, unit);
+    }
+    w.count(state->intelRecovery.size());
+    for (TickCount count : state->intelRecovery) w.u32(count);
+    w.count(state->intelRecoveryUnit.size());
+    for (UnitId unit : state->intelRecoveryUnit) writeId(w, unit);
+}
+
+[[nodiscard]] bool readIntel(PayloadReader& r, std::optional<Intel::Snapshot>& state) {
+    bool present{};
+    if (!readFlag(r, present)) return false;
+    if (!present) {
+        state.reset();
+        return true;
+    }
+    state.emplace();
+    std::size_t alliances{};
+    if (!r.count(alliances, 4)) return false;
+    state->retained.resize(alliances);
+    for (auto& contacts : state->retained) {
+        std::size_t count{};
+        if (!r.count(count, 17)) return false;
+        contacts.resize(count);
+        for (RetainedRadarContact& contact : contacts) {
+            std::int32_t x{}, z{};
+            std::uint8_t dead{};
+            if (!readId(r, contact.unit) || !r.i32(x) || !r.i32(z) || !r.u8(dead)
+                || dead > 1 || !r.u32(contact.deadTicks)) {
+                return false;
+            }
+            contact.x = Fx::fromRaw(x);
+            contact.z = Fx::fromRaw(z);
+            contact.maybeDead = dead != 0;
+        }
+    }
+    if (!r.count(alliances, 4)) return false;
+    state->seenEver.resize(alliances);
+    for (auto& seen : state->seenEver) {
+        std::size_t count{};
+        if (!r.count(count, 8)) return false;
+        seen.resize(count);
+        for (UnitId& unit : seen) {
+            if (!readId(r, unit)) return false;
+        }
+    }
+    std::size_t slots{};
+    if (!r.count(slots, 4)) return false;
+    state->intelRecovery.resize(slots);
+    for (TickCount& count : state->intelRecovery) {
+        if (!r.u32(count)) return false;
+    }
+    if (!r.count(slots, 8)) return false;
+    state->intelRecoveryUnit.resize(slots);
+    for (UnitId& unit : state->intelRecoveryUnit) {
+        if (!readId(r, unit)) return false;
+    }
+    return true;
+}
+
 void writeRedirects(PayloadWriter& w, std::span<const MissileRedirect> redirects) {
     w.count(redirects.size());
     for (const MissileRedirect& value : redirects) {
@@ -1634,6 +1909,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion34) writeArmyStats(payloadWriter, state.armyStats);
     if (version >= kVersion34) writeSelfDestructs(payloadWriter, state.selfDestructs);
     if (version >= kVersion35) writeProjectiles(payloadWriter, state.projectiles);
+    if (version >= kVersion37) writePathService(payloadWriter, state.pathService);
+    if (version >= kVersion37) writeIntel(payloadWriter, state.intel);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -1676,7 +1953,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion29 && version != kVersion30
                && version != kVersion31 && version != kVersion32
                && version != kVersion33 && version != kVersion34 && version != kVersion35
-               && version != kVersion36)
+               && version != kVersion36 && version != kVersion37)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -1746,6 +2023,10 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion34 && !readSelfDestructs(reader, selfDestructs)) return std::nullopt;
     std::optional<std::vector<Projectile>> projectiles;
     if (version >= kVersion35 && !readProjectiles(reader, projectiles)) return std::nullopt;
+    std::optional<PathService::Snapshot> pathService;
+    if (version >= kVersion37 && !readPathService(reader, pathService)) return std::nullopt;
+    std::optional<Intel::Snapshot> intel;
+    if (version >= kVersion37 && !readIntel(reader, intel)) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
@@ -1756,7 +2037,9 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        .captures = std::move(captures), .armyStats = std::move(armyStats),
                        .selfDestructs = std::move(selfDestructs),
                        .features = std::move(features),
-                       .projectiles = std::move(projectiles)};
+                       .projectiles = std::move(projectiles),
+                       .pathService = std::move(pathService),
+                       .intel = std::move(intel)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -1781,7 +2064,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion36);
+    return rm::sim::encode(state, kVersion37);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {
