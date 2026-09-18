@@ -11,6 +11,7 @@
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
 #include "core/sim/Movement.hpp"
+#include "core/sim/RandomStream.hpp"
 #include "core/unit/UnitDef.hpp"
 
 #include <array>
@@ -105,6 +106,26 @@ struct Projectile {
     /// position (`0x6a26d9`). Both water keys read it, so a shot crossing the
     /// surface this tick answers next tick, not this one.
     bool inWater = false;
+
+    /// `C-171`'s weave, copied from the projectile blueprint at launch:
+    /// `zigZagAmplitudeElmos` is `MaxZigZag` — how far the shot weaves off its
+    /// course line — and `zigZagPeriodTicks` is `ZigZagFrequency` in ticks.
+    /// `zigZagNextRoll` counts down to the next direction re-roll; the three
+    /// offsets are the current roll's uniform draws in [-1, 1].
+    Fx zigZagAmplitudeElmos{};
+    int zigZagPeriodTicks = 0;
+    int zigZagNextRoll = 0;
+    Fx zigZagOffsetX{};
+    Fx zigZagOffsetY{};
+    Fx zigZagOffsetZ{};
+    /// The weave displacement already folded into `position` — subtracted
+    /// before each tick's new displacement so the oscillation returns the
+    /// shot to its course at every roll boundary rather than random-walking.
+    std::array<Fx, 3> zigZagApplied{};
+
+    /// Where the shot was aimed at launch — the taper's `dist` for a shot
+    /// with no live `guidanceTarget` (C-171: `min(1, dist/maxZigZag)`).
+    std::array<Fx, 3> aimPoint{};
 
     /// Whether it arcs. A flat shot travels in a straight line; an arced one is pulled
     /// down by gravity, which is what makes it clear a hill.
@@ -374,7 +395,8 @@ void tickShields(UnitStore& store, const UnitCatalog& catalog,
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
                         EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr,
-                        std::span<MissileRedirect> redirects = {}, FeatureStore* features = nullptr);
+                        std::span<MissileRedirect> redirects = {}, FeatureStore* features = nullptr,
+                        RandomStream* random = nullptr);
 
 /// Gravity's pull on an arced shot, in elmos per tick per tick.
 ///

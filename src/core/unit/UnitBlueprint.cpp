@@ -890,6 +890,11 @@ loadProjectileTraits(std::string_view source) {
         // it outright there. Both live in the projectile's `Physics` block.
         .stayUnderwater = physics && flagAt(*physics, "StayUnderwater"),
         .destroyOnWater = physics && flagAt(*physics, "DestroyOnWater"),
+        // `C-171`'s weave: `MaxZigZag` is the amplitude in ogrids,
+        // `ZigZagFrequency` the seconds between direction re-rolls. Both live
+        // in `Physics`; a tactical missile authors 5 / 0.2.
+        .maxZigZagElmos = physics ? numberOr(*physics, "MaxZigZag", 0.0f) * scmap::kElmosPerOgrid : 0.0f,
+        .zigZagPeriodSeconds = physics ? numberOr(*physics, "ZigZagFrequency", 0.0f) : 0.0f,
     };
 }
 

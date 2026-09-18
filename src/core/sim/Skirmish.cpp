@@ -668,7 +668,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         advanceProjectiles(*match.projectiles, store, match.armies, terrain, rate,
                            match.events, &catalog,
                            match.redirects != nullptr ? std::span<MissileRedirect>{*match.redirects}
-                                                      : std::span<MissileRedirect>{}, match.features);
+                                                      : std::span<MissileRedirect>{}, match.features,
+                           &match.random);
     }
 
     // 4. The dead, then their explosions, then C-210's defeat poll. A commander that died to a

@@ -209,7 +209,7 @@ excluded from the headline.
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 65% | 30% | 85% | **Analyzed 2026-09-18 (C-320-C-328):** `CalcMoveWater` is the shared `CalcMoveCommon` plus dive/surface stepper, `speed²>1e-6` orientation gate, and platform→water `OnLayerChange`; weapon water gating fully mapped (firer caps vs target layer, fire-only vs own `Elevation`, targets-only as Seabed-only bone test, `FlyInWater` hard reject); `AutoSurfaceMode` defaults OFF and only `CUnitAttackTargetTask` consumes it; spawn layer computed by `0x631800`; shoreline/waves render-side only; naval pathing is `CAiNavigatorLand` + `gpg::HaStar` on per-footprint-spec grids. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 99% | 85% | 90% | Universal leading in (`55c31de`, `06390d1`) — radar keeps its error; manual silo-launch orders landed under FA-MISSILES; the C-157 engineer reclaim/capture target exemption is wired (`IsTargetExempt` deferred). |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 87% | 47% | 95% | Full cargo stack in and retail-validated: capacity/attach-cost from shipped blueprints (UEA0107: 10 slots, class2=2, class3=4), load/unload, ferry, auto-embark, carrier-death (`c538105`). Attach-bone retail observation landed (`2c3e7f8`, C-198): cargo hangs from Attachpoint bones. Next is the unload beacon's exact retail semantics. |
-| [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 70% | 45% | 95% | Manual missile-launch orders in with UI wiring and tests (`8d33735`); interceptor lead landed earlier; the silo build queue with assist links is in (`f41445e`). Next is tactical/nuke UI polish. |
+| [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 70% | 45% | 95% | Manual missile-launch orders in with UI wiring and tests (`8d33735`); interceptor lead landed earlier; the silo build queue with assist links is in (`f41445e`). Strategic-nuke silos now launch — `siloLaunched()` asked `damage > 0` and a nuke's authored `Damage` is 0 (the warhead is `NukeInner/OuterRingDamage`), so the gate now asks `harmful()`. C-171 zig-zag weave implemented: `MaxZigZag`/`ZigZagFrequency` parsed, serial re-roll from the match stream, tapered triangle oscillation. Remaining: returned-missile friendly fire, `0x005DEAD0` name. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 82% | 55% | 85% | Ordinary bubbles and personal UnitShield boxes share the collidable shield path; `CollisionCenter*`/`CollisionSize*` drive box containment and sweeps. The shield script-bit toggle is in (`C-350`): off stops absorbing and regenerating while keeping `OffHealth`; on gates absorption for the recharge time and resumes at kept health (`rechargeRestoresFull`, SaveState v36). Remaining: owner's armour multiplier (C-143), PersonalBubble and transport-shield boundary. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-omni-cloak-stealth-jamming) | Vision, radar, sonar, omni, cloak, stealth, jamming | `WP-33` | 67% | 35% | 85% | **Analyzed 2026-09-18 (C-276–C-285):** no temporal blip expiry; stale contacts die by confirmed-dead/ally/last-reference reaping. Counter-intel is a post-coverage flag filter (omni unmaskable; cloak anti-vision; stealth anti-radar/sonar; fields projected as grids). Sonar detects submerged, water-vision identifies. Jammer fakes are fixed random offsets that track the jammer. Recon DBs are per-army, intel sharing is flag-level ally OR. Lua `OnIntelChange` and `OnDetectedBy` events mapped; `IntelWatchThread` disables intel on brownout. The intel/stealth/cloak script-bit toggles are in (`C-350`): the placement cache keys on the script-bit mask, so a toggle withdraws senses and fields without waiting for the emitter to move. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 55% | 35% | 85% | **Analyzed 2026-09-18 (C-251–C-265, C-376–C-381):** WP-34 fully specified — `EnhanceTask.lua` state machine (Stopping→Enhancing→Done), `GetResourceConsumed`-driven progress, `GetConstructEconomyModel` cost, slot/prereq rules, UI replace = two `UNITCOMMAND_Script` clear=true commands (`XxxRemove` then new) → `ClearCommandQueue` `0x006f4d50`, cancellation = `OnWorkFail` no refund, registry = `SimUnitEnhancements` in schook `SimSync.lua`, mutation = per-script `CreateEnhancement` overrides. WP-35 closed: `OnBrainUnitVeterancyLevel` scenario triggers only, Regen buffs overwrite direct `SetRegenRate`, zero native veterancy surface. WP-36: all experimental abilities shipped Lua — GC claw is `TractorThread` slider+`AttachBoneTo`+`Kill` (native-drag refuted), Megalith eggs via `CConstructionEggUnit`, Paragon deficit loop, Ythotha→Othuy spawn, Salem transform, Scathis rotators. |
@@ -598,7 +598,15 @@ FA-WEAPONS.
 **Largest gap:** interception accounting and manual launch orders now run (`8d33735`, with
 UI wiring and tests), and the silo build queue landed (`f41445e`): retail's per-unit FIFO
 (`CAiSiloBuildImpl+0x20`, `C-081`/`C-241`) with auto-refill, manual SiloBuild commands, and
-SaveState v33. Strategic-nuke silos, the counter command, and guidance remain absent.
+SaveState v33. Strategic-nuke silos now launch too — `siloLaunched()` measured harm by
+`damage > 0` alone, and a nuke's authored `Damage` is 0 (its warhead is
+`NukeInner/OuterRingDamage`), so every strategic silo was refused at the door; the gate now
+asks `harmful()`. Guidance's zig-zag weave is implemented (`C-171`): `MaxZigZag`/
+`ZigZagFrequency` parse into the projectile traits, three uniforms re-roll per period from
+the match stream (serial, before the fork-joined flight), and a per-axis triangle
+oscillation tapered by `min(1, dist/maxZigZag)` displaces the shot and returns it to course
+at each boundary. Remaining: the returned-missile friendly-fire channel and the third
+`HasSiloAmmo` caller's name.
 
 **Current slice:** `C-095` gives projectile-target weapons a separate nearest-hostile,
 in-range 2-D acquisition path with `max(MaxRadius, MaxRadius * TrackingRadius)` reach; it neither
@@ -627,10 +635,12 @@ unnamed; the returned missile cannot yet damage its source side (no friendly-fir
 the cooldown may be 10 or 11 ticks (`WaitSeconds` runs n·10+1).
 
 ```text
-/goal Advance FA-MISSILES by implementing the missile build queue, with exact
-ART-E001 locators and counterevidence. Write failing tests first (interception, flare,
-redirect and manual-launch behavior stay green), run make test and make verify, record
-strategic-nuke silo and counter-command boundaries in WP-29, and refresh FA-MISSILES.
+/goal Advance FA-MISSILES by closing the remaining WP-29 boundaries, with exact
+ART-E001 locators and counterevidence: the returned-missile friendly-fire channel
+(a redirected shot cannot yet damage its source side) and the third `HasSiloAmmo`
+caller at `0x005DEAD0`. Write failing tests first (interception, flare, redirect,
+manual-launch and zig-zag behavior stay green), run make test and make verify, and
+refresh FA-MISSILES.
 ```
 
 ### FA-DAMAGE - Damage, Death, And Shields

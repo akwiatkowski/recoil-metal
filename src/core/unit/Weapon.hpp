@@ -165,6 +165,13 @@ struct Weapon {
         /// no damage. 305 shipped `_proj.bp` files set it: most surface
         /// ordnance dies at the waterline rather than flying on submerged.
         bool destroyOnWater = false;
+        /// `Physics.MaxZigZag` (C-171): the zig-zag amplitude in ogrids —
+        /// how far the shot weaves off its course line. Negative falls back
+        /// to the blueprint value, so 0 means "no authored weave".
+        float maxZigZagElmos = 0.0f;
+        /// `Physics.ZigZagFrequency` (C-171): seconds between re-rolls of the
+        /// weave direction — three uniforms from the sim RNG each period.
+        float zigZagPeriodSeconds = 0.0f;
     } projectileTraits;
 
     /// The VFS locator whose blueprint supplies `projectileTraits`.
@@ -533,9 +540,12 @@ struct Weapon {
     /// launches — `CommandKind::MissileLaunch`. The tactical and strategic silos are the
     /// corpus's shape (`RULEUCC_Tactical`/`RULEUCC_Nuke`); an interceptor is counted too
     /// but fires AT missiles on its own acquisition, so `targetsProjectiles` keeps it out
-    /// of the launch order's reach.
+    /// of the launch order's reach. `harmful()` rather than `damage > 0`: a nuke's
+    /// authored `Damage` is 0 — its warhead is `NukeInner/OuterRingDamage` — and a
+    /// damage-only test would refuse every strategic silo in the corpus.
     [[nodiscard]] bool siloLaunched() const noexcept {
-        return manuallyFired() && countedProjectile && !targetsProjectiles;
+        return role != WeaponRole::Death && manualFire && !enabledByEnhancement
+            && maxRange > sim::Fx{} && harmful() && countedProjectile && !targetsProjectiles;
     }
 
     /// Ticks between shots at a given rate, never less than one.

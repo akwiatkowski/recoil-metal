@@ -2565,7 +2565,11 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
         shot.accelerationPerTickSquared = rate.perTick(weapon.projectileTraits.accelerationElmosPerSecond2)
             / Fx::fromInt(static_cast<int>(rate.ticksPerSecond()));
         shot.maxSpeedPerTick = rate.perTick(weapon.projectileTraits.maxSpeedElmosPerSecond);
+        shot.zigZagAmplitudeElmos = fxFromFloat(weapon.projectileTraits.maxZigZagElmos);
+        shot.zigZagPeriodTicks = static_cast<int>(
+            rate.ticks(seconds(weapon.projectileTraits.zigZagPeriodSeconds)));
     }
+    shot.aimPoint = to;
     // The mount's posed muzzle when the caller resolved one — the point the barrel
     // actually points from — and otherwise the model's authored muzzle when the
     // app set one, the old constant when not: Weapon::muzzleHeight's contract.
@@ -3078,6 +3082,38 @@ inline constexpr Fx kStayUnderwaterClampElmos = Fx::fromRatio(2, 25);
         shot.position[axis] += averageVelocity;
     }
 
+    // `C-171`'s weave: a per-axis triangle oscillation — out to the rolled
+    // offset at mid-period, back to the course line at the boundary — tapered
+    // by `min(1, dist/maxZigZag)` measured to the live guidance target, else
+    // the launch aim. The applied displacement is subtracted first so the
+    // oscillation never accumulates: a bounded weave, not a random walk.
+    if (shot.zigZagAmplitudeElmos > Fx{} && shot.zigZagPeriodTicks > 0) {
+        const std::array<Fx, 3> anchor =
+            store.alive(shot.guidanceTarget)
+                ? positionOf(store.transforms()[shot.guidanceTarget.index])
+                : shot.aimPoint;
+        const Fx dist = fxHypot(fxHypot(anchor[0] - shot.position[0],
+                                        anchor[2] - shot.position[2]),
+                                anchor[1] - shot.position[1]);
+        const Fx taper = std::min(Fx::fromInt(1), dist / shot.zigZagAmplitudeElmos);
+        // Triangle phase: 0→1 over the first half-period, 1→0 over the
+        // second — the shot is back on course exactly when the next roll
+        // fires, so the boundary is continuous.
+        const int elapsed = shot.zigZagPeriodTicks - shot.zigZagNextRoll;
+        const int half = std::max(1, shot.zigZagPeriodTicks / 2);
+        const Fx phase = elapsed <= half
+            ? Fx::fromInt(elapsed) / Fx::fromInt(half)
+            : Fx::fromInt(shot.zigZagPeriodTicks - elapsed) / Fx::fromInt(half);
+        const Fx scale = shot.zigZagAmplitudeElmos * taper * phase;
+        const std::array<Fx, 3> weave{shot.zigZagOffsetX * scale,
+                                      shot.zigZagOffsetY * scale,
+                                      shot.zigZagOffsetZ * scale};
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            shot.position[axis] += weave[axis] - shot.zigZagApplied[axis];
+        }
+        shot.zigZagApplied = weave;
+    }
+
     // `StayUnderwater` (`C-204`, `0x006a2f31`): while the shot is in the water
     // its position Y is pinned just under the waterline — POSITION only, never
     // velocity, so a torpedo keeps its speed and simply cannot climb out.
@@ -3107,6 +3143,7 @@ struct StagedFlight {
     int ticksRemaining = 0;
     ImpactType pendingImpact = ImpactType::Invalid;
     bool inWater = false;
+    std::array<Fx, 3> zigZagApplied{};
     bool computed = false;
 };
 
@@ -3232,7 +3269,8 @@ void resolvePendingImpact(Projectile& shot, UnitStore& store,
 void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                         std::span<const Army> armies, const Terrain& terrain, TickRate rate,
                         EventQueue* events, const UnitCatalog* catalog,
-                        std::span<MissileRedirect> redirects, FeatureStore* features) {
+                        std::span<MissileRedirect> redirects, FeatureStore* features,
+                        RandomStream* random) {
     const Fx gravityPerTickSquared = projectileGravityPerTickSquared(rate);
     // Redirect rate cycles tick down whether or not a missile arrives — a unit that just
     // spent its redirect watches for exactly one full cycle (`C-088` MissileRedirect).
@@ -3247,6 +3285,34 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
         starts.push_back({.position = shot.position,
                           .inFlight = shot.ticksRemaining > 0
                                       && shot.pendingImpact == ImpactType::Invalid});
+    }
+
+    // `C-171`'s weave re-roll, SERIAL and in list order before any segment
+    // flies: the draws come from the match's one stream, and a parallel lane
+    // cannot consume them deterministically. A shot whose period elapsed
+    // draws three uniforms in [-1, 1) — the offset it walks toward over the
+    // next period. The weave itself is applied in `advanceFlight`.
+    if (random != nullptr) {
+        for (Projectile& shot : projectiles) {
+            if (shot.ticksRemaining <= 0 || shot.zigZagAmplitudeElmos <= Fx{}
+                || shot.zigZagPeriodTicks <= 0) {
+                continue;
+            }
+            if (shot.zigZagNextRoll > 0) {
+                --shot.zigZagNextRoll;
+                continue;
+            }
+            shot.zigZagNextRoll = shot.zigZagPeriodTicks;
+            const auto uniform = [&]() {
+                // [0, 2^32) → [-1, 1) in fixed point: top 16 bits doubled
+                // minus one full fraction.
+                return Fx::fromRaw(static_cast<std::int32_t>(random->next() >> 16) * 2
+                                   - (1 << kFxFractionalBits));
+            };
+            shot.zigZagOffsetX = uniform();
+            shot.zigZagOffsetY = uniform();
+            shot.zigZagOffsetZ = uniform();
+        }
     }
 
     // FLIGHT, fork-joined in segments (ADR-036/D15). A flying shot's sweep
@@ -3289,6 +3355,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                     .ticksRemaining = flying.ticksRemaining,
                     .pendingImpact = flying.pendingImpact,
                     .inWater = flying.inWater,
+                    .zigZagApplied = flying.zigZagApplied,
                     .computed = true,
                 };
             }
@@ -3345,6 +3412,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
             shot.guidanceTarget = flight.guidanceTarget;
             shot.ticksRemaining = flight.ticksRemaining;
             shot.inWater = flight.inWater;
+            shot.zigZagApplied = flight.zigZagApplied;
 
             // Redirect AFTER flight, BEFORE the outcome — the serial pass's
             // order. Its decision reads the staged position and lifetime just
