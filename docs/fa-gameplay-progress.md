@@ -110,18 +110,20 @@ Equal-weight average across the 20 gameplay subsystem rows below; `FA-FOUND` is 
 ```text
 Implemented       [##############------] about 68%
 Retail-validated  [#######-------------] about 37%
-Retail-analyzed   [###############-----] about 73%
+Retail-analyzed   [###############-----] about 74%
 ```
 
-The row estimates average 68.05%, 37.25% and 73.00%, respectively. The 2026-09-18
+The row estimates average 68.05%, 37.25% and 74.00%, respectively. The 2026-09-18
 analysis pass raised `FA-CONTENT` (60→85 analyzed) with the full VFS mount order,
-blueprint ingestion, and map bootstrap read (`C-266`–`C-275`), and earlier
-`FA-PROGRESS` (40→80 analyzed) on the full enhancement lifecycle (`C-251`–`C-265`).
+blueprint ingestion, and map bootstrap read (`C-266`–`C-275`), `FA-INTEL` (60→85
+analyzed) on the full counter-intel/jammer/stale-contact lifecycle (`C-276`–`C-285`),
+and earlier `FA-PROGRESS` (40→80 analyzed) on the full enhancement lifecycle
+(`C-251`–`C-265`).
 The 2026-09-14 refresh restores the `FA-LUA`, `FA-AIR` and `FA-INTEL` rows the table had dropped
 (their detail sections never left; scores are estimated from those sections), and
 raises `FA-TRANSPORT` (45→85 implemented, 5→45 validated) on the landed cargo/ferry/
 auto-embark stack and its shipped-blueprint validation, `FA-NAVY` (45→60, 15→25)
-on depth-aware navigation, `FA-MISSILES` (60→70) on manual launch orders,
+on depth-aware navigation, `FA-MISSILES` (60→70) on manual missile-launch orders,
 `FA-WEAPONS` validated (80→85) on universal leading, `FA-LAND` (90→95) on the
 completed P10 pathfinding run, `FA-UI` (80→85) and `FA-PRESENT` (75→85) on the
 post-processing and interface batches, and `FA-PERSIST` validated (25→30) on the
@@ -131,8 +133,8 @@ Only **1 of 45 work packages**, `WP-15` economy, currently passes the complete r
 confirmation gate. The three percentages must never be combined: understanding absent behavior
 does not make the game more complete.
 
-The independent evidence-state count is **34 of 45 WPs at `Analyzed`**. That 76% inventory count
-and the 73% equal-subsystem estimate answer different questions and are shown together to keep the
+The independent evidence-state count is **33 of 45 WPs at `Analyzed`**. That 73% inventory count
+and the 74% equal-subsystem estimate answer different questions and are shown together to keep the
 headline honest.
 
 **Current implementation critical path:**
@@ -182,8 +184,7 @@ excluded from the headline.
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 99% | 85% | 90% | Universal leading in (`55c31de`, `06390d1`) — radar keeps its error; manual silo-launch orders landed under FA-MISSILES. Next is the C-157 engineer reclaim/capture target-exemption wiring. |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 85% | 45% | 95% | Full cargo stack in and retail-validated: capacity/attach-cost from shipped blueprints (UEA0107: 10 slots, class2=2, class3=4), load/unload, ferry, auto-embark, carrier-death (`c538105`). Next is attach-bone retail observation and the unload beacon's exact retail semantics. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 70% | 45% | 95% | Manual missile-launch orders in with UI wiring and tests (`8d33735`); interceptor lead landed earlier. Next is the missile build queue and tactical/nuke UI. |
-| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 82% | 55% | 85% | PersonalBubble shelters owner-only (specified-from-name, corpus-pinned absent); TransportShield parses as ordinary pending cargo source. Next is transport cargo coverage. |
-| [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 45% | 30% | 60% | Depth-gated senses and sonar acquisition in (`2c00d76`); radar position error drives automatic targeting (`06390d1`). Temporal expiry, cloak, jamming, sonar memory stay open. |
+| [`FA-INTEL`](#fa-intel---vision-radar-sonar-omni-cloak-stealth-jamming) | Vision, radar, sonar, omni, cloak, stealth, jamming | `WP-33` | 60% | 30% | 85% | **Analyzed 2026-09-18 (C-276–C-285):** no temporal blip expiry; stale contacts die by confirmed-dead/ally/last-reference reaping. Counter-intel is a post-coverage flag filter (omni unmaskable; cloak anti-vision; stealth anti-radar/sonar; fields projected as grids). Sonar detects submerged, water-vision identifies. Jammer fakes are fixed random offsets that track the jammer. Recon DBs are per-army, intel sharing is flag-level ally OR. Lua `OnIntelChange` and `OnDetectedBy` events mapped; `IntelWatchThread` disables intel on brownout. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 45% | 30% | 80% | **Analyzed 2026-09-18 (C-251–C-265):** full enhancement lifecycle is shipped-Lua on the CUnitScriptTask bridge — two-command replace protocol, stationary+unpaused task, funded-drain progress, no refund, SimUnitEnhancements bookkeeping, paid pseudo-enhancement removal, the BuildCostMass=BuildCostEnergy retail bug; SetUpgradedTo/QueueNotifyUpgrade proven to belong to structure upgrades. Veterancy brain callback + regen last-writer-wins closed; zero native surface reconfirmed. WP-36 catalog complete — all bespoke abilities Lua except the Colossus tractor claw (native, bounded). Next: the Lua-side contract implementation (SetUpgradedTo is out; EnhanceTask host + CreateEnhancement overrides). |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 15% | 45% | Crater path traced: retail scorch is visual-only (splat/decal scale split, no height/type/pathing effect); next is non-lethal impact scorch records. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 50% | 10% | 30% | Must-scout requests, unknown-threat queues and continuous air flybys are in with headless cover; next is High/LowPriority interest lists. Current easy, turtle and tech duels are decisive. |
