@@ -2584,6 +2584,10 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     // So does the shot's own category set (`C-088`): restriction checks evaluate the
     // target's categories, and a shot with no resolved blueprint carries none.
     shot.categories = weapon.projectileTraits.categories;
+    // And `C-204`'s water pair: `StayUnderwater`/`DestroyOnWater` are the
+    // projectile blueprint's own keys, resolved into `projectileTraits` at load.
+    shot.stayUnderwater = weapon.projectileTraits.stayUnderwater;
+    shot.destroyOnWater = weapon.projectileTraits.destroyOnWater;
     shot.arc = weapon.arc;
     shot.ticksRemaining = static_cast<int>(rate.ticks(kProjectileLifetime));
 
@@ -3006,10 +3010,30 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos,
 /// ADR-036/D15 asks of the parallel phase. `redirectMissile` is deliberately
 /// NOT in here — it writes the shared `redirects` cooldowns, so it runs in the
 /// serial apply walk where ordering is defined.
+/// How far under the waterline `StayUnderwater` pins a shot, in elmos.
+///
+/// Retail's constant is `waterY − 0.01` OGRIDS (`0x00E4D9B4`, read by the
+/// clamp at `0x006a2f6a`); 0.01 ogrids is 0.08 elmos at the corpus's 8:1
+/// conversion. Written as a ratio so no float ever enters the sim.
+inline constexpr Fx kStayUnderwaterClampElmos = Fx::fromRatio(2, 25);
+
 [[nodiscard]] std::array<Fx, 3> advanceFlight(
     Projectile& shot, Fx gravityPerTickSquared, const UnitStore& store,
-    const UnitCatalog* catalog, std::span<const Army> armies) noexcept {
+    const UnitCatalog* catalog, std::span<const Army> armies,
+    const Terrain& terrain) noexcept {
     --shot.ticksRemaining;
+
+    // `C-204`'s water gates, in retail's `MotionTick` order. `inWater`
+    // (`proj+0x334`) is recomputed from the TICK-START position (`0x6a26d9`),
+    // before this tick's integration — a shot crossing the surface this tick
+    // answers next tick. `DestroyOnWater` (`0x6a27a3`) then kills the shot
+    // outright: no impact, no damage, the same silent removal retail's
+    // `Entity::Destroy` performs.
+    shot.inWater = terrain.hasWater() && shot.position[1] < terrain.waterLevel();
+    if (shot.destroyOnWater && shot.inWater) {
+        shot.ticksRemaining = 0;
+        return shot.position;
+    }
 
     const std::array<Fx, 3> oldVelocity = shot.velocity;
     if (store.alive(shot.guidanceTarget) && shot.turnPerTick > 0) {
@@ -3054,6 +3078,17 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos,
         shot.position[axis] += averageVelocity;
     }
 
+    // `StayUnderwater` (`C-204`, `0x006a2f31`): while the shot is in the water
+    // its position Y is pinned just under the waterline — POSITION only, never
+    // velocity, so a torpedo keeps its speed and simply cannot climb out.
+    // Retail runs the clamp after integration and before the pending transform
+    // is set, so the sweep below sees the clamped point exactly as `C-168`'s
+    // does.
+    if (shot.stayUnderwater && shot.inWater
+        && shot.position[1] > terrain.waterLevel() - kStayUnderwaterClampElmos) {
+        shot.position[1] = terrain.waterLevel() - kStayUnderwaterClampElmos;
+    }
+
     // Aeon flares divert before anything impacts: a retargeted shot must not resolve
     // a unit hit on its pre-diversion course in the same tick (`C-088` (c)).
     divertToFlareOwner(shot, store, catalog, armies);
@@ -3071,6 +3106,7 @@ struct StagedFlight {
     UnitId impactTarget{};
     int ticksRemaining = 0;
     ImpactType pendingImpact = ImpactType::Invalid;
+    bool inWater = false;
     bool computed = false;
 };
 
@@ -3081,6 +3117,12 @@ struct StagedFlight {
 void sweepFlight(Projectile& shot, std::array<Fx, 3> from,
                  const UnitStore& store, std::span<const Army> armies,
                  const UnitCatalog* catalog, const Terrain& terrain) {
+    // A `DestroyOnWater` shot killed this tick (`C-204`) is gone before the
+    // sweep runs — retail's `Entity::Destroy` precedes the collision pass, so
+    // it cannot hit anything on the tick it dies.
+    if (shot.destroyOnWater && shot.inWater) {
+        return;
+    }
     // TWO ways a shot ends, and both are needed.
     //
     // It HITS something: the first hostile body on the extended sweep, or a body inside
@@ -3237,7 +3279,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                 // reproduce the mixed read pattern the serial pass made.
                 Projectile flying = shot;
                 const std::array<Fx, 3> from = advanceFlight(
-                    flying, gravityPerTickSquared, store, catalog, armies);
+                    flying, gravityPerTickSquared, store, catalog, armies, terrain);
                 sweepFlight(flying, from, store, armies, catalog, terrain);
                 staged[i] = StagedFlight{
                     .position = flying.position,
@@ -3246,6 +3288,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                     .impactTarget = flying.impactTarget,
                     .ticksRemaining = flying.ticksRemaining,
                     .pendingImpact = flying.pendingImpact,
+                    .inWater = flying.inWater,
                     .computed = true,
                 };
             }
@@ -3265,7 +3308,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                 // shot, but the interception sweep reads every other shot's
                 // live fields — decidable only at this point in the walk.
                 const std::array<Fx, 3> from = advanceFlight(
-                    shot, gravityPerTickSquared, store, catalog, armies);
+                    shot, gravityPerTickSquared, store, catalog, armies, terrain);
                 // The Cybran redirect answers second: it only fires on shots the
                 // flare ignored.
                 redirectMissile(shot, store, armies, redirects);
@@ -3301,6 +3344,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
             shot.velocity = flight.velocity;
             shot.guidanceTarget = flight.guidanceTarget;
             shot.ticksRemaining = flight.ticksRemaining;
+            shot.inWater = flight.inWater;
 
             // Redirect AFTER flight, BEFORE the outcome — the serial pass's
             // order. Its decision reads the staged position and lifetime just
@@ -3311,11 +3355,15 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                 // tick cannot unmake the contact the serial sweep still saw.
                 shot.pendingImpact = flight.pendingImpact;
                 shot.impactTarget = flight.impactTarget;
-            } else if (shot.ticksRemaining <= 0) {
+            } else if (shot.ticksRemaining <= 0
+                       && !(shot.destroyOnWater && shot.inWater)) {
                 // The redirect's kill IS the serial sweep's expiry gate: the
                 // staged sweep ran while the shot still had lifetime, so a
                 // no-hit flight now earns the same Air/Underwater impact the
-                // serial pass gave a shot that died this tick.
+                // serial pass gave a shot that died this tick. A
+                // `DestroyOnWater` kill is EXCLUDED (`C-204`): retail's
+                // `Entity::Destroy` is silent — no impact, no damage — so the
+                // shot simply leaves the list below.
                 shot.pendingImpact = shot.position[1] < terrain.waterLevel()
                                        ? ImpactType::Underwater
                                        : ImpactType::Air;

@@ -92,6 +92,20 @@ struct Projectile {
     /// A point-defence shot. It contacts hostile projectiles rather than unit collision bodies.
     bool interceptor = false;
 
+    /// `C-204`'s water pair, copied from the projectile blueprint at launch.
+    /// `stayUnderwater` clamps position Y to just under the waterline while the
+    /// shot is in the water — position only, never velocity — which is what
+    /// makes an ordinary projectile a torpedo (retail has no torpedo class).
+    /// `destroyOnWater` kills the shot outright on a tick it is in the water:
+    /// no impact, no damage — most surface ordnance dies at the waterline.
+    bool stayUnderwater = false;
+    bool destroyOnWater = false;
+    /// Whether the shot was in the water at the START of this tick — retail's
+    /// `proj+0x334`, recomputed each `MotionTick` from the pre-integration
+    /// position (`0x6a26d9`). Both water keys read it, so a shot crossing the
+    /// surface this tick answers next tick, not this one.
+    bool inWater = false;
+
     /// Whether it arcs. A flat shot travels in a straight line; an arced one is pulled
     /// down by gravity, which is what makes it clear a hill.
     unitdef::BallisticArc arc = unitdef::BallisticArc::None;

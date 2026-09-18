@@ -155,6 +155,16 @@ struct Weapon {
         float turnRateDegreesPerSecond = 0.0f;
         float accelerationElmosPerSecond2 = 0.0f;
         float maxSpeedElmosPerSecond = 0.0f;
+        /// `Physics.StayUnderwater` (projectile bp `+0x2AE`, `C-204`): while the
+        /// shot is in the water its position Y is clamped to just under the
+        /// waterline — position only, never velocity — which is what makes an
+        /// ordinary projectile a torpedo. 56 shipped `_proj.bp` files set it.
+        bool stayUnderwater = false;
+        /// `Physics.DestroyOnWater` (projectile bp `+0x2AF`, `C-204`): the shot
+        /// is destroyed outright on the tick it is in the water — no impact,
+        /// no damage. 305 shipped `_proj.bp` files set it: most surface
+        /// ordnance dies at the waterline rather than flying on submerged.
+        bool destroyOnWater = false;
     } projectileTraits;
 
     /// The VFS locator whose blueprint supplies `projectileTraits`.
@@ -353,7 +363,18 @@ struct Weapon {
     float recoilDistanceMesh = 0.0f;  ///< as-authored `RackRecoilDistance` (negative = backward); 0 = no recoil
     float recoilReturnSpeedMeshPerSecond = 0.0f;  ///< 0 = unauthored (only 6 weapons state one)
     std::string telescopeBone;    ///< first rack's `TelescopeBone` (3 weapons)
-    float telescopeDistanceMesh = 0.0f;
+    /// `TelescopeRecoilDistance`, nullopt when unstated — the distinction
+    /// matters because Lua's `v.TelescopeRecoilDistance or bp.RackRecoilDistance`
+    /// (defaultweapons.lua:283) treats an authored ZERO as truthy: it would
+    /// slide the telescope 0, not the rack distance. No shipped blueprint
+    /// authors 0, but the type keeps the semantics honest.
+    std::optional<float> telescopeDistanceMesh;
+    /// Raw authored `MuzzleChargeDelay` seconds — NOT `faWaitSeconds`-corrected.
+    /// It is a `WaitSeconds` argument in the fire sequence (defaultweapons.lua:570)
+    /// but the recoil-return formula consumes the authored figure verbatim
+    /// (`(1/RateOfFire) - MuzzleChargeDelay`, defaultweapons.lua:62), so the
+    /// spec keeps the raw number; a sim charge phase would want the corrected one.
+    float muzzleChargeDelaySeconds = 0.0f;
     std::string animationReload;  ///< `AnimationReload` .sca path (2 weapons)
     std::string animationCharge;  ///< `AnimationCharge` .sca path (none shipped; the field exists)
     std::string weaponUnpackAnimation;  ///< 17 weapons

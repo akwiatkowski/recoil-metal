@@ -328,6 +328,52 @@ TEST_CASE("C-279/C-285: sonar hears a hull but never identifies it", "[fa-intel]
           == rm::sim::ContactKind::Sonar);
     CHECK(intel.hasSeenEver(0, boat));
 }
+TEST_CASE("C-279: a seabed unit is a sonar contact, never radar or vision", "[fa-intel]") {
+    // The layer byte's other half: retail's flag computation (`0x005D1E30`)
+    // routes `layer ∈ {Seabed, Sub}` targets to sonar alone (`0x005C83C0`'s
+    // explicit `==2`/`==4` compares) and lets radar answer for everything
+    // else — including Water-layer surface ships, which take BOTH senses.
+    // With the water-vision grid deferred, a seabed walker under hostile
+    // vision AND radar coverage is a sonar return only, while the surfaced
+    // ship beside it stays an ordinary radar contact.
+    rm::unitdef::UnitDef watching = seer(150.0f, 400.0f, 400.0f);
+    rm::unitdef::UnitDef hull;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex walker = catalog.add(&hull);
+    const rm::UnitTypeIndex ship = catalog.add(&hull);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 200.0f, 200.0f);
+    // A ground unit under water: the Seabed layer, which the movement tick
+    // publishes as `seabed` — not submersible, not floating.
+    const rm::sim::UnitId seabedUnit = place(store, walker, 1, 300.0f, 200.0f);
+    store.motion()[seabedUnit.index].seabed = true;
+    // A surface ship outside vision but inside radar: the Water layer takes
+    // radar AND sonar in retail, and radar answers first.
+    const rm::sim::UnitId surfaced = place(store, ship, 1, 500.0f, 200.0f);
+    store.motion()[surfaced.index].surfaceWater = true;
+
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    // Inside vision AND radar coverage, the seabed unit is a sonar return
+    // only — vision and radar both refuse the water column's floor.
+    CHECK(rm::sim::contactKindForUnit(0, seabedUnit.index, store, catalog, armies, intel)
+          == rm::sim::ContactKind::Sonar);
+    CHECK_FALSE(intel.hasSeenEver(0, seabedUnit));
+
+    // The surfaced ship is a radar contact: `layer & 0xC` (Sub|Water) routes
+    // it to sonar too, but radar is not refused for Water-layer targets.
+    CHECK(rm::sim::contactKindForUnit(0, surfaced.index, store, catalog, armies, intel)
+          == rm::sim::ContactKind::Radar);
+}
+
 
 // --- C-281: allied intel sharing ----------------------------------------------
 

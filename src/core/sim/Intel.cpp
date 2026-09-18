@@ -791,14 +791,24 @@ std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,
     const bool counterIntelOff = store.scriptBitDisabledAt(target, 3);
     const bool stealthOff = counterIntelOff || store.scriptBitDisabledAt(target, 5);
     const bool cloakOff = counterIntelOff || store.scriptBitDisabledAt(target, 8);
-    // Depth gates the senses, never the geometry: a submerged submarine is invisible
-    // to vision and radar however close it stands, and sonar only ever hears naval
-    // hulls — surface ships and submarines, surfaced or not. Omni still sees all.
+    // Depth gates the senses, never the geometry. Retail's flag computation
+    // (`0x005D1E30`) splits on the target's layer byte: the caller's water flag
+    // — `layer ∈ {Seabed(2), Sub(4)}` (`0x005C83C0`, explicit `==2`/`==4`
+    // compares) — routes to sonar alone, while `layer & 0xC` (Sub|Water) is
+    // the sonar fallback and radar runs for everything the flag did not claim.
+    // Net: sonar hears Seabed|Sub|Water — every hull in the water column,
+    // surfaced or not — and radar answers for everything EXCEPT Seabed|Sub, so
+    // a surfaced ship is a radar contact and a seabed walker is not. Vision
+    // never sees under water at all; retail substitutes its water-vision grid
+    // (`+0x48`) for submerged targets, which this sim defers — so a seabed or
+    // submerged target is sonar-only here. Omni still sees all.
     const MoveState& targetMotion = store.motion()[target];
     const bool submerged = targetMotion.submersible && targetMotion.submerged;
-    const bool naval = targetMotion.surfaceWater || targetMotion.submersible;
+    const bool underwater = submerged || targetMotion.seabed;
+    const bool sonarLayer = targetMotion.surfaceWater || targetMotion.submersible
+                            || targetMotion.seabed;
     if (hiding.freeIntel
-        || (!(hiding.cloak && !cloakOff) && !submerged
+        || (!(hiding.cloak && !cloakOff) && !underwater
             && intel.sees(alliance, IntelKind::Vision, at.x, at.z))) {
         return ContactKind::Seen;
     }
@@ -814,12 +824,12 @@ std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,
     // sonar bits alone. RadarStealth and SonarStealth each defeat their own sense, and
     // only when vision has not already identified the unit. A disabled stealth
     // (script bits 3/5) stops defeating its sense.
-    if (!submerged && !(hiding.radarStealth && !stealthOff)
+    if (!underwater && !(hiding.radarStealth && !stealthOff)
         && !intel.hiddenBy(army->alliance, HiddenKind::RadarField, at.x, at.z)
         && intel.sees(alliance, IntelKind::Radar, at.x, at.z)) {
         return ContactKind::Radar;
     }
-    if (naval && !(hiding.sonarStealth && !stealthOff)
+    if (sonarLayer && !(hiding.sonarStealth && !stealthOff)
         && !intel.hiddenBy(army->alliance, HiddenKind::SonarField, at.x, at.z)
         && intel.sees(alliance, IntelKind::Sonar, at.x, at.z)) {
         return ContactKind::Sonar;

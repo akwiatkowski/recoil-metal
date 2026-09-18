@@ -885,6 +885,11 @@ loadProjectileTraits(std::string_view source) {
         .turnRateDegreesPerSecond = physics ? numberOr(*physics, "TurnRate", 0.0f) : 0.0f,
         .accelerationElmosPerSecond2 = physics ? numberOr(*physics, "Acceleration", 0.0f) * scmap::kElmosPerOgrid : 0.0f,
         .maxSpeedElmosPerSecond = physics ? numberOr(*physics, "MaxSpeed", 0.0f) * scmap::kElmosPerOgrid : 0.0f,
+        // `C-204`'s torpedo pair: `StayUnderwater` clamps the shot's position
+        // under the waterline while it is in the water; `DestroyOnWater` kills
+        // it outright there. Both live in the projectile's `Physics` block.
+        .stayUnderwater = physics && flagAt(*physics, "StayUnderwater"),
+        .destroyOnWater = physics && flagAt(*physics, "DestroyOnWater"),
     };
 }
 

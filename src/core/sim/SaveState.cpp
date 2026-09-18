@@ -108,6 +108,12 @@ constexpr std::uint32_t kVersion36 = 36;
 // count — the deterministic frontier replays on restore — and intel grids
 // re-stamp from unit positions on the first update.
 constexpr std::uint32_t kVersion37 = 37;
+// 38: `C-204`'s water pair on each projectile record — `StayUnderwater` and
+// `DestroyOnWater` are launch-time state resolved from the projectile
+// blueprint, so a saved torpedo must carry them or it loses its clamp on
+// restore. `inWater` stays out: it is recomputed from the restored position
+// on the first tick, exactly like retail's `proj+0x334`.
+constexpr std::uint32_t kVersion38 = 38;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -852,7 +858,8 @@ bool readSelfDestructs(PayloadReader& r, std::vector<SelfDestructWork>& work) {
 // that was saved. `visualId`/`visualOrigin`/`visualSerial` are deliberately
 // absent — presentation identity, never hashed.
 void writeProjectiles(PayloadWriter& w,
-                      const std::optional<std::vector<Projectile>>& state) {
+                      const std::optional<std::vector<Projectile>>& state,
+                      bool waterFlags) {
     w.u8(state.has_value());
     if (!state) {
         return;
@@ -885,11 +892,17 @@ void writeProjectiles(PayloadWriter& w,
         w.i32(shot.ticksRemaining);
         w.u8(static_cast<std::uint8_t>(shot.pendingImpact));
         writeId(w, shot.impactTarget);
+        // V38 trails the record: `C-204`'s launch-time water pair.
+        if (waterFlags) {
+            w.u8(shot.stayUnderwater ? 1 : 0);
+            w.u8(shot.destroyOnWater ? 1 : 0);
+        }
     }
 }
 
 bool readProjectiles(PayloadReader& r,
-                     std::optional<std::vector<Projectile>>& state) {
+                     std::optional<std::vector<Projectile>>& state,
+                     bool waterFlags) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) {
@@ -955,6 +968,16 @@ bool readProjectiles(PayloadReader& r,
         shot.arc = static_cast<unitdef::BallisticArc>(arc);
         shot.ticksRemaining = ticks;
         shot.pendingImpact = static_cast<ImpactType>(impact);
+        // V38's trailing water pair; older saves leave both flags false,
+        // which is what a pre-C-204 shot was anyway.
+        if (waterFlags) {
+            std::uint8_t stay{}, destroy{};
+            if (!r.u8(stay) || stay > 1 || !r.u8(destroy) || destroy > 1) {
+                return false;
+            }
+            shot.stayUnderwater = stay != 0;
+            shot.destroyOnWater = destroy != 0;
+        }
     }
     return true;
 }
@@ -1908,7 +1931,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion33) writeSiloQueue(payloadWriter, state.siloQueue);
     if (version >= kVersion34) writeArmyStats(payloadWriter, state.armyStats);
     if (version >= kVersion34) writeSelfDestructs(payloadWriter, state.selfDestructs);
-    if (version >= kVersion35) writeProjectiles(payloadWriter, state.projectiles);
+    if (version >= kVersion35) writeProjectiles(payloadWriter, state.projectiles,
+                                               version >= kVersion38);
     if (version >= kVersion37) writePathService(payloadWriter, state.pathService);
     if (version >= kVersion37) writeIntel(payloadWriter, state.intel);
     const std::vector<std::byte> payload = payloadWriter.take();
@@ -1928,7 +1952,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
 }
 
 [[nodiscard]] std::optional<SaveState> decode(std::span<const std::byte> bytes,
-                                              std::optional<std::uint32_t> requiredVersion) {
+                                                std::optional<std::uint32_t> requiredVersion) {
     std::size_t offset = 0;
     if (bytes.size() < kMagic.size()
         || !std::equal(kMagic.begin(), kMagic.end(), bytes.begin())) {
@@ -1953,7 +1977,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion29 && version != kVersion30
                && version != kVersion31 && version != kVersion32
                && version != kVersion33 && version != kVersion34 && version != kVersion35
-               && version != kVersion36 && version != kVersion37)
+               && version != kVersion36 && version != kVersion37 && version != kVersion38)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2022,7 +2046,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::vector<SelfDestructWork> selfDestructs;
     if (version >= kVersion34 && !readSelfDestructs(reader, selfDestructs)) return std::nullopt;
     std::optional<std::vector<Projectile>> projectiles;
-    if (version >= kVersion35 && !readProjectiles(reader, projectiles)) return std::nullopt;
+    if (version >= kVersion35 && !readProjectiles(reader, projectiles,
+                                                 version >= kVersion38)) return std::nullopt;
     std::optional<PathService::Snapshot> pathService;
     if (version >= kVersion37 && !readPathService(reader, pathService)) return std::nullopt;
     std::optional<Intel::Snapshot> intel;
@@ -2064,7 +2089,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion37);
+    return rm::sim::encode(state, kVersion38);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

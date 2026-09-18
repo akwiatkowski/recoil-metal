@@ -766,6 +766,14 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             if (shot.interceptor) {
                 feed(h, true);
             }
+            // `C-204`'s water pair rides the shot like the interceptor flag:
+            // launch-time state the blueprint resolved once, fed only when set
+            // so ordinary shots keep the byte stream they were blessed with.
+            if (shot.stayUnderwater || shot.destroyOnWater) {
+                feed(h, true);
+                feed(h, shot.stayUnderwater);
+                feed(h, shot.destroyOnWater);
+            }
             // The damage pool, only when the blueprint authored one — otherwise the
             // golden duel's shots keep the byte stream they were blessed with (`C-087`).
             if (shot.maxHealth > Mag{}) {

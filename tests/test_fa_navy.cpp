@@ -680,3 +680,69 @@ TEST_CASE("C-203: AutoSurfaceMode surfaces a submerged sub that holds an attack 
                && event.instigator == target;
     }));
 }
+
+TEST_CASE("C-204: StayUnderwater clamps a shot under the waterline; DestroyOnWater kills it",
+          "[fa-navy]") {
+    // There is no torpedo class — retail makes one from two blueprint
+    // booleans on an ordinary projectile. `StayUnderwater` pins the shot's
+    // POSITION just under the waterline while it is in the water (velocity
+    // untouched, `0x006a2f31`); `DestroyOnWater` destroys it outright on a
+    // tick it is in the water (`0x6a27a3`) — no impact, no damage. Both read
+    // `inWater` (`proj+0x334`), which is the tick-START position, so a shot
+    // crossing the surface this tick answers next tick.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);  // waterline at 80
+
+    rm::test::Roster roster;
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    const auto fly = [&](rm::sim::Projectile shot, int ticks) {
+        std::vector<rm::sim::Projectile> shots{shot};
+        rm::sim::EventQueue events;
+        for (int i = 0; i < ticks && !shots.empty(); ++i) {
+            rm::sim::advanceProjectiles(shots, roster.store, armies, terrain,
+                                        roster.rate, &events);
+        }
+        return std::pair{shots, events};
+    };
+
+    // A torpedo already in the water, aimed UP out of it: the clamp pins it
+    // 0.08 elmos under the waterline (retail's waterY − 0.01 ogrids) whatever
+    // its velocity says — `pos.y = min(pos.y, waterY − 0.01)`, so a shot
+    // already deeper is left alone and only the climb is arrested.
+    rm::sim::Projectile torpedo;
+    torpedo.stayUnderwater = true;
+    torpedo.position = {Fx::fromInt(300), Fx::fromInt(70), Fx::fromInt(300)};
+    torpedo.velocity = {Fx{}, Fx::fromInt(20), Fx{}};
+    torpedo.ticksRemaining = 100;
+    const auto [held, heldEvents] = fly(torpedo, 5);
+    REQUIRE(held.size() == 1);
+    CHECK(rm::sim::fxToFloat(held.front().position[1])
+          == Approx(80.0 - 0.08).margin(0.01));
+    // Position only, never velocity: the upward speed is still there.
+    CHECK(held.front().velocity[1] == Fx::fromInt(20));
+
+    // A shell with DestroyOnWater already under the surface is destroyed on
+    // its first tick — silently: no ProjectileImpact event, no damage.
+    rm::sim::Projectile shell;
+    shell.destroyOnWater = true;
+    shell.damage.base = rm::sim::Mag::fromInt(50);
+    shell.position = {Fx::fromInt(300), Fx::fromInt(70), Fx::fromInt(300)};
+    shell.velocity = {Fx{}, Fx::fromInt(-5), Fx{}};
+    shell.ticksRemaining = 100;
+    const auto [dead, deadEvents] = fly(shell, 5);
+    CHECK(dead.empty());
+    CHECK(std::ranges::none_of(deadEvents.all(), [](const rm::sim::Event& event) {
+        return event.kind == rm::sim::EventKind::ProjectileImpact;
+    }));
+
+    // The same shell ABOVE the waterline is untouched: `inWater` is the
+    // tick-start position, so it flies on until it crosses.
+    rm::sim::Projectile dry = shell;
+    dry.position = {Fx::fromInt(300), Fx::fromInt(90), Fx::fromInt(300)};
+    dry.velocity = {Fx::fromInt(1), Fx{}, Fx{}};
+    const auto [flying, dryEvents] = fly(dry, 3);
+    REQUIRE(flying.size() == 1);
+    CHECK(rm::sim::fxToFloat(flying.front().position[0])
+          == Approx(303.0).margin(0.5));
+}
