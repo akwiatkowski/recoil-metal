@@ -108,35 +108,27 @@ retail artifact `ART-E001`
 Equal-weight average across the 20 gameplay subsystem rows below; `FA-FOUND` is excluded:
 
 ```text
-Implemented       [##############------] about 68%
-Retail-validated  [#######-------------] about 37%
-Retail-analyzed   [##############------] about 77%
+Implemented       [###############-----] about 64%
+Retail-validated  [########------------] about 40%
+Retail-analyzed   [################----] about 80%
 ```
 
-The row estimates average 68.05%, 37.25% and 77.37%, respectively. The 2026-09-18
+The row estimates average 63.63%, 39.74% and 79.74%, respectively. The 2026-09-18
 analysis pass raised `FA-CONTENT` (60→85 analyzed) with the full VFS mount order,
 blueprint ingestion, and map bootstrap read (`C-266`–`C-275`), `FA-INTEL` (60→85
 analyzed) on the full counter-intel/jammer/stale-contact lifecycle (`C-276`–`C-285`),
 `FA-PROGRESS` (40→80 analyzed) on the full enhancement lifecycle (`C-251`–`C-265`),
 `FA-TERRAIN` (45→85 analyzed) on `FlattenMapRect`/wreck obstruction/terrain types/scorch
-(`C-286`–`C-292`), and `FA-PRESENT` (75→80 analyzed) on manipulators/effects/audio/LOD
-(`C-293`–`C-304`).
-The 2026-09-14 refresh restores the `FA-LUA`, `FA-AIR` and `FA-INTEL` rows the table had dropped
-(their detail sections never left; scores are estimated from those sections), and
-raises `FA-TRANSPORT` (45→85 implemented, 5→45 validated) on the landed cargo/ferry/
-auto-embark stack and its shipped-blueprint validation, `FA-NAVY` (45→60, 15→25)
-on depth-aware navigation, `FA-MISSILES` (60→70) on manual missile-launch orders,
-`FA-WEAPONS` validated (80→85) on universal leading, `FA-LAND` (90→95) on the
-completed P10 pathfinding run, `FA-UI` (80→85) and `FA-PRESENT` (75→85) on the
-post-processing and interface batches, and `FA-PERSIST` validated (25→30) on the
-re-recorded golden.
+(`C-286`–`C-292`), `FA-PRESENT` (45→80 analyzed) on manipulators/effects/audio/LOD
+boundary (`C-293`–`C-304`), and `FA-LUA` (40→85 analyzed) on the full LuaPlus dialect,
+two-ring FIFO scheduler, script lifecycle, and mod-hook contract (`C-305`–`C-319`).
 
 Only **1 of 45 work packages**, `WP-15` economy, currently passes the complete retail
 confirmation gate. The three percentages must never be combined: understanding absent behavior
 does not make the game more complete.
 
-The independent evidence-state count is **36 of 45 WPs at `Analyzed`**. That 80% inventory count
-and the 77% equal-subsystem estimate answer different questions and are shown together to keep the
+The independent evidence-state count is **37 of 45 WPs at `Analyzed`**. That 82% inventory count
+and the 80% equal-subsystem estimate answer different questions and are shown together to keep the
 headline honest.
 
 **Current implementation critical path:**
@@ -171,12 +163,11 @@ Stable IDs are task handles. Do not rename an ID when its score or next task cha
 package appears in exactly one row, so the dashboard has an explicit denominator.
 `FA-FOUND` reports research-deliverable completeness rather than gameplay implementation and is
 excluded from the headline.
-
 | ID | Subsystem | Source WPs | Implemented | Retail-validated | Retail-analyzed | Exact next task |
 |---|---|---|---:|---:|---:|---|
 | [`FA-FOUND`](#fa-found---retail-build-and-api-foundation) | Retail build and API foundation | `WP-00`-`02` | n/a | 80% | 85% | Steam depot/build manifest bound to `ART-E001` (depots 9421–9425, build 2845, IDs SteamDB-transcribed, UNCONFIRMED); promoting check is hashing `ART-E001` against depot 9421's file list. |
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 70% | 40% | 85% | **Analyzed 2026-09-18 (C-266–C-275):** mount list is `bin/SupComDataPath.lua` executed at `0x004f86a0`; `gamedata/*.scd` mount at `/` sorted ascending, first-match-wins via `CVFSImpl` `0x00466c60`; `lua.scd` shadows `mohodata.scd`; mods act via hook concat (`SCR_LuaDoFileConcat` `0x004d4de0`) + `LoadBlueprints` mod pass, not VFS shadow. `schook.scd` is the shipped load-bearing hook payload. Blueprint boot: `RuleInit.lua` → `Blueprints.lua` `LoadBlueprints()` with fixed scan/registration order and deterministic category-bit assignment; bp→script binding defaults to `_script.lua`/`TypeClass` with fallbacks. Map bootstrap from `_scenario.lua` through `SetupSession`/`BeginSession` to initial-unit spawn and start markers mapped; `.scmap` binary chunk format remains bounded. |
-| [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 35% | 15% | 40% | FAF AI Lua 5.4 hosted (111 modules, 256 names bound, probes green); retail unit/projectile gameplay scripts, scheduler and mod hooks unhosted. |
+| [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 35% | 15% | 85% | **Analyzed 2026-09-18 (C-305–C-319):** `CTaskStage` two-ring FIFO scheduler with full status contract and `WaitTicks(n)` `n−1` quirk; `ForkThread`/`WaitFor` suspend/resume; script class resolution and `OnPreCreate`/`OnCreate`/`OnDestroy` order; Lua state serializes wholesale. Mod hooks: `doscript`/`import` concatenate original + `/schook` + mod `hookdir` matches into one chunk; `__active_mods` from `gameInfo.GameMods`; `shadow/` unimplemented; no sim/UI sandbox. Dialect = LuaPlus 5.0.1 + `#`/`!=`/`continue`/bare-`for`; no retail watchdog. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 90% | 75% | 75% | Staging pads now refuel bingo-fuel guards (`9768d4f`, C-183 rung 1); the ferry rung and exact multi-weapon guard arbitration stay open. Guard is accepted on the retail map (`make test-guard-ui`). |
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 70% | 30% | 85% | All four retail victory modes in with selector mapping, Annihilation counts and Sandbox endlessness (tested); scenario Options wiring stays open, no synthetic setting. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 80% | 60% | 90% | Single-captor Capture slice is in (funded progress, transfer identity, cancellation, replay, save/load); concurrent captors and general transfer parity stay open. |
@@ -264,14 +255,17 @@ dashboard row.
 
 ### FA-LUA - Gameplay Lua And Mod Contract
 
-**Largest gap:** the FAF AI uses Lua 5.4, but retail unit/projectile gameplay scripts, scheduler,
-script objects, and mod hooks are not hosted.
+**Largest gap:** the retail Lua dialect, scheduler, script lifecycle, and mod-hook contract are
+now fully specified (`C-305`–`C-319`); hosting the shipped unit/projectile gameplay scripts and
+the `EnhanceTask` adapter remain implementation work, not analysis.
 
 ```text
-/goal Advance FA-LUA by measuring and publishing the exact native Moho API contract required by
-the milestone-20 skirmish slice: simInit.lua, Unit.lua, defaultweapons.lua, its eight units, and
-their projectiles. Produce a reproducible ranked binding list, update WP-07, and refresh FA-LUA
-without implementing speculative bindings.
+/goal Advance FA-LUA by hosting the retail unit/projectile gameplay scripts in a LuaPlus 5.0.1
+interpreter with the recovered `CTaskStage` two-ring FIFO, `WaitTicks(n)` `n-1` resume,
+`ForkThread`/`WaitFor` suspend/resume, script-class resolution, and `OnPreCreate`/`OnCreate`/
+`OnDestroy` order. Wire `doscript`/`import` hook concat and `__active_mods` from
+`gameInfo.GameMods`; keep `shadow/` unimplemented and no sim/UI sandbox. Run make test and make
+verify, then refresh WP-07/08 and FA-LUA.
 ```
 
 ### FA-MATCH - Armies, Setup, And Victory Rules
