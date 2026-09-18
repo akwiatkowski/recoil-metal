@@ -158,6 +158,53 @@ struct Fixture {
     };
 }
 
+/// The facing `applyCommand` derives for a grouped move: the bearing from the live
+/// group's centroid to the click (the stand-in for the wire command's formation
+/// quaternion, C-151). Recomputed here from the same positions so the assertions
+/// measure slot geometry, not the angle itself.
+[[nodiscard]] rm::Brad groupFacing(rm::test::Roster& roster,
+                                   const std::vector<UnitId>& units,
+                                   rm::sim::Fx clickX, rm::sim::Fx clickZ) {
+    rm::FxWide sumX = 0;
+    rm::FxWide sumZ = 0;
+    std::size_t count = 0;
+    for (const UnitId unit : units) {
+        if (!roster.store.alive(unit)) {
+            continue;
+        }
+        sumX += roster.transform(unit).x.raw();
+        sumZ += roster.transform(unit).z.raw();
+        ++count;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    const rm::sim::Fx centreX = rm::sim::Fx::fromRaw(
+        rm::sim::saturate(sumX / static_cast<rm::FxWide>(count)));
+    const rm::sim::Fx centreZ = rm::sim::Fx::fromRaw(
+        rm::sim::saturate(sumZ / static_cast<rm::FxWide>(count)));
+    return rm::sim::fxBearing(clickX - centreX, clickZ - centreZ);
+}
+
+/// A queued target's projection onto the formation's facing axis, measured off the
+/// click anchor. The front row sits at local z = 0; each later row trails one
+/// collision diameter behind it.
+[[nodiscard]] rm::sim::Fx forwardOffAnchor(const rm::sim::QueuedCommand& entry,
+                                           rm::sim::Fx clickX, rm::sim::Fx clickZ,
+                                           rm::Brad facing) {
+    return (entry.targetX() - clickX) * rm::sim::fxSin(facing)
+           + (entry.targetZ() - clickZ) * rm::sim::fxCos(facing);
+}
+
+/// The same projection onto the flank axis: local +x, the centre-outward column
+/// order retail's `BlockBuilderLand` enumerates.
+[[nodiscard]] rm::sim::Fx flankOffAnchor(const rm::sim::QueuedCommand& entry,
+                                         rm::sim::Fx clickX, rm::sim::Fx clickZ,
+                                         rm::Brad facing) {
+    return (entry.targetX() - clickX) * rm::sim::fxCos(facing)
+           - (entry.targetZ() - clickZ) * rm::sim::fxSin(facing);
+}
+
 } // namespace
 
 TEST_CASE("a move command routes a unit, and a stop cancels it") {
@@ -360,11 +407,21 @@ TEST_CASE("a homogeneous grouped ground move uses GrowthFormation land-slot topo
     CHECK(differs(secondQueue.front(), thirdQueue.front()));
     CHECK(differs(thirdQueue.front(), fourthQueue.front()));
     CHECK(differs(fourthQueue.front(), fifthQueue.front()));
-    CHECK(mineQueue.front().targetZ() == clickZ);
-    CHECK(secondQueue.front().targetZ() == clickZ);
-    CHECK(thirdQueue.front().targetZ() == clickZ);
-    CHECK(fourthQueue.front().targetZ() == clickZ);
-    CHECK(fifthQueue.front().targetZ() != clickZ);
+    // The block is rotated to face the click, so the front row is measured along
+    // the facing axis: four members on the anchor line, the fifth one diameter back.
+    // The facing derives from the issued selection — `theirs` counts toward the
+    // centroid even though the command refuses it.
+    const std::vector<UnitId> issued{fix.mine, second, third, fourth, fifth, fix.theirs};
+    const rm::Brad facing = groupFacing(fix.roster, issued, clickX, clickZ);
+    const auto onFrontRow = [&](const rm::sim::QueuedCommand& entry) {
+        const rm::sim::Fx forward = forwardOffAnchor(entry, clickX, clickZ, facing);
+        return forward > rm::sim::Fx::fromInt(-1) && forward < rm::sim::Fx::fromInt(1);
+    };
+    CHECK(onFrontRow(mineQueue.front()));
+    CHECK(onFrontRow(secondQueue.front()));
+    CHECK(onFrontRow(thirdQueue.front()));
+    CHECK(onFrontRow(fourthQueue.front()));
+    CHECK_FALSE(onFrontRow(fifthQueue.front()));
 
     // A Shift-move bypasses the path-service intake and appends its local queue entry directly.
     // It must keep the same fan-out rather than reconstructing targets from the shared anchor.
@@ -387,11 +444,18 @@ TEST_CASE("a homogeneous grouped ground move uses GrowthFormation land-slot topo
     CHECK(differs(secondQueue.back(), thirdQueue.back()));
     CHECK(differs(thirdQueue.back(), fourthQueue.back()));
     CHECK(differs(fourthQueue.back(), fifthQueue.back()));
-    CHECK(mineQueue.back().targetZ() == queuedIssue.targetZ);
-    CHECK(secondQueue.back().targetZ() == queuedIssue.targetZ);
-    CHECK(thirdQueue.back().targetZ() == queuedIssue.targetZ);
-    CHECK(fourthQueue.back().targetZ() == queuedIssue.targetZ);
-    CHECK(fifthQueue.back().targetZ() != queuedIssue.targetZ);
+    const rm::Brad queuedFacing =
+        groupFacing(fix.roster, issued, queuedIssue.targetX, queuedIssue.targetZ);
+    const auto onQueuedFrontRow = [&](const rm::sim::QueuedCommand& entry) {
+        const rm::sim::Fx forward = forwardOffAnchor(
+            entry, queuedIssue.targetX, queuedIssue.targetZ, queuedFacing);
+        return forward > rm::sim::Fx::fromInt(-1) && forward < rm::sim::Fx::fromInt(1);
+    };
+    CHECK(onQueuedFrontRow(mineQueue.back()));
+    CHECK(onQueuedFrontRow(secondQueue.back()));
+    CHECK(onQueuedFrontRow(thirdQueue.back()));
+    CHECK(onQueuedFrontRow(fourthQueue.back()));
+    CHECK_FALSE(onQueuedFrontRow(fifthQueue.back()));
 }
 
 TEST_CASE("a mixed grouped ground move fills front rows by category", "[formation]") {
@@ -436,20 +500,29 @@ TEST_CASE("a mixed grouped ground move fills front rows by category", "[formatio
         &fix.paths);
     REQUIRE(result.accepted.size() == 5);
 
-    // Five units fill a four-wide first row: everyone but the engineer stands on
-    // the clicked line, and the T2 tank stands left of the T1 within direct fire.
     const auto& engineerQueue = fix.roster.store.orders()[engineer.index].entries();
     const auto& aaQueue = fix.roster.store.orders()[aa.index].entries();
     const auto& artilleryQueue = fix.roster.store.orders()[artillery.index].entries();
     const auto& tank1Queue = fix.roster.store.orders()[tank1.index].entries();
     const auto& tank2Queue = fix.roster.store.orders()[tank2.index].entries();
     REQUIRE(engineerQueue.size() == 1);
-    CHECK(tank2Queue.front().targetZ() == clickZ);
-    CHECK(tank1Queue.front().targetZ() == clickZ);
-    CHECK(artilleryQueue.front().targetZ() == clickZ);
-    CHECK(aaQueue.front().targetZ() == clickZ);
-    CHECK(engineerQueue.front().targetZ() != clickZ);
-    CHECK(tank2Queue.front().targetX() < tank1Queue.front().targetX());
+    // Five units fill a four-wide first row: everyone but the engineer stands on
+    // the line through the anchor perpendicular to the facing, and the T2 tank
+    // stands left of the T1 within direct fire — measured on the rotated axes,
+    // since the block now faces the click.
+    const std::vector<UnitId> accepted{engineer, aa, artillery, tank1, tank2};
+    const rm::Brad facing = groupFacing(fix.roster, accepted, clickX, clickZ);
+    const auto onFrontRow = [&](const rm::sim::QueuedCommand& entry) {
+        const rm::sim::Fx forward = forwardOffAnchor(entry, clickX, clickZ, facing);
+        return forward > rm::sim::Fx::fromInt(-1) && forward < rm::sim::Fx::fromInt(1);
+    };
+    CHECK(onFrontRow(tank2Queue.front()));
+    CHECK(onFrontRow(tank1Queue.front()));
+    CHECK(onFrontRow(artilleryQueue.front()));
+    CHECK(onFrontRow(aaQueue.front()));
+    CHECK_FALSE(onFrontRow(engineerQueue.front()));
+    CHECK(flankOffAnchor(tank2Queue.front(), clickX, clickZ, facing)
+          < flankOffAnchor(tank1Queue.front(), clickX, clickZ, facing));
 }
 
 TEST_CASE("a stopped move is removed before path service spends work on it") {

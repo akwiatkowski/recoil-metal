@@ -441,6 +441,7 @@ if(BUILD_TESTING)
         tests/test_fa_cmd.cpp
         tests/test_fa_econ.cpp
         tests/test_fa_land.cpp
+        tests/test_formation.cpp
         tests/test_fa_air.cpp
         tests/test_fa_navy.cpp
         tests/test_fa_transport.cpp

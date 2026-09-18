@@ -204,8 +204,9 @@ TEST_CASE("C-178: GrowthFormation widens its front row at the block thresholds",
           "[fa-land]") {
     // ART-S007's land-block widths: a group of up to twelve fills a four-wide
     // front row; the thirteenth member starts a five-wide one. Slots are
-    // assigned once at issue time, so the count standing on the clicked line
-    // IS the formation's front row.
+    // assigned once at issue time and the whole block is rotated so it faces
+    // the click, so the front row is the count standing on the line through
+    // the anchor perpendicular to the facing — not on a fixed world axis.
     const auto frontRowSize = [](std::size_t units) {
         Fixture fix;
         const rm::UnitTypeIndex type = fix.roster.store.typeAt(fix.mine.index);
@@ -231,11 +232,36 @@ TEST_CASE("C-178: GrowthFormation widens its front row at the block thresholds",
             &fix.building, nullptr, nullptr, &fix.paths);
         REQUIRE(result.accepted.size() == units);
 
+        // The facing the intake derives: bearing from the live group's centroid
+        // to the click. Recomputed here from the same positions so the check
+        // measures the row count, not the angle.
+        rm::FxWide sumX = 0;
+        rm::FxWide sumZ = 0;
+        for (const UnitId member : group) {
+            sumX += fix.roster.transform(member).x.raw();
+            sumZ += fix.roster.transform(member).z.raw();
+        }
+        const rm::sim::Fx centreX = rm::sim::Fx::fromRaw(rm::sim::saturate(
+            sumX / static_cast<rm::FxWide>(group.size())));
+        const rm::sim::Fx centreZ = rm::sim::Fx::fromRaw(rm::sim::saturate(
+            sumZ / static_cast<rm::FxWide>(group.size())));
+        const rm::Brad facing =
+            rm::sim::fxBearing(clickX - centreX, clickZ - centreZ);
+        const rm::sim::Fx sin = rm::sim::fxSin(facing);
+        const rm::sim::Fx cos = rm::sim::fxCos(facing);
+
         std::size_t front = 0;
         for (const UnitId member : group) {
             const auto& entries = fix.roster.store.orders()[member.index].entries();
             REQUIRE(entries.size() == 1);
-            if (entries.front().targetZ() == clickZ) {
+            // Forward projection of the slot off the anchor. The front row sits
+            // at local z = 0; trailing rows are a full collision diameter back,
+            // so a one-elmo margin separates them cleanly.
+            const rm::sim::Fx forward =
+                (entries.front().targetX() - clickX) * sin
+                + (entries.front().targetZ() - clickZ) * cos;
+            if (forward > rm::sim::Fx::fromInt(-1)
+                && forward < rm::sim::Fx::fromInt(1)) {
                 ++front;
             }
         }

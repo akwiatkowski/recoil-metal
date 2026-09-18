@@ -750,6 +750,38 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     // before and selection order stays presentation-only.
     std::ranges::stable_sort(formationMembers, {}, formationClass);
     const std::size_t formationWidth = growthFormationWidth(formationMembers.size());
+    // The formation's facing. Retail carries it on the wire command as an orientation
+    // quaternion (`C-151`, `CDecoder::DecodeCommandData` +0x3c..+0x48) that the engine
+    // applies to the Lua `FormationPos` offsets — the script itself returns unrotated
+    // geometry. With no UI to supply that quaternion, the deterministic stand-in is the
+    // bearing from the issued group's centroid to the click: the formation faces its
+    // destination, so the front row lands on the anchor and later rows trail back toward
+    // where the group stood. The centroid is over every live unit the issue names —
+    // refused members included — because the facing belongs to the selection as issued,
+    // the same way retail's UI computes the quaternion before the sim validates anyone.
+    // A click exactly on the centroid has no bearing — `fxBearing` answers zero there,
+    // which is the unrotated layout this replaces.
+    FxWide centroidX = 0;
+    FxWide centroidZ = 0;
+    std::size_t centroidCount = 0;
+    for (const UnitId unit : canonical) {
+        if (!store.alive(unit)) {
+            continue;
+        }
+        centroidX += store.transforms()[unit.index].x.raw();
+        centroidZ += store.transforms()[unit.index].z.raw();
+        ++centroidCount;
+    }
+    Brad formationFacing = 0;
+    if (centroidCount > 0) {
+        const Fx centreX = Fx::fromRaw(saturate(centroidX
+                                                / static_cast<FxWide>(centroidCount)));
+        const Fx centreZ = Fx::fromRaw(saturate(centroidZ
+                                                / static_cast<FxWide>(centroidCount)));
+        formationFacing = fxBearing(issue.targetX - centreX, issue.targetZ - centreZ);
+    }
+    const Fx facingSin = fxSin(formationFacing);
+    const Fx facingCos = fxCos(formationFacing);
 
     result.accepted.reserve(canonical.size());
     if (issue.kind == CommandKind::CancelFactoryBuild) {
@@ -1089,11 +1121,18 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             .buildType = issue.buildType,
         };
 
+        Fx localX;
+        Fx localZ;
         if (useGrowthFormation) {
-            // ART-S007's homogeneous GrowthFormation rows enumerate columns centre-outward:
-            // odd widths are 0,+1,-1,+2,-2 and even widths are -.5,+.5,-1.5,+1.5. A
-            // collision diameter is the existing local-target spacing, so its half supplies the
-            // even-row half positions; successive rows are one diameter behind the anchor.
+            // Retail `GrowthFormation` (lua/formations.lua:676-728) routes land units through
+            // `BlockBuilderLand` (formations.lua:838-913), whose `xPos`/`zPos` are the local
+            // offsets computed here: the engine rotates them by the command's formation
+            // quaternion before adding the anchor. `xPos` enumerates columns centre-outward —
+            // odd widths 0,+1,-1,+2,-2 and even widths -.5,+.5,-1.5,+1.5 (the `math.mod`
+            // branches at formations.lua:880-893) — and `zPos` is `-formationLength`, one row
+            // per step behind the anchor (formations.lua:896). A collision diameter is the
+            // existing local-target spacing, so its half supplies the even-row half
+            // positions; successive rows are one diameter behind the anchor.
             const std::size_t formationRank = static_cast<std::size_t>(
                 std::ranges::find(formationMembers, unit) - formationMembers.begin());
             const std::size_t column = formationRank % formationWidth;
@@ -1104,28 +1143,32 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                 const FxWide halfDiameterOffsets = column % 2 == 0
                                                        ? -static_cast<FxWide>(column + 1)
                                                        : static_cast<FxWide>(column);
-                member.targetX += Fx::fromRaw(
+                localX = Fx::fromRaw(
                     saturate(FxWide{radius.raw()} * halfDiameterOffsets));
             } else {
                 const FxWide diameterOffsets = column % 2 == 0
                                                    ? -static_cast<FxWide>(column / 2)
                                                    : static_cast<FxWide>((column + 1) / 2);
-                member.targetX += Fx::fromRaw(
+                localX = Fx::fromRaw(
                     saturate(FxWide{diameter.raw()} * diameterOffsets));
             }
-            member.targetZ -= Fx::fromRaw(saturate(FxWide{diameter.raw()}
-                                                    * static_cast<FxWide>(row)));
+            localZ = Fx::fromRaw(saturate(-FxWide{diameter.raw()}
+                                          * static_cast<FxWide>(row)));
         } else if (issue.kind == CommandKind::Move && canonical.size() > 1
                    && !store.motion()[unit.index].airborne) {
-            // This is deliberately only a generic intake fan-out, not retail's Lua-owned
-            // formation geometry. Centre an unrotated line on the clicked anchor; adjacent
-            // ranks are one collision diameter apart, so canonical ranks receive distinct local
-            // destinations while the immutable shared command still records the click itself.
+            // Degenerate fan-out for a group that cannot fill a formation (fewer than two
+            // valid members): centre a line on the clicked anchor, adjacent ranks one
+            // collision radius apart, rotated by the same facing so the intake stays
+            // consistent whichever path serves it.
             const FxWide offsetRanks = static_cast<FxWide>(rank) * 2
                                        - static_cast<FxWide>(canonical.size() - 1);
             const Fx spacing = store.motion()[unit.index].radiusElmos;
-            member.targetX += Fx::fromRaw(saturate(FxWide{spacing.raw()} * offsetRanks));
+            localX = Fx::fromRaw(saturate(FxWide{spacing.raw()} * offsetRanks));
         }
+        // Local → world by the facing yaw, the same convention `slopeAlignment` uses:
+        // local +z is the direction the formation faces, local +x its right flank.
+        member.targetX += localX * facingCos + localZ * facingSin;
+        member.targetZ += localZ * facingCos - localX * facingSin;
 
         if (applyCommandMember(member, issue.source, issue.id, issue.count, issue.targetX,
                                issue.targetZ, shared, store, catalog, players, armies, terrain,
