@@ -567,8 +567,9 @@ the same incumbent. Explicit Attack remains separate, including when its target 
 `C-157` now rejects automatic candidates outside the immutable playable rectangle before
 restriction/range/scoring and clears an incumbent that leaves it; live matches use their full map
 extent and explicit Attack remains unrestricted. `SetDoNotTarget` is represented, persisted,
-hashed, and consulted during automatic acquisition; the engineer reclaim/capture target-exemption
-rule remains unwired because those command paths do not yet expose their unit targets.
+hashed, and consulted during automatic acquisition. The engineer reclaim/capture
+target-exemption rule is wired: `collectUnitWorkClaims`/`collectCaptureClaims` feed the
+`C-157` own-side reject in `nearestTarget` (tested — `[combat]` C-157 case, `[capture]` suite).
 
 ```text
 /goal Advance WP-15 with type-safe unit-target Reclaim/Capture command support before implementing
