@@ -171,9 +171,10 @@ implementation gaps are closed: the `C-183` ferry rung (a transport guarding a
 `FERRYBEACON` flies its route) and multi-weapon guard arbitration (the longest-range
 envelope owns the hold) are implemented and tested.
 **Current EXE-analysis action:**
-the capture increment semantic at `Unit+0x690`
-(`C-239`/`C-243`) plus `Sim::TransferUnit`'s native copy/reset inventory, and naming the third
-`HasSiloAmmo` caller at `0x005DEAD0`.
+the >80% retail-analyzed goal is met (every row ≥85%). Residual unknowns, in
+implementation-impact order: the `CUnitCommand+0xa2` cancel-flag readers near
+`0x006f4730`/`0x006f4800`, and `IssueScript` command-data marshalling at
+`0x006fd240`.
 
 ## Reading The Scores
 
