@@ -190,6 +190,7 @@ TEST_CASE("a scripted match hashes identically at every pool size") {
                 [&](rm::sim::UnitId) { return &grid; }, roster.rate, &building, nullptr,
                 nullptr, &paths));
         }
+        std::size_t shotsFired = 0;
         for (rm::TickIndex tick = 0; tick < 120; ++tick) {
             const std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(),
                                                                      &grid);
@@ -200,13 +201,15 @@ TEST_CASE("a scripted match hashes identically at every pool size") {
                                  .passability = grids,
                                  .pathService = &paths,
                                  .commandersEver = commandersEver};
-            (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+            shotsFired += rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain)
+                              .shotsFired;
         }
-
         // Not vacuous: the run only counts if both parallel sites actually
         // had work — shots fired means acquisition ran, and the mover reaching
-        // its ordered x means a search completed and published.
-        REQUIRE_FALSE(shots.empty());
+        // its ordered x means a search completed and published. The count is
+        // cumulative: an unturreted hull slews between shots, so the in-flight
+        // set can legitimately be empty on the last tick.
+        REQUIRE(shotsFired > 0);
         REQUIRE(roster.store.transforms()[firstMover.index].x > rm::test::fx(300.0f));
 
         rm::sim::Match match{.armies = armies,

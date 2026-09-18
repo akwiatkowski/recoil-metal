@@ -1083,3 +1083,78 @@ TEST_CASE("an idle engineering station reports its project as a link") {
     CHECK(f.assistLinks[0].work == 0);
     CHECK(f.assistLinks[0].position == f.building[0].position);
 }
+
+TEST_CASE("C-183: guard arbitration holds inside a longer weapon's dead zone",
+          "[guard][guard-work-regression]") {
+    // `CAiAttackerImpl` prefers the longest-range weapon that can hit — its
+    // [minRange, maxRange] envelope covers the gap. A target inside the long
+    // gun's dead zone but inside the short gun's envelope is still engaged:
+    // the guard holds and lets the short gun work rather than chasing into
+    // the long gun's reach.
+    Fixture f;
+    auto armed = *f.roster.catalog.def(f.engineerType);
+    armed.name = "deadzone_guard";
+    armed.speedElmosPerSecond = 20.0f;
+    armed.guardScanRadiusElmos = rm::sim::Fx::fromInt(200);
+    rm::unitdef::Weapon longGun;
+    longGun.label = "long";
+    longGun.role = rm::unitdef::WeaponRole::DirectFire;
+    longGun.targetPriorities = {{"ALLUNITS"}};
+    longGun.damage = rm::sim::Mag::fromInt(10);
+    longGun.minRange = rm::sim::Fx::fromInt(60);
+    longGun.maxRange = rm::sim::Fx::fromInt(120);
+    longGun.rateOfFire = 1.0f;
+    rm::unitdef::Weapon shortGun = longGun;
+    shortGun.label = "short";
+    shortGun.minRange = rm::sim::Fx{};
+    shortGun.maxRange = rm::sim::Fx::fromInt(30);
+    armed.weapons = {longGun, shortGun};
+    const auto armedType = f.roster.addType(armed);
+    const auto founder = f.roster.add(f.engineerType, 200, 200, 0, 100);
+    const auto guard = f.roster.add(armedType, 220, 200, 0, 100);
+    // 25 elmos out: inside the short gun's envelope, inside the long gun's
+    // dead zone, inside the scan radius.
+    const auto prey = f.roster.add(f.tankType, 245, 200, 1, 100);
+    REQUIRE(f.apply(Command{.kind = CommandKind::Guard, .unit = guard, .target = founder}));
+
+    f.tick(30);
+    INFO("shots " << f.shots.size() << " prey hp "
+          << rm::test::asFloat(f.roster.health(prey).current)
+          << " heading " << static_cast<int>(f.roster.transform(guard).heading)
+          << " moving " << f.roster.motion(guard).moving);
+
+    const rm::sim::MoveState& motion = f.roster.motion(guard);
+    CHECK_FALSE(motion.moving);  // holds: a weapon's envelope covers the gap
+    // The short gun's envelope owns the gap, so the prey takes damage while
+    // the guard stands still — chasing into the long gun's reach would move it.
+    CHECK(f.roster.health(prey).current < f.roster.health(prey).maximum);
+}
+
+TEST_CASE("C-183: guard arbitration chases a target outside every envelope",
+          "[guard][guard-work-regression]") {
+    // Beyond the longest envelope the guard pursues — the same chase the
+    // single-weapon case already ran, kept honest for the multi-weapon def.
+    Fixture f;
+    auto armed = *f.roster.catalog.def(f.engineerType);
+    armed.name = "chase_guard";
+    armed.speedElmosPerSecond = 20.0f;
+    armed.guardScanRadiusElmos = rm::sim::Fx::fromInt(200);
+    rm::unitdef::Weapon gun;
+    gun.label = "gun";
+    gun.role = rm::unitdef::WeaponRole::DirectFire;
+    gun.targetPriorities = {{"ALLUNITS"}};
+    gun.damage = rm::sim::Mag::fromInt(10);
+    gun.maxRange = rm::sim::Fx::fromInt(30);
+    gun.rateOfFire = 1.0f;
+    armed.weapons = {gun};
+    const auto armedType = f.roster.addType(armed);
+    const auto founder = f.roster.add(f.engineerType, 200, 200, 0, 100);
+    const auto guard = f.roster.add(armedType, 220, 200, 0, 100);
+    (void)f.roster.add(f.tankType, 300, 200, 1, 100);  // 80 out: inside scan, outside range
+    REQUIRE(f.apply(Command{.kind = CommandKind::Guard, .unit = guard, .target = founder}));
+
+    f.tick();
+
+    CHECK(f.roster.motion(guard).moving);
+    CHECK(f.roster.motion(guard).destinationX > rm::sim::Fx::fromInt(220));
+}

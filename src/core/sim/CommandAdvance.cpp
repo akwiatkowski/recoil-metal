@@ -863,6 +863,20 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             continue;
         }
 
+        // C-183's FERRY rung outranks the leash and every assist: a transport
+        // guarding a FERRYBEACON flies the beacon's route. The drive itself
+        // lives in the transport pass (`advanceGuardFerry`) — this ladder just
+        // yields the tick so no rung routes the carrier back.
+        if (isGuardCommand(current->kind()) && store.alive(current->target())) {
+            const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
+            const unitdef::UnitDef* beaconDef =
+                catalog.def(store.typeAt(current->target().index));
+            if (guardDef != nullptr && guardDef->isTransport()
+                && beaconDef != nullptr && beaconDef->isFerryBeacon()) {
+                continue;
+            }
+        }
+
         // C-183's leash is measured from the guard to the guarded unit's current position
         // (or, in retail's richer task object, its resolved guarded/build position). The
         // guardee's full blueprint width is added to half GuardScanRadius. GuardReturnRadius
@@ -886,7 +900,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // The acquisition is a range-overridden copy of each firing weapon, so priorities,
         // restrictions, arcs, incumbency and recon all apply exactly as in combat — the
         // structural equivalent of delegating to `IAiAttacker` with `GuardScanRadius`.
-        // Multi-weapon selection among the guard's own guns still resolves to nearest here.
+        // Multi-weapon arbitration follows `CAiAttackerImpl` (`C-183`, `0x61a440`):
+        // the longest-range weapon whose envelope — minRange to maxRange — covers
+        // the gap owns the hold; a target inside every envelope's dead zone or
+        // outside every maxRange still holds or chases on the widest envelope.
         // Combat guards share this ladder; engineering rungs separately require build power.
         if (isGuardCommand(current->kind()) && !armies.empty()
             && store.alive(current->target())) {
@@ -896,20 +913,31 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 const std::span<const Transform> sight = store.transforms();
                 const auto prey = guardAttackTarget(slot, store, catalog, armies, intel, playableRect, tick, rate);
                 if (prey.has_value()) {
-                    Fx reach{};
                     const bool targetAirborne = store.motion()[prey->index].airborne;
-                    for (const unitdef::Weapon& weapon : guardDef->weapons) {
-                        if (!weapon.fires() || weapon.manuallyFired()
-                            || weapon.targetsProjectiles
-                            || !weapon.canTarget(targetAirborne) || weapon.maxRange <= reach) {
-                            continue;
-                        }
-                        reach = weapon.maxRange;
-                    }
                     MoveState& chase = store.motion()[slot];
                     const Fx gap = groundDistanceElmos(positionOf(sight[slot]),
                                                        positionOf(sight[prey->index]));
-                    if (reach <= Fx{} || gap <= reach) {
+                    // `CAiAttackerImpl` arbitration: the longest-range weapon
+                    // that can hit — its [minRange, maxRange] envelope covers
+                    // the gap — owns the hold. `reach` is that weapon's
+                    // maxRange; `widest` is the longest envelope at all, the
+                    // fallback when the target sits inside every dead zone or
+                    // outside every maxRange.
+                    Fx reach{};
+                    Fx widest{};
+                    for (const unitdef::Weapon& weapon : guardDef->weapons) {
+                        if (!weapon.fires() || weapon.manuallyFired()
+                            || weapon.targetsProjectiles
+                            || !weapon.canTarget(targetAirborne)) {
+                            continue;
+                        }
+                        widest = std::max(widest, weapon.maxRange);
+                        if (gap >= weapon.minRange && gap <= weapon.maxRange
+                            && weapon.maxRange > reach) {
+                            reach = weapon.maxRange;
+                        }
+                    }
+                    if (reach > Fx{} || widest <= Fx{} || gap <= widest) {
                         chase.moving = false;
                         chase.path.clear();
                         chase.pathIndex = 0;

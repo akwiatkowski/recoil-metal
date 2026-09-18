@@ -261,19 +261,19 @@ void advanceLoading(UnitStore& store, const UnitCatalog& catalog, const Terrain&
     }
 }
 
-/// The carrier-side drive for a `Ferry`: beacon → drop → beacon, forever.
-/// The anchor is captured where the order started; the phase survives saves.
-void advanceFerry(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
-                  std::span<const PassabilityGrid* const> gridForType, UnitIndex slot,
-                  QueuedCommand& order) {
+/// The carrier-side drive for a ferry route: beacon → drop → beacon, forever.
+/// `order` supplies the phase state; `beacon`/`drop` are the route's two ends.
+/// A `drop` equal to the beacon means "no destination yet" — the carrier
+/// loads whatever waits at the beacon and holds, rather than flying a
+/// zero-length leg that would detach and re-attach the same cargo each pass.
+void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
+                       std::span<const PassabilityGrid* const> gridForType, UnitIndex slot,
+                       QueuedCommand& order, std::array<Fx, 2> beacon,
+                       std::array<Fx, 2> drop) {
     const UnitId self = store.idAt(slot);
     const Transform& at = store.transforms()[slot];
     MoveState& motion = store.motion()[slot];
-    if (!order.transportAnchor()) {
-        order.beginFerry({at.x, at.z});
-    }
-    const std::array<Fx, 2> beacon = *order.transportAnchor();
-    const std::array<Fx, 2> drop = {order.targetX(), order.targetZ()};
+    const bool hasDrop = drop[0] != beacon[0] || drop[1] != beacon[1];
 
     const auto nearPoint = [&](std::array<Fx, 2> point, Fx radius) {
         const Fx dx = at.x - point[0];
@@ -322,6 +322,9 @@ void advanceFerry(UnitStore& store, const UnitCatalog& catalog, const Terrain& t
         if (store.childrenOf(self).empty()) {
             return;  // nothing aboard yet: the beacon holds
         }
+        if (!hasDrop) {
+            return;  // no destination: hold the loaded cargo at the beacon
+        }
         // Leave when full, or when nobody transportable still heads for the
         // beacon — a squad strung out along the route is waited on.
         if (carrierDef != nullptr
@@ -353,6 +356,53 @@ void advanceFerry(UnitStore& store, const UnitCatalog& catalog, const Terrain& t
         order.setTransportPhase(TransportPhase::ToBeacon);
         return;
     }
+}
+/// The `Ferry` order's own route: beacon where the order started, drop at the
+/// order's target. The anchor is captured where the order started; the phase
+/// survives saves.
+void advanceFerry(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
+                  std::span<const PassabilityGrid* const> gridForType, UnitIndex slot,
+                  QueuedCommand& order) {
+    const Transform& at = store.transforms()[slot];
+    if (!order.transportAnchor()) {
+        order.beginFerry({at.x, at.z});
+    }
+    advanceFerryRoute(store, catalog, terrain, gridForType, slot, order,
+                      *order.transportAnchor(), {order.targetX(), order.targetZ()});
+}
+
+/// `C-183`'s ferry rung: a transport guarding a `FERRYBEACON` flies the
+/// beacon's route — pickup at the beacon, drop where the beacon's own active
+/// command points. The guard command's `transportAnchor`/`transportPhase`
+/// carry the route state, the same fields a `Ferry` order uses; a beacon with
+/// no destination command holds the carrier at the pickup.
+void advanceGuardFerry(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
+                       std::span<const PassabilityGrid* const> gridForType, UnitIndex slot,
+                       QueuedCommand& order) {
+    const UnitId beacon = order.target();
+    if (!store.alive(beacon)) {
+        return;  // dead beacon: the ordinary guard ladder owns the unit again
+    }
+    const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
+    const unitdef::UnitDef* beaconDef = catalog.def(store.typeAt(beacon.index));
+    if (guardDef == nullptr || !guardDef->isTransport()
+        || beaconDef == nullptr || !beaconDef->isFerryBeacon()) {
+        return;
+    }
+    const Transform& beaconAt = store.transforms()[beacon.index];
+    if (!order.transportAnchor()) {
+        order.beginFerry({beaconAt.x, beaconAt.z});
+    }
+    // The drop is the beacon's own active command target — retail's beacon
+    // unit carries the route's destination on its command. No command, or a
+    // command with no position, means the route has no far end yet.
+    std::array<Fx, 2> drop = {beaconAt.x, beaconAt.z};
+    if (const QueuedCommand* head = store.orders()[beacon.index].active();
+        head != nullptr) {
+        drop = {head->targetX(), head->targetZ()};
+    }
+    advanceFerryRoute(store, catalog, terrain, gridForType, slot, order,
+                      *order.transportAnchor(), drop);
 }
 
 /// Whether `slot` has a live cargo inbound on an active `LoadTransport` —
@@ -435,6 +485,13 @@ void updateTransports(UnitStore& store, const UnitCatalog& catalog, const Terrai
             break;
         case CommandKind::Ferry:
             advanceFerry(store, catalog, terrain, gridForType, slot, *order);
+            break;
+        case CommandKind::Guard:
+        case CommandKind::Assist:
+            // `C-183`'s ferry rung: a transport guarding a FERRYBEACON flies
+            // its route. `advanceGuardFerry` no-ops for every other guard, so
+            // the ordinary ladder in `advanceOrders` keeps ownership.
+            advanceGuardFerry(store, catalog, terrain, gridForType, slot, *order);
             break;
         default:
             break;

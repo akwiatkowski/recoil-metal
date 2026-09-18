@@ -627,6 +627,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     for (const WorkClaim& claim : collectCaptureClaims(store)) {
         claims.push_back(claim);
     }
+    (void)aimAtTargets(store, catalog, match.armies, match.intel, match.projectiles,
+                       playableRect, tickIndex, rate, claims);
 
     // Who stands beside whom for the GUNS, computed once here: the RateOfFire row
     // (`C-051`(b) — a penalty, not a bonus) lands on this tick's reloads. The economy

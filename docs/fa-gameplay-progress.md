@@ -154,9 +154,10 @@ headline honest.
 **Current implementation critical path:**
 the stated goal is a recorded full vivid AI skirmish end-to-end — every piece that makes
 one worth recording landed this week (transports, flow fields, universal leading,
-post-processing). Remaining [`FA-CMD`](#fa-cmd---commands-controls-and-factories)
-implementation gaps are the `C-183` ferry rung and multi-weapon guard arbitration;
-staging-pad refuel is in.
+post-processing). The remaining [`FA-CMD`](#fa-cmd---commands-controls-and-factories)
+implementation gaps are closed: the `C-183` ferry rung (a transport guarding a
+`FERRYBEACON` flies its route) and multi-weapon guard arbitration (the longest-range
+envelope owns the hold) are implemented and tested.
 **Current EXE-analysis action:**
 the capture increment semantic at `Unit+0x690`
 (`C-239`/`C-243`) plus `Sim::TransferUnit`'s native copy/reset inventory, and naming the third
@@ -393,8 +394,14 @@ Guard is accepted on the retail map: `make test-guard-ui` replays
 250 elmos across the terrain — and requires matching pixels and hashes with the guard
 order still standing and the guard away from the factory (`hud-order:` line). Strict
 `make test-content` runs every `[corpus][guard]` case with no skips. Staging pads now
-refuel bingo-fuel guards — the first `C-183` refuel rung (`9768d4f`, tested).
-Still absent: the ferry rung and exact multi-weapon guard arbitration.
+refuel bingo-fuel guards — the first `C-183` refuel rung (`9768d4f`, tested). The ferry
+rung is now in too: a transport guarding a `FERRYBEACON` flies the beacon's route —
+pickup at the beacon, drop at the beacon's own command target — on the same phase
+state a `Ferry` order uses (`[fa-transport]`, tested). Multi-weapon guard arbitration
+follows `CAiAttackerImpl`: the longest-range weapon whose [minRange, maxRange] envelope
+covers the gap owns the hold, and the widest envelope is the chase/hold fallback
+(`[guard]`, tested). The `aimAtTargets` call dropped by the capture refactor (`0a879ee`)
+is restored, so unturreted hulls slew onto their aim point before the facing gate again.
 
 ```text
 /goal Advance FA-CMD by specifying the remaining C-183 ferry rung from its retail callers

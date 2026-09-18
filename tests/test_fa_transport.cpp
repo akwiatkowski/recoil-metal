@@ -56,7 +56,7 @@ namespace {
     def.motion = rm::unitdef::MotionType::Air;
     def.canFly = true;
     def.speedElmosPerSecond = 10.0f;
-    def.commandCaps = {"RULEUCC_Transport"};
+    def.commandCaps = {"RULEUCC_Guard", "RULEUCC_Transport"};
     def.commandCapsDeclared = true;
     def.transport.transportClass = 6;
     def.transport.class2AttachSize = 2;
@@ -349,4 +349,85 @@ TEST_CASE("C-199: a ferry holds at the beacon for a straggler", "[fa-transport]"
     CHECK(rm::sim::fxToFloat(roster.transform(near).z) == Approx(80.0f).margin(10.0f));
     CHECK(rm::sim::fxToFloat(roster.transform(far).x) == Approx(80.0f).margin(10.0f));
     CHECK(rm::sim::fxToFloat(roster.transform(far).z) == Approx(80.0f).margin(10.0f));
+}
+
+/// A FERRYBEACON-shaped marker: UEB5102's category set, immobile, no command
+/// caps — the engine spawns it, so it never needs to act on its own.
+[[nodiscard]] UnitDef beaconDef() {
+    UnitDef def;
+    def.name = "test_beacon";
+    def.categories = {"FERRYBEACON", "UNTARGETABLE"};  // sorted for hasCategory
+    def.health = rm::sim::Mag::fromInt(10);
+    return def;
+}
+
+TEST_CASE("C-183: a transport guarding a ferry beacon flies its route",
+          "[fa-transport]") {
+    // The guard ladder's ferry rung: a transport guarding a FERRYBEACON picks
+    // up whatever waits at the beacon and ferries it to the beacon's own
+    // command target — the same loop a `Ferry` order flies, driven by the
+    // guard instead of a standing route.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const rm::UnitTypeIndex beaconType = roster.addType(beaconDef());
+    const UnitId transport = landedTransport(roster, transportType, 40.0f, 30.0f);
+    const UnitId beacon = roster.add(beaconType, 30.0f, 30.0f, 0, 10.0f);
+    const UnitId cargo = roster.add(cargoType, 32.0f, 30.0f, 0, 500.0f);
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+
+    // The beacon's own command carries the drop point — retail's beacon unit
+    // holds the route's destination on its command.
+    REQUIRE(rm::sim::applyCommand(moveIssue(beacon, 80.0f, 80.0f, 1), roster.store,
+                                  roster.catalog, players, armies, terrain, gridFor,
+                                  roster.rate)
+                .accepted.size()
+            == 1);
+    // The transport guards the beacon; the cargo walks to the pickup ring.
+    REQUIRE(rm::sim::applyCommand(
+                CommandIssue{.source = 0,
+                             .id = rm::commandId(0, 2),
+                             .player = 0,
+                             .kind = CommandKind::Guard,
+                             .units = {transport},
+                             .target = beacon},
+                roster.store, roster.catalog, players, armies, terrain, gridFor,
+                roster.rate)
+                .accepted.size()
+            == 1);
+    REQUIRE(rm::sim::applyCommand(moveIssue(cargo, 30.0f, 30.0f, 3), roster.store,
+                                  roster.catalog, players, armies, terrain, gridFor,
+                                  roster.rate)
+                .accepted.size()
+            == 1);
+
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    bool boarded = false;
+    bool delivered = false;
+    for (int i = 0; i < 6000 && !delivered; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        boarded = boarded || roster.motion(cargo).attached;
+        delivered = boarded && !roster.motion(cargo).attached;
+    }
+
+    REQUIRE(boarded);
+    REQUIRE(delivered);
+    CHECK(rm::sim::fxToFloat(roster.transform(cargo).x) == Approx(80.0f).margin(10.0f));
+    CHECK(rm::sim::fxToFloat(roster.transform(cargo).z) == Approx(80.0f).margin(10.0f));
+    // The guard order still stands — the route is a standing loop, not a
+    // one-shot delivery.
+    const rm::sim::QueuedCommand* head = roster.store.orders()[transport.index].active();
+    REQUIRE(head != nullptr);
+    CHECK(head->kind() == CommandKind::Guard);
 }

@@ -802,6 +802,13 @@ struct UnitDef {
         return hasCategory("AIRSTAGINGPLATFORM");
     }
 
+    /// A `FERRYBEACON` — the spawned marker a ferry route loads at (`C-199`,
+    /// `C-348`). Four shipped blueprints carry the category: UEB5102, UAB5102,
+    /// URB5102, XSB5102. A transport guarding one runs the beacon's route.
+    [[nodiscard]] bool isFerryBeacon() const noexcept {
+        return hasCategory("FERRYBEACON");
+    }
+
     /// `AI.RefuelingMultiplier` — how much faster than the bare drain rate a
     /// docked aircraft refuels on this pad (`C-223`: the ratio climbs by
     /// `multiplier / FuelUseTime × 0.1` a beat; UEB5202 states 50).

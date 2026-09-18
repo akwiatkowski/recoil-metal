@@ -917,9 +917,9 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
 /// the origin instead puts every authored-`Elevation` unit under its own
 /// datum — a Fatboy standing on flat ground could never fire.
 [[nodiscard]] Fx weaponGateFirerY(const unitdef::UnitDef& def, Fx originY) noexcept {
-    const float boneHeight = def.sizeYElmos > 0.0f ? def.sizeYElmos
-                                                  : def.meshHeightElmos;
-    return originY + fxFromFloat(boneHeight);
+    const Fx boneHeight = fxFromFloat(def.sizeYElmos > 0.0f ? def.sizeYElmos
+                                                          : def.meshHeightElmos);
+    return originY + boneHeight;
 }
 
 /// The target-side water gates (`C-322`), evaluated ONLY for Seabed-layer
