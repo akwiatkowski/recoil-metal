@@ -358,6 +358,10 @@ private:
     struct Placement {
         std::int32_t square = IntelGrid::kNoSquare;
         int alliance = 0;
+        /// The unit's `scriptBitsDisabled` mask at stamp time: a RULEUTC_* toggle
+        /// changes what this slot emits without moving it, so the mask is part of
+        /// the "did anything change" key alongside square and alliance.
+        std::uint16_t scriptBits = 0;
     };
 
     void withdraw(UnitIndex slot);

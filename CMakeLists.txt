@@ -452,6 +452,7 @@ if(BUILD_TESTING)
         tests/test_fa_terrain.cpp
         tests/test_fa_ai.cpp
         tests/test_fa_ui.cpp
+        tests/test_script_bits.cpp
         tests/test_fa_present.cpp
         tests/test_fa_persist.cpp
         tests/support/SmfWriter.cpp

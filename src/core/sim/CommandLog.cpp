@@ -101,10 +101,11 @@ namespace {
 
 
 inline constexpr std::string_view kCommandLogMagic = "recoil-metal semantic command log";
-/// Version 6 adds `set-build-priority` and its trailing `priority` column; v5 added
-/// immediate `dive`. Versions 2–5 are still read — the column defaults to Normal there,
-/// and a name their writers never produced cannot appear in them anyway.
-inline constexpr std::uint32_t kCommandLogVersion = 6;
+/// Version 7 adds `toggle-script-bit` and its trailing `scriptBit` column; v6 added
+/// `set-build-priority` and its `priority` column; v5 added immediate `dive`.
+/// Versions 2–6 are still read — the columns default there, and a name their
+/// writers never produced cannot appear in them anyway.
+inline constexpr std::uint32_t kCommandLogVersion = 7;
 
 [[nodiscard]] const char* phaseName(CommandPhase phase) noexcept {
     return phase == CommandPhase::PreTick ? "pre-tick" : "post-spawn";
@@ -209,7 +210,8 @@ bool writeCommandLog(const CommandLog& log, const std::string& path,
         }
         out << ' ' << std::quoted(blueprint) << ' ' << std::quoted(issue.scriptTask) << ' '
             << std::quoted(scriptData) << ' ' << issue.cancelCommandId << ' '
-            << static_cast<unsigned>(issue.priority) << '\n';
+            << static_cast<unsigned>(issue.priority) << ' '
+            << static_cast<unsigned>(issue.scriptBit) << '\n';
     }
     return out.good();
 }
@@ -344,6 +346,13 @@ std::optional<CommandLog> readCommandLog(const std::string& path,
                 return std::nullopt;
             }
             issue.priority = static_cast<BuildPriority>(priority);
+        }
+        if (version >= 7) {
+            std::uint64_t scriptBit{};
+            if (!(fields >> scriptBit) || scriptBit > 8) {
+                return std::nullopt;
+            }
+            issue.scriptBit = static_cast<std::uint8_t>(scriptBit);
         }
         if (fields >> extra) return std::nullopt;
         issue.scriptTask = std::move(scriptTask);

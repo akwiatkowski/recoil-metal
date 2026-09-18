@@ -267,8 +267,13 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
             if (!store.productionPaused(store.idAt(slot))) {
                 economy.incomePerTick.mass += rates.massPerTick * beside.massProduction;
                 economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction;
-                economy.upkeepPerTick.energy +=
-                    rates.upkeepEnergyPerTick * beside.energyUpkeep;
+                // `SetMaintenanceConsumption{Active,Inactive}` gates upkeep only —
+                // the script-bit toggles cut a unit's draw without touching what
+                // it produces (`Unit.lua`'s `OnScriptBitSet`/`OnScriptBitClear`).
+                if (store.maintenanceActive(store.idAt(slot))) {
+                    economy.upkeepPerTick.energy +=
+                        rates.upkeepEnergyPerTick * beside.energyUpkeep;
+                }
             }
             // TRUNCATED PER STRUCTURE, and this is the only place the economy rounds
             // (`C-069`, `C-104`(e), `C-160`). Retail keeps its capacity as a `uint64` and

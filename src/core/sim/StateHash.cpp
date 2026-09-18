@@ -212,6 +212,12 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
         feed(h, health.shield.maximum);
         feed(h, static_cast<std::size_t>(health.shield.regenDelayRemaining));
         feed(h, static_cast<std::size_t>(health.shield.rechargeRemaining));
+        // A manual re-enable recharges without refilling — the flag decides what
+        // the next completed recharge does, so it hashes when set. Default-true
+        // stays silent, keeping the pre-toggle stream intact.
+        if (!health.shield.rechargeRestoresFull) {
+            feed(h, false);
+        }
     }
     feed(h, health.reloadRemaining.size());
     for (const int remaining : health.reloadRemaining) {
@@ -533,6 +539,19 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         }
         if (store.doNotTarget(store.idAt(slot))) {
             feed(h, std::uint8_t{2});
+        }
+        // The script-bit toggles change what the unit does next tick — a disabled
+        // shield stops absorbing, disabled intel stops emitting — so a set mask
+        // hashes. The maintenance flag is last-writer-wins state, not derivable
+        // from the mask, and it gates upkeep: it hashes too. All-off/active
+        // stays silent, keeping the pre-toggle stream intact.
+        if (const std::uint16_t bits = store.scriptBitsDisabledMaskAt(slot);
+            bits != 0) {
+            feed(h, std::uint8_t{8});
+            feed(h, bits);
+        }
+        if (!store.maintenanceActive(store.idAt(slot))) {
+            feed(h, std::uint8_t{9});
         }
         // WHETHER THE SLOT IS OCCUPIED, which the generation cannot say on its own. Death is
         // a tombstone: `kill` leaves every array untouched and deliberately does NOT advance

@@ -662,7 +662,8 @@ struct ProjectileTickStart {
         // native shield primitive occupies its own collision layer (`C-169`).
         if (!proximityFallback && catalog != nullptr) {
             const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(slot));
-            if (shield.exists() && store.health()[slot].shield.active()) {
+            if (shield.exists() && store.health()[slot].shield.active()
+                && !store.scriptBitDisabledAt(slot, 0)) {
                 const std::array<Fx, 3> centre = shieldCentre(shield, transforms[slot]);
                 const std::optional<SweepFraction> hit = segmentShieldEntry(
                     from, to, shield, centre, minimumFraction, maximumFraction);
@@ -2507,13 +2508,22 @@ void tickShields(UnitStore& store, const UnitCatalog& catalog, EventQueue* event
         }
         ShieldState& state = health[slot].shield;
         const UnitCatalog::ShieldInfo& shield = catalog.shield(store.typeAt(slot));
+        // Script bit 0 (`RULEUTC_ShieldToggle`) is retail's manual off switch:
+        // `OffState` kills the regen thread and removes the collision shape, so a
+        // disabled shield neither absorbs (the call sites above) nor regenerates.
+        // Its health is kept — retail's `OffHealth` — for the re-enable.
+        if (store.scriptBitDisabledAt(slot, 0)) {
+            continue;
+        }
         if (!shield.exists() || state.maximum <= Mag{}) {
             continue;
         }
         if (state.rechargeRemaining > 0) {
             --state.rechargeRemaining;
             if (state.rechargeRemaining == 0) {
-                state.current = state.maximum;
+                if (state.rechargeRestoresFull) {
+                    state.current = state.maximum;
+                }
                 emit(events, Event{.kind = EventKind::ShieldRestored,
                                    .unit = store.idAt(slot),
                                    .army = armyAt(store, slot),
@@ -2723,7 +2733,8 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
                 continue;
             }
             const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(slot));
-            if (!shield.exists() || !healths[slot].shield.active()) {
+            if (!shield.exists() || !healths[slot].shield.active()
+                || store.scriptBitDisabledAt(slot, 0)) {
                 continue;
             }
             // shield.lua:100-108 asks the OWNER for its armour multiplier. A shield has no
@@ -2950,6 +2961,7 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
             owner.shield.current = Mag{};
             owner.shield.regenDelayRemaining = 0;
             owner.shield.rechargeRemaining = shield.recharge;
+            owner.shield.rechargeRestoresFull = true;
             emit(events, Event{.kind = EventKind::ShieldCollapsed,
                                .unit = store.idAt(bubble.slot),
                                .instigator = by,

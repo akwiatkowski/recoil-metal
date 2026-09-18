@@ -2796,6 +2796,35 @@ All 1916 tests pass. Retail-analyzed remains >=85% on every subsystem row; the
 cancel-flag readers near `0x006f4730`/`0x006f4800`, or `IssueScript` command-data
 marshalling at `0x006fd240`.
 
+### 2026-09-18 / Wave-3 implementation update
+
+The `C-350` script-bit contract is now implemented end to end:
+
+- `FA-UI`/`FA-CMD`: the five backed `RULEUTC_*` toggles (shield, jamming, intel,
+  stealth, cloak) dispatch from the rack as `CommandKind::ToggleScriptBit` through
+  the same semantic intake as every other order — authorized, cap-gated on the
+  blueprint's `ToggleCaps`, and immediate like `ToggleProduction`. Weapon,
+  generic and special stay present-but-disabled, matching retail's own no-ops.
+- `FA-DAMAGE`: shield off stops absorbing and regenerating while keeping
+  `OffHealth`; re-enable gates absorption for `ShieldEnergyDrainRechargeTime`
+  and resumes at the kept health — `ShieldState::rechargeRestoresFull` records
+  which completion the countdown owes, hashed only when it differs from the
+  default so pre-toggle streams are untouched.
+- `FA-INTEL`: bits 3/5/8 withdraw senses, stealth fields and cloak per
+  `DisableUnitIntel`; the emitter placement cache now keys on the script-bit
+  mask, so a toggle re-stamps without waiting for the unit to move (a stale-
+  coverage bug the toggle tests exposed).
+- `FA-ECON`: every implemented bit runs `SetMaintenanceConsumption{Active,
+  Inactive}` last-writer-wins (`Unit.lua:309-380`), stored as
+  `maintenanceActive` — independent of the mask, as retail's own sequence of
+  calls is.
+- `FA-PERSIST`: SaveState v36 carries the mask, the upkeep flag and the shield
+  restore flag; command log v7 records the bit; both arrays hash.
+
+All 1,909 tests pass. Next exact action: the `CUnitCommand+0xa2` cancel-flag
+readers near `0x006f4730`/`0x006f4800`, or `IssueScript` command-data
+marshalling at `0x006fd240`.
+
 ## Confirmation gate
 
 A work package may move to **Confirmed with EXE analysis** only when all are true:

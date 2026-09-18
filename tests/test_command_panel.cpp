@@ -309,7 +309,7 @@ TEST_CASE("order overrides merge unanimously across the selection", "[ui][toggle
 
 TEST_CASE("the command page fills dead order slots with toggles", "[ui][toggles]") {
     // An immobile unarmed structure: only Stop lives, so Dive's slot takes the
-    // retail Shield toggle at its preferred position — present but disabled.
+    // retail Shield toggle at its preferred position — backed by script bit 0.
     rm::unitdef::UnitDef shield;
     shield.toggleCapsDeclared = true;
     shield.toggleCaps = {"RULEUTC_ShieldToggle"};
@@ -319,7 +319,7 @@ TEST_CASE("the command page fills dead order slots with toggles", "[ui][toggles]
     CHECK(page[6].toggle == 0);
     CHECK(page[6].name == "SHIELD");
     CHECK(page[6].icon == "shield");
-    CHECK_FALSE(page[6].enabled);
+    CHECK(page[6].enabled);
     CHECK(page[4].name == "STOP");
     CHECK(page[4].enabled);
     CHECK_FALSE(page[4].toggle.has_value());
@@ -341,7 +341,7 @@ TEST_CASE("orders keep their slots when a toggle wants them too", "[ui][toggles]
     CHECK_FALSE(page[10].toggle.has_value());
     REQUIRE(page[7].toggle.has_value());
     CHECK(page[7].name == "INTEL");
-    CHECK_FALSE(page[7].enabled);
+    CHECK(page[7].enabled);
 }
 
 TEST_CASE("overrides relabel the cells they agree on", "[ui][toggles]") {
@@ -357,19 +357,21 @@ TEST_CASE("overrides relabel the cells they agree on", "[ui][toggles]") {
 }
 
 TEST_CASE("toggle cards report present-but-unsupported actions", "[ui][toggles]") {
+    // Weapon is retail's no-op toggle: declared, presented, and still without a
+    // sim effect — the card says so rather than pretending a state.
     rm::unitdef::UnitDef shield;
     shield.toggleCapsDeclared = true;
-    shield.toggleCaps = {"RULEUTC_ShieldToggle"};
+    shield.toggleCaps = {"RULEUTC_WeaponToggle"};
     const std::array<const rm::unitdef::UnitDef*, 1> selection{&shield};
-    const rm::ui::InfoCard card = rm::ui::toggleCard(rm::ui::kToggleDescriptors[0], selection);
-    CHECK(card.title == "SHIELD TOGGLE");
+    const rm::ui::InfoCard card = rm::ui::toggleCard(rm::ui::kToggleDescriptors[1], selection);
+    CHECK(card.title == "WEAPON TOGGLE");
     REQUIRE(card.rows.size() == 3);
     CHECK(card.rows[0].value == "NOT IMPLEMENTED");
-    CHECK(card.rows[1].value == "1 OF 1 UNITS");
+    CHECK(card.rows[1].value == "0 OF 1 UNITS");
 
     const rm::ui::CommandPage page = rm::ui::commandPage(selection);
     const rm::ui::InfoCard routed = rm::ui::commandInspector(page, 6, selection);
-    CHECK(routed.title == "SHIELD TOGGLE");
+    CHECK(routed.title == "WEAPON TOGGLE");
     const rm::ui::InfoCard order = rm::ui::commandInspector(page, 4, selection);
     CHECK(order.title == "STOP");
 }
@@ -504,5 +506,5 @@ TEST_CASE("the retail shield's authored toggle reaches its rack cell", "[ui][tog
     REQUIRE(page[6].toggle.has_value());
     CHECK(page[6].name == "toggle_shield_dome");
     CHECK(page[6].icon == "shield-dome");
-    CHECK_FALSE(page[6].enabled);
+    CHECK(page[6].enabled);
 }

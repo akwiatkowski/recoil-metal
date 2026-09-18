@@ -93,6 +93,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "toggle-silo-auto";
     case CommandKind::SelfDestruct:
         return "self-destruct";
+    case CommandKind::ToggleScriptBit:
+        return "toggle-script-bit";
     }
     return "stop";
 }
@@ -110,7 +112,8 @@ bool operator==(const CommandIssue& a, const CommandIssue& b) noexcept {
            && a.units == b.units && a.targetX == b.targetX && a.targetZ == b.targetZ
            && a.target == b.target && a.buildType == b.buildType && a.count == b.count
            && a.scriptTask == b.scriptTask && a.scriptData == b.scriptData
-           && a.cancelCommandId == b.cancelCommandId && a.priority == b.priority;
+           && a.cancelCommandId == b.cancelCommandId && a.priority == b.priority
+           && a.scriptBit == b.scriptBit;
 }
 
 // --- The shared predicates ------------------------------------------------

@@ -42,6 +42,7 @@ template <typename Order>
     case CommandKind::SiloBuildNuke:
     case CommandKind::ToggleSiloAuto:
     case CommandKind::SelfDestruct:
+    case CommandKind::ToggleScriptBit:
         return false;
     case CommandKind::Move:
     case CommandKind::AttackMove:

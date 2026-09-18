@@ -463,8 +463,6 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     constexpr std::size_t kV35AbsentProjectileBytes = sizeof(std::uint8_t);
     v7.resize(v7.size() - kV35AbsentProjectileBytes - kV34Bytes - kV33SiloQueueBytes - kV32LeadStepBytes - kV31CongestionBytes - kV30FocusBytes - kV28RetreatBytes - kV27PriorityBytes - kV26ProductionPausedBytes - kV25DualPoseBytes - kV24TurretPoseBytes - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
               - kV8CommandStateBytes);
-    writeU32(v7, 4, 7);
-    writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
     // v4 adds the offset collection, v5 adds DoNotTarget, v6 adds one automatic-target count
     // to every health record, and v7 adds attached motion plus the local height. Removing the
     // additions recreates the published v3 shape, which stored the attachment graph but none of
@@ -480,6 +478,25 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
                                + sizeof(std::uint32_t) + kSlots * 18
                                  + sizeof(std::uint32_t) + kSlots * kV7MotionBytes
                                  + sizeof(std::uint32_t);
+    // V36 inserts a restore-flag byte inside every health record (after the two
+    // shield countdown words, at record offset 40) and two counted arrays —
+    // scriptBitsDisabled u16 and maintenanceActive u8 — between the health array
+    // and the type table. Both come out before the v7 shape is reached: the
+    // arrays first (they sit after the records), then the flags, last slot
+    // first so earlier offsets stay valid. This runs before the header writes
+    // below so the recorded payload size counts the stripped stream.
+    constexpr std::size_t kV36HealthFlagOffset = 40;
+    constexpr std::size_t kV36RecordBytes = kV6HealthBytes + 1;
+    constexpr std::size_t kV36ArrayBytes = 2 * sizeof(std::uint32_t) + kSlots * 3;
+    const std::size_t healthEnd = health + kSlots * kV36RecordBytes;
+    v7.erase(v7.begin() + static_cast<std::ptrdiff_t>(healthEnd),
+             v7.begin() + static_cast<std::ptrdiff_t>(healthEnd + kV36ArrayBytes));
+    for (std::size_t slot = kSlots; slot-- > 0;) {
+        v7.erase(v7.begin() + static_cast<std::ptrdiff_t>(
+                     health + slot * kV36RecordBytes + kV36HealthFlagOffset));
+    }
+    writeU32(v7, 4, 7);
+    writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
     const auto publishedV7 = SaveState::decode(v7);
     REQUIRE(publishedV7.has_value());
     CHECK(publishedV7->units.orders.empty());

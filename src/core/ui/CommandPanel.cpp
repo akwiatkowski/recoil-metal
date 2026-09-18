@@ -121,6 +121,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         case sim::CommandKind::UnloadTransport: // the U key
         case sim::CommandKind::Ferry:          // the Y key
         case sim::CommandKind::SelfDestruct:  // the ctrl-K kill switch; no rack cell
+        case sim::CommandKind::ToggleScriptBit:  // issued through the toggle cells, not a descriptor
             break;  // None has a command-rack descriptor.
         }
     }
@@ -347,10 +348,16 @@ CommandPage commandPage(std::span<const unitdef::UnitDef* const> selection,
         }
         const ToggleDescriptor& rule = kToggleDescriptors[*toggle];
         const auto [name, icon] = presentation(rule.cap, rule.label, rule.icon);
-        // The production pause is the one backed toggle: `UnitStore::productionPaused`
-        // and `CommandKind::ToggleProduction` implement it. The rest remain
-        // present-but-disabled until a simulation state backs them.
-        const bool implemented = rule.cap == "RULEUTC_ProductionToggle";
+        // The backed toggles: production pause (`ToggleProduction`) and the five
+        // script bits `Unit.lua` gives real effects — shield, jammer, intel,
+        // stealth and cloak (`ToggleScriptBit`, `C-350`). Weapon is a retail
+        // no-op; generic/special stay unbacked.
+        const bool implemented = rule.cap == "RULEUTC_ProductionToggle"
+                                 || rule.cap == "RULEUTC_ShieldToggle"
+                                 || rule.cap == "RULEUTC_JammingToggle"
+                                 || rule.cap == "RULEUTC_IntelToggle"
+                                 || rule.cap == "RULEUTC_StealthToggle"
+                                 || rule.cap == "RULEUTC_CloakToggle";
         page[slot] = {name, icon, implemented, toggle, std::nullopt};
     }
     return page;
@@ -433,20 +440,29 @@ InfoCard toggleCard(const ToggleDescriptor& toggle,
             ? sim::canPauseProduction(*def)
             : (def->toggleCapsDeclared && def->hasToggleCap(toggle.cap));
         if (!applies) continue;
-        ++eligible;
         if (i < paused.size() && paused[i] != 0) ++held;
     }
-    if (total == 0) {
-        card.rows.push_back({"STATE", "SELECT A UNIT", kLoss});
-        return card;
-    }
-    if (!production) {
-        // Present but never enabled: no simulation state backs the other toggles yet,
-        // so the count reads as the audience the toggle will serve once it exists.
+    const bool backed = production || toggle.cap == "RULEUTC_ShieldToggle"
+                        || toggle.cap == "RULEUTC_JammingToggle"
+                        || toggle.cap == "RULEUTC_IntelToggle"
+                        || toggle.cap == "RULEUTC_StealthToggle"
+                        || toggle.cap == "RULEUTC_CloakToggle";
+    if (!backed) {
+        // Present but never enabled: weapon/generic/special have no simulation
+        // state behind them, so the count reads as the audience the toggle will
+        // serve once it exists.
         card.rows.push_back({"STATE", "NOT IMPLEMENTED", kLoss});
         card.rows.push_back({"APPLIES TO", std::to_string(eligible) + " OF "
             + std::to_string(total) + " UNITS"});
         card.rows.push_back({"", "NO SIMULATION STATE YET"});
+        return card;
+    }
+    if (!production) {
+        // A backed script-bit toggle: the card reports the audience, not a
+        // paused count — per-unit bit state is not yet mirrored to the UI.
+        card.rows.push_back({"STATE", "ENABLED", kGain});
+        card.rows.push_back({"APPLIES TO", std::to_string(eligible) + " OF "
+            + std::to_string(total) + " UNITS"});
         return card;
     }
     card.rows.push_back({"STATE", held > 0 && held == eligible ? "PAUSED"

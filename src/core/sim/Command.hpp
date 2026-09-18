@@ -204,6 +204,12 @@ enum class CommandKind : std::uint8_t {
     /// intake-immediate command like `ToggleProduction`, and a second issue cancels the
     /// countdown, which is what "toggle" means.
     SelfDestruct = 29,
+    /// Toggle one retail script bit (`RULEUTC_*` → `ToggleScriptBit`, `C-350`):
+    /// 0 shield, 2 jammer, 3 intel, 5 stealth, 8 cloak — the bits `Unit.lua`'s
+    /// `OnScriptBitSet`/`OnScriptBitClear` give real effects. Bit 1 is a retail
+    /// no-op, 4 is `ToggleProduction`, 6/7 are out of scope. Authoritative and
+    /// unqueued like `ToggleProduction`; `scriptBit` carries the index.
+    ToggleScriptBit = 30,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {
@@ -297,6 +303,9 @@ struct CommandIssue {
     CommandId cancelCommandId = kInvalidCommandId;
     /// Used only by SetBuildPriority: the tier to set, not a cycle step.
     BuildPriority priority = BuildPriority::Normal;
+    /// Used only by ToggleScriptBit: the retail bit index (0 shield, 2 jammer,
+    /// 3 intel, 5 stealth, 8 cloak).
+    std::uint8_t scriptBit = 0;
 };
 
 /// Transport-only command intake. It is deliberately absent from the state hash.

@@ -98,6 +98,20 @@ inline constexpr std::array<ToggleDescriptor, 9> kToggleDescriptors{{
     {"RULEUTC_SpecialToggle", "SPECIAL", "activate-weapon", 10},
     {"RULEUTC_CloakToggle", "CLOAK", "intel-counter", 10},
 }};
+
+/// The retail script bit a `RULEUTC_*` cap toggles (`C-350`, `Unit.lua`
+/// `OnScriptBitSet`/`OnScriptBitClear`), or `nullopt` for caps with no sim
+/// effect — weapon is a retail no-op, production has `ToggleProduction`,
+/// generic/special are unbacked.
+[[nodiscard]] inline std::optional<std::uint8_t> scriptBitForToggleCap(
+    std::string_view cap) noexcept {
+    if (cap == "RULEUTC_ShieldToggle") return 0;
+    if (cap == "RULEUTC_JammingToggle") return 2;
+    if (cap == "RULEUTC_IntelToggle") return 3;
+    if (cap == "RULEUTC_StealthToggle") return 5;
+    if (cap == "RULEUTC_CloakToggle") return 8;
+    return std::nullopt;
+}
 using ToggleAvailability = std::array<bool, 9>;
 
 /// One resolved rack cell: an order, a toggle filling its dead order slot, or the

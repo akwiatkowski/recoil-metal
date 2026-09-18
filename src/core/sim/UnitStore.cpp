@@ -22,6 +22,8 @@ UnitStore::UnitStore(const Snapshot& snapshot)
        targetFocus_(snapshot.targetFocus),
        retreats_(snapshot.retreats),
        doNotTarget_(snapshot.doNotTarget),
+       scriptBitsDisabled_(snapshot.scriptBitsDisabled),
+       maintenanceActive_(snapshot.maintenanceActive),
        orders_(snapshot.transforms.size()),
        parents_(snapshot.parents),
        children_(snapshot.children),
@@ -74,6 +76,10 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     targetFocus_.resize(transforms_.size(), TargetFocus::Default);
     retreats_.resize(transforms_.size());
     doNotTarget_.resize(transforms_.size(), false);
+    // Older snapshots carry neither array: resize to the defaults — every
+    // feature on, maintenance consuming — rather than fail the load.
+    scriptBitsDisabled_.resize(transforms_.size(), 0);
+    maintenanceActive_.resize(transforms_.size(), true);
     for (std::size_t child = 0; child < transforms_.size(); ++child) {
         if (parents_[child]) {
             if (deriveAttachmentHeights) {
@@ -99,6 +105,8 @@ UnitStore::Snapshot UnitStore::snapshot() const {
                    .targetFocus = targetFocus_,
                    .retreats = retreats_,
                    .doNotTarget = doNotTarget_,
+                   .scriptBitsDisabled = scriptBitsDisabled_,
+                   .maintenanceActive = maintenanceActive_,
                    .parents = parents_,
                    .children = children_,
                    .attachmentOffsets = attachmentOffsets_,
@@ -147,6 +155,8 @@ UnitId UnitStore::spawn(const Spawn& request) {
         buildPriority_.emplace_back(BuildPriority::Normal);
         retreatThresholds_.emplace_back(RetreatThreshold::Off);
         targetFocus_.emplace_back(TargetFocus::Default);
+        scriptBitsDisabled_.emplace_back(0);
+        maintenanceActive_.emplace_back(true);
         retreats_.emplace_back();
         doNotTarget_.emplace_back(false);
         orders_.emplace_back();
@@ -174,6 +184,8 @@ UnitId UnitStore::spawn(const Spawn& request) {
     buildPriority_[slot] = BuildPriority::Normal;
     retreatThresholds_[slot] = RetreatThreshold::Off;
     targetFocus_[slot] = TargetFocus::Default;
+    scriptBitsDisabled_[slot] = 0;
+    maintenanceActive_[slot] = true;
     retreats_[slot] = {};
     doNotTarget_[slot] = false;
     // CLEARED HERE rather than in `kill`, which is the tombstone rule applied to orders: a
@@ -363,6 +375,8 @@ void UnitStore::kill(UnitId id) {
     factoryRepeat_[id.index] = false;
     productionPaused_[id.index] = false;
     buildPriority_[id.index] = BuildPriority::Normal;
+    scriptBitsDisabled_[id.index] = 0;
+    maintenanceActive_[id.index] = true;
     retreatThresholds_[id.index] = RetreatThreshold::Off;
     targetFocus_[id.index] = TargetFocus::Default;
     retreats_[id.index] = {};
@@ -541,6 +555,41 @@ bool UnitStore::setDoNotTarget(UnitId unit, bool enabled) noexcept {
 
 bool UnitStore::doNotTarget(UnitId unit) const noexcept {
     return alive(unit) && doNotTarget_[unit.index];
+}
+
+bool UnitStore::setScriptBitDisabled(UnitId unit, std::uint8_t bit,
+                                     bool disabled) noexcept {
+    if (!alive(unit) || bit >= 16) {
+        return false;
+    }
+    const std::uint16_t mask = static_cast<std::uint16_t>(1u << bit);
+    if (disabled) {
+        scriptBitsDisabled_[unit.index] |= mask;
+    } else {
+        scriptBitsDisabled_[unit.index] &= static_cast<std::uint16_t>(~mask);
+    }
+    return true;
+}
+
+bool UnitStore::scriptBitDisabled(UnitId unit, std::uint8_t bit) const noexcept {
+    return alive(unit) && scriptBitDisabledAt(unit.index, bit);
+}
+
+bool UnitStore::scriptBitDisabledAt(UnitIndex slot, std::uint8_t bit) const noexcept {
+    return slot < scriptBitsDisabled_.size() && bit < 16
+           && (scriptBitsDisabled_[slot] & static_cast<std::uint16_t>(1u << bit)) != 0;
+}
+
+bool UnitStore::setMaintenanceActive(UnitId unit, bool active) noexcept {
+    if (!alive(unit)) {
+        return false;
+    }
+    maintenanceActive_[unit.index] = active;
+    return true;
+}
+
+bool UnitStore::maintenanceActive(UnitId unit) const noexcept {
+    return alive(unit) && maintenanceActive_[unit.index];
 }
 
 bool UnitStore::increaseCommandCount(CommandId id, std::uint32_t amount) {

@@ -94,6 +94,8 @@ public:
         std::vector<TargetFocus> targetFocus;
         std::vector<RetreatState> retreats;
         std::vector<bool> doNotTarget;
+        std::vector<std::uint16_t> scriptBitsDisabled;
+        std::vector<bool> maintenanceActive;
         std::vector<std::optional<UnitId>> parents;
         std::vector<std::vector<UnitId>> children;
         std::vector<std::array<Fx, 2>> attachmentOffsets;
@@ -295,6 +297,31 @@ public:
     [[nodiscard]] bool setDoNotTarget(UnitId unit, bool enabled) noexcept;
     [[nodiscard]] bool doNotTarget(UnitId unit) const noexcept;
 
+    /// Per-live-unit script-bit disabled mask, retail's `RULEUTC_*` toggles
+    /// (`C-350`, `Unit.lua` `OnScriptBitSet`/`OnScriptBitClear`). A SET bit means
+    /// the feature is OFF — the uniform reading the sim needs, since retail's own
+    /// bit polarity is inconsistent (shield set = on, intel set = off). Bit
+    /// numbers are retail's: 0 shield, 2 jammer, 3 intel, 5 stealth, 8 cloak.
+    /// Bits 1 (weapon — a retail no-op), 4 (production — `productionPaused`),
+    /// 6 (generic pause) and 7 (special) are not stored.
+    [[nodiscard]] bool setScriptBitDisabled(UnitId unit, std::uint8_t bit,
+                                            bool disabled) noexcept;
+    [[nodiscard]] bool scriptBitDisabled(UnitId unit, std::uint8_t bit) const noexcept;
+    /// The whole mask, for the state hash — per-bit reads cannot express it.
+    [[nodiscard]] std::uint16_t scriptBitsDisabledMaskAt(UnitIndex slot) const noexcept {
+        return slot < scriptBitsDisabled_.size() ? scriptBitsDisabled_[slot] : 0;
+    }
+    /// The slot-indexed read the hot loops use — `Intel::update` and the shield
+    /// passes walk slots, not handles.
+    [[nodiscard]] bool scriptBitDisabledAt(UnitIndex slot, std::uint8_t bit) const noexcept;
+
+    /// Per-live-unit maintenance-consumption flag, retail's
+    /// `SetMaintenanceConsumption{Active,Inactive}` — last writer wins, so a unit
+    /// with two toggles draws upkeep by whichever it touched LAST, not by whether
+    /// anything remains on. Defaults to active; the toggle command owns changes.
+    [[nodiscard]] bool setMaintenanceActive(UnitId unit, bool active) noexcept;
+    [[nodiscard]] bool maintenanceActive(UnitId unit) const noexcept;
+
     /// Shared repeat/count operations. Exhaustion removes this exact object from every member
     /// queue, matching retail's cross-queue `DecreaseCommandCount` path.
     [[nodiscard]] bool increaseCommandCount(CommandId id, std::uint32_t amount = 1);
@@ -361,6 +388,10 @@ private:
     std::vector<TargetFocus> targetFocus_;
     std::vector<RetreatState> retreats_;
     std::vector<bool> doNotTarget_;
+    /// Retail's nine script bits fit a u16; a set bit means that feature is OFF.
+    std::vector<std::uint16_t> scriptBitsDisabled_;
+    /// `SetMaintenanceConsumption*` — last writer wins; defaults to active.
+    std::vector<bool> maintenanceActive_;
     std::vector<CommandQueue> orders_;
     std::vector<std::optional<UnitId>> parents_;
     std::vector<std::vector<UnitId>> children_;

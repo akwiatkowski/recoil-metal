@@ -13,6 +13,11 @@ struct ShieldState {
     Mag maximum{};
     TickCount regenDelayRemaining = 0;
     TickCount rechargeRemaining = 0;
+    /// What finishing a recharge does. Damage collapse refills to maximum
+    /// (`DamageRechargeState`); a manual re-enable only gates absorption for the
+    /// charge time and resumes at the health kept from before the off switch
+    /// (`shield.lua` `OffState`/`OnState` — `OffHealth` is kept, not restored).
+    bool rechargeRestoresFull = true;
 
     [[nodiscard]] bool active() const noexcept {
         return maximum > Mag{} && current > Mag{} && rechargeRemaining == 0;

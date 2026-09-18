@@ -1273,6 +1273,24 @@ int runWindowed(const Session& session) {
                         .units = selected,
                     });
                     armedCommand.reset();
+                } else if (slot && commandPage[*slot].enabled && commandPage[*slot].toggle
+                           && rm::ui::scriptBitForToggleCap(
+                                  rm::ui::kToggleDescriptors[*commandPage[*slot].toggle].cap)
+                                  .has_value()) {
+                    // A backed script-bit toggle — shield, jammer, intel,
+                    // stealth or cloak — through the same semantic issue.
+                    (void)submitCommand(units, rm::sim::CommandIssue{
+                        .tick = static_cast<rm::TickIndex>(matchTicks),
+                        .phase = rm::sim::CommandPhase::PreTick,
+                        .source = static_cast<rm::CommandSource>(
+                            playerDriving(units, units.playerArmy)),
+                        .player = playerDriving(units, units.playerArmy),
+                        .kind = rm::sim::CommandKind::ToggleScriptBit,
+                        .units = selected,
+                        .scriptBit = *rm::ui::scriptBitForToggleCap(
+                            rm::ui::kToggleDescriptors[*commandPage[*slot].toggle].cap),
+                    });
+                    armedCommand.reset();
                 } else if (slot && commandPage[*slot].enabled
                            && !commandPage[*slot].toggle
                            && (commandPage[*slot].order

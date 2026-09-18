@@ -22,6 +22,18 @@ on kill), and economy/match (`C-051`/`C-243`/`C-227`/`C-345` — T2 power-build
 bonus, multi-captor banks, army-stats store as SaveState v34, self-destruct
 countdowns). CTest passes all 1,898 cases.
 
+**Update:** same day, later wave — the five backed `RULEUTC_*` toggles now drive
+the sim (`C-350`): shield, jamming, intel, stealth and cloak issue as
+`ToggleScriptBit` commands through the same semantic intake as every other
+order, flip the unit's script-bit mask, and run retail's last-writer-wins
+`SetMaintenanceConsumption{Active,Inactive}` upkeep. Re-enabling a shield is
+`OnState`: absorption gates for the recharge time and resumes at the kept
+`OffHealth`, not at maximum — `rechargeRestoresFull` rides SaveState v36 and
+the state hash. The intel placement cache now keys on the script-bit mask, so
+a toggle withdraws coverage without waiting for the emitter to move. Command
+log v7 records the bit. Weapon/generic/special stay present-but-unbacked, as
+in retail. CTest passes all 1,909 cases.
+
 **Snapshot:** 2026-09-14, main through `8fa09ae`. 116 commits since the last
 snapshot. The transport stack is complete and now retail-validated: cargo
 load/unload, the ferry loop and auto-embark (`fef1913`, `5e9fbba`), staging-pad
@@ -198,14 +210,14 @@ excluded from the headline.
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 99% | 85% | 90% | Universal leading in (`55c31de`, `06390d1`) — radar keeps its error; manual silo-launch orders landed under FA-MISSILES; the C-157 engineer reclaim/capture target exemption is wired (`IsTargetExempt` deferred). |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 87% | 47% | 95% | Full cargo stack in and retail-validated: capacity/attach-cost from shipped blueprints (UEA0107: 10 slots, class2=2, class3=4), load/unload, ferry, auto-embark, carrier-death (`c538105`). Attach-bone retail observation landed (`2c3e7f8`, C-198): cargo hangs from Attachpoint bones. Next is the unload beacon's exact retail semantics. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 70% | 45% | 95% | Manual missile-launch orders in with UI wiring and tests (`8d33735`); interceptor lead landed earlier; the silo build queue with assist links is in (`f41445e`). Next is tactical/nuke UI polish. |
-| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 80% | 55% | 85% | Ordinary bubbles and personal UnitShield boxes share the collidable shield path; `CollisionCenter*`/`CollisionSize*` drive box containment and sweeps. Remaining: owner's armour multiplier (C-143), PersonalBubble and transport-shield boundary. |
-| [`FA-INTEL`](#fa-intel---vision-radar-sonar-omni-cloak-stealth-jamming) | Vision, radar, sonar, omni, cloak, stealth, jamming | `WP-33` | 65% | 35% | 85% | **Analyzed 2026-09-18 (C-276–C-285):** no temporal blip expiry; stale contacts die by confirmed-dead/ally/last-reference reaping. Counter-intel is a post-coverage flag filter (omni unmaskable; cloak anti-vision; stealth anti-radar/sonar; fields projected as grids). Sonar detects submerged, water-vision identifies. Jammer fakes are fixed random offsets that track the jammer. Recon DBs are per-army, intel sharing is flag-level ally OR. Lua `OnIntelChange` and `OnDetectedBy` events mapped; `IntelWatchThread` disables intel on brownout. |
+| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 82% | 55% | 85% | Ordinary bubbles and personal UnitShield boxes share the collidable shield path; `CollisionCenter*`/`CollisionSize*` drive box containment and sweeps. The shield script-bit toggle is in (`C-350`): off stops absorbing and regenerating while keeping `OffHealth`; on gates absorption for the recharge time and resumes at kept health (`rechargeRestoresFull`, SaveState v36). Remaining: owner's armour multiplier (C-143), PersonalBubble and transport-shield boundary. |
+| [`FA-INTEL`](#fa-intel---vision-radar-sonar-omni-cloak-stealth-jamming) | Vision, radar, sonar, omni, cloak, stealth, jamming | `WP-33` | 67% | 35% | 85% | **Analyzed 2026-09-18 (C-276–C-285):** no temporal blip expiry; stale contacts die by confirmed-dead/ally/last-reference reaping. Counter-intel is a post-coverage flag filter (omni unmaskable; cloak anti-vision; stealth anti-radar/sonar; fields projected as grids). Sonar detects submerged, water-vision identifies. Jammer fakes are fixed random offsets that track the jammer. Recon DBs are per-army, intel sharing is flag-level ally OR. Lua `OnIntelChange` and `OnDetectedBy` events mapped; `IntelWatchThread` disables intel on brownout. The intel/stealth/cloak script-bit toggles are in (`C-350`): the placement cache keys on the script-bit mask, so a toggle withdraws senses and fields without waiting for the emitter to move. |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 55% | 35% | 85% | **Analyzed 2026-09-18 (C-251–C-265, C-376–C-381):** WP-34 fully specified — `EnhanceTask.lua` state machine (Stopping→Enhancing→Done), `GetResourceConsumed`-driven progress, `GetConstructEconomyModel` cost, slot/prereq rules, UI replace = two `UNITCOMMAND_Script` clear=true commands (`XxxRemove` then new) → `ClearCommandQueue` `0x006f4d50`, cancellation = `OnWorkFail` no refund, registry = `SimUnitEnhancements` in schook `SimSync.lua`, mutation = per-script `CreateEnhancement` overrides. WP-35 closed: `OnBrainUnitVeterancyLevel` scenario triggers only, Regen buffs overwrite direct `SetRegenRate`, zero native veterancy surface. WP-36: all experimental abilities shipped Lua — GC claw is `TractorThread` slider+`AttachBoneTo`+`Kill` (native-drag refuted), Megalith eggs via `CConstructionEggUnit`, Paragon deficit loop, Ythotha→Othuy spawn, Salem transform, Scathis rotators. |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 15% | 85% | **Analyzed 2026-09-18 (C-286–C-292):** `FlattenMapRect` writes uniform u16 elevation, dirty render heightfield, re-seats Land/Seabed entities — no pathing/ogrid. Wrecks use footprint-less `DefaultWreckage_prop.bp` and never block; `Physics.BlockPath` is a dead key. Terrain types gate pathing only via `Blocking` flag; `Slippery`/`Bumpiness`/`HealthEffectPerSecond` are dead. Scorch is visual-only, 28 corpus files, gated on `layer=='Land'`/`targetType=='Terrain'|'Prop'`, no underwater. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 50% | 10% | 85% | **Analyzed 2026-09-18 (C-352–C-362):** full native AI object model enumerated — `CAiBrain`/`CPlatoon`/`CAiPersonality` script objects + per-unit attacker/navigator/builder/transport/silo/steering impls + per-army `CAiReconDBImpl`/`CInfluenceMap`; all managers pure Lua (no RTTI). `CArmyImpl` owns the stack (`+0x1ec` brain … `+0x21c` path queue; vtable[6]=GetInfluenceMap, vtable[7]=GetBrain). Threat grid: `float[14]` `SThreat` per army per cell, per-blip weighted `*ThreatLevel` contribution, 30-tick per-army decay stagger, region queries sum cells. Brain threads in three unnamed per-brain `CTaskStage`s; `ForkThread` links `CLuaTask` onto the object's Lua state. AIx cheats are Lua buffs; callback surface enumerated; `+0x38` is current-enemy `SimArmy*`. |
-| [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 85% | 5% | 85% | **Analyzed 2026-09-18 (C-329–C-346, C-363–C-369):** every UI→sim mutation crosses the `0x112626c` command sink — `CMarshaller`'s 24-message vtable is the complete wire alphabet (`ProcessInfoPair` named commands, `IssueCommand`/`IssueFactoryCommand` UNITCOMMAND records, `LuaSimCallback`). Full RULEUCC→UNITCOMMAND map recovered (`0x827af0`); silo-build types 5/6 rewrite to named `("add","SiloBuildTactical|Nuke",bpid)`; `ProcessInfo` is an unfiltered forwarder; `UI_SelectByCategory` flags = `+add +nearest +idle +inview +goto +excludeengineers`; `GetUnitCommandData` = unioned CommandCaps(0-22)/ToggleCaps(0-8)/Categories+BuildableCategories; selection is client-local; `UnitData`/`Sync` is the sim→UI mirror; taunts/templates ride chat; self-destruct/pings/diplomacy are SimCallbacks. |
+| [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 88% | 5% | 85% | **Analyzed 2026-09-18 (C-329–C-346, C-363–C-369):** every UI→sim mutation crosses the `0x112626c` command sink — `CMarshaller`'s 24-message vtable is the complete wire alphabet (`ProcessInfoPair` named commands, `IssueCommand`/`IssueFactoryCommand` UNITCOMMAND records, `LuaSimCallback`). Full RULEUCC→UNITCOMMAND map recovered (`0x827af0`); silo-build types 5/6 rewrite to named `("add","SiloBuildTactical|Nuke",bpid)`; `ProcessInfo` is an unfiltered forwarder; `UI_SelectByCategory` flags = `+add +nearest +idle +inview +goto +excludeengineers`; `GetUnitCommandData` = unioned CommandCaps(0-22)/ToggleCaps(0-8)/Categories+Buildable. **Implemented same day:** the five backed toggles (shield/jamming/intel/stealth/cloak) issue `ToggleScriptBit` through the semantic path with last-writer-wins upkeep (`C-350`); weapon/generic/special stay retail-accurate no-ops. |
 | [`FA-PRESENT`](#fa-present---rendering-effects-audio-and-lod) | Rendering, effects, audio, LOD | `WP-41`-`42` | 75% | 45% | 85% | **Analyzed 2026-09-18 (C-293–C-304, C-370–C-375):** 11 `IAniManipulator` subclasses + `MotorFallDown` sim-serialized, ticked solely from `Unit::MotionTick`; `CAniPoseBone` flag map (enabled/dirty/visibility/skip-interp); `CCollisionManipulator` fires `OnAnimTerrainCollision`/`OnNotAnimTerrainCollision`/`OnAnimCollision` (footfall into Unit.lua:2289); effects manager at `Sim+0x8C0` with per-army visibility-mask emission gating (`EmitIfVisible`/`CatchupEmit`); LOD is a cached screen-space pixel scale (`min(vpW,vpH) × LODScale × FOV factor`); `SAudioRequest` wire laid out, `CSimSoundManager` at `Sim+0x8C4`, `CUserSoundManager` drains per Frame; `SetPivot` is a dead attached-entity pivot API. |
-| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 75% | 30% | 90% | Wreck pool in save v23 and the in-flight projectile pool in v35, both with continued-hash proofs (tested); golden re-recorded for the P10.4 route change and MATCHing (`a85c690`). Next: intel/path state. |
+| [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 77% | 30% | 90% | Wreck pool in save v23 and the in-flight projectile pool in v35, both with continued-hash proofs (tested); golden re-recorded for the P10.4 route change and MATCHing (`a85c690`). SaveState v36 adds the script-bit mask, upkeep flag and shield `rechargeRestoresFull`; command log v7 records the toggle bit. Next: intel/path state. |
 
 
 ## Claim-level test coverage (2026-09-18 audit)
@@ -830,18 +842,26 @@ presence by authored `true` (no capability fallback), and toggles fill dead orde
 retail's preferred positions (Shield/Weapon 7, Jamming/Intel 8, Production/Stealth 9, Generic
 10, Special/Cloak 11) with orders winning ties. `General.OrderOverrides` merge unanimously
 across the selection and relabel cells (UEB4301's dome bitmap/help, tested headless and through
-the corpus). Every toggle renders visibly disabled — no simulation state backs any of them —
-with a NOT IMPLEMENTED hover card; toggle cells swallow clicks by construction (no order kind).
+the corpus). The five backed toggles — shield, jamming, intel, stealth, cloak — now issue
+`ToggleScriptBit` through the semantic command path (`C-350`): the click flips the unit's
+script-bit mask, `SetMaintenanceConsumption{Active,Inactive}` runs last-writer-wins, and the
+features follow `Unit.lua`'s `OnScriptBitSet`/`OnScriptBitClear` — a disabled shield stops
+absorbing and regenerating while keeping `OffHealth`, a re-enable gates absorption for the
+recharge time and resumes at the kept health; disabled intel/stealth withdraw the senses and
+fields they own, and the intel placement cache re-stamps on the mask change rather than waiting
+for the emitter to move. The mask and upkeep flag ride SaveState v36 and the state hash; the
+command log records the bit at v7. Weapon, generic and special stay visibly disabled with a
+NOT IMPLEMENTED hover card — retail's own no-ops.
 A headed `toggle` capture scenario pins the extractor's Production cell pixel- and hash-stable.
 
-**Largest gap:** toggle simulation behaviors (production pause, shield/weapon/intel switching),
-idle selectors, overlays, key contexts, and split views remain absent (`WP-40`).
+**Largest gap:** idle selectors, overlays, key contexts, and split views remain absent (`WP-40`).
 
 ```text
-/goal Advance FA-UI with toggle simulation behaviors behind the data-driven toggle page,
-starting with production pause, keeping the headed toggle scenario green. Add focused tests,
-run the full suite and golden replay, and update FA-UI.
+/goal Advance FA-UI with the remaining WP-40 surface — idle selectors, overlays,
+key contexts, split views — behind the data-driven command page. Add focused
+tests, run the full suite and golden replay, and update FA-UI.
 ```
+
 
 ### FA-PRESENT - Animation, Effects, And Audio
 

@@ -848,6 +848,60 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         }
         return result;
     }
+    if (issue.kind == CommandKind::ToggleScriptBit) {
+        // Retail's `ToggleScriptBit` named command (`C-350`): the UI's RULEUTC_*
+        // toggles reach `Unit:ToggleScriptBit` and `Unit.lua` flips the feature.
+        // Only the bits with real effects are accepted; the cap gate is the same
+        // `ToggleCaps` table the rack reads, so a unit cannot be asked to toggle
+        // a feature its blueprint never declared.
+        static constexpr std::pair<std::uint8_t, std::string_view> kBits[] = {
+            {0, "RULEUTC_ShieldToggle"},
+            {2, "RULEUTC_JammingToggle"},
+            {3, "RULEUTC_IntelToggle"},
+            {5, "RULEUTC_StealthToggle"},
+            {8, "RULEUTC_CloakToggle"},
+        };
+        const auto* rule = std::ranges::find_if(
+            kBits, [&](const auto& entry) { return entry.first == issue.scriptBit; });
+        if (rule == std::end(kBits)) {
+            return result;
+        }
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit)) {
+                continue;
+            }
+            const Player* player = playerFor(issue.player, players);
+            const unitdef::UnitDef* definition = catalog.def(store.typeAt(unit.index));
+            if (player == nullptr || !authorised(*player, store, unit, armies)
+                || definition == nullptr || !definition->toggleCapsDeclared
+                || !definition->hasToggleCap(rule->second)) {
+                continue;
+            }
+            const bool disabled = !store.scriptBitDisabled(unit, issue.scriptBit);
+            (void)store.setScriptBitDisabled(unit, issue.scriptBit, disabled);
+            // `SetMaintenanceConsumption{Active,Inactive}` — last writer wins
+            // (`Unit.lua:309-380`): every implemented bit calls it, so the unit's
+            // upkeep follows whichever toggle it touched last, not the count of
+            // features still on.
+            (void)store.setMaintenanceActive(unit, !disabled);
+            if (issue.scriptBit == 0 && !disabled) {
+                // Re-enabling a shield is retail's `OnState`: the bubble gates
+                // absorption for `ShieldEnergyDrainRechargeTime` and resumes at
+                // the health it kept (`OffHealth`), not at maximum — that refill
+                // belongs to damage collapse alone.
+                Health& health = store.health()[unit.index];
+                const UnitCatalog::ShieldInfo& shield =
+                    catalog.shield(store.typeAt(unit.index));
+                if (shield.exists() && health.shield.maximum > Mag{}
+                    && health.shield.rechargeRemaining == 0) {
+                    health.shield.rechargeRemaining = shield.recharge;
+                    health.shield.rechargeRestoresFull = false;
+                }
+            }
+            result.accepted.push_back(unit);
+        }
+        return result;
+    }
     if (issue.kind == CommandKind::CycleBuildPriority) {
         for (const UnitId unit : canonical) {
             if (!store.alive(unit)) {
