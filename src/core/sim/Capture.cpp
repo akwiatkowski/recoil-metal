@@ -184,7 +184,8 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
 }
 
 std::size_t applyCaptureWork(UnitStore& store, std::vector<CaptureWork>& captures,
-                             EventQueue* events) {
+                             EventQueue* events, std::span<SiloAmmo> siloAmmo,
+                             std::span<EnhancementWork> enhancements) {
     std::size_t capturing = 0;
     for (std::size_t i = 0; i < captures.size();) {
         CaptureWork& work = captures[i];
@@ -233,14 +234,30 @@ std::size_t applyCaptureWork(UnitStore& store, std::vector<CaptureWork>& capture
         motion.armyIndex = work.armyIndex;
         motion.moving = false;
         motion.path.clear();
-        motion.pathIndex = 0;
         store.kill(work.target);
         const UnitId replacement = store.spawn(UnitStore::Spawn{
             .type = type,
             .transform = transform,
             .motion = motion,
-            .health = Health{.current = health.current, .maximum = health.maximum},
+            // `C-240`/`SimUtils.lua:68-132`: the replacement keeps the WHOLE
+            // health record — shield state, reload/burst clocks, automatic
+            // targets, veterancy — not just current/maximum.
+            .health = health,
         });
+        // And the match-side records that keyed on the old handle follow it:
+        // Lua restores silo ammo and in-flight enhancement work onto the
+        // replacement, so a captured silo keeps its stockpile and a
+        // half-built enhancement keeps its progress.
+        for (SiloAmmo& ammo : siloAmmo) {
+            if (ammo.owner == work.target) {
+                ammo.owner = replacement;
+            }
+        }
+        for (EnhancementWork& work_ : enhancements) {
+            if (work_.owner == work.target) {
+                work_.owner = replacement;
+            }
+        }
         emit(events, Event{.kind = EventKind::UnitCreated,
                            .unit = replacement,
                            .army = motion.armyIndex,

@@ -320,3 +320,59 @@ TEST_CASE("C-243: a lone captor still banks one per funded beat", "[fa-econ]") {
     REQUIRE(f.captures.size() == 1);
     CHECK(f.captures[0].progress == 10);
 }
+
+TEST_CASE("C-240: a captured unit's silo stockpile and shield ride the replacement",
+          "[fa-econ]") {
+    // `SimUtils.lua:68-132`: the transfer's Lua restores kills, enhancements,
+    // clamped health, fuel, ammo and shield state onto the replacement — the
+    // match-side records that keyed on the old handle follow it, or a captured
+    // silo would lose its stockpile and a half-built enhancement its progress.
+    CaptureFixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    // A stockpile and an in-flight enhancement keyed on the victim.
+    std::vector<rm::sim::SiloAmmo> siloAmmo{
+        rm::sim::SiloAmmo{.owner = target, .weapon = 0, .slot = 1,
+                          .stored = 3, .capacity = 5}};
+    std::vector<rm::sim::EnhancementWork> enhancements{
+        rm::sim::EnhancementWork{.owner = target, .name = "test_upgrade",
+                                 .buildTimeRemaining = rm::sim::Mag::fromInt(40)}};
+    // And a shield with charge left — the whole Health record rides across.
+    f.roster.store.health()[target.index].shield.current = rm::sim::Mag::fromInt(500);
+    f.roster.store.health()[target.index].shield.maximum = rm::sim::Mag::fromInt(1000);
+    REQUIRE(f.capture(captor, target));
+
+    // Drive the capture to completion through the match tick so the transfer
+    // runs with the real record spans.
+    const std::vector<const rm::sim::PassabilityGrid*> grids(f.roster.catalog.size(),
+                                                             &f.grid);
+    for (int tick = 0; tick < 60 && f.roster.store.alive(target); ++tick) {
+        rm::sim::Match match{.armies = f.armies,
+                             .economies = f.economies,
+                             .projectiles = &f.shots,
+                             .building = &f.building,
+                             .captures = &f.captures,
+                             .siloAmmo = &siloAmmo,
+                             .enhancements = &enhancements,
+                             .events = &f.events,
+                             .passability = grids,
+                             .commandersEver = f.commandersEver,
+                             .baseStorage = {.mass = rm::sim::magFromFloat(1000.0f),
+                                             .energy = rm::sim::magFromFloat(1000.0f)}};
+        (void)rm::sim::tickSkirmish(f.roster.store, f.roster.catalog, match, f.terrain,
+                                    f.roster.rate);
+    }
+    REQUIRE_FALSE(f.roster.store.alive(target));
+    const UnitId replacement = f.roster.store.idAt(target.index);
+    REQUIRE(f.roster.store.alive(replacement));
+    CHECK(f.roster.store.motion()[replacement.index].armyIndex == 0);
+    // The stockpile and the enhancement followed the replacement handle.
+    REQUIRE(siloAmmo.size() == 1);
+    CHECK(siloAmmo.front().owner == replacement);
+    CHECK(siloAmmo.front().stored == 3);
+    REQUIRE(enhancements.size() == 1);
+    CHECK(enhancements.front().owner == replacement);
+    // And the shield charge survived the swap.
+    CHECK(f.roster.store.health()[replacement.index].shield.current
+          == rm::sim::Mag::fromInt(500));
+}

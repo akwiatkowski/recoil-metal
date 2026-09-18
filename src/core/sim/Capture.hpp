@@ -101,7 +101,9 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
 ///
 /// Run AFTER the economy pass awarded this tick's funding, like repair work.
 std::size_t applyCaptureWork(UnitStore& store, std::vector<CaptureWork>& captures,
-                             EventQueue* events);
+                             EventQueue* events,
+                             std::span<SiloAmmo> siloAmmo = {},
+                             std::span<EnhancementWork> enhancements = {});
 
 /// The units being captured this tick and by whose side, for C-157's targeting
 /// exemption: own guns do not shoot what own engineers are taking. Same shape as
