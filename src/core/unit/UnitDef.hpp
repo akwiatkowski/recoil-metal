@@ -359,10 +359,12 @@ struct UnitDef {
     float radarStealthFieldRadiusElmos = 0.0f;
     float sonarStealthFieldRadiusElmos = 0.0f;
 
-    /// The jammer: `JammerBlips` false radar contacts scattered within `JamRadius.Max` of
+    /// The jammer: `JammerBlips` false radar contacts scattered within `JamRadius` of
     /// the carrier, shown to any hostile radar that covers it. Seven retail units. The
-    /// blueprint states the radius as a {Min, Max} table; Max is read because every retail
-    /// pair is equal and the larger bound is the honest reach of a deception.
+    /// blueprint states the radius as a {Min, Max} table and each fake draws a uniform
+    /// magnitude inside it (`C-278`); every retail pair is equal, so the range matters
+    /// only to mods — but reading only Max would fix every blip at the rim.
+    float jamRadiusMinElmos = 0.0f;
     float jamRadiusElmos = 0.0f;
     int jammerBlips = 0;
 
@@ -419,6 +421,24 @@ struct UnitDef {
     /// (`C-221`): cruise height above the terrain reference, and the height a slow flyer
     /// climbs half of before moving forward (`C-245`). Zero when unauthored.
     float elevationElmos = 0.0f;
+    /// The elevation datum the weapon water gates compare against (`C-321`,
+    /// `C-322`, `C-327`), in elmos. This is `Physics.Elevation` again, but with
+    /// RETAIL's default rather than the mover's: `UnitWeapon::CanFire` reads the
+    /// field as authored-or-−10000 OGRIDS (ART-E001 `0x6db78b`–`0x6db829`), so a
+    /// unit stating nothing is always "above" its datum and `BelowWaterFireOnly`
+    /// can never fire for it. `elevationElmos` keeps its zero default because
+    /// the hover and sub movers need "no authored clearance", not "datum at the
+    /// bottom of the world".
+    float waterGateElevationElmos = -80000.0f;
+    /// `Air.FlyInWater` (`C-327`): whether an Air-layer unit may fire while
+    /// below its water-gate datum — retail's "cannot fire while submerged"
+    /// reject at `0x6db822`. False when unauthored; no shipped unit states it.
+    bool airFlyInWater = false;
+    /// `AutoSurfaceToAttack` (`C-203`): the Dive toggle's auto-surface mode —
+    /// a submerged unit with an attack task surfaces to engage. Root-level
+    /// blueprint key; no shipped unit states it and retail's reader was never
+    /// found, so the constructor default (off) stands.
+    bool autoSurfaceToAttack = false;
     /// C-218: retail constructor defaults DiveSurfaceSpeed to 1 ogrid/s.
     float diveSurfaceSpeedElmosPerSecond = 8.0f;
     float airAutoLandTimeSec = 0.0f;

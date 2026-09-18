@@ -51,12 +51,43 @@ constexpr AdjacencyGrants kT1PowerGenerator{
     // numerically, but a literal that does not match the source silently stops matching if the
     // fixed-point format ever gains bits.
     .energyMaintenance = {-0.0625f, -0.03125f, -0.020833f, -0.015625f, -0.0125f},
+    // `T1PowerEnergyBuildBonusSize4..20` — the same -0.25 ring total as maintenance.
+    .energyBuild = {-0.0625f, -0.03125f, -0.020833f, -0.015625f, -0.0125f},
+    // `T1PowerRateOfFireBonusSize4` — the ONLY live row. Sizes 8..20 are defined in the
+    // file but appear in no producer list (`C-051`(c)), so they grant nothing.
+    .rateOfFire = {-0.025f, 0.0f, 0.0f, 0.0f, 0.0f},
 };
 constexpr AdjacencyGrants kT2PowerGenerator{
     .energyMaintenance = {-0.125f, -0.125f, -0.125f, -0.125f, -0.125f},
+    // `T2PowerEnergyBuildBonusSize4..20` — flat -0.125, EXCEPT the Size20 row, which the
+    // file writes as `-0.0125`: a dropped digit that gives SIZE20 receivers a tenth of
+    // the intended discount. Reproduced deliberately, not fixed (`C-051`(a)).
+    .energyBuild = {-0.125f, -0.125f, -0.125f, -0.125f, -0.0125f},
+    .rateOfFire = {-0.05f, 0.0f, 0.0f, 0.0f, 0.0f},
 };
 constexpr AdjacencyGrants kT3PowerGenerator{
     .energyMaintenance = {-0.1875f, -0.1875f, -0.1875f, -0.1875f, -0.1875f},
+    // `T3PowerEnergyBuildBonusSize4..20` — flat -0.1875 like its maintenance row.
+    .energyBuild = {-0.1875f, -0.1875f, -0.1875f, -0.1875f, -0.1875f},
+    .rateOfFire = {-0.075f, 0.0f, 0.0f, 0.0f, 0.0f},
+};
+// The extractors' `T*MEXMassBuildBonusSize4..20` rows — the mass half of the build-drain
+// discount, ring totals -0.40 / -0.60 / -0.80 (`C-050`). The fabricators' flat rows sit
+// beside them: T1 -0.10 total, T3 -0.075 flat (an 8x8 skirt caps at four neighbours).
+constexpr AdjacencyGrants kT1MassExtractor{
+    .massBuild = {-0.1f, -0.05f, -0.033333f, -0.025f, -0.02f},
+};
+constexpr AdjacencyGrants kT2MassExtractor{
+    .massBuild = {-0.15f, -0.075f, -0.05f, -0.0375f, -0.03f},
+};
+constexpr AdjacencyGrants kT3MassExtractor{
+    .massBuild = {-0.2f, -0.1f, -0.066667f, -0.05f, -0.04f},
+};
+constexpr AdjacencyGrants kT1MassFabricator{
+    .massBuild = {-0.025f, -0.0125f, -0.008333f, -0.00625f, -0.005f},
+};
+constexpr AdjacencyGrants kT3MassFabricator{
+    .massBuild = {-0.075f, -0.075f, -0.075f, -0.075f, -0.075f},
 };
 // BOTH OF THESE WERE WRONG, and the invariant above is what makes that visible.
 //
@@ -93,15 +124,15 @@ const AdjacencyGrants& adjacencyGrants(AdjacencyClass which) noexcept {
     case AdjacencyClass::T1MassStorage:
         return kT1MassStorage;
     case AdjacencyClass::T1MassExtractor:
+        return kT1MassExtractor;
     case AdjacencyClass::T2MassExtractor:
+        return kT2MassExtractor;
     case AdjacencyClass::T3MassExtractor:
+        return kT3MassExtractor;
     case AdjacencyClass::T1MassFabricator:
+        return kT1MassFabricator;
     case AdjacencyClass::T3MassFabricator:
-        // These grant only `MassActive` — a discount on a neighbour's BUILD drain, which
-        // is deferred by name in the header. Their entry here is deliberate: the class
-        // resolves, the grants are zero, and the day build-drain adjacency lands the
-        // numbers go here rather than into a new mechanism.
-        return kNone;
+        return kT3MassFabricator;
     case AdjacencyClass::None:
         return kNone;
     }

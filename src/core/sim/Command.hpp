@@ -27,6 +27,7 @@ class Intel;
 class ScriptTaskHost;
 struct PlayableRect;
 struct GuardWork;
+struct SelfDestructWork;
 
 /// When an input is applied relative to one simulation tick.
 enum class CommandPhase : std::uint8_t {
@@ -196,6 +197,13 @@ enum class CommandKind : std::uint8_t {
     /// off an idle silo stops re-queueing itself, while already-queued and manually
     /// issued builds still run. Same intake-immediate shape as `ToggleProduction`.
     ToggleSiloAuto = 28,
+    /// Toggle the unit's self-destruct countdown (`C-345`): five seconds, then the unit
+    /// dies by the ordinary death path — wreck, blast, kill stats and all. Retail
+    /// reaches the same behaviour through a SimCallback (`ToggleSelfDestruct` →
+    /// `selfdestruct.lua`'s `StartCountdown` + `unit:Kill()`); here it is an
+    /// intake-immediate command like `ToggleProduction`, and a second issue cancels the
+    /// countdown, which is what "toggle" means.
+    SelfDestruct = 29,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {
@@ -424,7 +432,8 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
                                    PathService* pathService = nullptr,
                                    ScriptTaskHost* scriptTasks = nullptr,
                                    std::vector<SiloAmmo>* siloAmmo = nullptr,
-                                   std::vector<SiloBuild>* siloQueue = nullptr);
+                                   std::vector<SiloBuild>* siloQueue = nullptr,
+                                   std::vector<SelfDestructWork>* selfDestructs = nullptr);
 
 /// Applies one semantic issue to a canonicalized unit set.
 ///
@@ -447,7 +456,8 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
     ScriptTaskHost* scriptTasks = nullptr,
     const CommandGridForUnit& approachGridForUnit = {},
     std::vector<SiloAmmo>* siloAmmo = nullptr,
-    std::vector<SiloBuild>* siloQueue = nullptr);
+    std::vector<SiloBuild>* siloQueue = nullptr,
+    std::vector<SelfDestructWork>* selfDestructs = nullptr);
 
 /// Publishes a finished asynchronous plain-move route through the command authority.
 ///

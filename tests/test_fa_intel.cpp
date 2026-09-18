@@ -1,14 +1,15 @@
 // Player-perspective coverage for intel claims (see docs/fa-exe-analysis-plan.md).
 //
 // What one side knows about another: the counter-intel flag filter (C-277), the
-// jammer's deception (C-278), sonar's detect-without-identify (C-279), allied
-// sharing (C-281), and the identification latch (C-285). The grid mechanics
+// jammer's deception (C-278), sonar's detect-without-identify (C-279), omni's
+// detect-without-identify (C-280), allied sharing (C-281), the energy-brownout
+// intel blackout (C-284), and the identification latch (C-285). The grid mechanics
 // themselves live in test_intel.cpp; these cases pin the parts of the claims
 // that were implemented but unproven, and each names the claim it answers.
-
 #include "core/sim/Intel.hpp"
 
 #include "core/sim/Army.hpp"
+#include "core/sim/Economy.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/Terrain.hpp"
@@ -486,6 +487,264 @@ TEST_CASE("C-007/C-285: a scout walking into view turns a blip into a sighting",
     }
 
     CHECK(intel.hasSeenEver(0, target));
+    CHECK(rm::sim::contactKindForUnit(0, target.index, store, catalog, armies, intel)
+          == rm::sim::ContactKind::Seen);
+}
+
+// --- C-278: jammer offset distribution ------------------------------------------
+
+TEST_CASE("C-278: jammer fakes draw a uniform magnitude inside JamRadius[Min,Max]",
+          "[fa-intel]") {
+    // The claim's distribution half: each fake's offset is a random direction AND a
+    // uniform magnitude in `JamRadius[min,max]` — not the fixed full-radius ring the
+    // first implementation stamped. The wander is peeled off exactly: a fake's drawn
+    // offset is FIXED while its blip drift moves with the tick, so matching a contact
+    // across two ticks against each ghost's own drift recovers the offset with no
+    // tolerance at all.
+    rm::unitdef::UnitDef watching = seer(0.0f, 800.0f);
+    rm::unitdef::UnitDef deceiver;
+    deceiver.jamRadiusMinElmos = 80.0f;
+    deceiver.jamRadiusElmos = 208.0f;
+    deceiver.jammerBlips = 10;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex jammer = catalog.add(&deceiver);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(4096), Fx::fromInt(4096),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 500.0f, 500.0f);
+    const rm::sim::UnitId carrier = place(store, jammer, 1, 700.0f, 500.0f);
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    std::vector<rm::sim::Contact> atZero;
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 0, atZero);
+    std::vector<rm::sim::Contact> atFive;
+    rm::sim::contactsFor(0, store, catalog, armies, intel, 5, atFive);
+
+    const Fx carrierX = store.transforms()[carrier.index].x;
+    const Fx carrierZ = store.transforms()[carrier.index].z;
+    const Fx minR = rm::sim::fxFromFloat(80.0f);
+    const Fx maxR = rm::sim::fxFromFloat(208.0f);
+
+    // For each ghost identity — the real blip (offset 0) plus one per fake — predict
+    // where a tick-0 contact must land at tick 5 under that ghost's drift. An exact
+    // match identifies the ghost; the tick-0 contact minus the ghost's tick-0 drift
+    // is then the drawn offset, in whole elmos with no tolerance to argue about.
+    std::vector<Fx> magnitudes;
+    for (int blip = 0; blip <= deceiver.jammerBlips; ++blip) {
+        const rm::sim::UnitId ghost{
+            carrier.index,
+            static_cast<rm::Generation>(carrier.generation
+                                        + static_cast<rm::Generation>(blip))};
+        const auto [w0x, w0z] = rm::sim::radarBlipPosition(ghost, Fx{}, Fx{}, 0);
+        const auto [w5x, w5z] = rm::sim::radarBlipPosition(ghost, Fx{}, Fx{}, 5);
+        for (const rm::sim::Contact& contact : atZero) {
+            if (contact.unit != carrier) {
+                continue;
+            }
+            const Fx predictedX = contact.x - w0x + w5x;
+            const Fx predictedZ = contact.z - w0z + w5z;
+            const auto moved = std::ranges::find_if(
+                atFive, [&](const rm::sim::Contact& later) {
+                    return later.unit == carrier && later.x == predictedX
+                           && later.z == predictedZ;
+                });
+            if (moved == atFive.end()) {
+                continue;
+            }
+            const Fx offX = contact.x - w0x - carrierX;
+            const Fx offZ = contact.z - w0z - carrierZ;
+            magnitudes.push_back(rm::sim::fxHypot(offX, offZ));
+            break;  // one ghost, one contact
+        }
+    }
+
+    // The real blip plus ten fakes: eleven offsets, exactly one of them zero.
+    REQUIRE(magnitudes.size() == 11);
+    std::vector<Fx> fakes;
+    for (const Fx magnitude : magnitudes) {
+        if (magnitude > Fx{}) {
+            fakes.push_back(magnitude);
+        }
+    }
+    REQUIRE(fakes.size() == 10);
+
+    // Uniform in [min, max], not a ring: the old fixed-magnitude model put all ten at
+    // exactly `maxR`. Distinct magnitudes inside the range are the claim.
+    for (const Fx magnitude : fakes) {
+        CHECK(magnitude >= minR);
+        CHECK(magnitude <= maxR);
+    }
+    const auto [flo, fhi] = std::ranges::minmax(fakes);
+    CHECK(flo < fhi);
+}
+
+// --- C-280: omni detects, never identifies ---------------------------------------
+
+TEST_CASE("C-280: an omni-only contact is a blip, never an identification",
+          "[fa-intel]") {
+    // Omni bypasses every counter-intel flag but does not set `LOSEver`: a unit known
+    // ONLY through omni is a radar-class blip — detected, targetable at the worst
+    // rank, unidentified — and the `seenEver` latch stays clear until real vision
+    // does the identifying.
+    rm::unitdef::UnitDef watching = seer(0.0f, 0.0f, 0.0f, 400.0f);
+    rm::unitdef::UnitDef scout = seer(150.0f);
+    rm::unitdef::UnitDef quiet;
+    rm::unitdef::UnitDef sneaky;
+    sneaky.cloak = true;  // omni ignores it — and vision can never identify it either
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex scoutType = catalog.add(&scout);
+    const rm::UnitTypeIndex enemy = catalog.add(&quiet);
+    const rm::UnitTypeIndex cloaked = catalog.add(&sneaky);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 200.0f, 200.0f);
+    const rm::sim::UnitId observer = place(store, scoutType, 0, 200.0f, 900.0f);
+    const rm::sim::UnitId target = place(store, enemy, 1, 300.0f, 200.0f);
+    const rm::sim::UnitId ghost = place(store, cloaked, 1, 310.0f, 200.0f);
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    // Omni covers both: detected — but as blips, and neither latch is set. Cloak does
+    // not even keep omni out; it only keeps the contact unidentified forever.
+    CHECK(rm::sim::contactKindForUnit(0, target.index, store, catalog, armies, intel)
+          == rm::sim::ContactKind::Radar);
+    CHECK(rm::sim::contactKindForUnit(0, ghost.index, store, catalog, armies, intel)
+          == rm::sim::ContactKind::Radar);
+    CHECK_FALSE(intel.hasSeenEver(0, target));
+    CHECK_FALSE(intel.hasSeenEver(0, ghost));
+
+    // The scout walks vision over both: the plain target is NOW identified and stays
+    // identified — while the cloaked one remains an omni blip, because cloak still
+    // defeats the eye that would have named it.
+    store.transforms()[observer.index].z = Fx::fromInt(300);
+    intel.update(store, catalog, armies, nullptr);
+    CHECK(rm::sim::contactKindForUnit(0, target.index, store, catalog, armies, intel)
+          == rm::sim::ContactKind::Seen);
+    CHECK(intel.hasSeenEver(0, target));
+    CHECK(rm::sim::contactKindForUnit(0, ghost.index, store, catalog, armies, intel)
+          == rm::sim::ContactKind::Radar);
+    CHECK_FALSE(intel.hasSeenEver(0, ghost));
+}
+
+// --- C-277: cloak is anti-vision only ---------------------------------------------
+
+TEST_CASE("C-277: cloak hides from vision but not from radar", "[fa-intel]") {
+    // The claim's split, side by side in one scene: a cloaked enemy inside vision AND
+    // radar coverage is a radar blip — retail's filter clears `LOSNow` on self-cloak
+    // and leaves the radar bit standing. (The sibling case in test_intel.cpp pinned
+    // the wrong semantics for a while; this is the claim-level pair.)
+    rm::unitdef::UnitDef watching = seer(400.0f, 400.0f);
+    rm::unitdef::UnitDef sneaky;
+    sneaky.cloak = true;
+    rm::unitdef::UnitDef plain;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex cloaked = catalog.add(&sneaky);
+    const rm::UnitTypeIndex visible = catalog.add(&plain);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 200.0f, 200.0f);
+    const rm::sim::UnitId ghost = place(store, cloaked, 1, 300.0f, 200.0f);
+    const rm::sim::UnitId seen = place(store, visible, 1, 400.0f, 200.0f);
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    // Same coverage, different flag: the plain unit is identified, the cloaked one is
+    // a blip — present on the scope, absent from the eye.
+    CHECK(rm::sim::contactKindForUnit(0, seen.index, store, catalog, armies, intel)
+          == rm::sim::ContactKind::Seen);
+    CHECK(rm::sim::contactKindForUnit(0, ghost.index, store, catalog, armies, intel)
+          == rm::sim::ContactKind::Radar);
+    CHECK_FALSE(intel.hasSeenEver(0, ghost));
+}
+
+// --- C-284: energy brownout disables intel -----------------------------------------
+
+TEST_CASE("C-284: an energy brownout blacks out intel until recovery holds",
+          "[fa-intel]") {
+    // Retail's `IntelWatchThread`: when a unit's consumed ratio collapses, its intel
+    // stops detecting — immediately — and stays off until the ratio has held for
+    // `Intel.ReactivateTime` (10s at the default 10 Hz: 100 updates). A relapse
+    // restarts the count. The watcher carries energy upkeep so its intel is a real
+    // consumer; a zero-upkeep unit would never brown out.
+    rm::unitdef::UnitDef watching = seer(400.0f, 400.0f);
+    watching.upkeepEnergyPerSecond = 10.0f;
+    rm::unitdef::UnitDef quiet;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex enemy = catalog.add(&quiet);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 200.0f, 200.0f);
+    const rm::sim::UnitId target = place(store, enemy, 1, 300.0f, 200.0f);
+    const std::vector<Army> armies = twoArmies(false);
+
+    // Both economies funded in full: the watcher sees its enemy.
+    std::vector<rm::sim::Economy> economies(2);
+    const rm::sim::TickRate rate{};
+    intel.update(store, catalog, armies, nullptr, rate, economies);
+    CHECK(rm::sim::contactKindForUnit(0, target.index, store, catalog, armies, intel)
+          == rm::sim::ContactKind::Seen);
+
+    // Army 0's energy consumer is granted nothing — the brownout. Its intel dies the
+    // same update: the enemy vanishes from the contact list entirely.
+    economies[0].singleResourceFunded = rm::sim::kFxZero;
+    economies[0].multiResourceFunded = rm::sim::kFxZero;
+    intel.update(store, catalog, armies, nullptr, rate, economies);
+    CHECK_FALSE(
+        rm::sim::contactKindForUnit(0, target.index, store, catalog, armies, intel)
+            .has_value());
+
+    // Power returns — but intel does NOT. The ratio must hold for the reactivate
+    // window first; one tick short of it the scope is still dark.
+    economies[0].singleResourceFunded = rm::sim::kFxOne;
+    economies[0].multiResourceFunded = rm::sim::kFxOne;
+    const auto reactivate = rate.ticks(rm::sim::Seconds{rm::sim::kIntelReactivateSeconds});
+    for (rm::TickCount i = 0; i + 1 < reactivate; ++i) {
+        intel.update(store, catalog, armies, nullptr, rate, economies);
+    }
+    CHECK_FALSE(
+        rm::sim::contactKindForUnit(0, target.index, store, catalog, armies, intel)
+            .has_value());
+
+    // A relapse inside the window restarts the count: brown out once more, recover
+    // again, and the full window is owed a second time.
+    economies[0].singleResourceFunded = rm::sim::kFxZero;
+    economies[0].multiResourceFunded = rm::sim::kFxZero;
+    intel.update(store, catalog, armies, nullptr, rate, economies);
+    economies[0].singleResourceFunded = rm::sim::kFxOne;
+    economies[0].multiResourceFunded = rm::sim::kFxOne;
+    for (rm::TickCount i = 0; i + 1 < reactivate; ++i) {
+        intel.update(store, catalog, armies, nullptr, rate, economies);
+    }
+    CHECK_FALSE(
+        rm::sim::contactKindForUnit(0, target.index, store, catalog, armies, intel)
+            .has_value());
+
+    // The hundredth consecutive funded update brings the senses back.
+    intel.update(store, catalog, armies, nullptr, rate, economies);
     CHECK(rm::sim::contactKindForUnit(0, target.index, store, catalog, armies, intel)
           == rm::sim::ContactKind::Seen);
 }

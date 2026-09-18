@@ -1994,6 +1994,10 @@ TEST_CASE("every retail T1 land factory product performs its role through the ma
                 // a target or consume the resources that the role scenario needs.
                 Scenario job;
                 const auto actor = job.spawn(def, 200.0f, 200.0f);
+                // Scouts carry energy upkeep (URL0101: 5/s), and C-284 browns intel
+                // out when upkeep goes unpaid — fund the army so its sensors stay on.
+                job.scene.economies[0].storage = rm::app::kStartingStorage;
+                job.scene.economies[0].stored = rm::app::kStartingStorage;
                 if (role == rm::unitdef::Role::Scout) {
                     job.scene.intel.configure(2, rm::sim::Fx::fromInt(1024),
                         rm::sim::Fx::fromInt(1024), rm::sim::VisionStyle::ForgedAlliance);

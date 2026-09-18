@@ -16,6 +16,9 @@ namespace rm::sim {
 // Funded unit-capture tasks (`core/sim/Capture.hpp`). Forward-declared: the economy
 // pass only names the span; the award loop in Economy.cpp sees the full type.
 struct CaptureWork;
+/// One unit's adjacency multipliers (`core/sim/Adjacency.hpp`). Forward-declared like
+/// `CaptureWork`: the signature names the span, the .cpp sees the fields.
+struct AdjacencyEffects;
 
 // What an army can spend, and what it is spending it on.
 //
@@ -545,13 +548,19 @@ void advanceConstruction(Construction& work) noexcept;
 /// runs each owner's state-0 auto-refill on it first, then bills the queue HEAD's record —
 /// one build per unit at a time — and pops an entry when its production lands in `stored`.
 /// Null means the caller has no queue: no refills, no billing, silos are inert.
+///
+/// `adjacency` is `adjacencyEffects`' slot-indexed output: a construction's drain is
+/// multiplied by its BUILDER's `massBuild`/`energyBuild` — the `MassActive`/`EnergyActive`
+/// discount a generator or extractor gives a structure that is actively building
+/// (`C-051`). Empty means every builder pays full price, the pre-adjacency answer.
 void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<RepairWork> repairs = {}, std::span<SiloAmmo> siloAmmo = {},
                   bool deferOverflow = false, std::span<UnitResourceFlow> flows = {},
                   int armyIndex = kNoArmy, std::span<EnhancementWork> enhancements = {},
                   std::span<CaptureWork> captures = {},
                   std::span<const BuildPriority> priorities = {},
-                  std::vector<SiloBuild>* siloQueue = nullptr);
+                  std::vector<SiloBuild>* siloQueue = nullptr,
+                  std::span<const AdjacencyEffects> adjacency = {});
 ///
 /// Run AFTER every army has ticked, because an army's spare capacity is only known once it
 /// has spent. Not a flat `1/n`: retail walks the recipients dividing the *remaining* excess

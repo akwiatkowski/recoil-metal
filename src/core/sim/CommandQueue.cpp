@@ -41,6 +41,7 @@ template <typename Order>
     case CommandKind::SiloBuildTactical:
     case CommandKind::SiloBuildNuke:
     case CommandKind::ToggleSiloAuto:
+    case CommandKind::SelfDestruct:
         return false;
     case CommandKind::Move:
     case CommandKind::AttackMove:

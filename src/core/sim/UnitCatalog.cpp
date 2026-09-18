@@ -103,6 +103,11 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
         if (const std::optional<std::uint8_t> size = adjacencySizeIndex(*def); structure && size) {
             adjacency.sizeIndex = *size;
             adjacency.receives = true;
+            // Retail's RateOfFire receiver is `STRUCTURE SIZE4 ARTILLERY` with at least
+            // one weapon (`RateOfFireBuffCheck`). The SIZE4 half is implicit: the grant
+            // rows for every other size are zero by `C-051`(c)'s dead code.
+            adjacency.receivesRateOfFire =
+                def->hasCategory("ARTILLERY") && !def->weapons.empty();
         }
         const unitdef::AdjacencyGrants& grants = unitdef::adjacencyGrants(
             unitdef::adjacencyClassFromName(def->adjacencyBuffs));
@@ -110,6 +115,9 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
             adjacency.givesMassProduction[i] = fxFromFloat(grants.massProduction[i]);
             adjacency.givesEnergyProduction[i] = fxFromFloat(grants.energyProduction[i]);
             adjacency.givesEnergyUpkeep[i] = fxFromFloat(grants.energyMaintenance[i]);
+            adjacency.givesMassBuild[i] = fxFromFloat(grants.massBuild[i]);
+            adjacency.givesEnergyBuild[i] = fxFromFloat(grants.energyBuild[i]);
+            adjacency.givesRateOfFire[i] = fxFromFloat(grants.rateOfFire[i]);
         }
     }
     adjacency_.push_back(adjacency);
@@ -130,6 +138,7 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
         intel.freeIntel = def->freeIntel;
         intel.radarStealthField = fxFromFloat(def->radarStealthFieldRadiusElmos);
         intel.sonarStealthField = fxFromFloat(def->sonarStealthFieldRadiusElmos);
+        intel.jamRadiusMin = fxFromFloat(def->jamRadiusMinElmos);
         intel.jamRadius = fxFromFloat(def->jamRadiusElmos);
         intel.jammerBlips = def->jammerBlips;
     }

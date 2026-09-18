@@ -1,6 +1,6 @@
 #include "core/sim/Economy.hpp"
+#include "core/sim/Adjacency.hpp"
 #include "core/sim/Capture.hpp"
-
 #include <algorithm>
 
 namespace rm::sim {
@@ -172,7 +172,8 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<UnitResourceFlow> flows, int armyIndex,
                   std::span<EnhancementWork> enhancements, std::span<CaptureWork> captures,
                   std::span<const BuildPriority> priorities,
-                  std::vector<SiloBuild>* siloQueue) {
+                  std::vector<SiloBuild>* siloQueue,
+                  std::span<const AdjacencyEffects> adjacency) {
     // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
     // pass, so its over-cap excess is still lost rather than becoming a hidden reserve.
     economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
@@ -224,6 +225,19 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         (resources == 2 ? multi[tier] : single[tier]) += out;
     };
 
+    // The build-drain discount (`MassActive`/`EnergyActive`, `C-051`): a construction's
+    // per-tick drain is multiplied by its BUILDER's adjacency row — the factory standing
+    // beside the generators pays less, which is the whole reason players ring their
+    // factories. An empty span or a builder outside it pays full price.
+    const auto buildDrain = [&adjacency](const Construction& work) {
+        Resources demand = drainPerTick(work);
+        if (work.builder.index < adjacency.size()) {
+            demand.mass *= adjacency[work.builder.index].massBuild;
+            demand.energy *= adjacency[work.builder.index].energyBuild;
+        }
+        return demand;
+    };
+
     const Resources upkeepOutstanding = outstanding(economy.upkeepPerTick,
                                                     economy.upkeepAllocated);
     bucket(upkeepOutstanding, kNormal);
@@ -233,7 +247,7 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         if (!stillBilled(work)) {
             continue;
         }
-        const Resources demand = drainPerTick(work);
+        const Resources demand = buildDrain(work);
         wanted += demand;
         bucket(outstanding(demand, work.allocated), tierAt(work.builder.index));
     }
@@ -415,7 +429,7 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
             // stage (`advanceConstruction`). All that is left here is the bill and the ratio the
             // NEXT beat's progress will be multiplied by — retail's split across two stages exactly.
             const Resources before = granted;
-            work.fundedLastTick = grantAndConsume(drainPerTick(work), work.allocated, grantFor);
+            work.fundedLastTick = grantAndConsume(buildDrain(work), work.allocated, grantFor);
             recordCharge(work.builder, {.mass = granted.mass - before.mass,
                                        .energy = granted.energy - before.energy});
             work.workedThisTick = false;

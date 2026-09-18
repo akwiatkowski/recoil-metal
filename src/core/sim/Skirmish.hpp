@@ -2,6 +2,7 @@
 
 #include "core/map/HeightField.hpp"
 #include "core/sim/Army.hpp"
+#include "core/sim/ArmyStats.hpp"
 #include "core/sim/Assist.hpp"
 #include "core/sim/Combat.hpp"
 #include "core/sim/Capture.hpp"
@@ -63,6 +64,16 @@ enum class VictoryMode : std::uint8_t {
 // `SkirmishGroup` used to live here: one batch's mutable spans plus the one definition its
 // whole batch shared. The passes take `UnitStore` and `UnitCatalog` now — see PLAN2.md §7
 // P1.4 for why the grouping existed and what removing it changed.
+/// One unit's self-destruct countdown (`C-345`): `selfdestruct.lua`'s `StartCountdown`
+/// — five seconds of warning, then `unit:Kill()`. Match-owned like `SiloAmmo`: retail
+/// keeps the timer on the unit's script side, not in the order queue, which is why a
+/// self-destructing unit keeps working until the moment it dies.
+struct SelfDestructWork {
+    UnitId unit{};
+    /// Ticks until the kill lands. Reaches zero → the unit dies by the ordinary path.
+    TickCount remainingTicks = 0;
+};
+
 /// The match-wide state one tick advances, alongside the per-batch groups.
 ///
 /// References rather than values: a tick mutates all of it, and a Match is built fresh
@@ -211,10 +222,20 @@ struct Match {
     /// C-210: OnDefeat clears an army's non-wall units twenty seconds later. Entries are
     /// indexed like `armies`; zero means that army has no cleanup pending.
     std::vector<TickCount> defeatCleanupRemainingTicks;
+
+    /// `CArmyStats` — the serialized per-army stat store and one-shot trigger service
+    /// (`C-227`), indexed by army like `economies`. The tick feeds the engine-owned
+    /// stats (economy ratios, income, consumption, kills) and evaluates triggers from
+    /// the per-army beat after tick 10; fired names land in `TickReport::armyStatsFired`.
+    /// Null for a scene with no stat service — every update and evaluation is skipped.
+    std::vector<ArmyStats>* armyStats = nullptr;
+
+    /// Self-destruct countdowns (`C-345`), match-owned like `siloAmmo`. The
+    /// `SelfDestruct` command toggles an entry on and off; the tick counts each down
+    /// and kills the unit on zero through the ordinary death path.
+    std::vector<SelfDestructWork>* selfDestructs = nullptr;
 };
 
-/// A unit's death, with everything the caller needs to mark it.
-///
 /// The position and radius are CARRIED rather than looked up, because retiring a unit is
 /// what zeroes its radius and collapses its mesh — a caller that went back to the slot
 /// afterwards would find a scorch mark of size zero at a position the sim had written
@@ -281,6 +302,11 @@ struct TickReport {
     /// deposit would put a second extractor on top of the first the moment the first
     /// was removed.
     std::vector<Construction> finished;
+
+    /// `CArmyStats` triggers that fired this tick (`C-227`): the name Lua registered,
+    /// with the army it belonged to. The callback is the caller's — the sim removes
+    /// the trigger before reporting, exactly retail's ordering.
+    std::vector<ArmyStatFired> armyStatsFired;
 };
 
 /// Advances the whole match by one fixed tick.

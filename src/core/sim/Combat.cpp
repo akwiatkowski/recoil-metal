@@ -1,7 +1,7 @@
 #include "core/sim/Combat.hpp"
+#include "core/sim/Adjacency.hpp"
 #include "core/sim/Reclaim.hpp"
 #include "core/TaskPool.hpp"
-
 #include "core/unit/BuildTree.hpp"
 
 #include <algorithm>
@@ -21,6 +21,22 @@ namespace {
         return kNoArmy;
     }
     return motion[slot].armyIndex;
+}
+
+/// The reload a weapon gets after firing, through its owner's `RateOfFire` adjacency
+/// multiplier. Retail's buff is a PENALTY despite the "Bonus" name (`C-051`(b)):
+/// `Buff.lua` computes `wep:ChangeRateOfFire(1/(val*delay))`, which lands the new rate
+/// at `val x bpRateOfFire` — `Add < 0` means `val < 1` and the weapon fires SLOWER, so
+/// the reload stretches by `1/val`. Only SIZE4 artillery receivers ever see `val` off
+/// one (`C-051`(c)); everything else takes the blueprint ticks unchanged.
+[[nodiscard]] TickCount adjacencyReload(std::span<const AdjacencyEffects> adjacency,
+                                        UnitIndex slot, TickCount reloadTicks) noexcept {
+    if (slot >= adjacency.size() || adjacency[slot].rateOfFire <= Fx{}) {
+        return reloadTicks;
+    }
+    const Fx stretched = Fx::fromInt(static_cast<std::int32_t>(reloadTicks))
+                         / adjacency[slot].rateOfFire;
+    return static_cast<TickCount>(std::max<std::int32_t>(1, stretched.floorToInt()));
 }
 
 /// The Army record for an index, or null. An index with no army is not an error: the
@@ -865,6 +881,73 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
 /// The live entity target an active Attack order explicitly forces, if it has one.
 ///
 /// An entity-target Attack is distinct from automatic acquisition: the command has already
+/// The firer-side water gates (`C-321`, `C-327`) — retail's `UnitWeapon::CanFire`
+/// checks at `0x6db78b`–`0x6db829`. `isAbove = firerY > elevation` compares the
+/// firer's Y against the firer's OWN `Physics.Elevation` datum (default −10000
+/// ogrids, `UnitDef::waterGateElevationElmos`), never the waterline: a unit with
+/// no authored `Elevation` is always "above" and `BelowWaterFireOnly` can never
+/// fire for it. The `FlyInWater` reject is a SEPARATE waterline test (`C-327`):
+/// an Air-layer unit below the water plane cannot fire unless the blueprint
+/// lets it fly under water — it does not depend on the elevation datum, so an
+/// aircraft cruising at exactly its authored `Elevation` is unaffected.
+[[nodiscard]] bool firerWaterGateOpen(const unitdef::Weapon& weapon,
+                                      const unitdef::UnitDef& def, Fx firerY,
+                                      bool firerAirborne,
+                                      bool firerBelowWater) noexcept {
+    if (firerAirborne && firerBelowWater && !def.airFlyInWater) {
+        return false;  // C-327: submerged aircraft cannot fire
+    }
+    const Fx elevation = fxFromFloat(def.waterGateElevationElmos);
+    const bool isAbove = firerY > elevation;
+    if (!isAbove && weapon.aboveWaterFireOnly) {
+        return false;
+    }
+    if (isAbove && weapon.belowWaterFireOnly) {
+        return false;
+    }
+    return true;
+}
+
+/// The Y retail's `CanFire` gate actually reads (`0x6dbdb0`): the WEAPON BONE's
+/// world Y — `weapon+0xa8` picks the bone, and the returned vector's `+4` is
+/// its Y. This sim has no bone list, so the stand-in is the same one the
+/// sight model uses for "where the hardware sits": the collision-box top
+/// (`UnitDef::sizeYElmos`, the Fatboy's 12 elmos against its 8-elmo datum),
+/// falling back to the mesh top when the blueprint states no `SizeY`. Reading
+/// the origin instead puts every authored-`Elevation` unit under its own
+/// datum — a Fatboy standing on flat ground could never fire.
+[[nodiscard]] Fx weaponGateFirerY(const unitdef::UnitDef& def, Fx originY) noexcept {
+    const float boneHeight = def.sizeYElmos > 0.0f ? def.sizeYElmos
+                                                  : def.meshHeightElmos;
+    return originY + fxFromFloat(boneHeight);
+}
+
+/// The target-side water gates (`C-322`), evaluated ONLY for Seabed-layer
+/// candidates — a ground unit under water, never a submerged sub (the Sub
+/// layer is not Seabed, so the flags are inert against it). The candidate's Y
+/// is tested against its own `Physics.Elevation` datum; retail tests the bone
+/// Ys, and the origin is the one bone this sim always has. With the −10000
+/// default every seabed unit reads "above", so `AboveWaterTargetsOnly` passes
+/// and `BelowWaterTargetsOnly` can never pass.
+[[nodiscard]] bool passesWaterTargetGate(const unitdef::Weapon& weapon,
+                                         const unitdef::UnitDef* targetDef,
+                                         bool seabed, Fx targetY) noexcept {
+    if (!seabed || (!weapon.aboveWaterTargetsOnly && !weapon.belowWaterTargetsOnly)) {
+        return true;
+    }
+    const Fx elevation = fxFromFloat(
+        targetDef != nullptr ? targetDef->waterGateElevationElmos
+                             : -80000.0f);  // retail's −10000-ogrid default
+    const bool isAbove = targetY > elevation;
+    if (weapon.aboveWaterTargetsOnly && !isAbove) {
+        return false;
+    }
+    if (weapon.belowWaterTargetsOnly && isAbove) {
+        return false;
+    }
+    return true;
+}
+
 /// named its desired target, so it must not be replaced by a nearer hostile at fire time.
 [[nodiscard]] std::optional<UnitId> explicitAttackTarget(UnitIndex slot,
                                                           const UnitStore& store) noexcept {
@@ -894,6 +977,13 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
     if (target.index >= motion.size() || motion[target.index].attached
         || !weapon.canTarget(motion[target.index].airborne,
             motion[target.index].submersible && motion[target.index].submerged, sourceSubmerged)) {
+        return false;
+    }
+    // C-322: the target-side water gate applies to Seabed-layer candidates
+    // only — a submerged sub is the Sub layer and passes untouched.
+    if (!passesWaterTargetGate(weapon, catalog.def(store.typeAt(target.index)),
+                               motion[target.index].seabed,
+                               store.transforms()[target.index].y)) {
         return false;
     }
     if (intel != nullptr) {
@@ -1071,6 +1161,12 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
             return std::nullopt;
         }
         if (def != nullptr && !passesTargetRestrictions(weapon, *def)) {
+            return std::nullopt;
+        }
+        // C-322: the target-side water gate applies to Seabed-layer candidates
+        // only — a submerged sub is the Sub layer and passes untouched.
+        if (!passesWaterTargetGate(weapon, def, motion[slot].seabed,
+                                   transforms[slot].y)) {
             return std::nullopt;
         }
         bool prioritiesApply = true;
@@ -1581,6 +1677,13 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
             if ((!weapon.fires() && !weapon.firesAtProjectiles()) || weapon.turreted) {
                 continue;
             }
+            // A weapon the water gates silence (`C-321`/`C-327`) is not worth
+            // turning the hull for — the fire pass will hold its shot anyway.
+            if (!firerWaterGateOpen(weapon, *def, weaponGateFirerY(*def, transforms[slot].y),
+                                    sourceMotion.airborne,
+                                    sourceMotion.belowWater)) {
+                continue;
+            }
             const std::array<Fx, 3> from = positionOf(transforms[slot]);
             std::optional<std::array<Fx, 3>> candidatePosition;
             std::optional<UnitId> candidateUnit;
@@ -1682,7 +1785,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                            EventQueue* events, const Intel* intel,
                            const PlayableRect* playableRect, TickIndex tick,
                            std::span<SiloAmmo> siloAmmo, FeatureStore* features,
-                           std::span<const WorkClaim> claims) {
+                           std::span<const WorkClaim> claims,
+                           std::span<const AdjacencyEffects> adjacency) {
     std::size_t fired = 0;
 
     const std::span<const Transform> transforms = store.transforms();
@@ -1839,6 +1943,19 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 continue;
             }
 
+            // The firer-side water gates (`C-321`/`C-327`), retail's
+            // `UnitWeapon::CanFire` checks: `AboveWaterFireOnly`/
+            // `BelowWaterFireOnly` compare the firer's Y against its own
+            // `Physics.Elevation` datum, and an Air-layer unit below that
+            // datum cannot fire unless `Air.FlyInWater`. The gate holds the
+            // shot rather than spending the reload — the weapon fires the
+            // tick the hull crosses its datum again.
+            if (!firerWaterGateOpen(weapon, *def, weaponGateFirerY(*def, from[1]),
+                                    sourceMotion.airborne,
+                                    sourceMotion.belowWater)) {
+                continue;
+            }
+
             if (weapon.targetsProjectiles) {
                 const Projectile* target =
                     nearestProjectileTarget(from, army, weapon, projectiles, armies);
@@ -1929,10 +2046,10 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     --health.burstRemaining[w];
                     health.reloadRemaining[w] = health.burstRemaining[w] > 0
                                                     ? static_cast<int>(rates.burstDelayTicks)
-                                                    : static_cast<int>(rates.reloadTicks);
+                                                    : static_cast<int>(adjacencyReload(adjacency, slot, rates.reloadTicks));
                 } else {
                     health.burstRemaining[w] = 0;
-                    health.reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
+                    health.reloadRemaining[w] = static_cast<int>(adjacencyReload(adjacency, slot, rates.reloadTicks));
                 }
                 continue;
             }
@@ -2125,13 +2242,13 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 --health.burstRemaining[w];
                 health.reloadRemaining[w] = health.burstRemaining[w] > 0
                                                 ? static_cast<int>(rates.burstDelayTicks)
-                                                : static_cast<int>(rates.reloadTicks);
+                                                : static_cast<int>(adjacencyReload(adjacency, slot, rates.reloadTicks));
             } else {
                 // The volley above delivered the whole rack at once; a plain reload
                 // follows. Letting the burst cycle run here with a zero delay would fire
                 // again next tick and deliver the salvo twice over.
                 health.burstRemaining[w] = 0;
-                health.reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
+                health.reloadRemaining[w] = static_cast<int>(adjacencyReload(adjacency, slot, rates.reloadTicks));
             }
         }
     }
@@ -2186,6 +2303,13 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
             if (!weapon.canTarget(store.motion()[head->target().index].airborne,
                     store.motion()[head->target().index].submersible
                         && store.motion()[head->target().index].submerged, sourceSubmerged)) {
+                continue;
+            }
+            // The same `CanFire` water gates as the automatic path (`C-321`/
+            // `C-327`): a manual click does not exempt a submerged barrel.
+            if (!firerWaterGateOpen(weapon, *def, weaponGateFirerY(*def, transforms[slot].y),
+                                    sourceMotion.airborne,
+                                    sourceMotion.belowWater)) {
                 continue;
             }
             healths[slot].reloadRemaining.resize(def->weapons.size(), 0);
@@ -2311,6 +2435,13 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
                 && !weapon.canTarget(store.motion()[aimTarget.index].airborne,
                     store.motion()[aimTarget.index].submersible
                         && store.motion()[aimTarget.index].submerged, sourceSubmerged)) {
+                continue;
+            }
+            // The same `CanFire` water gates as the automatic path (`C-321`/
+            // `C-327`): a launch order does not exempt a submerged silo.
+            if (!firerWaterGateOpen(weapon, *def, weaponGateFirerY(*def, from[1]),
+                                    sourceMotion.airborne,
+                                    sourceMotion.belowWater)) {
                 continue;
             }
             healths[slot].reloadRemaining.resize(def->weapons.size(), 0);

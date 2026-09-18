@@ -91,6 +91,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "silo-build-nuke";
     case CommandKind::ToggleSiloAuto:
         return "toggle-silo-auto";
+    case CommandKind::SelfDestruct:
+        return "self-destruct";
     }
     return "stop";
 }

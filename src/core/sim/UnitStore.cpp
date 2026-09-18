@@ -372,6 +372,10 @@ void UnitStore::kill(UnitId id) {
     targetFocus_[id.index] = TargetFocus::Default;
     retreats_[id.index] = {};
     doNotTarget_[id.index] = false;
+    // `C-254`: `SimUnitEnhancements[id]` is live unit state, not corpse state — a dead
+    // commander's installed upgrades leave the registry with it, so a respawned or
+    // recycled slot never inherits a tombstone's enhancements.
+    enhancements_[id.index].clear();
     (void)detach(id);
     // Cargo dies with its carrier: retail disperses veterancy for the attached
     // units at their remaining health when a loaded transport is destroyed

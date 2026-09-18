@@ -10,8 +10,9 @@
 #include "app/SceneBuild.hpp"
 #include "core/lua/LuaTable.hpp"
 #include "core/sim/Enhancement.hpp"
+#include "core/sim/Movement.hpp"
 #include "core/sim/StateHash.hpp"
-#include "core/sim/Veterancy.hpp"
+#include "core/sim/Terrain.hpp"
 #include "core/unit/UnitDef.hpp"
 #include "support/FxMatchers.hpp"
 #include "support/TestRoster.hpp"
@@ -131,12 +132,14 @@ struct Scenario {
 /// `CommandKind::Script` carrying `EnhanceTask` and the enhancement id, through the
 /// same intake a UI click uses.
 [[nodiscard]] bool issueEnhancement(Scenario& job, rm::sim::UnitId unit,
-                                    rm::TickIndex tick, const std::string& name) {
+                                    rm::TickIndex tick, const std::string& name,
+                                    bool queued = false) {
     return rm::app::submitCommand(job.scene, rm::sim::CommandIssue{
         .tick = tick,
         .source = static_cast<rm::CommandSource>(0),
         .player = 0,
         .kind = rm::sim::CommandKind::Script,
+        .queued = queued,
         .units = {unit},
         .scriptTask = "EnhanceTask",
         .scriptData = {name.begin(), name.end()},
@@ -337,4 +340,67 @@ TEST_CASE("C-380/C-028: promotion heals on top of enhancement health, recomputed
     // (100 + 20) × 1.1 = 132, and the +12 increase lands in current health too.
     CHECK(rm::test::near(roster.store.health()[unit.index].maximum) == 132.0f);
     CHECK(rm::test::near(roster.store.health()[unit.index].current) == 132.0f);
+}
+
+TEST_CASE("C-376: an enhancement waits for the unit to stand still before work "
+          "begins", "[fa-progress][enhancement]") {
+    // EnhanceTask.lua's `Stopping` phase: `IsMobile() and IsMoving()` gates
+    // `OnWorkBegin`, with `Navigator:AbortMove()` doing the stopping. A queued
+    // script reaches dispatch without the intake teardown, so the commander is
+    // still under way when the task first ticks — the work row must NOT appear
+    // until it stands still.
+    Scenario job;
+    const auto acu = job.spawn(commanderDef(), 300, 300);
+    auto runner = job.runner();
+    int tick = 0;
+
+    // Orderless motion — the shape a congestion sidestep or a direct `orderTo`
+    // leaves: `moving` set with no order at the queue head.
+    const rm::sim::Terrain terrain{job.field};
+    rm::sim::orderTo(job.scene.store.motion()[acu.index], terrain,
+                     rm::sim::fxFromFloat(400.0f), rm::sim::fxFromFloat(300.0f));
+    REQUIRE(job.scene.store.motion()[acu.index].moving);
+
+    REQUIRE(issueEnhancement(job, acu, static_cast<rm::TickIndex>(tick),
+                             "AdvancedEngineering", /*queued=*/true));
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+    // The dispatch beat is spent stopping: no progress bar yet, and the abort
+    // has already taken the destination away.
+    CHECK(job.scene.enhancementWork.empty());
+    CHECK_FALSE(job.scene.store.motion()[acu.index].moving);
+
+    // Standing still, the next beat runs OnWorkBegin and the bar appears.
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+    REQUIRE(job.scene.enhancementWork.size() == 1);
+    CHECK(rm::test::asFloat(job.scene.enhancementWork[0].buildTimeRemaining)
+          == Catch::Approx(8.0f));
+
+    // And the install completes normally once funded.
+    job.scene.economies[0].stored = {rm::test::mag(100.0f), rm::test::mag(1000.0f)};
+    for (int i = 0; i < 14 && !job.scene.enhancementWork.empty(); ++i) {
+        (void)rm::app::advanceMatch(runner, tick++, 0);
+    }
+    REQUIRE(job.scene.enhancementWork.empty());
+    CHECK(job.scene.store.enhancements()[acu.index].at("LCH") == "AdvancedEngineering");
+}
+
+TEST_CASE("C-254: a dead unit's enhancement registry entry leaves with it",
+          "[fa-progress][enhancement]") {
+    // `SimUnitEnhancements[id]` is live unit state: `Unit::OnKilled` drops the
+    // table entry, so a recycled slot never inherits a tombstone's upgrades.
+    rm::test::Roster roster;
+    const auto type = roster.addType(commanderDef());
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit,
+                                      "AdvancedEngineering"));
+    REQUIRE_FALSE(roster.store.enhancements()[unit.index].empty());
+
+    roster.store.kill(unit);
+    CHECK(roster.store.enhancements()[unit.index].empty());
+
+    // The slot recycles clean: the replacement commander starts with no
+    // enhancements rather than the corpse's LCH suite.
+    const auto replacement = roster.add(type, 60.0f, 60.0f, 0, 100.0f);
+    CHECK(roster.store.enhancements()[replacement.index].empty());
 }

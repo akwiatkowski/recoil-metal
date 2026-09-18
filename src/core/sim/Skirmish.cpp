@@ -24,7 +24,8 @@ namespace {
 /// there. Without that a dead unit would set off its death explosion every tick
 /// forever, which is both a wrong answer and an unbounded one.
 void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report,
-                EventQueue* events, FeatureStore* features) {
+                EventQueue* events, FeatureStore* features,
+                std::vector<ArmyStats>* armyStats) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
@@ -66,6 +67,42 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
         // The same `radiusElmos > 0` guard makes this once per death too, which matters more
         // here than for the event: a kill counted twice is a unit promoted at half the cost.
         (void)creditKill(store, catalog, healths[slot].lastHitBy, events);
+
+        // `CArmyStats` (`C-227`): the victim's army loses a unit, the killer's army
+        // gains a kill — the two counters `aibrain.lua` reads for score and taunts.
+        // Same once-per-death guard as the credit above, and the same live-killer
+        // rule: a dead instigator earns nothing. The per-blueprint rows key on the
+        // blueprint id, which is what `GetBlueprintStat` asks for.
+        if (armyStats != nullptr) {
+            const int victimArmy = motion[slot].armyIndex;
+            const unitdef::UnitDef* victimDef = catalog.def(store.typeAt(slot));
+            if (victimArmy >= 0
+                && static_cast<std::size_t>(victimArmy) < armyStats->size()) {
+                ArmyStats& victim = (*armyStats)[static_cast<std::size_t>(victimArmy)];
+                addArmyStat(victim, "Units_Killed", Mag::fromInt(1));
+                if (victimDef != nullptr) {
+                    addArmyBlueprintStat(victim, "Units_Killed", victimDef->name,
+                                         Mag::fromInt(1));
+                }
+            }
+            const UnitId killer = healths[slot].lastHitBy;
+            if (store.alive(killer) && killer.index < motion.size()) {
+                const int killerArmy = motion[killer.index].armyIndex;
+                if (killerArmy >= 0
+                    && static_cast<std::size_t>(killerArmy) < armyStats->size()) {
+                    ArmyStats& scorer = (*armyStats)[static_cast<std::size_t>(killerArmy)];
+                    addArmyStat(scorer, "Enemies_Killed", Mag::fromInt(1));
+                    if (victimDef != nullptr) {
+                        addArmyBlueprintStat(scorer, "Enemies_Killed", victimDef->name,
+                                             Mag::fromInt(1));
+                        if (isCommanderId(victimDef->name)) {
+                            addArmyStat(scorer, "Enemies_Commanders_Destroyed",
+                                        Mag::fromInt(1));
+                        }
+                    }
+                }
+            }
+        }
 
         // THE WRECK, after the victim's owner has awarded kill credit. `Unit.lua` runs
         // `instigator:OnKilledUnit(self)` before it creates the wreck; keep the event ordering
@@ -160,7 +197,8 @@ void advanceDefeatCleanup(UnitStore& store, const UnitCatalog& catalog, Match& m
 /// mode of getting that wrong is an economy that drifts over a long match with nothing
 /// pointing at when it started.
 void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& match,
-                     TickRate rate, const Terrain& terrain) {
+                     TickRate rate, const Terrain& terrain,
+                     std::vector<AdjacencyEffects>& adjacency) {
     // The commander's trickle, per tick. Computed once for the whole pass rather than per
     // commander: it is the same number for all of them.
     const Resources trickle{
@@ -171,8 +209,9 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
     // Who stands beside whom, this tick (`core/sim/Adjacency.hpp`): a storage feeding the
     // extractor it touches, a generator discounting its neighbours' upkeep. Derived state,
     // recomputed like the income itself — a structure that died in step 3 takes its
-    // bonuses with it in the same tick its production stops.
-    std::vector<AdjacencyEffects> adjacency;
+    // bonuses with it in the same tick its production stops. Written into the caller's
+    // vector so `tickEconomy` can read the build-drain rows (`C-051`) without a second
+    // scan.
     // Grid placement meets exactly; free placement keeps the half-ogrid slack (C-074).
     adjacencyEffects(store, catalog, adjacency,
                      terrain.placement() == PlacementMode::Grid ? Fx{} : kAdjacencyGapElmos);
@@ -550,7 +589,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //     shooter may only choose a target its side can see. Those two constraints are what
     //     fix this pass here rather than anywhere else in the order.
     if (match.intel != nullptr) {
-        match.intel->update(store, catalog, match.armies, &terrain, rate);
+        match.intel->update(store, catalog, match.armies, &terrain, rate, match.economies);
     }
 
     // Recovery precedes fire: a bubble whose timer reaches zero can intercept this tick,
@@ -589,6 +628,15 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         claims.push_back(claim);
     }
 
+    // Who stands beside whom for the GUNS, computed once here: the RateOfFire row
+    // (`C-051`(b) — a penalty, not a bonus) lands on this tick's reloads. The economy
+    // recomputes its own inside `recomputeIncome` after the dead are retired, because a
+    // giver that dies in step 3 stops granting the same tick its production stops —
+    // sharing this earlier scan would let a corpse discount one more beat.
+    std::vector<AdjacencyEffects> fireAdjacency;
+    adjacencyEffects(store, catalog, fireAdjacency,
+                     terrain.placement() == PlacementMode::Grid ? Fx{} : kAdjacencyGapElmos);
+
     // 3. FIRE, fly, land.
     if (match.projectiles != nullptr) {
         report.shotsFired =
@@ -596,7 +644,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                              match.intel, playableRect, tickIndex,
                              match.siloAmmo != nullptr ? std::span<SiloAmmo>{*match.siloAmmo}
                                                        : std::span<SiloAmmo>{}, match.features,
-                             claims);
+                             claims, fireAdjacency);
         // The held overcharges, after the guns and before the flight: a shot authorised
         // this tick flies this tick, and the energy it burned is gone before the economy
         // pass reads the store.
@@ -619,7 +667,34 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // 4. The dead, then their explosions, then C-210's defeat poll. A commander that died to a
     //    shot this tick is visible to the next three-second poll, and an ACU's detonation is
     //    still resolved before that poll samples the surviving commanders.
-    retireDead(store, catalog, report, match.events, match.features);
+    // Self-destruct countdowns (`C-345`): `selfdestruct.lua`'s five-second
+    // `StartCountdown`, then `unit:Kill()` — which here is the ordinary death path:
+    // health to zero and `retireDead` below reports it, wrecks it and scores it like
+    // any other kill. A dead unit's countdown dies with it.
+    if (match.selfDestructs != nullptr) {
+        std::span<Health> healths = store.health();
+        for (std::size_t i = 0; i < match.selfDestructs->size();) {
+            SelfDestructWork& work = (*match.selfDestructs)[i];
+            if (!store.alive(work.unit) || work.unit.index >= healths.size()
+                || !healths[work.unit.index].alive()) {
+                match.selfDestructs->erase(match.selfDestructs->begin()
+                                           + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+            if (work.remainingTicks > 0) {
+                --work.remainingTicks;
+            }
+            if (work.remainingTicks > 0) {
+                ++i;
+                continue;
+            }
+            healths[work.unit.index].current = Mag{};
+            match.selfDestructs->erase(match.selfDestructs->begin()
+                                       + static_cast<std::ptrdiff_t>(i));
+        }
+    }
+
+    retireDead(store, catalog, report, match.events, match.features, match.armyStats);
 
     // 99 of the 494 shipped weapons are `WeaponCategory = 'Death'` — a blast with no
     // target and no rate of fire. This is where they finally go off.
@@ -736,7 +811,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    and running before `tickEconomy` means this tick's haul meets this tick's storage
     //    cap — reclaiming over a full mass bar overflows and is lost, the same rule as
     //    every other income (`core/sim/Reclaim.hpp`).
-    recomputeIncome(store, catalog, match, rate, terrain);
+    std::vector<AdjacencyEffects> adjacency;
+    recomputeIncome(store, catalog, match, rate, terrain, adjacency);
     if (match.features != nullptr) {
         (void)harvestReclaim(store, catalog, *match.features, match.economies);
         (void)applyGuardReclaim(store, catalog, *match.features, match.economies, guardWork);
@@ -846,7 +922,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                     : std::span<UnitResourceFlow>{}, static_cast<int>(army), enhancementMine,
                 match.captures != nullptr ? std::span<CaptureWork>{captureMine}
                                           : std::span<CaptureWork>{},
-                store.buildPriorities(), match.siloQueue);
+                store.buildPriorities(), match.siloQueue, adjacency);
 
             // Written back over this army's entries, in order — the two lists were built
             // by the same filter in the same pass, so the nth of `mine` is the nth of
@@ -914,6 +990,54 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         (void)applyCaptureWork(store, *match.captures, match.events);
     }
     (void)applyRepairWork(store, catalog, repairs);
+
+    // `CArmyStats` (`C-227`): the engine-owned stats are fed from this tick's economy
+    // — the ratios `aibrain.lua`'s hysteresis ladder triggers on, the income and
+    // consumption the score screen reads — and the trigger evaluator runs from the
+    // per-army beat AFTER TICK 10, retail's own gate. Kills are recorded in
+    // `retireDead` above, where the death is known once.
+    if (match.armyStats != nullptr) {
+        // Per-second, because retail's stats are: the per-tick rates scale back up by
+        // the tick count, the same conversion `UnitCatalog` runs at registration.
+        const Mag perSecond = Mag::fromInt(static_cast<std::int64_t>(rate.ticksPerSecond()));
+        for (std::size_t army = 0; army < match.armyStats->size()
+             && army < match.economies.size(); ++army) {
+            ArmyStats& stats = (*match.armyStats)[army];
+            const Economy& economy = match.economies[army];
+            // `Economy_Ratio_*`: stored over capacity — the figure the low/full-store
+            // triggers compare against 0.1 / 0.9. An army with no storage reports a
+            // full ratio, which is the honest reading of "nothing fits anywhere".
+            const auto ratio = [](Mag stored, Mag cap) {
+                return cap > Mag{} ? stored.toFx() / cap.toFx() : kFxOne;
+            };
+            setArmyStat(stats, "Economy_Ratio_Mass",
+                        Mag::fromRaw(ratio(economy.stored.mass, economy.storage.mass).raw()));
+            setArmyStat(stats, "Economy_Ratio_Energy",
+                        Mag::fromRaw(ratio(economy.stored.energy, economy.storage.energy).raw()));
+            // `Economy_Income_*` / `Economy_Output_*` are per-SECOND figures in
+            // retail's Lua; the per-tick rates scale back up by the tick count.
+            setArmyStat(stats, "Economy_Income_Mass", economy.incomePerTick.mass * perSecond.toFx());
+            setArmyStat(stats, "Economy_Income_Energy", economy.incomePerTick.energy * perSecond.toFx());
+            setArmyStat(stats, "Economy_Output_Mass", economy.usageLastTick.mass * perSecond.toFx());
+            setArmyStat(stats, "Economy_Output_Energy", economy.usageLastTick.energy * perSecond.toFx());
+            setArmyStat(stats, "Economy_Stored_Mass", economy.stored.mass);
+            setArmyStat(stats, "Economy_Stored_Energy", economy.stored.energy);
+            setArmyStat(stats, "Economy_TotalProduced_Mass", economy.generatedLifetime.mass);
+            setArmyStat(stats, "Economy_TotalProduced_Energy", economy.generatedLifetime.energy);
+            addArmyStat(stats, "Economy_TotalConsumed_Mass", economy.usageLastTick.mass);
+            addArmyStat(stats, "Economy_TotalConsumed_Energy", economy.usageLastTick.energy);
+        }
+        // The evaluator's own gate: it runs from the per-army beat after tick 10
+        // (`C-227`), so the first ten beats feed stats without a trigger able to fire.
+        if (tickIndex > 10) {
+            for (std::size_t army = 0; army < match.armyStats->size(); ++army) {
+                for (std::string& name : evaluateArmyStats((*match.armyStats)[army])) {
+                    report.armyStatsFired.push_back(ArmyStatFired{
+                        .army = static_cast<int>(army), .name = std::move(name)});
+                }
+            }
+        }
+    }
 
     return report;
 }

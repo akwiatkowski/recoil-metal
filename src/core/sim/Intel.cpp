@@ -2,6 +2,7 @@
 
 #include "core/sim/Terrain.hpp"
 #include "core/sim/Army.hpp"
+#include "core/sim/Economy.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Transform.hpp"
 #include "core/sim/UnitCatalog.hpp"
@@ -367,6 +368,10 @@ void Intel::configure(std::size_t alliances, Fx widthElmos, Fx depthElmos,
     retainedRadarContacts_.resize(alliances);
     seenEver_.clear();
     seenEver_.resize(alliances);
+    // Powered by default: a reconfigure is a new match, and a unit that has not yet
+    // brown-out has a full recovery banked — see `update`.
+    intelRecovery_.clear();
+    intelRecoveryUnit_.clear();
 
     // ONE GRID PER KIND PER ALLIANCE, IN `IntelKind` ORDER, because every index into this is
     // `alliance * kIntelKindCount + kind` and nothing bounds-checks it. Adding a kind without
@@ -487,15 +492,27 @@ void Intel::withdraw(UnitIndex slot) {
 }
 
 void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
-                   std::span<const Army> armies, const Terrain* terrain, TickRate rate) {
+                   std::span<const Army> armies, const Terrain* terrain, TickRate rate,
+                   std::span<const Economy> economies) {
     if (!active()) {
         return;
     }
 
+    // C-284's brownout, PER UNIT like retail's `IntelWatchThread`: the Lua thread reads
+    // the unit's own `GetResourceConsumed` — the ratio its upkeep request was granted
+    // at — and `consumedRatio` recovers exactly that from the bucket sums. A unit with
+    // no upkeep asks for nothing, so its ratio is always 1 and its intel never browns
+    // out; an intel unit under an energy stall goes dark immediately and stays dark
+    // until the ratio has held for `kIntelReactivateSeconds`. A relapse restarts the
+    // count. Recovery is tracked per slot keyed on the unit generation, so a recycled
+    // slot starts powered rather than inheriting its predecessor's blackout.
+    const TickCount reactivate = rate.ticks(Seconds{kIntelReactivateSeconds});
     const std::size_t slots = store.slotCount();
     placements_.resize(slots);
     emitters_.resize(slots);
     hiddenEmitters_.resize(slots);
+    intelRecovery_.resize(slots, reactivate);
+    intelRecoveryUnit_.resize(slots);
 
     const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
@@ -507,19 +524,47 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
         // we have no cache. The visible difference is a wreck's last square of ground going
         // dark a second earlier.
         if (!store.slotAlive(slot)) {
+            intelRecovery_[slot] = reactivate;
+            intelRecoveryUnit_[slot] = {};
             withdraw(slot);
             continue;
         }
 
         const int army = motion[slot].armyIndex;
         if (army == kNoArmy || static_cast<std::size_t>(army) >= armies.size()) {
+            intelRecovery_[slot] = reactivate;
+            intelRecoveryUnit_[slot] = {};
             withdraw(slot);
             continue;
         }
 
+        // The unit's own brownout state: a generation change in this slot resets the
+        // count to powered, then this tick's granted ratio either banks a recovery tick
+        // or zeroes it.
+        const UnitId unit = store.idAt(slot);
+        if (intelRecoveryUnit_[slot] != unit) {
+            intelRecoveryUnit_[slot] = unit;
+            intelRecovery_[slot] = reactivate;
+        }
+        const Mag upkeep = catalog.rates(store.typeAt(slot)).upkeepEnergyPerTick;
+        const Fx ratio = static_cast<std::size_t>(army) < economies.size()
+                             ? economies[static_cast<std::size_t>(army)]
+                                   .consumedRatio(Resources{.energy = upkeep})
+                             : kFxOne;
+        TickCount& recovered = intelRecovery_[slot];
+        recovered = ratio < kFxOne ? TickCount{0}
+                                   : std::min<TickCount>(recovered + 1, reactivate);
+
         const int alliance = armies[static_cast<std::size_t>(army)].alliance;
         const Transform& at = transforms[slot];
 
+        // A browned-out unit sees nothing and hides nothing (`C-284`): withdraw
+        // whatever this slot stamped and leave it unstamped until the recovery count
+        // fills — which is also what makes a unit that never moved lose its coverage.
+        if (recovered < reactivate) {
+            withdraw(slot);
+            continue;
+        }
         // The SQUARE decides, not the position. A unit crossing a 16-elmo square at 27
         // elmos a second re-stamps about twice a second; stamping on every position change
         // would do the same work ten times over for an answer the grid cannot express.
@@ -736,19 +781,27 @@ std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,
     const MoveState& targetMotion = store.motion()[target];
     const bool submerged = targetMotion.submersible && targetMotion.submerged;
     const bool naval = targetMotion.surfaceWater || targetMotion.submersible;
-    if (hiding.freeIntel || intel.sees(alliance, IntelKind::Omni, at.x, at.z)
+    if (hiding.freeIntel
         || (!hiding.cloak && !submerged && intel.sees(alliance, IntelKind::Vision, at.x, at.z))) {
         return ContactKind::Seen;
     }
-    // Cloak defeats every non-omni sense: a cloaked unit under a T1 dish is absent,
-    // not a blip, and only omni (the T3 sensor sense) brings it back. RadarStealth
-    // and SonarStealth each defeat their own sense the same way.
-    if (!submerged && !hiding.cloak && !hiding.radarStealth
+    // Omni bypasses every counter-intel flag — cloak, both stealths, both fields — but
+    // does NOT identify (`C-280`): retail's recon bits set detection without `LOSEver`,
+    // so an omni-only contact is a radar-class blip, not a sighting. It is checked
+    // before radar and sonar because it outranks them, not because it is one.
+    if (intel.sees(alliance, IntelKind::Omni, at.x, at.z)) {
+        return ContactKind::Radar;
+    }
+    // Cloak is anti-VISION only (`C-277`): a cloaked unit under a T1 dish is an ordinary
+    // blip, not absent — retail clears `LOSNow` on self-cloak and leaves the radar and
+    // sonar bits alone. RadarStealth and SonarStealth each defeat their own sense, and
+    // only when vision has not already identified the unit.
+    if (!submerged && !hiding.radarStealth
         && !intel.hiddenBy(army->alliance, HiddenKind::RadarField, at.x, at.z)
         && intel.sees(alliance, IntelKind::Radar, at.x, at.z)) {
         return ContactKind::Radar;
     }
-    if (naval && !hiding.cloak && !hiding.sonarStealth
+    if (naval && !hiding.sonarStealth
         && !intel.hiddenBy(army->alliance, HiddenKind::SonarField, at.x, at.z)
         && intel.sees(alliance, IntelKind::Sonar, at.x, at.z)) {
         return ContactKind::Sonar;
@@ -804,6 +857,14 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
         if (hiding.jammerBlips > 0 && hiding.jamRadius > kFxZero
             && intel.sees(alliance, IntelKind::Radar, at.x, at.z)) {
             const UnitId carrier = store.idAt(slot);
+            // Retail draws each fake's offset once: a random direction and a uniform
+            // magnitude inside `JamRadius[Min, Max]` (`C-278`). Ours is derived rather
+            // than drawn — the same hash family that seeds the blip wander, so the
+            // offsets are fixed per blip, need no stored state, and cannot desync. The
+            // match RNG is deliberately NOT used: `contactsFor` also runs on the render
+            // path, and consuming sim randomness there would desync replays.
+            const Fx lo = std::min(hiding.jamRadiusMin, hiding.jamRadius);
+            const Fx span = hiding.jamRadius - lo;
             for (int blip = 0; blip < hiding.jammerBlips; ++blip) {
                 // A distinct identity per blip, derived from the carrier's: the generation
                 // offset keeps the angle hash from handing every blip the same wander.
@@ -812,8 +873,16 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
                                        carrier.generation
                                        + static_cast<Generation>(blip + 1))};
                 const Brad spread = blipAngle(ghost, 0x9E37u + static_cast<std::uint32_t>(blip));
-                const Fx offsetX = fxCos(spread) * hiding.jamRadius;
-                const Fx offsetZ = fxSin(spread) * hiding.jamRadius;
+                // The magnitude's fraction, [0, 1): the low 14 bits of a differently-salted
+                // mix over one Fx fractional part. A salt shared with the angle would
+                // correlate direction with distance, which reads as a spiral, not a scatter.
+                const Fx fraction = Fx::fromRaw(static_cast<FxRaw>(
+                    mix(ghost.index, ghost.generation,
+                        0x51EDu + static_cast<std::uint32_t>(blip))
+                    & 0x3FFFu));
+                const Fx magnitude = lo + span * fraction;
+                const Fx offsetX = fxCos(spread) * magnitude;
+                const Fx offsetZ = fxSin(spread) * magnitude;
                 const auto [x, z] =
                     radarBlipPosition(ghost, at.x + offsetX, at.z + offsetZ, tick, rate);
                 contacts.push_back(Contact{.unit = carrier,

@@ -23,6 +23,15 @@ struct AdjacencyEffects {
     Fx massProduction = kFxOne;
     Fx energyProduction = kFxOne;
     Fx energyUpkeep = kFxOne;
+    /// `MassActive`/`EnergyActive`: the build-drain discount a generator or extractor
+    /// gives a structure that is actively building — multiplied into the builder's
+    /// construction demand (`C-051`(a) reproduces retail's dropped-digit Size20 row).
+    Fx massBuild = kFxOne;
+    Fx energyBuild = kFxOne;
+    /// `RateOfFire` adjacency: a PENALTY in retail despite the "Bonus" name — the
+    /// multiplier lands on the weapon's rate, so `Add < 0` fires slower (`C-051`(b)).
+    /// Only SIZE4 artillery receivers ever see it move off one (`C-051`(c)).
+    Fx rateOfFire = kFxOne;
 };
 
 /// How far apart two skirts may stand and still count as touching, in elmos.
@@ -68,12 +77,17 @@ struct AdjacencyFlow {
     Fx massProduction{};
     Fx energyProduction{};
     Fx energyUpkeep{};
+    Fx massBuild{};
+    Fx energyBuild{};
+    Fx rateOfFire{};
 
     /// True when a grant crosses in this direction. Every authored grant is a bonus —
-    /// production adds, maintenance discounts — so a link is always good news, just of
-    /// a different size and sign.
+    /// production adds, maintenance and build discounts subtract — so a link is always
+    /// good news, just of a different size and sign. (`RateOfFire` is the exception:
+    /// retail's penalty-by-bug, `C-051`(b), still counts as a link.)
     [[nodiscard]] bool any() const noexcept {
-        return massProduction != Fx{} || energyProduction != Fx{} || energyUpkeep != Fx{};
+        return massProduction != Fx{} || energyProduction != Fx{} || energyUpkeep != Fx{}
+            || massBuild != Fx{} || energyBuild != Fx{} || rateOfFire != Fx{};
     }
 };
 

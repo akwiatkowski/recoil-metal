@@ -160,6 +160,23 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
             }
             weapon.targetLayers = static_cast<TargetLayerMask>(bits);
         }
+        // The water gates (`C-321`/`C-322`). Firer-side flags compare the firer's
+        // Y against its own `Physics.Elevation` datum; target-side flags apply to
+        // Seabed-layer candidates only. All four default false — the corpus ships
+        // 16 `AboveWaterFireOnly` and 166 `AboveWaterTargetsOnly`, zero of the
+        // Below pair.
+        if (const lua::Value* flag = entry.find("AboveWaterFireOnly")) {
+            weapon.aboveWaterFireOnly = flag->asBoolean().value_or(false);
+        }
+        if (const lua::Value* flag = entry.find("BelowWaterFireOnly")) {
+            weapon.belowWaterFireOnly = flag->asBoolean().value_or(false);
+        }
+        if (const lua::Value* flag = entry.find("AboveWaterTargetsOnly")) {
+            weapon.aboveWaterTargetsOnly = flag->asBoolean().value_or(false);
+        }
+        if (const lua::Value* flag = entry.find("BelowWaterTargetsOnly")) {
+            weapon.belowWaterTargetsOnly = flag->asBoolean().value_or(false);
+        }
         std::uint8_t layers = static_cast<std::uint8_t>(weapon.targetLayers);
         if (const lua::Value* cannotGround = entry.find("CannotAttackGround");
             cannotGround != nullptr && cannotGround->asBoolean().value_or(false)) {

@@ -389,10 +389,12 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             numberOr(*intel, "RadarStealthFieldRadius", 0.0f) * scmap::kElmosPerOgrid;
         def.sonarStealthFieldRadiusElmos =
             numberOr(*intel, "SonarStealthFieldRadius", 0.0f) * scmap::kElmosPerOgrid;
-        // `JamRadius` is a {Min, Max} TABLE, unlike every other radius here; Max is read
-        // because every retail pair is equal and the larger bound is a deception's honest
-        // reach. `JammerBlips` is a count, not a radius, and is not scaled.
+        // `JamRadius` is a {Min, Max} TABLE, unlike every other radius here, and each
+        // fake blip draws a uniform magnitude inside it (`C-278`). Both bounds are read;
+        // every retail pair is equal, so the range only diverges under mods. `JammerBlips`
+        // is a count, not a radius, and is not scaled.
         if (const lua::Value* jam = intel->find("JamRadius")) {
+            def.jamRadiusMinElmos = numberOr(*jam, "Min", 0.0f) * scmap::kElmosPerOgrid;
             def.jamRadiusElmos = numberOr(*jam, "Max", 0.0f) * scmap::kElmosPerOgrid;
         }
         def.jammerBlips =
@@ -423,6 +425,16 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // authored here — the sim converts once at spawn.
     // Both winged flight and RULEUMT_Hover use the authored height above the surface.
     def.elevationElmos = numberOr(*physics, "Elevation", 0.0f) * scmap::kElmosPerOgrid;
+    // The same field with RETAIL's default (`C-321`): `UnitWeapon::CanFire`
+    // reads `Physics.Elevation` as authored-or-−10000 ogrids, so a unit stating
+    // nothing is always "above" its datum. The mover's copy above keeps zero —
+    // it means "no authored clearance", not "datum at the bottom of the world".
+    def.waterGateElevationElmos =
+        numberOr(*physics, "Elevation", -10000.0f) * scmap::kElmosPerOgrid;
+    // `AutoSurfaceToAttack` (`C-203`): the Dive toggle's auto-surface mode. A
+    // root-level key no shipped unit states; retail's reader was never found,
+    // so the constructor default (off) stands either way.
+    def.autoSurfaceToAttack = flagAt(*parsed, "AutoSurfaceToAttack");
     def.diveSurfaceSpeedElmosPerSecond =
         numberOr(*physics, "DiveSurfaceSpeed", 1.0f) * scmap::kElmosPerOgrid;
     if (const lua::Value* airBlock = parsed->path("Air")) {
@@ -430,6 +442,10 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.airKMoveDamping = numberOr(*airBlock, "KMoveDamping", 0.0f);
         def.airKLift = numberOr(*airBlock, "KLift", 0.0f);
         def.airKLiftDamping = numberOr(*airBlock, "KLiftDamping", 0.0f);
+        // `FlyInWater` (`C-327`): whether an Air-layer unit may fire while
+        // below its water-gate datum — retail's hard `CanFire` reject at
+        // `0x6db822`. No shipped unit states it; false is the honest default.
+        def.airFlyInWater = flagAt(*airBlock, "FlyInWater");
         def.airLiftFactor = numberOr(*airBlock, "LiftFactor", 0.0f);
         def.airWinged = flagAt(*airBlock, "Winged");
         // Defaults recovered from 0x00525a00; schema at 0x00527a40.

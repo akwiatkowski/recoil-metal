@@ -1044,9 +1044,12 @@ TEST_CASE("a cloaked unit is absent from sight") {
     CHECK(contacts.size() == 1);
 }
 
-TEST_CASE("a cloaked unit is absent from radar too, until omni looks", "[intel]") {
-    // Cloak defeats vision AND radar — only omni (the T3 sensor sense) counters
-    // it. A cloak that still blipped on every T1 dish would be camouflage paint.
+TEST_CASE("a cloaked unit still blips on radar — cloak is anti-vision only", "[intel]") {
+    // C-277's retail semantics, and this test previously pinned the WRONG ones: it
+    // asserted a cloaked unit was absent from radar too. Retail's flag filter clears
+    // `LOSNow` on self-cloak and leaves the radar and sonar bits alone — cloak hides a
+    // unit from EYES, not from the dish. What radar returns is a blip, not an
+    // identification: detection without identity, like any radar contact.
     UnitCatalog catalog;
     static const rm::unitdef::UnitDef kEye = watcher(0.0f, 400.0f, 0.0f, 0.0f);
     static const rm::unitdef::UnitDef kCloaked = hider(false, false, true);
@@ -1058,19 +1061,27 @@ TEST_CASE("a cloaked unit is absent from radar too, until omni looks", "[intel]"
 
     UnitStore store;
     (void)place(store, eye, 0, 100.0f, 100.0f);
-    (void)place(store, cloaked, 1, 140.0f, 100.0f);
+    const rm::sim::UnitId ghost = place(store, cloaked, 1, 140.0f, 100.0f);
 
     const std::vector<Army> armies = twoArmies(false);
     intel.update(store, catalog, armies, nullptr);
 
-    // Inside a 400-elmo radar and still nothing: not Seen, not a blip.
+    // Inside a 400-elmo radar: a blip, and never a sighting — the cloak still defeats
+    // vision, so nothing here can identify it.
     const auto contacts = seenBy(0, store, catalog, armies, intel);
-    CHECK(contacts.size() == 1);
+    const auto blip = std::ranges::find_if(
+        contacts, [&](const rm::sim::Contact& c) { return c.unit == ghost; });
+    REQUIRE(blip != contacts.end());
+    CHECK(blip->kind == rm::sim::ContactKind::Radar);
+    CHECK(blip->isBlip());
+    CHECK_FALSE(intel.hasSeenEver(0, ghost));
 }
 
-TEST_CASE("omni sees a cloaked unit, and sees it as itself") {
-    // THE WHOLE POINT OF OMNI BEING A SENSE RATHER THAN A BIG VISION RADIUS. It defeats every
-    // flag, and what it returns is `Seen` — a position AND an identity — not a blip.
+TEST_CASE("omni detects a cloaked unit, but does not identify it") {
+    // THE WHOLE POINT OF OMNI BEING A SENSE RATHER THAN A BIG VISION RADIUS: it defeats
+    // every flag. What it returns is detection WITHOUT identification (`C-280`) — a
+    // radar-class blip, not a sighting — and this test previously pinned the wrong half
+    // by asserting `Seen` at the exact position.
     UnitCatalog catalog;
     static const rm::unitdef::UnitDef kEye = watcher(0.0f, 0.0f, 0.0f, 400.0f);
     static const rm::unitdef::UnitDef kHidden = hider(true, true, true);
@@ -1092,11 +1103,13 @@ TEST_CASE("omni sees a cloaked unit, and sees it as itself") {
     for (const rm::sim::Contact& contact : contacts) {
         if (contact.unit == ghost) {
             found = true;
-            CHECK(contact.kind == rm::sim::ContactKind::Seen);
-            CHECK(contact.x == store.transforms()[ghost.index].x);  // exact, not offset
+            CHECK(contact.kind == rm::sim::ContactKind::Radar);
+            CHECK(contact.isBlip());
         }
     }
     CHECK(found);
+    // And the identification latch stays clear — omni never sets `LOSEver`.
+    CHECK_FALSE(intel.hasSeenEver(0, ghost));
 }
 
 TEST_CASE("omni does not reach past its own radius") {
@@ -1193,7 +1206,9 @@ TEST_CASE("a stealth field hides its neighbours from radar, and omni still wins"
     CHECK_FALSE(knows(inside));
     CHECK(knows(outside));
 
-    // Omni is the counter: give the watcher omni over the field and everything is Seen.
+    // Omni is the counter: give the watcher omni over the field and the hidden tank is
+    // detected — as a BLIP, not a sighting (`C-280`: omni bypasses counter-intel but
+    // does not identify; this assertion previously pinned `Seen`, the wrong half).
     rm::unitdef::UnitDef allSeeing = seer(0.0f, 800.0f);
     allSeeing.omniRadiusElmos = 800.0f;
     UnitCatalog counters;
@@ -1215,7 +1230,8 @@ TEST_CASE("a stealth field hides its neighbours from radar, and omni still wins"
     const auto seen = std::find_if(contacts.begin(), contacts.end(),
                                    [&](const rm::sim::Contact& c) { return c.unit == inside2; });
     REQUIRE(seen != contacts.end());
-    CHECK(seen->kind == rm::sim::ContactKind::Seen);
+    CHECK(seen->kind == rm::sim::ContactKind::Radar);
+    CHECK(seen->isBlip());
 }
 
 TEST_CASE("a jammer scatters false blips inside hostile radar, and only there") {

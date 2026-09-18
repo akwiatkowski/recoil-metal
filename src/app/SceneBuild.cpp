@@ -277,6 +277,11 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
         motion.submarineOffset = motion.submerged ? motion.submarineElevation : rm::sim::Fx{};
         motion.divePerTick = gAppTickRate.perTick(def.diveSurfaceSpeedElmosPerSecond);
     }
+    // `AutoSurfaceMode` (`C-203`): the Dive toggle's second state, from the
+    // root-level `AutoSurfaceToAttack` key. Only a submersible can act on it —
+    // the attack task reads it to pick the Water layer — but the flag itself
+    // is authored state, so it is copied unconditionally.
+    motion.autoSurface = def.autoSurfaceToAttack;
     motion.hovering = def.motion == rm::unitdef::MotionType::Hover;
     motion.hoverElevation = motion.hovering ? rm::sim::fxFromFloat(def.elevationElmos)
                                            : rm::sim::Fx{};

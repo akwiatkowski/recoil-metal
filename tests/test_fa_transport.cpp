@@ -187,6 +187,47 @@ TEST_CASE("C-196: cargo rides its carrier's transform every tick", "[fa-transpor
     CHECK(rm::sim::fxToFloat(roster.transform(transport).x) > 200.0f);
 }
 
+TEST_CASE("C-196: attached cargo stays in the collision grid and can be hit", "[fa-transport]") {
+    // Retail never removes an attached child from the collision world: the
+    // per-tick transform recompute keeps its box under the hull, and a swept
+    // projectile that meets the box strikes the CARGO, not the carrier. The
+    // player sees a tank slung under a transport take fire on the rack — it
+    // is not a free ablative shield for the hull.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const rm::UnitTypeIndex shooterType = roster.addType(shooterDef());
+    const UnitId transport = landedTransport(roster, transportType, 50.0f, 50.0f);
+    // Cargo racks BETWEEN the shooter and the carrier: the swept shot meets
+    // its collision box first, so the hit lands on the passenger. The 5k
+    // hull outlasts several 500-point hits, so the damage lands while the
+    // unit is still attached rather than in the same tick as its death.
+    const UnitId cargo = roster.add(cargoType, 55.0f, 50.0f, 0, 5000.0f);
+    REQUIRE(roster.store.attach(transport, cargo));
+    (void)roster.add(shooterType, 120.0f, 50.0f, 1, 500.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<rm::sim::Projectile> projectiles;
+    std::vector<int> commandersEver(2, 0);
+    Match match = loneMatch(armies, economies, commandersEver);
+    match.projectiles = &projectiles;
+
+    const rm::sim::Mag before = roster.health(cargo).current;
+    for (int i = 0; i < 400 && roster.health(cargo).current == before; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    }
+
+    // The cargo took fire while still racked: still attached, health down,
+    // and the carrier behind it untouched by the shot the cargo absorbed.
+    CHECK(roster.motion(cargo).attached);
+    CHECK(roster.health(cargo).current < before);
+    CHECK(roster.health(transport).current == rm::sim::Mag::fromInt(500));
+}
+
 TEST_CASE("C-197: a shot-down transport takes its passengers with it", "[fa-transport]") {
     // Retail's TransportDetachAllUnits kills the cargo before Lua ever hears
     // OnKilled — the player sees the whole lift die in the same explosion.

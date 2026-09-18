@@ -1,4 +1,5 @@
 #include "core/sim/Army.hpp"
+#include "core/sim/ArmyStats.hpp"
 
 #include <algorithm>
 #include <array>
@@ -163,6 +164,132 @@ std::vector<Player> onePlayerPerArmy(std::size_t armyCount, int humanArmy) {
         });
     }
     return players;
+}
+
+// --- `CArmyStats` (`C-227`) -----------------------------------------------------
+//
+// The serialized per-army stat store and one-shot threshold-trigger service. See
+// `ArmyStats.hpp` for the retail citation; the shapes below are the evaluator's own:
+// four comparisons, every condition must pass, qualifying triggers removed before
+// delivery.
+
+StatCompare statCompareFromName(std::string_view name) noexcept {
+    if (name == "GreaterThan") {
+        return StatCompare::GreaterThan;
+    }
+    if (name == "LessThan") {
+        return StatCompare::LessThan;
+    }
+    if (name == "LessThanOrEqual") {
+        return StatCompare::LessThanOrEqual;
+    }
+    // `GreaterThanOrEqual` is both the spelled name and TriggerManager.lua's default
+    // for an unset `CompareType` — unknown spellings land there too rather than
+    // inventing a fifth comparison.
+    return StatCompare::GreaterThanOrEqual;
+}
+
+namespace {
+
+[[nodiscard]] bool statComparePasses(StatCompare op, Mag lhs, Mag rhs) noexcept {
+    switch (op) {
+    case StatCompare::GreaterThan:
+        return lhs > rhs;
+    case StatCompare::GreaterThanOrEqual:
+        return lhs >= rhs;
+    case StatCompare::LessThan:
+        return lhs < rhs;
+    case StatCompare::LessThanOrEqual:
+        return lhs <= rhs;
+    }
+    return false;
+}
+
+[[nodiscard]] bool conditionPasses(const ArmyStats& stats,
+                                   const ArmyStatCondition& condition) noexcept {
+    const Mag current = condition.category.empty()
+        ? armyStat(stats, condition.stat)
+        : armyBlueprintStat(stats, condition.stat, condition.category);
+    return statComparePasses(condition.op, current, condition.value);
+}
+
+} // namespace
+
+Mag armyStat(const ArmyStats& stats, std::string_view name, Mag fallback) noexcept {
+    for (const auto& [key, value] : stats.stats) {
+        if (key == name) {
+            return value;
+        }
+    }
+    return fallback;
+}
+
+Mag armyBlueprintStat(const ArmyStats& stats, std::string_view name,
+                      std::string_view category, Mag fallback) noexcept {
+    for (const auto& [key, value] : stats.blueprintStats) {
+        if (key.first == name && key.second == category) {
+            return value;
+        }
+    }
+    return fallback;
+}
+
+void setArmyStat(ArmyStats& stats, std::string name, Mag value) {
+    for (auto& [key, current] : stats.stats) {
+        if (key == name) {
+            current = value;
+            return;
+        }
+    }
+    stats.stats.emplace_back(std::move(name), value);
+}
+
+void addArmyStat(ArmyStats& stats, const std::string& name, Mag delta) {
+    setArmyStat(stats, name, armyStat(stats, name) + delta);
+}
+
+void addArmyBlueprintStat(ArmyStats& stats, const std::string& name,
+                          const std::string& category, Mag delta) {
+    const std::pair<std::string, std::string> wanted{name, category};
+    for (auto& [key, current] : stats.blueprintStats) {
+        if (key == wanted) {
+            current += delta;
+            return;
+        }
+    }
+    stats.blueprintStats.emplace_back(wanted, delta);
+}
+
+void setArmyStatsTrigger(ArmyStats& stats, ArmyStatTrigger trigger) {
+    for (ArmyStatTrigger& pending : stats.triggers) {
+        if (pending.name == trigger.name) {
+            pending = std::move(trigger);
+            return;
+        }
+    }
+    stats.triggers.push_back(std::move(trigger));
+}
+
+std::vector<std::string> evaluateArmyStats(ArmyStats& stats) {
+    std::vector<std::string> fired;
+    std::erase_if(stats.triggers, [&fired, &stats](const ArmyStatTrigger& trigger) {
+        // EVERY condition must pass — and a trigger with none cannot qualify, which
+        // is `std::ranges::all_of`'s empty-true deliberately excluded: retail's
+        // evaluator tests a list of comparisons, and an empty list has nothing to
+        // test.
+        const bool qualifies = !trigger.conditions.empty()
+            && std::ranges::all_of(trigger.conditions, [&stats](const auto& c) {
+                   return conditionPasses(stats, c);
+               });
+        if (qualifies) {
+            fired.push_back(trigger.name);
+        }
+        // Removal happens HERE, before the names reach the caller — retail removes
+        // qualifying triggers before callback delivery, so a callback that re-arms
+        // the same name never meets its predecessor still pending.
+        return qualifies;
+    });
+    return fired;
 }
 
 } // namespace rm::sim

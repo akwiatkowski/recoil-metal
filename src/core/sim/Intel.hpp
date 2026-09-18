@@ -19,6 +19,7 @@ class Terrain;
 class UnitStore;
 class UnitCatalog;
 struct Army;
+struct Economy;
 
 // What an alliance can see, and by what means (ADR-037).
 //
@@ -237,6 +238,13 @@ inline constexpr int kRadarMipLevel = 2;
 /// aftermath clears while the next wave still matters. Authored in seconds (§5.1); the
 /// tick count is derived from the rate `update` runs at, counted in updates.
 inline constexpr float kRetainedBlipLingerSeconds = 10.0f;
+
+/// How long a unit's consumed ratio must hold before its intel comes back after an
+/// energy brownout — retail's `Intel.ReactivateTime` default (`Unit.lua`'s
+/// `IntelWatchThread`, `C-284`). The blueprint field is per unit and unread: no
+/// shipped unit overrides the default anyway.
+inline constexpr float kIntelReactivateSeconds = 10.0f;
+
 struct RetainedRadarContact {
     UnitId unit;
     Fx x{};
@@ -283,9 +291,18 @@ public:
     /// anything reads visibility.
     ///
     /// `terrain` may be null, which forces discs — see `intelSquares`.
+    ///
+    /// `economies` is one `Economy` per army, indexed like `armies`, and may be empty —
+    /// an intel pass with no economy behind it is always powered. When it is given, a
+    /// unit whose own upkeep request went unfunded (an energy brownout) contributes
+    /// nothing: it withdraws every sense and every stealth field until the ratio has
+    /// held for `kIntelReactivateSeconds` (`C-284`, retail's `IntelWatchThread`). The
+    /// span is last and defaulted because this pass predates the plumbing — every
+    /// caller that has no economies keeps the behaviour it had.
     void update(const UnitStore& store, const UnitCatalog& catalog,
                 std::span<const Army> armies, const Terrain* terrain,
-                TickRate rate = TickRate{});
+                TickRate rate = TickRate{},
+                std::span<const Economy> economies = {});
 
     /// Whether `alliance` covers this position with this sense.
     ///
@@ -319,6 +336,14 @@ public:
     /// Per-slot identity latches for the state hash. A stored generation makes a retired slot
     /// harmless when its index is reused by a different unit.
     [[nodiscard]] std::span<const UnitId> seenEver(int alliance) const noexcept;
+
+    /// Ticks of uninterrupted recovery each unit slot has banked toward re-enabling its
+    /// intel after a brownout (`C-284`). An entry at or past the reactivate count is
+    /// powered; exposed for the state hash, which is the only reader that needs the
+    /// number itself.
+    [[nodiscard]] std::span<const TickCount> intelRecovery() const noexcept {
+        return intelRecovery_;
+    }
 
 private:
     /// What one unit last contributed, one entry per sense.
@@ -355,6 +380,15 @@ private:
     /// presentation history: C-158 uses it to decide whether a current radar contact may match
     /// the weapon's target-priority categories.
     std::vector<std::vector<UnitId>> seenEver_;
+
+    /// `[slot]` ticks of uninterrupted recovery toward re-enabling this unit's intel
+    /// after an energy brownout (`C-284`). An entry at or past the reactivate count
+    /// means powered — also the value a fresh or reconfigured entry starts at, so a
+    /// unit that was never starved never waits. `intelRecoveryUnit_` is the generation
+    /// the count belongs to; a recycled slot starts powered. Recomputed state like the
+    /// grids: not saved, and the hash reads it through `intelRecovery`.
+    std::vector<TickCount> intelRecovery_;
+    std::vector<UnitId> intelRecoveryUnit_;
     std::vector<Placement> placements_;
     std::vector<std::array<Emitter, kIntelKindCount>> emitters_;
     std::vector<std::array<Emitter, kHiddenKindCount>> hiddenEmitters_;
@@ -403,6 +437,10 @@ struct Contact {
 /// Classifies one real unit with the same cloak, stealth-field, omni and free-intel rules used
 /// by the contact list. Automatic targeting accepts `Seen` and `Radar`: an unidentified radar
 /// return competes at the worst priority rank, while sonar remains anonymous and untargetable.
+///
+/// OMNI RESOLVES TO `Radar`, NOT `Seen` (`C-280`): it bypasses every counter-intel flag but
+/// does not identify — an omni-only contact is a blip that never latches `seenEver`, exactly
+/// the detection-without-identification retail's recon bits encode.
 [[nodiscard]] std::optional<ContactKind> contactKindForUnit(
     int alliance, UnitIndex target, const UnitStore& store, const UnitCatalog& catalog,
     std::span<const Army> armies, const Intel& intel) noexcept;

@@ -1132,6 +1132,17 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             }
             if (reach > Fx{}) {
                 MoveState& chase = store.motion()[slot];
+                // `AutoSurfaceMode` (`C-203`): the attack task's one consumer
+                // of the Dive toggle's second state — retail's
+                // `CUnitAttackTargetTask` calls `SetNewTargetLayer(LAYER_Water)`
+                // when the mode is on and stays submerged when it is off
+                // (`0x005fa17c`). Our layer target is `diveTargetSubmerged`;
+                // the dive stepper walks the hull up and the layer commits at
+                // the endpoint, exactly like the manual Dive.
+                if (head->kind() == CommandKind::Attack && chase.submersible
+                    && chase.autoSurface) {
+                    chase.diveTargetSubmerged = false;
+                }
                 const Transform& mine = store.transforms()[slot];
                 const Transform& theirs = store.transforms()[head->target().index];
                 if (head->kind() == CommandKind::Attack && chase.canFly && chase.airWinged) {
@@ -2064,6 +2075,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     case CommandKind::SiloBuildTactical:
     case CommandKind::SiloBuildNuke:
     case CommandKind::ToggleSiloAuto:
+    case CommandKind::SelfDestruct:
         return false;  // applied immediately by semantic issue intake; it never enters a queue
     case CommandKind::Script:
         return false;  // dispatched through ScriptTaskHost, never as a movement/build command

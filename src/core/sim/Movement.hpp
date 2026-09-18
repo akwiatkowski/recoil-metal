@@ -145,6 +145,21 @@ struct MoveState {
     bool submersible = false;
     bool submerged = false;
     bool diveTargetSubmerged = false;
+    /// The Seabed layer (`C-322`): a ground unit under water — not airborne,
+    /// not floating, not a sub (the Sub layer is its own thing). Recomputed
+    /// every movement tick from `y < waterLevel`; the only consumer is the
+    /// `AboveWaterTargetsOnly`/`BelowWaterTargetsOnly` weapon gate.
+    bool seabed = false;
+    /// `AutoSurfaceMode` (`C-203`): the Dive toggle's second state — a
+    /// submerged unit with an attack task surfaces to engage. Off by default
+    /// (retail's `Unit+0x291` constructor default; `AutoSurfaceToAttack` is
+    /// the blueprint key that would set it).
+    bool autoSurface = false;
+    /// Below the water plane this tick (`C-327`): recomputed every movement
+    /// tick from `y < waterLevel`, for ANY layer — the `FlyInWater` fire gate
+    /// asks "is the aircraft submerged", which is a waterline test, not the
+    /// `seabed` ground-layer test and not the sub-only `submerged` flag.
+    bool belowWater = false;
     Fx submarineOffset{};  ///< signed elmos below water
     Fx submarineElevation{};  ///< authored preferred depth (negative)
     Fx divePerTick{};

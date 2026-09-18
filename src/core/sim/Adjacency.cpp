@@ -71,12 +71,24 @@ void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
                 onB.massProduction += a.info->givesMassProduction[b.info->sizeIndex];
                 onB.energyProduction += a.info->givesEnergyProduction[b.info->sizeIndex];
                 onB.energyUpkeep += a.info->givesEnergyUpkeep[b.info->sizeIndex];
+                onB.massBuild += a.info->givesMassBuild[b.info->sizeIndex];
+                onB.energyBuild += a.info->givesEnergyBuild[b.info->sizeIndex];
+                // The RateOfFire grant reaches only retail's receiver — SIZE4
+                // ARTILLERY with a weapon (`C-051`(b)/(c)).
+                if (b.info->receivesRateOfFire) {
+                    onB.rateOfFire += a.info->givesRateOfFire[b.info->sizeIndex];
+                }
             }
             if (a.info->receives) {
                 AdjacencyEffects& onA = out[a.slot];
                 onA.massProduction += b.info->givesMassProduction[a.info->sizeIndex];
                 onA.energyProduction += b.info->givesEnergyProduction[a.info->sizeIndex];
                 onA.energyUpkeep += b.info->givesEnergyUpkeep[a.info->sizeIndex];
+                onA.massBuild += b.info->givesMassBuild[a.info->sizeIndex];
+                onA.energyBuild += b.info->givesEnergyBuild[a.info->sizeIndex];
+                if (a.info->receivesRateOfFire) {
+                    onA.rateOfFire += b.info->givesRateOfFire[a.info->sizeIndex];
+                }
             }
         }
     }
@@ -112,14 +124,27 @@ AdjacencyPreview adjacencyPreview(const UnitStore& store, const UnitCatalog& cat
             link.toGhost.massProduction = theirs.givesMassProduction[ghost.sizeIndex];
             link.toGhost.energyProduction = theirs.givesEnergyProduction[ghost.sizeIndex];
             link.toGhost.energyUpkeep = theirs.givesEnergyUpkeep[ghost.sizeIndex];
+            link.toGhost.massBuild = theirs.givesMassBuild[ghost.sizeIndex];
+            link.toGhost.energyBuild = theirs.givesEnergyBuild[ghost.sizeIndex];
+            if (ghost.receivesRateOfFire) {
+                link.toGhost.rateOfFire = theirs.givesRateOfFire[ghost.sizeIndex];
+            }
             preview.received.massProduction += link.toGhost.massProduction;
             preview.received.energyProduction += link.toGhost.energyProduction;
             preview.received.energyUpkeep += link.toGhost.energyUpkeep;
+            preview.received.massBuild += link.toGhost.massBuild;
+            preview.received.energyBuild += link.toGhost.energyBuild;
+            preview.received.rateOfFire += link.toGhost.rateOfFire;
         }
         if (theirs.receives) {
             link.fromGhost.massProduction = ghost.givesMassProduction[theirs.sizeIndex];
             link.fromGhost.energyProduction = ghost.givesEnergyProduction[theirs.sizeIndex];
             link.fromGhost.energyUpkeep = ghost.givesEnergyUpkeep[theirs.sizeIndex];
+            link.fromGhost.massBuild = ghost.givesMassBuild[theirs.sizeIndex];
+            link.fromGhost.energyBuild = ghost.givesEnergyBuild[theirs.sizeIndex];
+            if (theirs.receivesRateOfFire) {
+                link.fromGhost.rateOfFire = ghost.givesRateOfFire[theirs.sizeIndex];
+            }
         }
         // A touching pair with no grant in either direction is geometry, not adjacency —
         // no link, so no line and no row.

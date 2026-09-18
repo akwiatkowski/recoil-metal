@@ -700,6 +700,15 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 }
             }
         }
+
+        // C-284's brownout recovery count decides when a starved army's senses come back,
+        // so it is live state like the latches above. Fed unconditionally — the vector is
+        // empty until an `update` with economies runs, and an empty span still feeds its
+        // size, which distinguishes "no economy" from "recovered".
+        feed(h, match.intel->intelRecovery().size());
+        for (const TickCount ticks : match.intel->intelRecovery()) {
+            feed(h, static_cast<std::uint64_t>(ticks));
+        }
     }
 
     // Shots in flight. Nullable because a decorative crowd has no projectile list, and

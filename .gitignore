@@ -44,3 +44,4 @@ vendor/ai/
 # `WEB`-tier evidence that must never be cited without blueprint or EXE support,
 # and it is regenerable by one script.
 reference/
+build-impl-*/

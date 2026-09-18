@@ -1,4 +1,5 @@
 #include "core/sim/Enhancement.hpp"
+#include "core/sim/CommandInternal.hpp"
 #include "core/unit/BuildTree.hpp"
 #include <algorithm>
 #include <array>
@@ -85,28 +86,55 @@ std::expected<void, std::string> installEnhancement(
                                                : std::min(health.current, health.maximum);
     return {};
 }
-void EnhancementTasks::onCreate(UnitId unit, std::string_view task,
-    std::span<const std::uint8_t> data, ScriptTaskState&) {
-    const std::string name(data.begin(), data.end());
-    if (task != "EnhanceTask" || !canInstallEnhancement(store_, catalog_, unit, name)) return;
-    if (std::any_of(work_.begin(), work_.end(), [unit](const auto& work) { return work.owner == unit; })) return;
-    const auto* spec = catalog_.def(store_.typeAt(unit.index))->enhancement(name);
-    const auto pace = effectiveBuildPerTick(store_, catalog_, unit.index);
-    if (pace <= Mag{}) return;
-    work_.push_back({.owner=unit, .name=name,
+namespace {
+/// `OnWorkBegin`, the row creation half: validates the slot/prerequisite chain and
+/// pushes the funded-work row the economy allocator drains. Called only once the
+/// unit is stationary — see the `Stopping` gate in `taskTick` (`C-376`).
+[[nodiscard]] bool beginEnhancementWork(UnitStore& store, const UnitCatalog& catalog,
+    std::vector<EnhancementWork>& work, UnitId unit, const std::string& name) {
+    if (!canInstallEnhancement(store, catalog, unit, name)) return false;
+    if (std::any_of(work.begin(), work.end(),
+                    [unit](const auto& entry) { return entry.owner == unit; })) return false;
+    const auto* spec = catalog.def(store.typeAt(unit.index))->enhancement(name);
+    const auto pace = effectiveBuildPerTick(store, catalog, unit.index);
+    if (pace <= Mag{}) return false;
+    work.push_back({.owner=unit, .name=name,
         .cost={spec->buildCostMass,spec->buildCostEnergy},
         .totalBuildTime=Mag::fromFx(spec->buildTime), .buildTimeRemaining=Mag::fromFx(spec->buildTime),
         .buildPerTick=pace});
+    return true;
+}
+} // namespace
+void EnhancementTasks::onCreate(UnitId, std::string_view,
+    std::span<const std::uint8_t>, ScriptTaskState&) {
+    // Retail's EnhanceTask has no OnCreate work: the task opens in `Stopping` and
+    // `OnWorkBegin` fires only after the unit stands still. Both live in
+    // `taskTick` below, so creation is a no-op here (`C-376`).
 }
 std::int32_t EnhancementTasks::taskTick(UnitId unit, std::string_view task,
     std::span<const std::uint8_t> data, ScriptTaskState&) {
+    if (task != "EnhanceTask"
+        || store_.resolve(unit).state != UnitStore::HandleState::Alive) {
+        return static_cast<std::int32_t>(ScriptTaskStatus::Abort);
+    }
     const std::string name(data.begin(), data.end());
     const auto work = std::find_if(work_.begin(), work_.end(), [&](const auto& entry) {
         return entry.owner == unit && entry.name == name;
     });
-    if (task != "EnhanceTask" || work == work_.end()
-        || store_.resolve(unit).state != UnitStore::HandleState::Alive) {
-        return static_cast<std::int32_t>(ScriptTaskStatus::Abort);
+    if (work == work_.end()) {
+        // `Stopping` (`C-376`): a mobile unit still under way is halted first —
+        // retail's `Navigator:AbortMove()` — and the work row appears only once
+        // it stands still. Our abort is instantaneous, so the gate costs one
+        // beat: this tick stops the unit, the next creates the row.
+        const unitdef::UnitDef* def = catalog_.def(store_.typeAt(unit.index));
+        if (def != nullptr && def->isMobile() && store_.motion()[unit.index].moving) {
+            teardownMovement(store_.motion()[unit.index]);
+            return static_cast<std::int32_t>(ScriptTaskStatus::NextBeat);
+        }
+        if (!beginEnhancementWork(store_, catalog_, work_, unit, name)) {
+            return static_cast<std::int32_t>(ScriptTaskStatus::Abort);
+        }
+        return static_cast<std::int32_t>(ScriptTaskStatus::NextBeat);
     }
     advanceEnhancement(*work);
     if (!work->finished()) return static_cast<std::int32_t>(ScriptTaskStatus::NextBeat);

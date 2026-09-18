@@ -174,16 +174,26 @@ std::size_t applyCaptureWork(UnitStore& store, std::vector<CaptureWork>& capture
             continue;
         }
         // All-or-nothing per beat, like the retail task: a partially funded beat
-        // advances nothing, and each funded in-reach beat adds one per active
-        // captor. Reach gates explicitly: a zero demand is trivially "fully
+        // advances nothing. Reach gates explicitly: a zero demand is trivially "fully
         // funded" by the allocator, so the ratio alone cannot tell waiting apart
         // from free.
         if (!work.inReach || work.funded < kFxOne || work.workTicks <= 0) {
             ++i;
             continue;
         }
+        // `C-243`: progress adds the TARGET's active-captor count, not one — retail's
+        // `Unit+0x690`, incremented when a capture task activates on the target and
+        // decremented when it deactivates. Every in-reach task on the same target is
+        // active, so two captors on one victim each bank two per funded beat and the
+        // capture lands in half the time.
+        int activeCaptors = 0;
+        for (const CaptureWork& other : captures) {
+            if (other.target == work.target && other.inReach) {
+                ++activeCaptors;
+            }
+        }
         ++capturing;
-        work.progress = std::min(work.workTicks, work.progress + 1);
+        work.progress = std::min(work.workTicks, work.progress + std::max(1, activeCaptors));
         if (work.progress < work.workTicks) {
             ++i;
             continue;

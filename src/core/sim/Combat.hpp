@@ -309,7 +309,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                            EventQueue* events = nullptr, const Intel* intel = nullptr,
                            const PlayableRect* playableRect = nullptr, TickIndex tick = 0,
                            std::span<SiloAmmo> siloAmmo = {}, FeatureStore* features = nullptr,
-                           std::span<const WorkClaim> claims = {});
+                           std::span<const WorkClaim> claims = {},
+                           std::span<const AdjacencyEffects> adjacency = {});
 
 /// Fires every held OVERCHARGE whose moment has come: target alive, in the manual
 /// weapon's range, reload ready, and the army's stored energy covering the shot's

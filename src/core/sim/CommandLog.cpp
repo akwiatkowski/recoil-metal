@@ -93,6 +93,7 @@ namespace {
     if (name == "silo-build-tactical") return CommandKind::SiloBuildTactical;
     if (name == "silo-build-nuke") return CommandKind::SiloBuildNuke;
     if (name == "toggle-silo-auto") return CommandKind::ToggleSiloAuto;
+    if (name == "self-destruct") return CommandKind::SelfDestruct;
     return std::nullopt;
 }
 

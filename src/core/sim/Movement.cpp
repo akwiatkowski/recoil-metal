@@ -684,6 +684,18 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
     // A separate pass rather than a line in the loop above, because it applies
     // to a different set: the loop moves what is moving, this tilts everything.
     for (std::size_t i = first; i < last; ++i) {
+        // The Seabed layer (`C-322`): a ground unit under water. Air, surface
+        // floaters, hover, and subs are their own layers — a submerged sub is
+        // Sub, not Seabed, which is why the target-side water gates do nothing
+        // against it. Recomputed every tick from the freshest Y, so a unit
+        // walking out of the water stops being a seabed target the same tick.
+        motion[i].seabed = !motion[i].airborne && !motion[i].surfaceWater
+            && !motion[i].submersible && !motion[i].hovering
+            && terrain.hasWater() && transforms[i].y < terrain.waterLevel();
+        // `belowWater` is the layer-agnostic waterline test (`C-327`): the
+        // `FlyInWater` fire gate asks whether an AIRCRAFT is submerged, which
+        // `seabed` (ground only) and `submerged` (submersibles only) cannot say.
+        motion[i].belowWater = terrain.hasWater() && transforms[i].y < terrain.waterLevel();
         // A flyer off the deck owns its altitude AND attitude in the winged integrator
         // above — this pass would otherwise teleport every climb back to clearance
         // height at the end of the same tick that earned it.

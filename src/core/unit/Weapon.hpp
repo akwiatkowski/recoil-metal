@@ -183,6 +183,26 @@ struct Weapon {
     std::optional<std::array<LayerCaps, 2>> submarineSourceCaps;
     bool targetsSubmerged = true;
 
+    /// `AboveWaterFireOnly`/`BelowWaterFireOnly`: the firer-side water gates
+    /// (`C-321`). Retail's `UnitWeapon::CanFire` compares the firer's Y against
+    /// the firer's OWN `Physics.Elevation` datum (default −10000 ogrids — see
+    /// `UnitDef::waterGateElevationElmos`), never the waterline: `isAbove =
+    /// firerY > elevation`; Above rejects `!isAbove`, Below rejects `isAbove`.
+    /// A unit with no authored `Elevation` is therefore always "above" and a
+    /// `BelowWaterFireOnly` weapon can never fire for it — which is why the
+    /// corpus ships 16 `AboveWaterFireOnly` and zero `BelowWaterFireOnly`.
+    bool aboveWaterFireOnly = false;
+    bool belowWaterFireOnly = false;
+
+    /// `AboveWaterTargetsOnly`/`BelowWaterTargetsOnly`: the target-side water
+    /// gates (`C-322`). Evaluated ONLY for Seabed-layer candidates — a ground
+    /// unit under water, never a submerged sub (the Sub layer) — testing the
+    /// target's Y against the target's own `Physics.Elevation` datum. With the
+    /// −10000 default every seabed unit reads "above", so `AboveWaterTargetsOnly`
+    /// passes and `BelowWaterTargetsOnly` (unshipped anyway) can never pass.
+    bool aboveWaterTargetsOnly = false;
+    bool belowWaterTargetsOnly = false;
+
     [[nodiscard]] bool canTarget(bool airborne, bool submerged = false,
                                  std::optional<bool> sourceSubmerged = std::nullopt) const noexcept {
         const LayerCaps caps = sourceSubmerged && submarineSourceCaps

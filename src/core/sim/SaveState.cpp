@@ -86,6 +86,10 @@ constexpr std::uint32_t kVersion32 = 32;
 // `autoBuild` flag. Older saves decode with empty queues and auto-mode on — the
 // pre-queue refill behaviour by another name.
 constexpr std::uint32_t kVersion33 = 33;
+// 34: the per-army `CArmyStats` store (`C-227`) — named aggregate and per-blueprint
+// statistics plus the pending one-shot triggers — and the self-destruct countdowns
+// (`C-345`). Older saves decode with no stat service and nothing counting down.
+constexpr std::uint32_t kVersion34 = 34;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -722,6 +726,105 @@ bool readCaptures(PayloadReader& r, std::vector<CaptureWork>& work) {
         value.progress = progress;
         value.funded = Fx::fromRaw(funded);
         value.inReach = inReach != 0;
+    }
+    return true;
+}
+
+// V34's `CArmyStats` (`C-227`): the serialized per-army stat store — named aggregate
+// and per-blueprint statistics plus the pending one-shot triggers. Null vs empty is
+// preserved like `features`: a scene with no stat service writes only the absent byte.
+void writeArmyStats(PayloadWriter& w,
+                    const std::optional<std::vector<ArmyStats>>& state) {
+    w.u8(state.has_value());
+    if (!state) {
+        return;
+    }
+    w.count(state->size());
+    for (const ArmyStats& stats : *state) {
+        w.count(stats.stats.size());
+        for (const auto& [name, value] : stats.stats) {
+            w.text(name);
+            w.i64(value.raw());
+        }
+        w.count(stats.blueprintStats.size());
+        for (const auto& [key, value] : stats.blueprintStats) {
+            w.text(key.first);
+            w.text(key.second);
+            w.i64(value.raw());
+        }
+        w.count(stats.triggers.size());
+        for (const ArmyStatTrigger& trigger : stats.triggers) {
+            w.text(trigger.name);
+            w.count(trigger.conditions.size());
+            for (const ArmyStatCondition& condition : trigger.conditions) {
+                w.text(condition.stat);
+                w.text(condition.category);
+                w.u8(static_cast<std::uint8_t>(condition.op));
+                w.i64(condition.value.raw());
+            }
+        }
+    }
+}
+
+bool readArmyStats(PayloadReader& r,
+                   std::optional<std::vector<ArmyStats>>& state) {
+    bool present{};
+    if (!readFlag(r, present)) return false;
+    if (!present) {
+        state.reset();
+        return true;
+    }
+    state.emplace();
+    std::size_t count{};
+    // 4 bytes of count per army at minimum; each stat row costs at least a length
+    // word plus its value, each blueprint row two lengths plus a value, each trigger
+    // a name and a condition count.
+    if (!r.count(count, 4)) return false;
+    state->resize(count);
+    for (ArmyStats& stats : *state) {
+        if (!r.count(count, 12)) return false;
+        stats.stats.resize(count);
+        for (auto& [name, value] : stats.stats) {
+            if (!r.text(name) || !readMag(r, value)) return false;
+        }
+        if (!r.count(count, 16)) return false;
+        stats.blueprintStats.resize(count);
+        for (auto& [key, value] : stats.blueprintStats) {
+            if (!r.text(key.first) || !r.text(key.second) || !readMag(r, value))
+                return false;
+        }
+        if (!r.count(count, 8)) return false;
+        stats.triggers.resize(count);
+        for (ArmyStatTrigger& trigger : stats.triggers) {
+            if (!r.text(trigger.name) || !r.count(count, 17)) return false;
+            trigger.conditions.resize(count);
+            for (ArmyStatCondition& condition : trigger.conditions) {
+                std::uint8_t op{};
+                if (!r.text(condition.stat) || !r.text(condition.category)
+                    || !r.u8(op) || op > static_cast<std::uint8_t>(StatCompare::LessThanOrEqual)
+                    || !readMag(r, condition.value)) return false;
+                condition.op = static_cast<StatCompare>(op);
+            }
+        }
+    }
+    return true;
+}
+
+// V34's self-destruct countdowns (`C-345`): the unit handle and the ticks left.
+void writeSelfDestructs(PayloadWriter& w, std::span<const SelfDestructWork> work) {
+    w.count(work.size());
+    for (const SelfDestructWork& value : work) {
+        writeId(w, value.unit);
+        w.u32(value.remainingTicks);
+    }
+}
+
+bool readSelfDestructs(PayloadReader& r, std::vector<SelfDestructWork>& work) {
+    std::size_t count{};
+    if (!r.count(count, 12)) return false;
+    work.resize(count);
+    for (SelfDestructWork& value : work) {
+        if (!readId(r, value.unit) || !r.u32(value.remainingTicks)) return false;
     }
     return true;
 }
@@ -1390,6 +1493,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion31) writeCongestion(payloadWriter, state.units.motion);
     if (version >= kVersion32) writeLeadStep(payloadWriter, state.units.motion);
     if (version >= kVersion33) writeSiloQueue(payloadWriter, state.siloQueue);
+    if (version >= kVersion34) writeArmyStats(payloadWriter, state.armyStats);
+    if (version >= kVersion34) writeSelfDestructs(payloadWriter, state.selfDestructs);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -1431,7 +1536,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion27 && version != kVersion28
                && version != kVersion29 && version != kVersion30
                && version != kVersion31 && version != kVersion32
-               && version != kVersion33)
+               && version != kVersion33 && version != kVersion34)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -1494,6 +1599,10 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion32 && !readLeadStep(reader, units.motion)) return std::nullopt;
     std::vector<SiloBuild> siloQueue;
     if (version >= kVersion33 && !readSiloQueue(reader, siloQueue)) return std::nullopt;
+    std::optional<std::vector<ArmyStats>> armyStats;
+    if (version >= kVersion34 && !readArmyStats(reader, armyStats)) return std::nullopt;
+    std::vector<SelfDestructWork> selfDestructs;
+    if (version >= kVersion34 && !readSelfDestructs(reader, selfDestructs)) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
@@ -1501,7 +1610,9 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        .siloQueue = std::move(siloQueue),
                        .redirects = std::move(redirects), .economyArmies = std::move(economyArmies),
                        .enhancements = std::move(enhancements),
-                       .captures = std::move(captures), .features = std::move(features)};
+                       .captures = std::move(captures), .armyStats = std::move(armyStats),
+                       .selfDestructs = std::move(selfDestructs),
+                       .features = std::move(features)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -1526,7 +1637,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion33);
+    return rm::sim::encode(state, kVersion34);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

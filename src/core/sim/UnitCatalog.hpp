@@ -119,9 +119,13 @@ public:
         bool freeIntel = false;
 
         /// The stealth FIELDS this type projects over its own alliance, and the jammer's
-        /// deception. Radii like the senses above; `jammerBlips` is a count.
+        /// deception. Radii like the senses above; `jammerBlips` is a count. `JamRadius`
+        /// is a {Min, Max} range in the blueprints — each fake blip draws a uniform
+        /// magnitude inside it (`C-278`) — so the jammer carries two radii where the
+        /// fields carry one.
         Fx radarStealthField{};
         Fx sonarStealthField{};
+        Fx jamRadiusMin{};
         Fx jamRadius{};
         int jammerBlips = 0;
     };
@@ -166,11 +170,19 @@ public:
         /// blueprint did not state.
         bool receives = false;
 
+        /// Whether this type may receive the `RateOfFire` grant — retail's
+        /// `EntityCategory = 'STRUCTURE SIZE4 ARTILLERY'` plus `RateOfFireBuffCheck`'s
+        /// weapon count, so a SIZE4 radar never slows a gun it does not have (`C-051`).
+        bool receivesRateOfFire = false;
+
         /// What standing beside this type ADDS to a neighbour, indexed by the
         /// NEIGHBOUR's `sizeIndex`. Already fixed point; already per the giver's table.
         std::array<Fx, unitdef::kAdjacencySizeSteps> givesMassProduction{};
         std::array<Fx, unitdef::kAdjacencySizeSteps> givesEnergyProduction{};
         std::array<Fx, unitdef::kAdjacencySizeSteps> givesEnergyUpkeep{};
+        std::array<Fx, unitdef::kAdjacencySizeSteps> givesMassBuild{};
+        std::array<Fx, unitdef::kAdjacencySizeSteps> givesEnergyBuild{};
+        std::array<Fx, unitdef::kAdjacencySizeSteps> givesRateOfFire{};
 
         /// Whether this type sits in the adjacency game at all — a structure with a
         /// skirt. The pair scan skips everything else without touching the arrays.

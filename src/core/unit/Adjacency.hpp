@@ -18,12 +18,12 @@ namespace rm::unitdef {
 // (a generator discounting its neighbours' running costs).
 //
 // WHAT THIS ENGINE TAKES, and what it defers by name: `MassProduction` and
-// `EnergyProduction` (storage beside a producer), and `EnergyMaintenance` (a generator
-// beside anything with upkeep). Deferred: `EnergyActive`/`MassActive` (a discount on the
-// consumption of a structure that is actively BUILDING — this engine's `Construction`
-// does not know which structure is doing the work), and `EnergyWeapon`/`RateOfFire`
-// (weapons cost no energy here yet). Named so their absence is a decision on record
-// rather than a surprise.
+// `EnergyProduction` (storage beside a producer), `EnergyMaintenance` (a generator
+// beside anything with upkeep), `MassActive`/`EnergyActive` (the build-drain discount a
+// generator or extractor gives a structure that is actively BUILDING — applied to the
+// builder's construction demand), and `RateOfFire` (a generator beside SIZE4 artillery —
+// a PENALTY in retail, see `C-051`(b)). Deferred: `EnergyWeapon` (weapons cost no energy
+// here yet). Named so their absence is a decision on record rather than a surprise.
 
 /// Which buff table a structure grants — the root `Adjacency` field, as a closed set.
 /// `Hydrocarbon` shares `T2PowerGenerator`'s numbers by the file's own
@@ -68,6 +68,19 @@ struct AdjacencyGrants {
     /// `EnergyMaintenance`: added to the receiving structure's upkeep — negative, a
     /// discount.
     std::array<float, kAdjacencySizeSteps> energyMaintenance{};
+    /// `MassActive` / `EnergyActive`: added to the receiving structure's BUILD drain —
+    /// negative, a discount on what an actively-building structure consumes
+    /// (`AdjacencyBuffs.lua` `*MassBuildBonus*`/`*EnergyBuildBonus*`, gated there on
+    /// `Economy.BuildableCategory` or `STRUCTURE SILO`).
+    std::array<float, kAdjacencySizeSteps> massBuild{};
+    std::array<float, kAdjacencySizeSteps> energyBuild{};
+    /// `RateOfFire`: added to the receiving weapon's rate multiplier — NEGATIVE, and in
+    /// retail that makes the weapon fire SLOWER, not faster (`C-051`(b): `Buff.lua`
+    /// computes `wep:ChangeRateOfFire(1/(val*delay))`, so the new rate is
+    /// `val x bpRateOfFire` and `Add < 0` is a penalty despite the "Bonus" name).
+    /// Only the Size4 row is ever live: the Size8/12/16/20 buffs are defined but
+    /// referenced by no producer list — `C-051`(c)'s dead code, reproduced as zeroes.
+    std::array<float, kAdjacencySizeSteps> rateOfFire{};
 };
 
 /// The table for one class — `AdjacencyBuffs.lua:206-247`, transcribed. Zeroes for `None`.

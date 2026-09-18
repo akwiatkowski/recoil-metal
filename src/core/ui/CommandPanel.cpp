@@ -120,6 +120,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         case sim::CommandKind::LoadTransport:   // issued by right-clicking a carrier, below
         case sim::CommandKind::UnloadTransport: // the U key
         case sim::CommandKind::Ferry:          // the Y key
+        case sim::CommandKind::SelfDestruct:  // the ctrl-K kill switch; no rack cell
             break;  // None has a command-rack descriptor.
         }
     }

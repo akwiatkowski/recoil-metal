@@ -51,8 +51,15 @@ struct SaveState {
     std::optional<EconomyArmyState> economyArmies;
     std::vector<EnhancementWork> enhancements;
     std::vector<CaptureWork> captures;
+    /// The per-army `CArmyStats` stores (`C-227`), from v34 — null when the match has
+    /// no stat service, like `features`. Restored straight into `Match::armyStats`'s
+    /// storage by the caller; `EconomyArmyState` does not carry it.
+    std::optional<std::vector<ArmyStats>> armyStats;
+    /// Self-destruct countdowns (`C-345`), from v34. Empty for older saves and for a
+    /// match with nothing counting down.
+    std::vector<SelfDestructWork> selfDestructs;
     /// Wreck pool, when the scene leaves anything behind. Null scenes (and old readers)
-    /// keep no features, exactly like the match's nullable pool.
+    /// keep no features, exactly like the match's null-vs-empty distinction.
     std::optional<FeatureStore::Snapshot> features;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);

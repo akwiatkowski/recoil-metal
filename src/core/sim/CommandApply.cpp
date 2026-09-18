@@ -19,6 +19,7 @@
 #include "core/sim/Reclaim.hpp"
 #include "core/sim/ScriptTask.hpp"
 #include "core/sim/Transport.hpp"
+#include "core/sim/Skirmish.hpp"
 #include "core/sim/UnitStore.hpp"
 
 #include "core/unit/BuildTree.hpp"
@@ -674,7 +675,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                                  ScriptTaskHost* scriptTasks,
                                  const CommandGridForUnit& approachGridForUnit,
                                  std::vector<SiloAmmo>* siloAmmo,
-                                 std::vector<SiloBuild>* siloQueue) {
+                                 std::vector<SiloBuild>* siloQueue,
+                                 std::vector<SelfDestructWork>* selfDestructs) {
     const CommandIssue issue = onBuildGrid(issued, catalog, terrain);
     ApplyCommandResult result;
     if (!validCancellation(issue) || issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
@@ -980,6 +982,31 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         }
         return result;
     }
+    if (issue.kind == CommandKind::SelfDestruct) {
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit)) {
+                continue;
+            }
+            const Player* player = playerFor(issue.player, players);
+            if (player == nullptr || !authorised(*player, store, unit, armies)
+                || selfDestructs == nullptr) {
+                continue;
+            }
+            // The toggle (`C-345`): an entry already counting down is cancelled, a unit
+            // with none starts `selfdestruct.lua`'s five-second `StartCountdown`.
+            const auto found = std::ranges::find_if(*selfDestructs,
+                [unit](const SelfDestructWork& work) { return work.unit == unit; });
+            if (found != selfDestructs->end()) {
+                selfDestructs->erase(found);
+            } else {
+                selfDestructs->push_back(SelfDestructWork{
+                    .unit = unit,
+                    .remainingTicks = rate.ticks(seconds(5.0f))});
+            }
+            result.accepted.push_back(unit);
+        }
+        return result;
+    }
     std::shared_ptr<SharedCommand> shared;
     for (std::size_t rank = 0; rank < canonical.size(); ++rank) {
         const UnitId unit = canonical[rank];
@@ -1066,7 +1093,8 @@ bool applyCommand(const Command& ordered, UnitStore& store, const UnitCatalog& c
                    const FeatureStore* features, PathService* pathService,
                    ScriptTaskHost* scriptTasks,
                    std::vector<SiloAmmo>* siloAmmo,
-                   std::vector<SiloBuild>* siloQueue) {
+                   std::vector<SiloBuild>* siloQueue,
+                   std::vector<SelfDestructWork>* selfDestructs) {
     const Command command = onBuildGrid(ordered, catalog, terrain);
     if (command.player >= static_cast<PlayerIndex>(kInvalidCommandSource)
         || command.kind == CommandKind::Script) {
@@ -1093,7 +1121,7 @@ bool applyCommand(const Command& ordered, UnitStore& store, const UnitCatalog& c
     const ApplyCommandResult result = applyCommand(
         issue, store, catalog, players, armies, terrain,
         [&grid](UnitId) { return &grid; }, rate, building, events, features, pathService,
-        scriptTasks, {}, siloAmmo, siloQueue);
+        scriptTasks, {}, siloAmmo, siloQueue, selfDestructs);
     return result.acceptedUnit(command.unit);
 }
 

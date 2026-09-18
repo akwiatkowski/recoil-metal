@@ -8,9 +8,10 @@
 // AutoSurfaceMode defaults OFF), and that a submerged deck gun stays silent
 // while the torpedo still answers (C-202/C-323 gating).
 //
-// NOT_IMPLEMENTED and therefore deliberately absent: AboveWaterFireOnly /
-// BelowWaterFireOnly (C-321), AboveWaterTargetsOnly / BelowWaterTargetsOnly
-// (C-322), FlyInWater (C-327), and the AutoSurfaceMode flag itself (C-203).
+// Also covered: the firer-side water gates comparing Y against the unit's own
+// `Physics.Elevation` datum (C-321), the Seabed-only target-side gates
+// (C-322), `Air.FlyInWater` as a hard fire reject (C-327), and AutoSurfaceMode
+// surfacing a sub that holds an attack task (C-203).
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -358,4 +359,324 @@ TEST_CASE("C-202/C-323: a submerged deck gun stays silent while the torpedo answ
     REQUIRE_FALSE(motion.submerged);
     CHECK(fires("Torpedo"));
     CHECK(fires("DeckGun"));
+}
+
+TEST_CASE("C-321: the fire gates compare the firer's Y against its own Elevation datum",
+          "[fa-navy]") {
+    // `isAbove = firerY > Physics.Elevation` — the unit's OWN datum, never the
+    // waterline. Give the boat a datum between its keel and the surface and
+    // the gates flip with the dive: submerged (y 68 < 74) the AboveWater gun
+    // is silent and the BelowWater gun answers; surfaced (y 80 > 74) they
+    // trade places. A unit with no authored Elevation keeps retail's −10000
+    // default, is always "above", and its BelowWaterFireOnly weapon can never
+    // fire — the reason the corpus ships zero of them.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);
+
+    rm::test::Roster roster;
+    UnitDef sub = subDef();
+    sub.waterGateElevationElmos = 74.0f;  // authored ogrids ×8, between keel and surface
+    const auto gun = [](std::string_view label, bool above, bool below) {
+        Weapon weapon;
+        weapon.label = std::string{label};
+        weapon.role = rm::unitdef::WeaponRole::DirectFire;
+        weapon.targetPriorities = {{"MOBILE"}};
+        weapon.turreted = true;
+        weapon.damage = rm::sim::Mag::fromInt(50);
+        weapon.maxRange = Fx::fromInt(200);
+        weapon.rateOfFire = 1.0f;
+        weapon.muzzleVelocityElmosPerSecond = 100.0f;
+        weapon.aboveWaterFireOnly = above;
+        weapon.belowWaterFireOnly = below;
+        return weapon;
+    };
+    sub.weapons = {gun("AboveGun", true, false), gun("BelowGun", false, true)};
+
+    UnitDef defaultSub = subDef();
+    defaultSub.name = "test_default_sub";
+    defaultSub.weapons = {gun("NeverGun", false, true)};  // default datum: never below
+
+    const UnitDef ship = shipDef();
+    const rm::UnitTypeIndex subType = roster.addType(sub);
+    const rm::UnitTypeIndex defaultType = roster.addType(defaultSub);
+    const rm::UnitTypeIndex shipType = roster.addType(ship);
+    const UnitId boat = spawnDef(roster, subType, sub, 300.0f, 300.0f, 0);
+    const UnitId defaultBoat = spawnDef(roster, defaultType, defaultSub, 500.0f, 300.0f, 0);
+    const UnitId target = spawnDef(roster, shipType, ship, 300.0f, 400.0f, 1);
+    rm::sim::placeOnMotionLayer(roster.transform(target), roster.motion(target), terrain);
+    roster.reindex();
+
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    auto& motion = roster.motion(boat);
+    REQUIRE(motion.submerged);
+    REQUIRE(roster.motion(defaultBoat).submerged);
+
+    const auto fires = [&](UnitId shooter, const UnitDef& def, std::string_view label) {
+        roster.health(shooter).reloadRemaining.assign(def.weapons.size(), 0);
+        rm::sim::EventQueue events;
+        std::vector<rm::sim::Projectile> shots;
+        (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                   roster.rate, &events);
+        return std::ranges::any_of(events.all(), [&](const rm::sim::Event& event) {
+            return event.visualId == std::string{def.name} + ":" + std::string{label};
+        });
+    };
+
+    // Submerged at y 68, below the 74-elmo datum: Below answers, Above does not.
+    CHECK(fires(boat, sub, "BelowGun"));
+    CHECK_FALSE(fires(boat, sub, "AboveGun"));
+    // The default-datum boat is always "above": its BelowWater gun never fires.
+    CHECK_FALSE(fires(defaultBoat, defaultSub, "NeverGun"));
+
+    // Surfaced at y 80, above the datum: the guns trade places.
+    motion.diveTargetSubmerged = false;
+    for (int i = 0; i < 600 && motion.submerged; ++i) {
+        rm::sim::tick(roster.store.transforms(), roster.store.motion(), terrain);
+    }
+    REQUIRE_FALSE(motion.submerged);
+    CHECK(fires(boat, sub, "AboveGun"));
+    CHECK_FALSE(fires(boat, sub, "BelowGun"));
+}
+
+TEST_CASE("C-322: the target gates apply to Seabed-layer candidates only",
+          "[fa-navy]") {
+    // `AboveWaterTargetsOnly`/`BelowWaterTargetsOnly` test a SEABED candidate's
+    // Y against its own `Physics.Elevation` datum — a ground unit under water.
+    // A submerged sub is the Sub layer, not Seabed, so the flags are inert
+    // against it; and with the −10000 default every seabed unit reads "above",
+    // which is why `BelowWaterTargetsOnly` is unshipped.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);
+
+    rm::test::Roster roster;
+    UnitDef ship = shipDef();
+    const auto gun = [](std::string_view label, bool above, bool below) {
+        Weapon weapon;
+        weapon.label = std::string{label};
+        weapon.role = rm::unitdef::WeaponRole::DirectFire;
+        weapon.targetPriorities = {{"MOBILE"}};
+        weapon.turreted = true;
+        weapon.damage = rm::sim::Mag::fromInt(50);
+        weapon.maxRange = Fx::fromInt(400);
+        weapon.rateOfFire = 1.0f;
+        weapon.muzzleVelocityElmosPerSecond = 100.0f;
+        weapon.aboveWaterTargetsOnly = above;
+        weapon.belowWaterTargetsOnly = below;
+        return weapon;
+    };
+    ship.weapons = {gun("AboveGun", true, false), gun("BelowGun", false, true)};
+
+    // Two seabed walkers: one on the default datum (always "above"), one with
+    // an authored datum above the waterline (always "below").
+    UnitDef walker = shipDef();
+    walker.name = "test_walker";
+    walker.motion = rm::unitdef::MotionType::Amphibious;
+    UnitDef deepWalker = walker;
+    deepWalker.name = "test_deep_walker";
+    deepWalker.waterGateElevationElmos = 90.0f;  // above the 80-elmo waterline
+
+    const UnitDef sub = subDef();
+    const rm::UnitTypeIndex shipType = roster.addType(ship);
+    const rm::UnitTypeIndex walkerType = roster.addType(walker);
+    const rm::UnitTypeIndex deepType = roster.addType(deepWalker);
+    const rm::UnitTypeIndex subType = roster.addType(sub);
+    const UnitId shooter = spawnDef(roster, shipType, ship, 300.0f, 300.0f, 0);
+    const UnitId walkerId = spawnDef(roster, walkerType, walker, 320.0f, 300.0f, 1);
+    const UnitId deepId = spawnDef(roster, deepType, deepWalker, 340.0f, 300.0f, 1);
+    const UnitId subId = spawnDef(roster, subType, sub, 700.0f, 300.0f, 1);
+    rm::sim::placeOnMotionLayer(roster.transform(shooter), roster.motion(shooter), terrain);
+    rm::sim::placeOnMotionLayer(roster.transform(walkerId), roster.motion(walkerId), terrain);
+    rm::sim::placeOnMotionLayer(roster.transform(deepId), roster.motion(deepId), terrain);
+    roster.reindex();
+
+    // One movement tick publishes the Seabed layer: both walkers sit at y 0
+    // under the 80-elmo waterline; the sub is Sub, not Seabed.
+    rm::sim::tick(roster.store.transforms(), roster.store.motion(), terrain);
+    CHECK(roster.motion(walkerId).seabed);
+    CHECK(roster.motion(deepId).seabed);
+    CHECK_FALSE(roster.motion(subId).seabed);
+
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    const auto firesAt = [&](std::string_view label, UnitId victim) {
+        roster.health(shooter).reloadRemaining.assign(ship.weapons.size(), 0);
+        rm::sim::EventQueue events;
+        std::vector<rm::sim::Projectile> shots;
+        (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                   roster.rate, &events);
+        return std::ranges::any_of(events.all(), [&](const rm::sim::Event& event) {
+            return event.visualId == std::string{ship.name} + ":" + std::string{label}
+                   && event.instigator == victim;
+        });
+    };
+
+    // The default-datum walker reads "above" its datum: AboveGun takes it,
+    // BelowGun refuses it. The authored-datum walker reads "below": the
+    // mirror image. And the submerged sub is the Sub layer — both flags are
+    // inert against it, so AboveGun can still engage it.
+    CHECK(firesAt("AboveGun", walkerId));
+    CHECK(firesAt("BelowGun", deepId));
+    CHECK_FALSE(firesAt("AboveGun", deepId));
+    CHECK_FALSE(firesAt("BelowGun", walkerId));
+    // The flags are inert against the Sub layer: put the submerged sub in
+    // range as the NEAREST candidate and BOTH guns engage it — neither Above
+    // nor Below applies to a Sub-layer target.
+    roster.transform(subId).x = Fx::fromInt(310.0f);
+    roster.reindex();
+    CHECK(firesAt("AboveGun", subId));
+    CHECK(firesAt("BelowGun", subId));
+}
+
+TEST_CASE("C-327: an Air-layer unit below the waterline cannot fire unless FlyInWater",
+          "[fa-navy]") {
+    // `Air.FlyInWater=false` + Air layer + below the waterline is a hard
+    // `CanFire` reject — "aircraft cannot fire while submerged". The test is
+    // the water plane, not the `Physics.Elevation` datum the other gates
+    // read: put a plane under it and its gun stays silent; author
+    // `FlyInWater` and the same plane answers.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);
+
+    rm::test::Roster roster;
+    const auto planeDef = [](bool flyInWater) {
+        UnitDef def;
+        def.name = flyInWater ? "test_seaplane" : "test_plane";
+        def.categories = {"AIR", "MOBILE"};
+        def.motion = rm::unitdef::MotionType::Air;
+        def.speedElmosPerSecond = 10.0f;
+        def.airWinged = true;
+        def.waterGateElevationElmos = 100.0f;  // cruise datum above the waterline
+        def.airFlyInWater = flyInWater;
+        def.health = rm::sim::Mag::fromInt(500);
+        Weapon gun;
+        gun.label = "Gun";
+        gun.role = rm::unitdef::WeaponRole::DirectFire;
+        gun.targetPriorities = {{"MOBILE"}};
+        gun.turreted = true;
+        gun.damage = rm::sim::Mag::fromInt(50);
+        gun.maxRange = Fx::fromInt(200);
+        gun.rateOfFire = 1.0f;
+        gun.muzzleVelocityElmosPerSecond = 100.0f;
+        def.weapons = {gun};
+        return def;
+    };
+    const UnitDef plane = planeDef(false);
+    const UnitDef seaplane = planeDef(true);
+    const UnitDef ship = shipDef();
+    const rm::UnitTypeIndex planeType = roster.addType(plane);
+    const rm::UnitTypeIndex seaplaneType = roster.addType(seaplane);
+    const rm::UnitTypeIndex shipType = roster.addType(ship);
+    const UnitId dry = spawnDef(roster, planeType, plane, 300.0f, 300.0f, 0);
+    const UnitId wet = spawnDef(roster, seaplaneType, seaplane, 320.0f, 300.0f, 0);
+    const UnitId target = spawnDef(roster, shipType, ship, 300.0f, 400.0f, 1);
+    rm::sim::placeOnMotionLayer(roster.transform(target), roster.motion(target), terrain);
+    // Both planes sit at y 50 — below the 80-elmo waterline, the submerged
+    // case `unit+0x120 == Air` + `y < waterLevel` describes. The movement
+    // tick owns `belowWater`; this fixture writes `transform.y` directly, so
+    // it sets the flag the tick would compute.
+    roster.transform(dry).y = Fx::fromInt(50);
+    roster.transform(wet).y = Fx::fromInt(50);
+    roster.motion(dry).belowWater = true;
+    roster.motion(wet).belowWater = true;
+    roster.reindex();
+
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    const auto fires = [&](UnitId shooter, const UnitDef& def) {
+        roster.health(shooter).reloadRemaining.assign(def.weapons.size(), 0);
+        rm::sim::EventQueue events;
+        std::vector<rm::sim::Projectile> shots;
+        (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                   roster.rate, &events);
+        return std::ranges::any_of(events.all(), [&](const rm::sim::Event& event) {
+            return event.visualId == std::string{def.name} + ":Gun";
+        });
+    };
+
+    CHECK_FALSE(fires(dry, plane));   // FlyInWater=false: the reject holds
+    CHECK(fires(wet, seaplane));      // FlyInWater=true: the same plane fires
+}
+
+TEST_CASE("C-203: AutoSurfaceMode surfaces a submerged sub that holds an attack task",
+          "[fa-navy]") {
+    // The toggle's one retail consumer is the attack task: with the mode ON
+    // the task picks the Water layer and the boat surfaces to engage — the
+    // same `diveTargetSubmerged` flip the manual Dive order writes, so the
+    // deck gun wakes exactly when the hull commits to the surface.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);
+    const rm::sim::PassabilityGrid water =
+        rm::sim::buildSurfaceWaterPassability(field, 80.0f);
+
+    rm::test::Roster roster;
+    UnitDef sub = subDef();
+    sub.autoSurfaceToAttack = true;
+    Weapon deckGun;
+    deckGun.label = "DeckGun";
+    deckGun.role = rm::unitdef::WeaponRole::DirectFire;
+    deckGun.targetPriorities = {{"MOBILE"}};
+    deckGun.turreted = true;
+    deckGun.damage = rm::sim::Mag::fromInt(50);
+    deckGun.maxRange = Fx::fromInt(200);
+    deckGun.rateOfFire = 1.0f;
+    deckGun.muzzleVelocityElmosPerSecond = 100.0f;
+    // Water row only: the gun answers from the surface, never from under.
+    deckGun.submarineSourceCaps = std::array<rm::unitdef::Weapon::LayerCaps, 2>{
+        rm::unitdef::Weapon::LayerCaps{.targets = rm::unitdef::TargetLayerMask::Surface,
+                                       .submerged = false},
+        rm::unitdef::Weapon::LayerCaps{.targets = rm::unitdef::TargetLayerMask::None,
+                                       .submerged = false}};
+    sub.weapons = {deckGun};
+    const UnitDef ship = shipDef();
+    const rm::UnitTypeIndex subType = roster.addType(sub);
+    const rm::UnitTypeIndex shipType = roster.addType(ship);
+    const UnitId boat = spawnDef(roster, subType, sub, 300.0f, 300.0f, 0);
+    const UnitId target = spawnDef(roster, shipType, ship, 300.0f, 400.0f, 1);
+    rm::sim::placeOnMotionLayer(roster.transform(target), roster.motion(target), terrain);
+    roster.reindex();
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<int> commandersEver(2, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &water);
+    const auto gridFor = [&water](UnitId) { return &water; };
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    match.passabilitySubmerged = grids;
+    rm::sim::EventQueue events;
+    match.events = &events;
+    std::vector<rm::sim::Projectile> projectiles;
+    match.projectiles = &projectiles;  // fireWeapons runs only when the match owns a volley list
+
+    auto& motion = roster.motion(boat);
+    REQUIRE(motion.submerged);
+    REQUIRE(motion.autoSurface);  // motionFor copied the authored flag
+
+    const auto attack = rm::sim::applyCommand(
+        CommandIssue{.source = 0,
+                     .id = rm::commandId(0, 1),
+                     .player = 0,
+                     .kind = CommandKind::Attack,
+                     .units = {boat},
+                     .targetX = rm::sim::fxFromFloat(300.0f),
+                     .targetZ = rm::sim::fxFromFloat(400.0f),
+                     .target = target},
+        roster.store, roster.catalog, players, armies, terrain, gridFor, roster.rate);
+    REQUIRE(attack.accepted.size() == 1);
+
+    // The attack task picks the Water layer the first tick it runs — the boat
+    // commits to surfacing without a Dive order ever being issued.
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    CHECK_FALSE(motion.diveTargetSubmerged);
+
+    // The ease commits at the endpoint (C-200): the boat surfaces and the
+    // deck gun — silent while submerged — engages the ship it was sent after.
+    for (int i = 0; i < 600 && motion.submerged; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    }
+    CHECK_FALSE(motion.submerged);
+    CHECK(rm::sim::fxToFloat(roster.transform(boat).y) == Approx(80.0f));
+    CHECK(std::ranges::any_of(events.all(), [&](const rm::sim::Event& event) {
+        return event.kind == rm::sim::EventKind::WeaponFired
+               && event.visualId == std::string{sub.name} + ":DeckGun"
+               && event.instigator == target;
+    }));
 }
