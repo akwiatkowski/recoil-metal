@@ -114,6 +114,11 @@ constexpr std::uint32_t kVersion37 = 37;
 // restore. `inWater` stays out: it is recomputed from the restored position
 // on the first tick, exactly like retail's `proj+0x334`.
 constexpr std::uint32_t kVersion38 = 38;
+// 39: `C-171`'s weave state and `C-088`'s friendly-fire flag on each projectile
+// record — a saved mid-flight weaving shot must keep its roll schedule and
+// offsets or it un-weaves on restore, and a returned missile must keep its
+// `CollideFriendly` or it stops being able to hit its own side.
+constexpr std::uint32_t kVersion39 = 39;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -854,12 +859,11 @@ bool readSelfDestructs(PayloadReader& r, std::vector<SelfDestructWork>& work) {
 }
 
 // V35's projectile pool: every field the state hash walks, in the same order
-// `StateHash.cpp` feeds them, so a restored shot hashes identically to the one
 // that was saved. `visualId`/`visualOrigin`/`visualSerial` are deliberately
 // absent — presentation identity, never hashed.
 void writeProjectiles(PayloadWriter& w,
                       const std::optional<std::vector<Projectile>>& state,
-                      bool waterFlags) {
+                      bool waterFlags, bool weaveFlags) {
     w.u8(state.has_value());
     if (!state) {
         return;
@@ -897,12 +901,25 @@ void writeProjectiles(PayloadWriter& w,
             w.u8(shot.stayUnderwater ? 1 : 0);
             w.u8(shot.destroyOnWater ? 1 : 0);
         }
+        // V39 trails the record: `C-171`'s weave schedule and `C-088`'s
+        // friendly-fire flag.
+        if (weaveFlags) {
+            w.i32(shot.zigZagAmplitudeElmos.raw());
+            w.i32(shot.zigZagPeriodTicks);
+            w.i32(shot.zigZagNextRoll);
+            w.i32(shot.zigZagOffsetX.raw());
+            w.i32(shot.zigZagOffsetY.raw());
+            w.i32(shot.zigZagOffsetZ.raw());
+            for (const Fx v : shot.zigZagApplied) w.i32(v.raw());
+            for (const Fx v : shot.aimPoint) w.i32(v.raw());
+            w.u8(shot.friendlyFire ? 1 : 0);
+        }
     }
 }
 
 bool readProjectiles(PayloadReader& r,
                      std::optional<std::vector<Projectile>>& state,
-                     bool waterFlags) {
+                     bool waterFlags, bool weaveFlags) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) {
@@ -977,6 +994,35 @@ bool readProjectiles(PayloadReader& r,
             }
             shot.stayUnderwater = stay != 0;
             shot.destroyOnWater = destroy != 0;
+        }
+        // V39's trailing weave schedule and friendly-fire flag; older saves
+        // leave the shot un-weaving and hostile-only, which is what a
+        // pre-C-171/pre-C-088 shot was anyway.
+        if (weaveFlags) {
+            std::int32_t amplitude{}, period{}, nextRoll{}, ox{}, oy{}, oz{};
+            std::uint8_t friendly{};
+            if (!r.i32(amplitude) || !r.i32(period) || !r.i32(nextRoll)
+                || !r.i32(ox) || !r.i32(oy) || !r.i32(oz)) {
+                return false;
+            }
+            shot.zigZagAmplitudeElmos = Fx::fromRaw(amplitude);
+            shot.zigZagPeriodTicks = period;
+            shot.zigZagNextRoll = nextRoll;
+            shot.zigZagOffsetX = Fx::fromRaw(ox);
+            shot.zigZagOffsetY = Fx::fromRaw(oy);
+            shot.zigZagOffsetZ = Fx::fromRaw(oz);
+            for (Fx& v : shot.zigZagApplied) {
+                std::int32_t raw{};
+                if (!r.i32(raw)) return false;
+                v = Fx::fromRaw(raw);
+            }
+            for (Fx& v : shot.aimPoint) {
+                std::int32_t raw{};
+                if (!r.i32(raw)) return false;
+                v = Fx::fromRaw(raw);
+            }
+            if (!r.u8(friendly) || friendly > 1) return false;
+            shot.friendlyFire = friendly != 0;
         }
     }
     return true;
@@ -1932,7 +1978,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion34) writeArmyStats(payloadWriter, state.armyStats);
     if (version >= kVersion34) writeSelfDestructs(payloadWriter, state.selfDestructs);
     if (version >= kVersion35) writeProjectiles(payloadWriter, state.projectiles,
-                                               version >= kVersion38);
+                                               version >= kVersion38, version >= kVersion39);
     if (version >= kVersion37) writePathService(payloadWriter, state.pathService);
     if (version >= kVersion37) writeIntel(payloadWriter, state.intel);
     const std::vector<std::byte> payload = payloadWriter.take();
@@ -1977,7 +2023,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion29 && version != kVersion30
                && version != kVersion31 && version != kVersion32
                && version != kVersion33 && version != kVersion34 && version != kVersion35
-               && version != kVersion36 && version != kVersion37 && version != kVersion38)
+               && version != kVersion36 && version != kVersion37 && version != kVersion38
+               && version != kVersion39)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2047,7 +2094,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion34 && !readSelfDestructs(reader, selfDestructs)) return std::nullopt;
     std::optional<std::vector<Projectile>> projectiles;
     if (version >= kVersion35 && !readProjectiles(reader, projectiles,
-                                                 version >= kVersion38)) return std::nullopt;
+                                                 version >= kVersion38,
+                                                 version >= kVersion39)) return std::nullopt;
     std::optional<PathService::Snapshot> pathService;
     if (version >= kVersion37 && !readPathService(reader, pathService)) return std::nullopt;
     std::optional<Intel::Snapshot> intel;
@@ -2089,7 +2137,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion38);
+    return rm::sim::encode(state, kVersion39);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

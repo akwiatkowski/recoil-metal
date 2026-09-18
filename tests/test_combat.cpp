@@ -3545,4 +3545,55 @@ TEST_CASE("a redirector turns an enemy missile back on its launcher") {
         CHECK(shots.front().velocity[0] < rm::sim::Fx{});
         CHECK(redirects.front().remaining == 0);
     }
+
+    SECTION("a returned missile damages its own launcher") {
+        // The Lua's RedirectingState flips `CollideFriendly`/`DamageFriendly`/
+        // `DamageSelf` on the returned shot — "so that when the missile reaches
+        // its source it can deal damage". The friendly-fire channel admits the
+        // source side to the sweep and the impact path, launcher included.
+        std::vector<rm::sim::MissileRedirect> redirects{
+            rm::sim::MissileRedirect{.owner = roster.store.idAt(0),
+                                     .radiusElmos = rm::sim::fxFromFloat(120.0f),
+                                     .cooldownTicks = 10,
+                                     .remaining = 0}};
+        Projectile shot = incoming();
+        shot.damage = rm::unitdef::flatDamage(rm::sim::Mag::fromInt(50));
+        shot.ticksRemaining = 40;  // the trip home is ~11 ticks at 20 elmos/tick
+        std::vector<Projectile> shots{shot};
+        // First tick: the redirect fires and the shot turns home.
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField()}, roster.rate, nullptr,
+                                    &roster.catalog, redirects);
+        REQUIRE(shots.size() == 1);
+        CHECK(shots.front().friendlyFire);
+        // Fly it home: the launcher sits at x=300, the shot turned at x~80
+        // moving +20/tick — a dozen ticks lands it.
+        for (int tick = 0; tick < 15 && !shots.empty(); ++tick) {
+            rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                        rm::sim::Terrain{flatField()}, roster.rate, nullptr,
+                                        &roster.catalog, redirects);
+        }
+        CHECK(shots.empty());
+        CHECK(roster.store.health()[launcher.index].current
+              < roster.store.health()[launcher.index].maximum);
+    }
+
+    SECTION("a diverted missile still cannot hurt its own side") {
+        // The flare's `SetNewTarget` never flips the friendly-fire flags — only
+        // the Cybran redirect does — so a shot aimed home by anything else
+        // still sweeps hostiles only.
+        Projectile shot = incoming();
+        shot.damage = rm::unitdef::flatDamage(rm::sim::Mag::fromInt(50));
+        shot.friendlyFire = false;
+        shot.velocity = rm::test::at(20, 0, 0);  // already flying at the launcher
+        std::vector<Projectile> shots{shot};
+        std::vector<rm::sim::MissileRedirect> none;
+        for (int tick = 0; tick < 15 && !shots.empty(); ++tick) {
+            rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                        rm::sim::Terrain{flatField()}, roster.rate, nullptr,
+                                        &roster.catalog, none);
+        }
+        CHECK(roster.store.health()[launcher.index].current
+              == roster.store.health()[launcher.index].maximum);
+    }
 }

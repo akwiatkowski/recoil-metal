@@ -149,6 +149,12 @@ void redirectMissile(Projectile& shot, const UnitStore& store,
                 shot.velocity = {hx / leg * speed, hy / leg * speed, hz / leg * speed};
                 shot.guidanceTarget = shot.firedBy;
             }
+            // The Lua's RedirectingState flips `CollideFriendly`/`DamageFriendly`/
+            // `DamageSelf` on the returned shot — "so that when the missile
+            // reaches its source it can deal damage". One flag carries all
+            // three: the sweep admits the source side, and the impact path
+            // damages it including the launcher itself.
+            shot.friendlyFire = true;
         } else {
             shot.health -= Mag::fromInt(30);
             if (shot.maxHealth <= Mag{} || shot.health <= Mag{}) {
@@ -365,7 +371,8 @@ struct SweptHit {
 [[nodiscard]] Mag damageTarget(UnitIndex target, const unitdef::DamageProfile& damage,
                                int byArmy, UnitStore& store, std::span<const Army> armies,
                                const UnitCatalog* catalog, UnitId by, EventQueue* events,
-                               unitdef::TargetLayerMask targetLayers);
+                               unitdef::TargetLayerMask targetLayers,
+                               bool friendlyFire = false);
 
 /// Whether the original three-dimensional tick motion is strictly below retail's 0.01-elmo
 /// sweep threshold (`C-168`). Compare the exact rational in raw units because Q18.14 cannot
@@ -650,7 +657,13 @@ struct ProjectileTickStart {
     const Fx queryZ = proximityFallback ? from[2] : middleZ;
 
     for (const UnitIndex slot : store.space().candidates(queryX, queryZ, reach)) {
-        if (!shootable(shot.firedByArmy, store, slot, armies)) {
+        // `C-088`'s friendly-fire channel: a redirected missile's Lua flips
+        // `CollideFriendly`, so the sweep admits every live owned unit — the
+        // source side included — rather than only hostiles.
+        if (shot.friendlyFire
+                ? (slot >= store.health().size() || !store.health()[slot].alive()
+                   || armyFor(armyAt(store, slot), armies) == nullptr)
+                : !shootable(shot.firedByArmy, store, slot, armies)) {
             continue;
         }
         if (slot >= transforms.size() || slot >= motion.size()) {
@@ -2654,7 +2667,8 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
                    std::span<const Army> armies, const UnitCatalog* catalog, UnitId by,
                    EventQueue* events, unitdef::TargetLayerMask targetLayers, bool damageFriendly,
                    std::optional<UnitIndex> exactTarget,
-                   std::optional<UnitIndex> impactTarget, FeatureStore* features = nullptr) {
+                   std::optional<UnitIndex> impactTarget, FeatureStore* features = nullptr,
+                   bool damageSelf = false) {
     Mag dealt{};
 
     // C-086/C-137: area queries (0xF00) include props; ordinary projectile sweeps (0xD00)
@@ -2693,7 +2707,7 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         const Army* target = armyFor(armyAt(store, slot), armies);
         return source != nullptr && !source->defeated
                && target != nullptr && !target->defeated
-               && store.idAt(slot) != by;
+               && (damageSelf || store.idAt(slot) != by);
     };
 
     // A blast is a sphere against collision boxes, not a centre-only ground circle. A square
@@ -2984,12 +2998,16 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
 [[nodiscard]] Mag damageTarget(UnitIndex target, const unitdef::DamageProfile& damage,
                                int byArmy, UnitStore& store, std::span<const Army> armies,
                                const UnitCatalog* catalog, UnitId by, EventQueue* events,
-                               unitdef::TargetLayerMask targetLayers) {
+                               unitdef::TargetLayerMask targetLayers,
+                               bool friendlyFire) {
     if (target >= store.transforms().size()) {
         return Mag{};
     }
+    // `C-088`: a redirected missile's `DamageFriendly`/`DamageSelf` — the
+    // point hit admits the source side, the launcher included.
     return damageTargets(positionOf(store.transforms()[target]), Fx{}, damage, byArmy, store,
-                          armies, catalog, by, events, targetLayers, false, target, std::nullopt);
+                          armies, catalog, by, events, targetLayers, friendlyFire, target,
+                          std::nullopt, nullptr, friendlyFire);
 }
 
 } // namespace
@@ -3247,7 +3265,7 @@ void resolvePendingImpact(Projectile& shot, UnitStore& store,
         if (target.generation != 0) {
             (void)damageTarget(target.index, shot.damage, shot.firedByArmy, store,
                                armies, catalog, shot.firedBy, events,
-                               shot.targetLayers);
+                               shot.targetLayers, shot.friendlyFire);
         }
     } else {
         const std::optional<UnitIndex> impactTarget = target.generation != 0
@@ -3256,7 +3274,8 @@ void resolvePendingImpact(Projectile& shot, UnitStore& store,
                                                         : std::nullopt;
         (void)damageTargets(shot.position, shot.damageRadiusElmos, shot.damage,
                              shot.firedByArmy, store, armies, catalog, shot.firedBy,
-                             events, shot.targetLayers, false, std::nullopt, impactTarget, features);
+                             events, shot.targetLayers, shot.friendlyFire, std::nullopt,
+                             impactTarget, features, shot.friendlyFire);
     }
 
     // Recoil Metal has no Lua projectile lifecycle yet, so retain its established

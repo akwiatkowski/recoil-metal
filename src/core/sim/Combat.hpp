@@ -123,6 +123,12 @@ struct Projectile {
     /// shot to its course at every roll boundary rather than random-walking.
     std::array<Fx, 3> zigZagApplied{};
 
+    /// `C-088`'s friendly-fire channel: the Cybran redirect flips the shot's
+    /// `CollideFriendly`/`DamageFriendly`/`DamageSelf` when it sends a missile
+    /// home, so a returned missile can hit — and kill — its own launcher and
+    /// side. Flares never set it: they divert without damaging.
+    bool friendlyFire = false;
+
     /// Where the shot was aimed at launch — the taper's `dist` for a shot
     /// with no live `guidanceTarget` (C-171: `min(1, dist/maxZigZag)`).
     std::array<Fx, 3> aimPoint{};

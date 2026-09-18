@@ -804,6 +804,21 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, static_cast<int>(shot.pendingImpact));
             feed(h, static_cast<std::size_t>(shot.impactTarget.index));
             feed(h, static_cast<std::size_t>(shot.impactTarget.generation));
+            // `C-171`'s weave and `C-088`'s friendly-fire flag, conditional like
+            // the water pair: a shot carrying either diverges from one that
+            // does not, and an ordinary shot keeps its byte stream.
+            if (shot.zigZagAmplitudeElmos > Fx{} || shot.friendlyFire) {
+                feed(h, true);
+                feed(h, shot.zigZagAmplitudeElmos);
+                feed(h, shot.zigZagPeriodTicks);
+                feed(h, shot.zigZagNextRoll);
+                feed(h, shot.zigZagOffsetX);
+                feed(h, shot.zigZagOffsetY);
+                feed(h, shot.zigZagOffsetZ);
+                feed(h, shot.zigZagApplied);
+                feed(h, shot.aimPoint);
+                feed(h, shot.friendlyFire);
+            }
         }
     }
 
