@@ -110,15 +110,17 @@ Equal-weight average across the 20 gameplay subsystem rows below; `FA-FOUND` is 
 ```text
 Implemented       [##############------] about 68%
 Retail-validated  [#######-------------] about 37%
-Retail-analyzed   [###############-----] about 74%
+Retail-analyzed   [##############------] about 77%
 ```
 
-The row estimates average 68.05%, 37.25% and 74.00%, respectively. The 2026-09-18
+The row estimates average 68.05%, 37.25% and 77.37%, respectively. The 2026-09-18
 analysis pass raised `FA-CONTENT` (60→85 analyzed) with the full VFS mount order,
 blueprint ingestion, and map bootstrap read (`C-266`–`C-275`), `FA-INTEL` (60→85
 analyzed) on the full counter-intel/jammer/stale-contact lifecycle (`C-276`–`C-285`),
-and earlier `FA-PROGRESS` (40→80 analyzed) on the full enhancement lifecycle
-(`C-251`–`C-265`).
+`FA-PROGRESS` (40→80 analyzed) on the full enhancement lifecycle (`C-251`–`C-265`),
+`FA-TERRAIN` (45→85 analyzed) on `FlattenMapRect`/wreck obstruction/terrain types/scorch
+(`C-286`–`C-292`), and `FA-PRESENT` (75→80 analyzed) on manipulators/effects/audio/LOD
+(`C-293`–`C-304`).
 The 2026-09-14 refresh restores the `FA-LUA`, `FA-AIR` and `FA-INTEL` rows the table had dropped
 (their detail sections never left; scores are estimated from those sections), and
 raises `FA-TRANSPORT` (45→85 implemented, 5→45 validated) on the landed cargo/ferry/
@@ -133,8 +135,8 @@ Only **1 of 45 work packages**, `WP-15` economy, currently passes the complete r
 confirmation gate. The three percentages must never be combined: understanding absent behavior
 does not make the game more complete.
 
-The independent evidence-state count is **33 of 45 WPs at `Analyzed`**. That 73% inventory count
-and the 74% equal-subsystem estimate answer different questions and are shown together to keep the
+The independent evidence-state count is **36 of 45 WPs at `Analyzed`**. That 80% inventory count
+and the 77% equal-subsystem estimate answer different questions and are shown together to keep the
 headline honest.
 
 **Current implementation critical path:**
@@ -189,7 +191,7 @@ excluded from the headline.
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 15% | 85% | **Analyzed 2026-09-18 (C-286–C-292):** `FlattenMapRect` writes uniform u16 elevation, dirty render heightfield, re-seats Land/Seabed entities — no pathing/ogrid. Wrecks use footprint-less `DefaultWreckage_prop.bp` and never block; `Physics.BlockPath` is a dead key. Terrain types gate pathing only via `Blocking` flag; `Slippery`/`Bumpiness`/`HealthEffectPerSecond` are dead. Scorch is visual-only, 28 corpus files, gated on `layer=='Land'`/`targetType=='Terrain'|'Prop'`, no underwater. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 50% | 10% | 30% | Must-scout requests, unknown-threat queues and continuous air flybys are in with headless cover; next is High/LowPriority interest lists. Current easy, turtle and tech duels are decisive. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 85% | 5% | 15% | Queue timing under shift, adjacency pricing, build tier tabs, reclaim totals, per-order route colours, target focus and T-track camera all in; toggle sim behaviors stay open. |
-| [`FA-PRESENT`](#fa-present---animation-effects-and-audio) | Animation, effects, audio | `WP-41`-`42` | 85% | 10% | 45% | MSAA, map-authored bloom, SSAO, fresnel rim and per-shot-class muzzle/particle effects in; manipulator rigs resolve per degree of freedom. Posing deferred, then dynamic music. |
+| [`FA-PRESENT`](#fa-present---rendering-effects-audio-and-lod) | Rendering, effects, audio, LOD | `WP-41`-`42` | 75% | 45% | 80% | **Analyzed 2026-09-18 (C-293–C-304):** 11 `IAniManipulator` subclasses + `MotorFallDown` are sim-serialized, ticked from `Unit::MotionTick` via `CAniActor::UpdateManipulators`; double-buffered pose, bone transforms, `HideBone` visibility. Effects manager at `Sim+0x8C0` ticks per type; zero sim-RNG in effect/anim regions. LOD camera-side. Audio: 16 registrations, `CSndParams` cue+bank+cutoff, serialized `SAudioRequest` queue; no native music manager — Lua-driven. |
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 75% | 30% | 90% | Wreck pool in save v23 with mid-reclaim continued-hash proof (tested); golden re-recorded for the P10.4 route change and MATCHing (`a85c690`). Projectiles next, then intel/path. |
 
 ## Starting Work
