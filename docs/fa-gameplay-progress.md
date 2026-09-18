@@ -582,8 +582,9 @@ FA-WEAPONS.
 ### FA-MISSILES - Silos, Missiles, And Interception
 
 **Largest gap:** interception accounting and manual launch orders now run (`8d33735`, with
-UI wiring and tests), but strategic-nuke silos, the counter command, guidance, and the
-build queue are absent.
+UI wiring and tests), and the silo build queue landed (`f41445e`): retail's per-unit FIFO
+(`CAiSiloBuildImpl+0x20`, `C-081`/`C-241`) with auto-refill, manual SiloBuild commands, and
+SaveState v33. Strategic-nuke silos, the counter command, and guidance remain absent.
 
 **Current slice:** `C-095` gives projectile-target weapons a separate nearest-hostile,
 in-range 2-D acquisition path with `max(MaxRadius, MaxRadius * TrackingRadius)` reach; it neither
@@ -606,7 +607,7 @@ shot carrying the flare category that enters the radius re-aims at the flare own
 speed — diverted, never damaged, no cooldown. **Redirect follow-up implemented (`C-088`
 MissileRedirect):** `Defense.AntiMissile{Radius, RedirectRateOfFire}` parses and a
 non-strategic enemy MISSILE inside the radius turns back on its live launcher, one redirect per
-rate cycle, dead owners reaped, SaveState v10. **Named divergences:** no build queue, adjacency
+rate cycle, dead owners reaped, SaveState v10. **Named divergences:** adjacency
 modifier fixed at 1, `--units` crowds unwired; the third `HasSiloAmmo` caller (`0x005DEAD0`) is
 unnamed; the returned missile cannot yet damage its source side (no friendly-fire channel);
 the cooldown may be 10 or 11 ticks (`WaitSeconds` runs n·10+1).
