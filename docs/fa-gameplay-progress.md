@@ -110,10 +110,12 @@ Equal-weight average across the 20 gameplay subsystem rows below; `FA-FOUND` is 
 ```text
 Implemented       [##############------] about 68%
 Retail-validated  [#######-------------] about 37%
-Retail-analyzed   [##############------] about 70%
+Retail-analyzed   [##############------] about 72%
 ```
 
-The row estimates average 68.05%, 37.25% and 69.75%, respectively. The 2026-09-14
+The row estimates average 68.05%, 37.25% and 71.75%, respectively. The 2026-09-18
+analysis pass raised `FA-PROGRESS` (40→80 analyzed) on the full enhancement
+lifecycle read (`C-251`–`C-265`). The 2026-09-14
 refresh restores the `FA-LUA`, `FA-AIR` and `FA-INTEL` rows the table had dropped
 (their detail sections never left; scores are estimated from those sections), and
 raises `FA-TRANSPORT` (45→85 implemented, 5→45 validated) on the landed cargo/ferry/
@@ -128,8 +130,8 @@ Only **1 of 45 work packages**, `WP-15` economy, currently passes the complete r
 confirmation gate. The three percentages must never be combined: understanding absent behavior
 does not make the game more complete.
 
-The independent evidence-state count is **27 of 45 WPs at `Analyzed`**. That 60% inventory count
-and the 70% equal-subsystem estimate answer different questions and are shown together to keep the
+The independent evidence-state count is **30 of 45 WPs at `Analyzed`**. That 67% inventory count
+and the 72% equal-subsystem estimate answer different questions and are shown together to keep the
 headline honest.
 
 **Current implementation critical path:**
@@ -182,7 +184,7 @@ excluded from the headline.
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 70% | 45% | 95% | Manual missile-launch orders in with UI wiring and tests (`8d33735`); interceptor lead landed earlier. Next is the missile build queue and tactical/nuke UI. |
 | [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 82% | 55% | 85% | PersonalBubble shelters owner-only (specified-from-name, corpus-pinned absent); TransportShield parses as ordinary pending cargo source. Next is transport cargo coverage. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-and-counter-intel) | Vision, radar, sonar, counter-intel | `WP-33` | 45% | 30% | 60% | Depth-gated senses and sonar acquisition in (`2c00d76`); radar position error drives automatic targeting (`06390d1`). Temporal expiry, cloak, jamming, sonar memory stay open. |
-| [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 45% | 30% | 40% | Enhancement removal uninstalls with health fallback (tested); next is the Lua-side contract (SetUpgradedTo, callbacks). |
+| [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 45% | 30% | 80% | **Analyzed 2026-09-18 (C-251–C-265):** full enhancement lifecycle is shipped-Lua on the CUnitScriptTask bridge — two-command replace protocol, stationary+unpaused task, funded-drain progress, no refund, SimUnitEnhancements bookkeeping, paid pseudo-enhancement removal, the BuildCostMass=BuildCostEnergy retail bug; SetUpgradedTo/QueueNotifyUpgrade proven to belong to structure upgrades. Veterancy brain callback + regen last-writer-wins closed; zero native surface reconfirmed. WP-36 catalog complete — all bespoke abilities Lua except the Colossus tractor claw (native, bounded). Next: the Lua-side contract implementation (SetUpgradedTo is out; EnhanceTask host + CreateEnhancement overrides). |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 0% | 15% | 45% | Crater path traced: retail scorch is visual-only (splat/decal scale split, no height/type/pathing effect); next is non-lethal impact scorch records. |
 | [`FA-AI`](#fa-ai---retail-ai-and-native-manager-boundary) | Retail AI and native manager boundary | `WP-38` | 50% | 10% | 30% | Must-scout requests, unknown-threat queues and continuous air flybys are in with headless cover; next is High/LowPriority interest lists. Current easy, turtle and tech duels are decisive. |
 | [`FA-UI`](#fa-ui---player-interface-and-advanced-controls) | Player interface and advanced controls | `WP-39`-`40` | 85% | 5% | 15% | Queue timing under shift, adjacency pricing, build tier tabs, reclaim totals, per-order route colours, target focus and T-track camera all in; toggle sim behaviors stay open. |
@@ -568,14 +570,23 @@ FA-INTEL.
 
 **Largest gap:** veterancy is implemented, and the enhancement lifecycle now covers
 install, funded work, cancellation without refund, removal with health fallback,
-and save/load (`[enhancement][script-task]`). What remains is the Lua adapter and
-EnhanceTask's gameplay contract beyond the native task machinery: `SetUpgradedTo`,
-`QueueNotifyUpgrade` linkage, and bespoke experimental script/native interactions.
+and save/load (`[enhancement][script-task]`). **Analysis closed 2026-09-18
+(`C-251`–`C-265`):** the retail contract is now fully specified — `UNITCOMMAND_Script`
+orders carry `{TaskName="EnhanceTask", Enhancement}`, slot replacement issues
+`<old>Remove` then `<new>` 0.5 s apart, the task requires stationary+unpaused with
+funded-drain progress and no refund, `OnWorkBegin` validates slot/prereq (with the
+`WorkItemBuildCostMass = BuildCostEnergy` retail bug), `SimUnitEnhancements` is the
+bookkeeping (cleared on death, not re-applied on capture), and every mutation is the
+unit script's `CreateEnhancement` override. `SetUpgradedTo`/`QueueNotifyUpgrade` are
+proven to belong to structure upgrades, not ACU enhancements. What remains is
+implementation fidelity against that contract plus the one native WP-36 mechanic
+(Colossus tractor claw).
 
 ```text
-/goal Advance FA-PROGRESS with the Lua-side enhancement contract: SetUpgradedTo and
-QueueNotifyUpgrade linkage, completion callbacks, and one bespoke experimental
-interaction, evidenced against EnhanceTask.lua. Keep native task machinery untouched.
+/goal Advance FA-PROGRESS by implementing the evidenced enhancement contract: the
+EnhanceTask state machine (stationary+unpaused, funded-drain progress, no refund),
+slot/prereq validation with the mass-cost bug, SimUnitEnhancements bookkeeping, and
+the <x>Remove pseudo-enhancement path. Keep native task machinery untouched.
 ```
 
 ### FA-TERRAIN - Mutable Terrain And Craters
