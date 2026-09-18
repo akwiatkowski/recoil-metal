@@ -784,7 +784,7 @@ exercises Guard targeting followed by Stop. Refuel/staging and ferry remain outs
 | `WP-41` | Rendering, model graph, manipulators, effects, LOD | Not ready | Medium | **Analyzed** | `PE-29` | P3 | **`C-293`–`C-304`.** 11 `IAniManipulator` subclasses + `MotorFallDown` are sim-serialized, ticked from `Unit::MotionTick` via `CAniActor::UpdateManipulators` (sole caller). Precedence orders execution; double-buffered `CAniPose` bones are `pose+0x28` stride `0x4c`. Effects manager at `Sim+0x8C0` ticks per type in `AdvanceBeat`; effect/anim regions have zero sim-RNG callers. Emitters attach to bones sim-side. `HideBone`/`ShowBone` write pose visibility. LOD is camera-side (`Mesh::ComputeLOD`/`GeomCamera3::LODMetric`); no sim involvement. |
 | `WP-42` | Audio cues, voice priority, dynamic music | Not ready | Medium | **Analyzed** | `PE-30` | P3 | **`C-300`.** 16 `audio` registrations: `Sound({cue,bank,cutoff})` builds `CSndParams`; `PlaySound` returns opaque handle controlled by `StartSound`/`StopSound`/`PauseSound`/`SoundIsPrepared`; sim-side `Entity::PlaySound`/`SetAmbientSound` enqueue serialized `SAudioRequest`s drained by user-side `CUserSoundManager`. No native music manager found — music is Lua-driven over cues. |
 | `WP-43` | Command replay, state hash equivalence, divergence | Ready but not confirmed | High | **Analyzed** | `PE-01`, `PE-26` | P2 | **Answered by `C-150`–`C-155`.** A 24-opcode message stream with `Moho::Sim` as the `ICommandSink`; one command is a 14-field value with **two** targets, a formation quaternion and a cell list; beats gate on `mAvailableBeat` (everyone acked), not on the queued counters; command ids are `[source:8][counter:24]`, unique among *live* commands and not monotonic; and application order is **ascending client index → FIFO within client → one AdvanceBeat**, with units inside one command visited in **ascending entity id**. **`C-154` is the sting: retail's checksum is a bounded 128-beat change-set ring, not a full-state hash, so digest parity is not a usable oracle for us** — a perfectly matching sim would still disagree. |
-| `WP-44` | Save/resume and full simulation serialization | Not ready | Medium | **Analyzed** | `PE-26` | P3 | **`C-184`–`C-186`.** 244 `SerSaveLoadHelper<T>` singletons; `SerSave(WriteArchive&, const T*)` bodies decoded past MSVC's custom register conventions to yield **1,617 members over 237 classes** with offset, type and declaration order — **but no names**, measured three ways. Validated 58/63 against independently derived offsets with **zero** landing on a wrong field. What is **not** saved is itself informative: the spatial index, runtime backpointers, the economy request list and the beat counter are all rebuilt or derived on load. **Current Recoil slice:** SaveState v16 includes optional economy/army state, construction history/active work/funding/retained command identity, lifecycle timers and aircraft controller state; v1-v15 readers remain. Restored owning arrays rebind match spans. Fresh-scene construction/sharing/defeat continuation matches 690 subsequent tick hashes, and real-interceptor turn/recovery continuations also match. This closes the construction-loss boundary described by the earlier guard slice. General app saves remain absent: projectile/feature pools, pending path searches, intel history, external inputs and opponent VM state are not saved. Replay remains a separate compatibility boundary. |
+| `WP-44` | Save/resume and full simulation serialization | Not ready | Medium | **Analyzed** | `PE-26` | P3 | **`C-184`–`C-186`.** 244 `SerSaveLoadHelper<T>` singletons; `SerSave(WriteArchive&, const T*)` bodies decoded past MSVC's custom register conventions to yield **1,617 members over 237 classes** with offset, type and declaration order — **but no names**, measured three ways. Validated 58/63 against independently derived offsets with **zero** landing on a wrong field. What is **not** saved is itself informative: the spatial index, runtime backpointers, the economy request list and the beat counter are all rebuilt or derived on load. **Current Recoil slice:** SaveState v35 carries optional economy/army state, construction history/active work/funding/retained command identity, lifecycle timers, aircraft controller state, the wreck pool (v23) and the in-flight projectile pool (v35, every field the state hash walks); v1-v34 readers remain. Restored owning arrays rebind match spans. Fresh-scene construction/sharing/defeat continuation matches 690 subsequent tick hashes, real-interceptor turn/recovery continuations match, and a mid-flight save resumes identical hashes for the rest of the flight (tested). General app saves remain absent: feature pools, pending path searches, intel history, external inputs and opponent VM state are not saved. Replay remains a separate compatibility boundary. |
 
 ## Analysis order
 
@@ -2775,6 +2775,27 @@ false-negative trap for good.
   highest-implementation-impact residual unknown — `CUnitCommand+0xa2` cancel-flag
   readers near `0x006f4730`/`0x006f4800`, or the `IssueScript` command-data
   marshalling at `0x006fd240`.
+### 2026-09-18 / Wave-2 implementation update
+
+Five implementation gaps closed against the analyzed contract, all committed:
+
+- `FA-CMD`: the ferry rung and multi-weapon guard arbitration (`C-183`, `C-347`–`C-351`).
+- `FA-WEAPONS`: the `C-157` engineer reclaim/capture target exemption wired through
+  `IsTargetExempt` (deliberately deferred per the earlier decision).
+- `FA-MISSILES`: the silo build queue with assist links (`f41445e`).
+- `FA-TRANSPORT`: cargo hangs from authored `Attachpoint` bones, not a sling row
+  (`2c3e7f8`, `C-198`).
+- `FA-PERSIST`: SaveState v35 adds the in-flight projectile pool — every field the
+  state hash walks, `paralyze` serialized as raw bits to keep sim arithmetic fixed
+  point. Continued-hash proof: a mid-flight save resumes identical hashes for the
+  rest of the flight (`[save-state][skirmish]`). `visualId`/`visualOrigin`/
+  `visualSerial` stay out — presentation identity, never hashed.
+
+All 1916 tests pass. Retail-analyzed remains >=85% on every subsystem row; the
+>80% analysis goal stands met. Next exact action: the `CUnitCommand+0xa2`
+cancel-flag readers near `0x006f4730`/`0x006f4800`, or `IssueScript` command-data
+marshalling at `0x006fd240`.
+
 ## Confirmation gate
 
 A work package may move to **Confirmed with EXE analysis** only when all are true:
