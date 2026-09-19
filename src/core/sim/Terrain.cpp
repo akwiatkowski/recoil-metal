@@ -112,6 +112,44 @@ Fx Terrain::surfaceHeightAt(Fx x, Fx z) const noexcept {
     return hasWater_ ? std::max(ground, waterLevel_) : ground;
 }
 
+Fx Terrain::deepHeightAt(Fx x, Fx z) const noexcept {
+    // `C-019`'s `GetDeepElevation`: the ground clamped to the deep level —
+    // terrain above the level answers the level, terrain below it answers
+    // itself. Undeclared deep level falls back to the water level, retail's
+    // own default.
+    const Fx level = hasDeepLevel_ ? deepLevel_ : waterLevel_;
+    return std::min(heightAt(x, z), level);
+}
+
+Fx Terrain::abyssHeightAt(Fx x, Fx z) const noexcept {
+    // Same clamp at the abyss level (`GetAbyssElevation`).
+    const Fx level = hasAbyssLevel_ ? abyssLevel_ : waterLevel_;
+    return std::min(heightAt(x, z), level);
+}
+
+bool Terrain::isPlayable(Fx x, Fx z) const noexcept {
+    if (!hasPlayableRect_) {
+        return true;  // a map with no declared rect is playable everywhere
+    }
+    return x >= playableX0_ && x <= playableX1_ && z >= playableZ0_
+           && z <= playableZ1_;
+}
+
+void Terrain::setPlayableRect(Fx x0, Fx z0, Fx x1, Fx z1) noexcept {
+    playableX0_ = x0;
+    playableZ0_ = z0;
+    playableX1_ = x1;
+    playableZ1_ = z1;
+    hasPlayableRect_ = true;
+}
+
+void Terrain::setWaterLevels(float deepElmos, float abyssElmos) noexcept {
+    deepLevel_ = fxFromFloat(deepElmos);
+    abyssLevel_ = fxFromFloat(abyssElmos);
+    hasDeepLevel_ = true;
+    hasAbyssLevel_ = true;
+}
+
 void Terrain::flattenRect(Fx x0Elmos, Fx z0Elmos, Fx x1Elmos, Fx z1Elmos,
                           Fx elevation) noexcept {
     // Elmos to cells: `floor` on the near edge, `ceil` on the far — the same pair

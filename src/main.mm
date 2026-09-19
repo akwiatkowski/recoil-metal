@@ -183,7 +183,7 @@ int main(int argc, const char* argv[]) {
         // Not const: the windowed path steps this scene every frame.
         UnitScene units = resolveUnits(unitRequests, map->field, map->starts, map->hasWater,
                                        map->waterLevel, assetSearch, content,
-                                       map->terrainTypes);
+                                       map->terrainTypes, map->deepLevel, map->abyssLevel);
 
         // `--alliances N`: deal the armies into N sides that win together, round-robin, so
         // `--armies 4 --alliances 2` is a 2v2. Free-for-all — every army its own alliance —

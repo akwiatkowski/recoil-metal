@@ -120,6 +120,11 @@ struct LoadedMap {
     bool hasWater = true;
     float waterLevel = 0.0f;
 
+    /// `C-019`: the deep/abyss water levels — the clamps the terrain query
+    /// surface answers `GetDeepElevation`/`GetAbyssElevation` with.
+    float deepLevel = 0.0f;
+    float abyssLevel = 0.0f;
+
     /// .scmap: the per-square terrain-type grid, one byte per square at full
     /// map resolution (C-288). The passability grids read it through the
     /// blocking LUT — Dirt09 (9) and Lava01 (230) are the shipped `Blocking =

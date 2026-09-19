@@ -261,6 +261,8 @@ namespace rm::app {
     LoadedMap loaded;
     loaded.hasWater = map->hasWater;
     loaded.waterLevel = map->waterElevation;
+    loaded.deepLevel = map->deepElevation;
+    loaded.abyssLevel = map->abyssElevation;
 
     // The map states its own horizon and sea, so use them rather than the
     // shader's stock values — that is the difference between every map looking

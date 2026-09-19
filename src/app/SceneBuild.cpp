@@ -1758,10 +1758,13 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                                      bool hasWater, float waterLevelElmos,
                                      const rm::vfs::AssetSearch& search,
                                      const rm::vfs::Vfs& content,
-                                     std::span<const std::uint8_t> terrainTypes) {
+                                     std::span<const std::uint8_t> terrainTypes,
+                                     float deepLevelElmos, float abyssLevelElmos) {
     UnitScene scene;
     scene.hasWater = hasWater;
     scene.waterLevelElmos = waterLevelElmos;
+    scene.deepLevelElmos = deepLevelElmos;
+    scene.abyssLevelElmos = abyssLevelElmos;
     scene.terrainTypeGrid =
         rm::sim::TerrainTypeGrid{terrainTypes, field.squaresX, field.squaresZ};
     scene.lookAhead = std::make_shared<const rm::MaxHeightPyramid>(field);

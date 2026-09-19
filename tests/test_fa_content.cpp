@@ -165,3 +165,59 @@ TEST_CASE("C-273/C-274: a map's army markers become one spawn each, on the terra
               == Approx(field.heightAtWorld((*starts)[i].x, (*starts)[i].z)));
     }
 }
+
+// --- C-019: the STIMap query surface -----------------------------------------
+//
+// Retail's `STIMap` answers height, water, deep, abyss and playable-rect
+// queries. Height and water are already pinned (test_height_field.cpp,
+// test_real_scmap.cpp); these pin the remaining three reads.
+
+TEST_CASE("C-019: deep and abyss queries clamp the terrain to their levels",
+          "[fa-content]") {
+    // A field sloping from 0 to 100 elmos across 128 squares: the left edge
+    // sits under both levels, the right edge above them.
+    rm::HeightField field;
+    field.squaresX = 128;
+    field.squaresZ = 128;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    for (std::int32_t z = 0; z <= field.squaresZ; ++z) {
+        for (std::int32_t x = 0; x <= field.squaresX; ++x) {
+            field.raw[static_cast<std::size_t>(z * (field.squaresX + 1) + x)] =
+                static_cast<std::uint16_t>(x * 100 / 128);
+        }
+    }
+
+    rm::sim::Terrain terrain{field, /*hasWater=*/true, /*waterLevelElmos=*/50.0f};
+    terrain.setWaterLevels(/*deepElmos=*/40.0f, /*abyssElmos=*/20.0f);
+
+    // Above the level, the query answers the level; below it, the ground.
+    const rm::sim::Fx high = rm::sim::fxFromFloat(1000.0f);  // ~78 elmos up
+    const rm::sim::Fx low = rm::sim::fxFromFloat(10.0f);     // ~0.8 elmos up
+    CHECK(terrain.deepHeightAt(high, high) == rm::sim::fxFromFloat(40.0f));
+    CHECK(terrain.abyssHeightAt(high, high) == rm::sim::fxFromFloat(20.0f));
+    CHECK(terrain.deepHeightAt(low, low) == terrain.heightAt(low, low));
+    CHECK(terrain.abyssHeightAt(low, low) == terrain.heightAt(low, low));
+
+    // Undeclared levels fall back to the water level — retail's own default.
+    rm::sim::Terrain plain{field, /*hasWater=*/true, /*waterLevelElmos=*/50.0f};
+    CHECK(plain.deepHeightAt(high, high) == rm::sim::fxFromFloat(50.0f));
+    CHECK(plain.abyssHeightAt(high, high) == rm::sim::fxFromFloat(50.0f));
+}
+
+TEST_CASE("C-019: IsPlayable answers inside the declared rect, true without one",
+          "[fa-content]") {
+    const rm::HeightField field = slopedField();
+    rm::sim::Terrain terrain{field};
+
+    // No declared rect: the whole map is playable.
+    CHECK(terrain.isPlayable(rm::sim::fxFromFloat(0.0f), rm::sim::fxFromFloat(0.0f)));
+    CHECK(terrain.isPlayable(rm::sim::fxFromFloat(-500.0f), rm::sim::fxFromFloat(9999.0f)));
+
+    terrain.setPlayableRect(rm::sim::fxFromFloat(100.0f), rm::sim::fxFromFloat(100.0f),
+                            rm::sim::fxFromFloat(500.0f), rm::sim::fxFromFloat(500.0f));
+    CHECK(terrain.isPlayable(rm::sim::fxFromFloat(300.0f), rm::sim::fxFromFloat(300.0f)));
+    CHECK(terrain.isPlayable(rm::sim::fxFromFloat(100.0f), rm::sim::fxFromFloat(500.0f)));
+    CHECK_FALSE(terrain.isPlayable(rm::sim::fxFromFloat(50.0f), rm::sim::fxFromFloat(300.0f)));
+    CHECK_FALSE(terrain.isPlayable(rm::sim::fxFromFloat(300.0f), rm::sim::fxFromFloat(600.0f)));
+}

@@ -167,7 +167,10 @@ void readToTerrainType(Cursor& cursor, rm::scmap::Map& map) {
     // --- water block -------------------------------------------------------
     map.hasWater = cursor.u8() != 0;
     map.waterElevation = cursor.f32() * rm::scmap::kElmosPerOgrid;
-    cursor.skipFloats(2);  // elevation deep, elevation abyss
+    // `C-019`: the deep/abyss clamps `GetDeepElevation`/`GetAbyssElevation`
+    // answer with — same ogrid-to-elmo scale as the water level.
+    map.deepElevation = cursor.f32() * rm::scmap::kElmosPerOgrid;
+    map.abyssElevation = cursor.f32() * rm::scmap::kElmosPerOgrid;
     // The uniforms effects/water2.fx reads, in the order the file stores them.
     map.water.surfaceColour = vec3();
     map.water.colourLerp[0] = cursor.f32();

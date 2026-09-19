@@ -222,6 +222,11 @@ struct Map {
     // dry map under a blue sheet.
     bool hasWater = false;
     float waterElevation = 0.0f;  ///< elmos
+    /// `C-019`: the deep and abyss water levels — the clamps
+    /// `STIMap::GetDeepElevation`/`GetAbyssElevation` answer with. Elmos like
+    /// `waterElevation`.
+    float deepElevation = 0.0f;
+    float abyssElevation = 0.0f;
 
     // --- props -------------------------------------------------------------
     //

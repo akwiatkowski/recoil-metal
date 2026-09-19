@@ -383,6 +383,14 @@ struct UnitScene {
     bool hasWater = false;
     float waterLevelElmos = 0.0f;
 
+    /// `C-019`: the map's deep/abyss water levels and declared playable rect,
+    /// applied to every `Terrain` view the scene hands out. Zero means "not
+    /// declared" — the queries fall back to the water level / whole map.
+    float deepLevelElmos = 0.0f;
+    float abyssLevelElmos = 0.0f;
+    bool hasPlayableRect = false;
+    float playableX0 = 0.0f, playableZ0 = 0.0f, playableX1 = 0.0f, playableZ1 = 0.0f;
+
     /// The map's per-square terrain-type grid (C-288), `.scmap` only — plus
     /// the runtime writes C-289 adds: `SetTerrainTypeRect` and the tarmac
     /// stamps structures lay under their footprints. `PassabilitySet` builds
@@ -406,8 +414,18 @@ struct UnitScene {
     rm::sim::PlacementMode placementMode = rm::sim::PlacementMode::Grid;
 
     [[nodiscard]] rm::sim::Terrain terrain(const rm::HeightField& field) const noexcept {
-        return rm::sim::Terrain{field, hasWater, waterLevelElmos, lookAhead.get(), resourceDeposits,
-                                placementMode};
+        rm::sim::Terrain terrain{field, hasWater, waterLevelElmos, lookAhead.get(),
+                                 resourceDeposits, placementMode};
+        if (deepLevelElmos != 0.0f || abyssLevelElmos != 0.0f) {
+            terrain.setWaterLevels(deepLevelElmos, abyssLevelElmos);
+        }
+        if (hasPlayableRect) {
+            terrain.setPlayableRect(rm::sim::fxFromFloat(playableX0),
+                                    rm::sim::fxFromFloat(playableZ0),
+                                    rm::sim::fxFromFloat(playableX1),
+                                    rm::sim::fxFromFloat(playableZ1));
+        }
+        return terrain;
     }
 
     /// How much to scale each type's mesh by, from its blueprint's `meshToElmos`.

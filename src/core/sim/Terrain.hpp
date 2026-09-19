@@ -134,6 +134,20 @@ public:
     [[nodiscard]] bool hasWater() const noexcept { return hasWater_; }
     [[nodiscard]] Fx waterLevel() const noexcept { return waterLevel_; }
 
+    /// `C-019`'s `STIMap::GetDeepElevation`/`GetAbyssElevation`: the terrain
+    /// height clamped to the deep and abyss water levels. A position above
+    /// the level answers the level; below it, the ground. Both default to the
+    /// water level when the map declares none — retail's own fallback.
+    [[nodiscard]] Fx deepHeightAt(Fx x, Fx z) const noexcept;
+    [[nodiscard]] Fx abyssHeightAt(Fx x, Fx z) const noexcept;
+
+    /// `C-019`'s `IsPlayable`/`GetPlayableMapRect`: whether a world position
+    /// sits inside the map's declared playable area. A map with no declared
+    /// rect is playable everywhere.
+    [[nodiscard]] bool isPlayable(Fx x, Fx z) const noexcept;
+    void setPlayableRect(Fx x0, Fx z0, Fx x1, Fx z1) noexcept;
+    void setWaterLevels(float deepElmos, float abyssElmos) noexcept;
+
     /// How many fractional bits the vertical scale is kept to. **Thirty, not fourteen.**
     ///
     /// This is the one number in the file that needed measuring rather than assuming. A real
@@ -162,6 +176,15 @@ private:
     bool hasWater_ = false;
     Fx waterLevel_{};
 
+    /// `C-019`: the deep/abyss water levels and the playable rect. Both
+    /// default to "not declared" — deep/abyss fall back to the water level,
+    /// and an unset rect means the whole map is playable.
+    Fx deepLevel_{};
+    Fx abyssLevel_{};
+    bool hasDeepLevel_ = false;
+    bool hasAbyssLevel_ = false;
+    Fx playableX0_{}, playableZ0_{}, playableX1_{}, playableZ1_{};
+    bool hasPlayableRect_ = false;
     /// `heightScale * 2^kScaleBits`, in the widening type — not an `Fx`. See `kScaleBits`.
     FxWide heightScale_;
 };
