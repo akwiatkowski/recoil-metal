@@ -390,3 +390,69 @@ TEST_CASE("C-301/C-372: the collision manipulator fires contact events on transi
     REQUIRE(restored.manipulators()[walker.index].size() == 1);
     CHECK_FALSE(restored.manipulators()[walker.index][0].inTerrainContact);
 }
+
+TEST_CASE("C-374: an emitter's emission carries the per-army visibility mask",
+          "[fa-present][effects]") {
+    // Retail builds a per-army visibility mask at emitter creation
+    // (`0x664ff0` → `0x665130`, tested against `1 << localArmyIndex`) and
+    // suppresses emission for armies that cannot see the point. The wire the
+    // scene drains is the `EffectEmitted` event's `viewerMask`: the firing
+    // army sees its own muzzle, the blind target's army does not.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef gunDef;
+    gunDef.name = "test_gunner";
+    gunDef.visionRadiusElmos = 200.0f;  // the shooter sees its own muzzle
+    rm::unitdef::Weapon gun;
+    gun.label = "test gun";
+    gun.role = rm::unitdef::WeaponRole::DirectFire;
+    gun.targetPriorities = {{"LAND"}};
+    gun.turreted = true;
+    gun.damage = rm::test::mag(10.0f);
+    gun.maxRange = rm::test::fx(400.0f);
+    gun.rateOfFire = 1.0f;
+    gun.muzzleVelocityElmosPerSecond = 200.0f;
+    gunDef.weapons.push_back(gun);
+    rm::unitdef::UnitDef targetDef;
+    targetDef.name = "test_target";
+    targetDef.categories = {"LAND"};  // no vision radius: army 1 is blind
+
+    (void)roster.add(roster.addType(gunDef), 0.0f, 0.0f, 0, 500.0f);
+    (void)roster.add(roster.addType(targetDef), 200.0f, 0.0f, 1, 500.0f);
+
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<rm::sim::Projectile> projectiles;
+    std::vector<rm::sim::SimEmitter> effects;
+    rm::sim::EventQueue events;
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(1024), rm::sim::Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    const std::vector<int> commandersEver(2, 0);
+    rm::sim::Match match{.armies = armies,
+                         .economies = economies,
+                         .projectiles = &projectiles,
+                         .events = &events,
+                         .commandersEver = commandersEver,
+                         .intel = &intel,
+                         .effects = &effects};
+
+    events.beginFrame(0);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                roster.rate, 0);
+    REQUIRE(effects.size() == 1);
+    // Bit 0 set (the shooter sees its own gun), bit 1 clear (the blind army
+    // sees nothing) — the mask is the sim's answer, carried on the event.
+    CHECK(effects[0].viewerMask == std::uint64_t{1});
+    bool reported = false;
+    for (const rm::sim::Event& event : events.all()) {
+        if (event.kind != rm::sim::EventKind::EffectEmitted) {
+            continue;
+        }
+        reported = true;
+        CHECK(event.viewerMask == std::uint64_t{1});
+        CHECK(event.bone == rm::sim::kMuzzleBone);
+    }
+    CHECK(reported);
+}
