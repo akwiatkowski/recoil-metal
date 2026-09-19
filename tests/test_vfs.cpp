@@ -251,3 +251,87 @@ TEST_CASE("a missing file and a bad archive are answers, not failures") {
     CHECK_FALSE(vfs.read("/anything").has_value());
     CHECK(vfs.list("/", "").empty());
 }
+
+TEST_CASE("active mods order by before/after uid constraints, uid-alphabetical else",
+          "[vfs][mods]") {
+    // `C-313` — mods.lua's `ModComp`: `before`/`after` uid lists order the
+    // active set; `after` falls back to `requires`; otherwise uid-alphabetical.
+    using rm::vfs::ActiveMod;
+
+    SECTION("no constraints is uid order") {
+        const auto ordered = rm::vfs::orderActiveMods({
+            ActiveMod{.uid = "uid-b", .name = "B", .location = "/tmp/b"},
+            ActiveMod{.uid = "uid-a", .name = "A", .location = "/tmp/a"},
+        });
+        REQUIRE(ordered.size() == 2);
+        CHECK(ordered[0].uid == "uid-a");
+        CHECK(ordered[1].uid == "uid-b");
+    }
+
+    SECTION("before/after beat the alphabetical order") {
+        const auto ordered = rm::vfs::orderActiveMods({
+            ActiveMod{.uid = "uid-a", .name = "A", .location = "/tmp/a",
+                      .after = {"uid-z"}},
+            ActiveMod{.uid = "uid-z", .name = "Z", .location = "/tmp/z"},
+        });
+        REQUIRE(ordered.size() == 2);
+        CHECK(ordered[0].uid == "uid-z");
+        CHECK(ordered[1].uid == "uid-a");
+    }
+
+    SECTION("an empty after falls back to requires") {
+        const auto ordered = rm::vfs::orderActiveMods({
+            ActiveMod{.uid = "uid-a", .name = "A", .location = "/tmp/a",
+                      .requiredUids = {"uid-z"}},
+            ActiveMod{.uid = "uid-z", .name = "Z", .location = "/tmp/z"},
+        });
+        REQUIRE(ordered.size() == 2);
+        CHECK(ordered[0].uid == "uid-z");
+        CHECK(ordered[1].uid == "uid-a");
+    }
+
+    SECTION("constraints on absent mods are ignored, not fatal") {
+        const auto ordered = rm::vfs::orderActiveMods({
+            ActiveMod{.uid = "uid-b", .name = "B", .location = "/tmp/b",
+                      .after = {"uid-not-installed"}},
+            ActiveMod{.uid = "uid-a", .name = "A", .location = "/tmp/a"},
+        });
+        REQUIRE(ordered.size() == 2);
+        CHECK(ordered[0].uid == "uid-a");
+        CHECK(ordered[1].uid == "uid-b");
+    }
+}
+
+TEST_CASE("a mod mounts under /mods/<name> and hooks join the concat",
+          "[vfs][mods]") {
+    // `C-268`/`C-312`/`C-311`: mods mount under `/mods/<name>` — never at `/`,
+    // so they cannot shadow base files — and each mod's hookdir registers for
+    // the import concat, which walks hookdirs in registration order.
+    const Scratch guard;
+    writeFile(scratch() / "stock/lua/base.lua", "base");
+    writeFile(scratch() / "stock/schook/lua/base.lua", "schook");
+    writeFile(scratch() / "mods/First/hook/lua/base.lua", "first-hook");
+    writeFile(scratch() / "mods/First/units/X_unit.bp", "first-bp");
+    writeFile(scratch() / "mods/Second/hook/lua/base.lua", "second-hook");
+
+    rm::vfs::Vfs vfs;
+    vfs.mountDirectory(scratch() / "stock");
+    vfs.addHookDirectory("/schook");
+
+    REQUIRE(vfs.mountMod(rm::vfs::ActiveMod{.uid = "uid-1", .name = "First",
+                                          .location = (scratch() / "mods/First").string()}));
+    REQUIRE(vfs.mountMod(rm::vfs::ActiveMod{.uid = "uid-2", .name = "Second",
+                                          .location = (scratch() / "mods/Second").string()}));
+
+    // The mod's files answer at `/mods/<name>/...` — and ONLY there.
+    CHECK(vfs.contains("/mods/first/units/x_unit.bp"));
+    CHECK_FALSE(vfs.contains("/units/x_unit.bp"));
+
+    // The concat: original → schook → mods in mount order (`C-311`).
+    const auto hooks = vfs.hooksFor("/lua/base.lua");
+    REQUIRE(hooks.size() == 3);
+    CHECK(hooks[0] == "/schook/lua/base.lua");
+    CHECK(hooks[1] == "/mods/First/hook/lua/base.lua");
+    CHECK(hooks[2] == "/mods/Second/hook/lua/base.lua");
+    CHECK(vfs.hooksFor("/lua/other.lua").empty());
+}

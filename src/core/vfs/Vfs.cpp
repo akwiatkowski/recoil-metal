@@ -83,6 +83,12 @@ struct Vfs::Impl {
     // one, which IS the priority rule — insert-or-assign, not insert.
     std::map<std::string, Entry> entries;
 
+    /// Registered hook directories, in registration order (`C-312`): the
+    /// `SCR_AddHookDirectory` vector. `/schook` from the stock mount spec
+    /// first, then each active mod's hookdir in `__active_mods` order — which
+    /// is exactly the concat order `C-311` states.
+    std::vector<std::string> hookDirs;
+
     ~Impl() {
         for (Archive& a : archives) {
             if (a.zip) {
@@ -103,8 +109,17 @@ Vfs::Vfs(Vfs&&) noexcept = default;
 Vfs& Vfs::operator=(Vfs&&) noexcept = default;
 
 void Vfs::mountDirectory(std::filesystem::path directory) {
+    mountDirectoryAt("/", std::move(directory));
+}
+
+void Vfs::mountDirectoryAt(std::string_view vfsPrefix, std::filesystem::path directory) {
     std::error_code ec;
     if (!std::filesystem::is_directory(directory, ec)) {
+        return;
+    }
+
+    const std::string prefix = normalisedVfsPath(vfsPrefix);
+    if (prefix.empty()) {
         return;
     }
 
@@ -123,15 +138,28 @@ void Vfs::mountDirectory(std::filesystem::path directory) {
         if (key.empty() || key == "/") {
             continue;
         }
+        const std::string mounted = prefix == "/" ? key : prefix + key;
+        const std::string shown =
+            vfsPrefix == "/" ? "/" + relative.generic_string()
+                             : std::string{vfsPrefix} + "/" + relative.generic_string();
         impl_->entries.insert_or_assign(
-            key, Impl::Entry{.archive = -1,
-                             .indexInArchive = 0,
-                             .realPath = item.path(),
-                             .vfsName = "/" + relative.generic_string()});
+            mounted, Impl::Entry{.archive = -1,
+                                 .indexInArchive = 0,
+                                 .realPath = item.path(),
+                                 .vfsName = shown});
     }
 }
 
 bool Vfs::mountArchive(const std::filesystem::path& archive) {
+    return mountArchiveAt("/", archive);
+}
+
+bool Vfs::mountArchiveAt(std::string_view vfsPrefix, const std::filesystem::path& archive) {
+    const std::string prefix = normalisedVfsPath(vfsPrefix);
+    if (prefix.empty()) {
+        return false;
+    }
+
     auto zip = std::make_unique<mz_zip_archive>();
     *zip = mz_zip_archive{};
     if (mz_zip_reader_init_file(zip.get(), archive.string().c_str(), 0) == MZ_FALSE) {
@@ -153,16 +181,21 @@ bool Vfs::mountArchive(const std::filesystem::path& archive) {
         if (key.empty() || key == "/") {
             continue;  // a name that climbs out of the root resolves to nothing
         }
-        impl_->entries.insert_or_assign(key,
+        const std::string mounted = prefix == "/" ? key : prefix + key;
+        const std::string shown = vfsPrefix == "/"
+                                      ? "/" + std::string{stat.m_filename}
+                                      : std::string{vfsPrefix} + "/" + std::string{stat.m_filename};
+        impl_->entries.insert_or_assign(mounted,
                                         Impl::Entry{.archive = archiveIndex,
                                                     .indexInArchive = i,
                                                     .realPath = {},
-                                                    .vfsName = "/" + std::string{stat.m_filename}});
+                                                    .vfsName = shown});
     }
 
     impl_->archives.push_back(Impl::Archive{.path = archive, .zip = std::move(zip)});
     return true;
 }
+
 
 std::optional<std::vector<std::byte>> Vfs::read(std::string_view gamePath) const {
     const std::string key = normalisedVfsPath(gamePath);
@@ -242,5 +275,160 @@ std::vector<std::string> Vfs::list(std::string_view directoryPrefix,
 }
 
 std::size_t Vfs::fileCount() const noexcept { return impl_->entries.size(); }
+
+void Vfs::addHookDirectory(std::string_view vfsPrefix) {
+    const std::string prefix = normalisedVfsPath(vfsPrefix);
+    if (prefix.empty() || prefix == "/") {
+        return;  // a hookdir of "/" would hook every file in the game
+    }
+    impl_->hookDirs.push_back(prefix);
+}
+
+std::vector<std::string> Vfs::hooksFor(std::string_view gamePath) const {
+    const std::string key = normalisedVfsPath(gamePath);
+    std::vector<std::string> found;
+    if (key.empty() || key == "/") {
+        return found;
+    }
+    for (const std::string& dir : impl_->hookDirs) {
+        const auto it = impl_->entries.find(dir + key);
+        if (it != impl_->entries.end()) {
+            found.push_back(it->second.vfsName);
+        }
+    }
+    return found;
+}
+
+std::span<const std::string> Vfs::hookDirectories() const noexcept {
+    return impl_->hookDirs;
+}
+
+bool Vfs::mountMod(const ActiveMod& mod) {
+    const std::string mountPoint = modMountPoint(mod);
+    std::error_code ec;
+    bool mounted = false;
+    if (std::filesystem::is_directory(mod.location, ec)) {
+        mountDirectoryAt(mountPoint, mod.location);
+        mounted = true;
+    } else if (std::filesystem::is_regular_file(mod.location, ec)) {
+        mounted = mountArchiveAt(mountPoint, mod.location);
+    }
+    if (mounted) {
+        // `C-312`: the mount spec's `hook` list drives SCR_AddHookDirectory —
+        // for a mod that is its hookdir under the mount point.
+        addHookDirectory(modHookDirectory(mod));
+    }
+    return mounted;
+}
+
+std::string modMountPoint(const ActiveMod& mod) {
+    // `/mods/<name>` — the location's last component, which is how the shipped
+    // mods name themselves (`/mods/Chess`). A location that cannot name one
+    // falls back to the uid rather than mounting at a bare `/mods`.
+    std::string name = mod.location.filename().string();
+    if (name.empty()) {
+        name = mod.location.parent_path().filename().string();
+    }
+    if (name.empty()) {
+        name = mod.uid.empty() ? "mod" : mod.uid;
+    }
+    return "/mods/" + name;
+}
+
+std::string modHookDirectory(const ActiveMod& mod) {
+    std::string hookdir = mod.hookdir.empty() ? "/hook" : mod.hookdir;
+    while (!hookdir.empty() && hookdir.front() == '/') {
+        hookdir.erase(hookdir.begin());
+    }
+    return modMountPoint(mod) + "/" + hookdir;
+}
+
+std::vector<ActiveMod> orderActiveMods(std::vector<ActiveMod> mods) {
+    // `C-313` / mods.lua `ModComp`: `before`/`after` uid constraints, else
+    // uid-alphabetical. ModComp is a comparator over a sortedpairs walk, which
+    // is a topological sort with uid tie-breaking stated as a comparator —
+    // Kahn's algorithm is the same order said directly, and stays
+    // deterministic where a contradictory set would leave std::sort's result
+    // arbitrary (mods.lua warns exactly that).
+    const std::size_t n = mods.size();
+
+    // Index mods by uid; constraints naming a uid outside the active set are
+    // ignored, as ModComp's comparisons against absent entries never fire.
+    std::map<std::string, std::size_t> byUid;
+    for (std::size_t i = 0; i < n; ++i) {
+        byUid.try_emplace(mods[i].uid, i);
+    }
+
+    // Edge i→j means "i sorts before j". `before` lists uids this mod precedes;
+    // `after` lists uids it follows — and an empty `after` falls back to
+    // `requires`, the documented default.
+    std::vector<std::vector<std::size_t>> edges(n);
+    std::vector<std::size_t> indegree(n, 0);
+    const auto link = [&](std::size_t from, std::size_t to) {
+        edges[from].push_back(to);
+        ++indegree[to];
+    };
+    for (std::size_t i = 0; i < n; ++i) {
+        for (const std::string& uid : mods[i].before) {
+            if (const auto it = byUid.find(uid); it != byUid.end()) {
+                link(i, it->second);
+            }
+        }
+        const std::vector<std::string>& after =
+            mods[i].after.empty() ? mods[i].requiredUids : mods[i].after;
+        for (const std::string& uid : after) {
+            if (const auto it = byUid.find(uid); it != byUid.end()) {
+                link(it->second, i);
+            }
+        }
+    }
+
+    // Ready set ordered by uid — the "else uid-alphabetical" half, applied at
+    // every choice point rather than only at the start.
+    std::vector<std::size_t> ready;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (indegree[i] == 0) {
+            ready.push_back(i);
+        }
+    }
+    const auto uidLess = [&](std::size_t a, std::size_t b) {
+        return mods[a].uid > mods[b].uid;  // min-first
+    };
+    std::ranges::make_heap(ready, uidLess);
+
+    std::vector<ActiveMod> ordered;
+    ordered.reserve(n);
+    while (!ready.empty()) {
+        std::ranges::pop_heap(ready, uidLess);
+        const std::size_t next = ready.back();
+        ready.pop_back();
+        for (const std::size_t to : edges[next]) {
+            if (--indegree[to] == 0) {
+                ready.push_back(to);
+                std::ranges::push_heap(ready, uidLess);
+            }
+        }
+        ordered.push_back(std::move(mods[next]));
+    }
+
+    // A cycle left nodes unordered — the "inconsistent ordering" mods.lua
+    // warns about. Append them uid-sorted rather than dropping them: a mod
+    // that asked for the impossible still runs, in a deterministic place.
+    if (ordered.size() < n) {
+        std::vector<std::size_t> rest;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (indegree[i] > 0) {
+                rest.push_back(i);
+            }
+        }
+        std::ranges::sort(rest, [&](std::size_t a, std::size_t b) {
+            return mods[a].uid < mods[b].uid;
+        });
+        for (const std::size_t i : rest) {
+            ordered.push_back(std::move(mods[i]));
+        }
+    }
+    return ordered;
+}
 
 } // namespace rm::vfs
