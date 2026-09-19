@@ -5,6 +5,7 @@
 #include "core/sim/Veterancy.hpp"
 
 #include <vector>
+#include <optional>
 
 namespace rm::sim {
 
@@ -88,6 +89,17 @@ struct Health {
     /// reload clocks and the instigator, neither of which is health either. A separate
     /// array would mean another span to keep index-locked for no gain.
     Veterancy veterancy;
+
+    /// The killing blow's excess — retail's `excessDamageRatio` numerator
+    /// (`Unit.lua:803-808`: `excess = preAdjHealth − amount`, negated), set only
+    /// by the damage path that computes it. `nullopt` is meaningful: retail's
+    /// `Kill()` callers that pass no ratio — self-destruct, `Destroy()` —
+    /// produce a ZERO-VALUE wreck (`overkillRatio or 1` multiplies the value
+    /// away), a shipped quirk `C-146` says to reproduce rather than fix.
+    /// Deliberately unsaved: it exists only between the killing blow and the
+    /// same tick's `retireDead`, and a save lands between ticks.
+    std::optional<Mag> overkillExcess;
+
 
     [[nodiscard]] bool alive() const noexcept { return current > Mag{}; }
 };

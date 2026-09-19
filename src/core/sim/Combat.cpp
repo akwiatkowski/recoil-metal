@@ -2956,6 +2956,14 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         const Mag applied = std::min(healths[slot].current, wanted);
         healths[slot].current -= applied;
         dealt += applied;
+        if (healths[slot].current <= Mag{}) {
+            // `C-146`/`Unit.lua:803-808`: the killing blow's excess is the
+            // wreck's overkill ratio numerator — `wanted` is the pre-clipping
+            // amount, `applied` what health could absorb, so their difference
+            // is exactly retail's `-excess`. Non-damage kills never set this,
+            // which is what makes their wrecks zero-value like retail's.
+            healths[slot].overkillExcess = wanted - applied;
+        }
 
         // WHO DID IT, recorded on the unit rather than carried in the event alone — because the
         // event that needs it most is the DEATH, and a death is noticed a pass later by

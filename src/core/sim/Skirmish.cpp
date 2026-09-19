@@ -109,27 +109,52 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
         // above unchanged while matching that gameplay ordering.
         if (features != nullptr) {
             const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
-            (void)features->add(Feature{
-                .at = positionOf(transforms[slot]),
-                .radiusElmos = motion[slot].radiusElmos,
-                .fromType = store.typeAt(slot),
-                .armyIndex = motion[slot].armyIndex,
-                .health = def != nullptr ? def->wreckHealth : Mag{},
-                .maximumHealth = def != nullptr ? def->health : Mag{},
-                .maximumMassReclaim = def != nullptr ? def->wreckMass : Mag{},
-                .maximumEnergyReclaim = def != nullptr ? def->wreckEnergy : Mag{},
-                .massRemaining = def != nullptr ? def->wreckMass : Mag{},
-                .energyRemaining = def != nullptr ? def->wreckEnergy : Mag{},
-                .reclaimWorkRemaining = def != nullptr
-                    ? std::max(def->wreckMass, def->wreckEnergy) : Mag{},
-                .reclaimWorkTotal = def != nullptr
-                    ? std::max(def->wreckMass, def->wreckEnergy) : Mag{},
-                .reclaimFraction = kFxOne,
-                .damageRatio = kFxOne,
-                .maximumReclaimPerBuildRate =
-                    def != nullptr ? def->reclaimPerBuildRate : Fx{},
-                .reclaimPerBuildRate = def != nullptr ? def->reclaimPerBuildRate : Fx{},
-            });
+            // `C-146`/`Unit.lua:1076-1118`: the wreck's overkill decides whether
+            // it exists at all and what it is worth. `overkillRatio > 1.0`
+            // vaporises it — no feature. Below that, mass and energy scale by
+            // `(value − value×overkillRatio) × GetFractionComplete`; our units
+            // only exist complete (an unfinished build is a Construction row,
+            // not a damageable entity), so the fraction is always one here and
+            // the formula reduces to the overkill term. A death with no ratio
+            // — self-destruct, `Destroy()` — is retail's `overkillRatio or 1`
+            // quirk: a wreck worth nothing, reproduced deliberately.
+            const bool ratioKnown = healths[slot].overkillExcess.has_value();
+            const Mag hull = def != nullptr ? def->health : Mag{};
+            // `overkillRatio or 1`: a death with no ratio scales by `1 − 1` —
+            // the zero-value wreck the claim says to keep.
+            const Fx overkill = !ratioKnown ? kFxOne
+                : hull > Mag{}
+                    ? healths[slot].overkillExcess->toFx() / hull.toFx() : Fx{};
+            if (!ratioKnown || overkill <= kFxOne) {
+                const Mag wreckMass =
+                    def != nullptr ? def->wreckMass * (kFxOne - overkill) : Mag{};
+                const Mag wreckEnergy =
+                    def != nullptr ? def->wreckEnergy * (kFxOne - overkill) : Mag{};
+                (void)features->add(Feature{
+                    .at = positionOf(transforms[slot]),
+                    .radiusElmos = motion[slot].radiusElmos,
+                    .fromType = store.typeAt(slot),
+                    .armyIndex = motion[slot].armyIndex,
+                    .health = def != nullptr ? def->wreckHealth : Mag{},
+                    .maximumHealth = def != nullptr ? def->health : Mag{},
+                    // `SetMaxReclaimValues` takes the UNSCALED baseline — the
+                    // maxima stay the blueprint's however little the wreck is
+                    // worth, which is also what lets wreckage.lua's first
+                    // scratch re-derive value from them.
+                    .maximumMassReclaim = def != nullptr ? def->wreckMass : Mag{},
+                    .maximumEnergyReclaim = def != nullptr ? def->wreckEnergy : Mag{},
+                    .massRemaining = wreckMass,
+                    .energyRemaining = wreckEnergy,
+                    .reclaimWorkRemaining = std::max(wreckMass, wreckEnergy),
+                    .reclaimWorkTotal = std::max(wreckMass, wreckEnergy),
+                    .reclaimFraction = kFxOne,
+                    .damageRatio = kFxOne,
+                    .maximumReclaimPerBuildRate =
+                        def != nullptr ? def->reclaimPerBuildRate : Fx{},
+                    .reclaimPerBuildRate =
+                        def != nullptr ? def->reclaimPerBuildRate : Fx{},
+                });
+            }
         }
 
         // The scale that used to be zeroed here belonged to `UnitInstance`, which the store no

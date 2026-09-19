@@ -224,6 +224,59 @@ TEST_CASE("an engineer empties a wreck into its army's store, and the wreck disa
     CHECK(f.roster.store.orders()[engineer.index].empty());
 }
 
+TEST_CASE("C-146: overkill scales the wreck's value, and enough of it vaporises the wreck") {
+    // `Unit.lua:1076-1118`: `SetReclaimValues` takes
+    // `(value − value×overkillRatio) × GetFractionComplete` — our units only
+    // exist complete, so the fraction is one and the overkill term is the whole
+    // story. `overkillRatio > 1.0` vaporises the wreck outright.
+    Fixture f;
+    rm::unitdef::UnitDef tank;
+    tank.name = "test_tank";
+    tank.health = rm::sim::magFromFloat(100.0f);
+    tank.wreckMass = rm::sim::magFromFloat(90.0f);
+    tank.wreckEnergy = rm::sim::magFromFloat(45.0f);
+    tank.wreckHealth = rm::sim::magFromFloat(100.0f);
+    const rm::UnitTypeIndex tankType = f.roster.addType(tank);
+
+    SECTION("a killing blow worth half again the hull halves the wreck") {
+        (void)f.roster.add(tankType, 200.0f, 200.0f, 1, 100.0f);
+        // 150 damage against 100 health: excess 50, ratio 0.5.
+        (void)rm::sim::damageArea(rm::test::at(200.0f, 0.0f, 200.0f),
+                                  rm::test::fx(0.0f), rm::test::mag(150.0f), 0,
+                                  f.roster.store, f.armies);
+        f.tick();
+        REQUIRE(f.features.size() == 1);
+        const Feature& wreck = f.features.all()[0];
+        CHECK(rm::test::asFloat(wreck.massRemaining) == Approx(45.0f).margin(0.01));
+        CHECK(rm::test::asFloat(wreck.energyRemaining) == Approx(22.5f).margin(0.01));
+        // `SetMaxReclaimValues` takes the UNSCALED baseline.
+        CHECK(rm::test::asFloat(wreck.maximumMassReclaim) == Approx(90.0f).margin(0.01));
+    }
+
+    SECTION("a killing blow worth more than double the hull leaves no wreck") {
+        (void)f.roster.add(tankType, 200.0f, 200.0f, 1, 100.0f);
+        // 250 damage against 100 health: excess 150, ratio 1.5 > 1.0 — vaporised.
+        (void)rm::sim::damageArea(rm::test::at(200.0f, 0.0f, 200.0f),
+                                  rm::test::fx(0.0f), rm::test::mag(250.0f), 0,
+                                  f.roster.store, f.armies);
+        f.tick();
+        CHECK(f.features.size() == 0);
+    }
+
+    SECTION("a death with no damage ratio leaves a zero-value wreck") {
+        // Retail's `overkillRatio or 1` quirk: `Kill()` callers that pass no
+        // ratio — self-destruct, `Destroy()` — produce a wreck worth nothing.
+        const UnitId victim = f.roster.add(tankType, 200.0f, 200.0f, 1, 100.0f);
+        f.roster.store.health()[victim.index].current = rm::sim::Mag{};
+        f.tick();
+        REQUIRE(f.features.size() == 1);
+        const Feature& wreck = f.features.all()[0];
+        CHECK(wreck.massRemaining == rm::sim::Mag{});
+        CHECK(wreck.energyRemaining == rm::sim::Mag{});
+        CHECK(rm::test::asFloat(wreck.maximumMassReclaim) == Approx(90.0f).margin(0.01));
+    }
+}
+
 TEST_CASE("a mid-reclaim save resumes the same harvest", "[save-state][reclaim]") {
     // The continued-hash proof for the wreck pool: save four ticks into a 90-mass
     // reclaim, restore units, features and economies through the envelope, and both
@@ -477,8 +530,13 @@ TEST_CASE("a death leaves a wreck worth the definition's word, and reclaim empti
     costly.reclaimPerBuildRate = rm::sim::fxFromFloat(10.0f);
     const rm::UnitTypeIndex costlyType = f.roster.addType(costly);
 
-    const UnitId doomed = f.roster.add(costlyType, 210.0f, 200.0f, 1, 100.0f);
-    f.roster.health(doomed).current = rm::sim::Mag{};
+    (void)f.roster.add(costlyType, 210.0f, 200.0f, 1, 100.0f);
+
+    // Killed by damage, not by a bare health write: `C-146` makes a no-ratio
+    // death (self-destruct, `Destroy()`) a zero-value wreck, so the honest way
+    // to say "a death" is the damage path that sets the ratio.
+    (void)rm::sim::damageArea(rm::test::at(210.0f, 0.0f, 200.0f), rm::test::fx(0.0f),
+                              rm::test::mag(100.0f), 0, f.roster.store, f.armies);
     f.tick(1);
 
     REQUIRE(f.features.size() == 1);
