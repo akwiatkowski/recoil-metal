@@ -19,6 +19,11 @@ struct ShieldState {
     /// charge time and resumes at the health kept from before the off switch
     /// (`shield.lua` `OffState`/`OnState` — `OffHealth` is kept, not restored).
     bool rechargeRestoresFull = true;
+    /// `C-145`: charge progress in fractional ticks — `shield.lua`'s
+    /// `ChargingUp` accrues `GetResourceConsumed()/10` per tick, so a brownout
+    /// stretches the recharge instead of the countdown running flat out.
+    /// Recharge completes when this reaches `rechargeRemaining`'s total.
+    Fx rechargeProgress{};
 
     [[nodiscard]] bool active() const noexcept {
         return maximum > Mag{} && current > Mag{} && rechargeRemaining == 0;
@@ -69,6 +74,13 @@ struct Health {
     /// Explicit Attack orders deliberately do not consult this state.
     std::vector<UnitId> automaticTargets;
 
+    /// `C-093`: the tick each weapon next scans for a target, one entry per
+    /// weapon — retail's `TargetCheckInterval` reschedule. A failed acquire
+    /// sets it to `tick + targetCheckTicks`; a successful one to `tick + 1`.
+    /// Deliberately unsaved and unhashed: it is scheduling metadata, and a
+    /// restored weapon scanning one tick early is the pre-cadence behaviour.
+    std::vector<TickIndex> targetCheckTick;
+
     /// The unit that last took health off this one, or an unset handle.
     ///
     /// THE INSTIGATOR a `UnitDestroyed` event names (§7 P6.1). Recoil passes an attacker triple
@@ -99,6 +111,23 @@ struct Health {
     /// Deliberately unsaved: it exists only between the killing blow and the
     /// same tick's `retireDead`, and a save lands between ticks.
     std::optional<Mag> overkillExcess;
+    /// `C-258`'s last-writer-wins regen state — the record of which writer
+    /// touched the unit's regen rate last, because retail's two writers
+    /// disagree and the disagreement is the shipped behaviour.
+    ///
+    /// `None` — the ordinary case: the tick heals `bp.Defense.RegenRate` plus
+    /// every active regen add (veterancy ladder, enhancement `Regen` buffs).
+    /// `Overridden` — a `SetRegenRate` enhancement (`DamageStablization`,
+    /// `SelfRepairSystem`, `SystemIntegrityCompensator`) wrote an absolute
+    /// rate; it stands until the next regen-buff event recomputes and erases
+    /// it — retail's accepted incoherence, where a promotion silently un-does
+    /// the Nano-Repair System. `Reverted` — the enhancement's `XxxRemove`
+    /// branch ran `RevertRegenRate`, which writes the BASE rate and thereby
+    /// erases the active regen buffs the other way; they stay erased until the
+    /// next buff event. Saved and hashed: the write survives a load.
+    enum class RegenWrite : std::uint8_t { None, Overridden, Reverted };
+    RegenWrite regenWrite = RegenWrite::None;
+
 
 
     [[nodiscard]] bool alive() const noexcept { return current > Mag{}; }

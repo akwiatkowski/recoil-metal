@@ -491,6 +491,37 @@ TEST_CASE("FA weapon firing arcs are converted to binary radians at load") {
     CHECK(def->weapons[0].arcRangeBrads == 5461);    // rounded 30 / 360 of one turn
 }
 
+TEST_CASE("FA weapon priority rows, height reach, and rescan cadence parse") {
+    // `C-229`/`C-093`: the remaining WP-27 weapon keys — `TargetPriorities`
+    // rows, `MaxHeightDiff` reach, `SlavedToBody`, `TargetCheckInterval`.
+    const Blueprint bp{"weapon_priorities_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
+            SizeX = 1, SizeZ = 1,
+            Weapon = {
+                {
+                    WeaponCategory = 'Direct Fire', Damage = 10, MaxRadius = 20, RateOfFire = 1,
+                    TargetPriorities = { 'TECH3 MOBILE', 'LAND' },
+                    MaxHeightDiff = 2.5,
+                    SlavedToBody = true,
+                    TargetCheckInterval = 0.5,
+                },
+            },
+        }
+    )"};
+
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    REQUIRE(def->weapons.size() == 1);
+    const auto& weapon = def->weapons[0];
+    REQUIRE(weapon.targetPriorities.size() == 2);
+    CHECK(weapon.targetPriorities[0].size() == 2);  // 'TECH3 MOBILE' is one row
+    CHECK(weapon.targetPriorities[1].size() == 1);
+    CHECK(weapon.maxHeightDifference == rm::test::fx(2.5f * 8.0f));  // ogrids → elmos;
+    CHECK(weapon.slavedToBody);
+    CHECK(weapon.targetCheckIntervalSeconds == 0.5f);
+}
+
 TEST_CASE("FA weapon TrackingRadius is dimensionless and defaults without shortening range") {
     const Blueprint bp{"tracking_radius_unit.bp", R"(
         UnitBlueprint {

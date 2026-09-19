@@ -172,6 +172,14 @@ struct Weapon {
         /// `Physics.ZigZagFrequency` (C-171): seconds between re-rolls of the
         /// weave direction — three uniforms from the sim RNG each period.
         float zigZagPeriodSeconds = 0.0f;
+        /// `Physics.DesiredShooterCap` (C-095): how many shooters may engage
+        /// this projectile at once — the anti-overkill gate on point-defence
+        /// acquisition. Nuke missiles carry 1-2; zero means uncapped.
+        int desiredShooterCap = 0;
+        /// `Physics.UseGravity` (C-172): the shot takes the ballistic
+        /// acceleration even with no arc — and, like the arc term, only while
+        /// it is not tracking (`TrackTarget` suppresses it).
+        bool useGravity = false;
     } projectileTraits;
 
     /// The VFS locator whose blueprint supplies `projectileTraits`.
@@ -417,6 +425,19 @@ struct Weapon {
         return innerRingDamage > sim::Mag{} || outerRingDamage > sim::Mag{};
     }
 
+    /// `SlavedToBody` (C-092): the weapon aims with the hull even though it is
+    /// not turreted — retail scores its candidates by aim-direction like a
+    /// turret's, least slew first. `SlavedToBodyArcRange` is the same arc the
+    /// `HeadingArcRange` pair already carries, so it folds into those fields.
+    bool slavedToBody = false;
+
+    /// `TargetCheckInterval` in authored seconds (C-093): how long a weapon
+    /// that found NOTHING waits before scanning again. Retail's reschedule is
+    /// `max(1, ceil(interval x ticksPerSecond)) + 1` ticks after a failed
+    /// acquire and one tick after a successful one — the catalog holds the
+    /// converted figure (`WeaponRates::targetCheckTicks`).
+    float targetCheckIntervalSeconds = 0.0f;
+
     /// The firing arc, in DEGREES, and its centre — retail's `HeadingArcCenter`/`Range`.
     ///
     /// `arcRangeDegrees >= 180` means unrestricted, and the engine skips the test entirely in
@@ -500,6 +521,16 @@ struct Weapon {
     /// away before anything reached it.
     bool enabledByEnhancement = false;
 
+    /// Whether this weapon automatically fires at units, ignoring the
+    /// enhancement gate. The gate is per-UNIT — an installed enhancement
+    /// enables it — so unit-context callers must pair this with
+    /// `weaponEnabledForUnit` (`core/sim/Enhancement.hpp`); def-level callers
+    /// (panels, capability probes) keep `fires()`.
+    [[nodiscard]] bool firesIgnoringEnhancement() const noexcept {
+        return role != WeaponRole::Death && !manualFire
+            && maxRange > sim::Fx{} && rateOfFire > 0.0f && damage > sim::Mag{};
+    }
+
     /// Whether this weapon automatically fires at units.
     ///
     /// The `Death` exclusion is the load-bearing one; manual and enhancement-gated
@@ -507,17 +538,21 @@ struct Weapon {
     /// range or no rate of fire is also excluded: both are things a gun must have, and
     /// a "weapon" lacking them is a table describing something else.
     [[nodiscard]] bool fires() const noexcept {
-        return automaticallyFires() && !targetsProjectiles;
+        return firesIgnoringEnhancement() && !enabledByEnhancement
+            && !targetsProjectiles;
     }
 
     /// Whether this weapon automatically fires at projectiles rather than units.
     [[nodiscard]] bool firesAtProjectiles() const noexcept {
-        return automaticallyFires() && targetsProjectiles;
+        return firesIgnoringEnhancement() && !enabledByEnhancement
+            && targetsProjectiles;
     }
 
-    [[nodiscard]] bool automaticallyFires() const noexcept {
-        return role != WeaponRole::Death && !manualFire && !enabledByEnhancement
-            && maxRange > sim::Fx{} && rateOfFire > 0.0f && damage > sim::Mag{};
+    /// `manuallyFired`/`siloLaunched` without the enhancement gate — same
+    /// per-unit caveat as `firesIgnoringEnhancement`.
+    [[nodiscard]] bool manuallyFiredIgnoringEnhancement() const noexcept {
+        return role != WeaponRole::Death && manualFire
+            && maxRange > sim::Fx{} && damage > sim::Mag{};
     }
 
     /// Whether this weapon does any damage at all, by either scheme. What a death explosion
@@ -532,8 +567,13 @@ struct Weapon {
     /// TacMissile is both flags at once and belongs to an upgrade that does not exist
     /// here), and otherwise a real gun by the same tests.
     [[nodiscard]] bool manuallyFired() const noexcept {
-        return role != WeaponRole::Death && manualFire && !enabledByEnhancement
-            && maxRange > sim::Fx{} && damage > sim::Mag{};
+        return manuallyFiredIgnoringEnhancement() && !enabledByEnhancement;
+    }
+
+    [[nodiscard]] bool siloLaunchedIgnoringEnhancement() const noexcept {
+        return role != WeaponRole::Death && manualFire
+            && maxRange > sim::Fx{} && harmful() && countedProjectile
+            && !targetsProjectiles;
     }
 
     /// Whether this weapon is a silo's round: a counted projectile an explicit order
@@ -544,9 +584,9 @@ struct Weapon {
     /// authored `Damage` is 0 — its warhead is `NukeInner/OuterRingDamage` — and a
     /// damage-only test would refuse every strategic silo in the corpus.
     [[nodiscard]] bool siloLaunched() const noexcept {
-        return role != WeaponRole::Death && manualFire && !enabledByEnhancement
-            && maxRange > sim::Fx{} && harmful() && countedProjectile && !targetsProjectiles;
+        return siloLaunchedIgnoringEnhancement() && !enabledByEnhancement;
     }
+
 
     /// Ticks between shots at a given rate, never less than one.
     ///

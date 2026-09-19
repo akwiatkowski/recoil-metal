@@ -274,7 +274,7 @@ TEST_CASE("point defence does not acquire or fire at units") {
     (void)roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
 
     std::vector<Projectile> shots;
-    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, pointDefence,
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, pointDefence,
                                        roster.store, armies, nullptr, &roster.catalog));
     CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
                                rm::sim::TickRate{}) == 0);
@@ -497,7 +497,7 @@ TEST_CASE("point defence applies TrackingRadius only to projectile acquisition")
         const rm::UnitTypeIndex type = roster.addType(targetDef());
         (void)roster.add(type, 0.0f, 150.0f, 1, 100.0f);
         Weapon ordinary = directFire(10.0f, 100.0f, 0.0f, rm::sim::Fx::fromInt(2));
-        CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, ordinary,
+        CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, ordinary,
                                             roster.store, armies));
     }
 }
@@ -791,7 +791,7 @@ TEST_CASE("a unit shoots the nearest enemy and never a friend") {
 
     const Weapon weapon = directFire(10.0f, 300.0f);
 
-    const auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies);
+    const auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies);
     REQUIRE(target.has_value());
     CHECK(*target == near);  // the near enemy, not the nearer ally
 }
@@ -809,7 +809,7 @@ TEST_CASE("automatic acquisition skips BENIGN enemies") {
         roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
 
     const Weapon weapon = directFire(10.0f, 300.0f);
-    const auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon,
+    const auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon,
                                                 roster.store, armies, nullptr,
                                                 &roster.catalog);
 
@@ -827,10 +827,10 @@ TEST_CASE("automatic acquisition skips DoNotTarget enemies") {
     const Weapon weapon = directFire(10.0f, 300.0f);
 
     REQUIRE(roster.store.setDoNotTarget(near, true));
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies) == far);
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies) == far);
 
     REQUIRE(roster.store.setDoNotTarget(near, false));
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies) == near);
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies) == near);
 }
 
 TEST_CASE("automatic acquisition skips a unit an own-side engineer is reclaiming (C-157)") {
@@ -846,7 +846,7 @@ TEST_CASE("automatic acquisition skips a unit an own-side engineer is reclaiming
     const Weapon weapon = directFire(10.0f, 300.0f);
     const auto pick = [&](std::span<const rm::sim::WorkClaim> claims,
                           std::optional<UnitId> incumbent = std::nullopt) {
-        return rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+        return rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                       nullptr, nullptr, std::nullopt, incumbent, nullptr, claims);
     };
 
@@ -875,7 +875,7 @@ TEST_CASE("automatic acquisition rejects a closer target outside the playable re
         .maxZ = rm::test::fx(100.0f),
     };
 
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, directFire(10.0f, 300.0f),
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, directFire(10.0f, 300.0f),
                                  roster.store, armies, nullptr, &roster.catalog, std::nullopt,
                                  std::nullopt, &playable)
           == inside);
@@ -890,9 +890,9 @@ TEST_CASE("automatic acquisition denies weapons with no target priorities") {
     Weapon weapon = directFire(10.0f, 300.0f);
     weapon.targetPriorities.clear();
 
-    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                         nullptr, &roster.catalog));
-    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies));
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies));
 }
 
 TEST_CASE("automatic acquisition penalizes targets outside a weapon firing arc") {
@@ -907,13 +907,13 @@ TEST_CASE("automatic acquisition penalizes targets outside a weapon firing arc")
 
     // The nearer side target scores 4 * 10^2 outside the arc; the 15-elmo forward target
     // scores 15^2 in it, so retail's class penalty makes the farther target win.
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                  nullptr, nullptr, rm::Brad{})
           == within);
 
     weapon.arcRangeDegrees = 180.0f;
     weapon.arcRangeBrads = rm::unitdef::arcRangeBradsFromDegrees(weapon.arcRangeDegrees);
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                  nullptr, nullptr, rm::Brad{})
           == outside);
 }
@@ -930,22 +930,22 @@ TEST_CASE("a firing arc centre rotates automatic acquisition around the hull hea
     weapon.arcCentreBrads = rm::unitdef::arcCentreBradsFromDegrees(weapon.arcCentreDegrees);
     weapon.arcRangeBrads = rm::unitdef::arcRangeBradsFromDegrees(weapon.arcRangeDegrees);
 
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                  nullptr, nullptr, rm::Brad{})
           == right);
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                  nullptr, nullptr, rm::Brad{})
           != forward);
 
     weapon.arcCentreDegrees = 0.0f;
     weapon.arcCentreBrads = rm::unitdef::arcCentreBradsFromDegrees(weapon.arcCentreDegrees);
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                  nullptr, nullptr, static_cast<rm::Brad>(16384))
           == right);  // +90 degrees of hull heading points along +X.
 
     weapon.arcCentreDegrees = 45.0f;
     weapon.arcCentreBrads = rm::unitdef::arcCentreBradsFromDegrees(weapon.arcCentreDegrees);
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                  nullptr, nullptr, static_cast<rm::Brad>(8192))
           == right);  // 45 degrees of hull heading plus 45 degrees of weapon offset is +X.
 }
@@ -972,14 +972,14 @@ TEST_CASE("automatic acquisition applies category target restrictions before ran
         roster.reindex();
         weapon.targetPriorities = {{"LAND"}, {"NAVAL"}};
         weapon.targetRestrictOnlyAllow = std::vector<std::string>{"NAVAL"};
-        CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+        CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                      nullptr, &roster.catalog)
               == nearNaval);
     }
 
     SECTION("only-disallow rejects a higher-ranked NAVAL target for another eligible target") {
         weapon.targetRestrictOnlyDisallow = std::vector<std::string>{"NAVAL"};
-        CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+        CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                      nullptr, &roster.catalog)
               == farLand);
     }
@@ -997,7 +997,7 @@ TEST_CASE("target ranking preserves distances below hypotenuse quantization") {
 
     const Weapon weapon = directFire(10.0f, 100.0f);
     const auto target =
-        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies);
+        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies);
 
     REQUIRE(target.has_value());
     CHECK(*target == nearer);
@@ -1005,7 +1005,7 @@ TEST_CASE("target ranking preserves distances below hypotenuse quantization") {
     roster.transform(farther).x = rm::test::fx(0.0f);
     roster.reindex();
     const auto tied =
-        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies);
+        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies);
     REQUIRE(tied.has_value());
     CHECK(*tied == farther);
 }
@@ -1026,11 +1026,11 @@ TEST_CASE("a weapon acquires targets only on its allowed movement layer") {
 
     Weapon weapon = directFire(10.0f, 300.0f);
     weapon.targetLayers = rm::unitdef::TargetLayerMask::Air;
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies)
           == farAir);
 
     weapon.targetLayers = rm::unitdef::TargetLayerMask::Surface;
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies)
           == nearSurface);
 }
 
@@ -1049,11 +1049,11 @@ TEST_CASE("a landed aircraft is surface to the guns that could not touch it airb
 
     Weapon weapon = directFire(10.0f, 300.0f);
     weapon.targetLayers = rm::unitdef::TargetLayerMask::Surface;
-    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies)
                     .has_value());
 
     roster.motion(parked).airborne = false;    // the tick it touched down
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies)
           == parked);
 }
 
@@ -1091,7 +1091,7 @@ TEST_CASE("a unit does not shoot what its side cannot see") {
     const Weapon weapon = directFire(10.0f, 300.0f);
 
     // With no intel at all — every scene that predates this — the enemy is a target.
-    const auto blind = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
+    const auto blind = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store,
                                               armies, nullptr);
     REQUIRE(blind.has_value());
     CHECK(*blind == enemy);
@@ -1101,7 +1101,7 @@ TEST_CASE("a unit does not shoot what its side cannot see") {
     rm::sim::Intel intel;
     intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
                     rm::sim::VisionStyle::ForgedAlliance);
-    const auto unseen = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
+    const auto unseen = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store,
                                                armies, &intel, &roster.catalog);
     CHECK_FALSE(unseen.has_value());
 
@@ -1114,7 +1114,7 @@ TEST_CASE("a unit does not shoot what its side cannot see") {
     (void)roster.add(scoutType, 0.0f, 20.0f, 0, 100.0f);
 
     intel.update(roster.store, roster.catalog, armies, nullptr);
-    const auto seen = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
+    const auto seen = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store,
                                              armies, &intel, &roster.catalog);
     REQUIRE(seen.has_value());
     CHECK(*seen == enemy);
@@ -1144,7 +1144,7 @@ TEST_CASE("radar contacts acquire by score until vision has identified them") {
     intel.update(roster.store, roster.catalog, armies, nullptr);
 
     // Radar is enough to acquire a real unit, but the blip has not revealed whether it is HIGH.
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                  &intel, &roster.catalog)
           == nearLand);
 
@@ -1158,7 +1158,7 @@ TEST_CASE("radar contacts acquire by score until vision has identified them") {
     // visual-identification latch that retail calls RECON_LOSEver.
     roster.transform(observer).z = rm::test::fx(400.0f);
     intel.update(roster.store, roster.catalog, armies, nullptr);
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                  &intel, &roster.catalog)
           == farHigh);
 }
@@ -1255,10 +1255,10 @@ TEST_CASE("torpedoes acquire sonar contacts, surface guns do not", "[intel][nava
                                         armies, intel)
             == rm::sim::ContactKind::Sonar);
 
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, torpedo, roster.store, armies,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, torpedo, roster.store, armies,
                                  &intel, &roster.catalog)
           == contact);
-    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, surfaceGun, roster.store,
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, surfaceGun, roster.store,
                                        armies, &intel, &roster.catalog)
                     .has_value());
 }
@@ -1493,7 +1493,7 @@ TEST_CASE("automatic targeting scores radar-only contacts at their blip, not tru
     REQUIRE(flipped);
 
     const auto acquired = rm::sim::nearestTarget(
-        rm::test::at(0, 0, 0), 0, weapon, roster.store, armies, &intel, &roster.catalog,
+        rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies, &intel, &roster.catalog,
         std::nullopt, std::nullopt, nullptr, {}, std::nullopt, flipTick, roster.rate);
     REQUIRE(acquired.has_value());
     CHECK(*acquired == far); // truth-nearer loses: identity survives, rank follows the blip
@@ -1514,8 +1514,7 @@ TEST_CASE("automatic targeting does not acquire sonar-only contacts") {
                     rm::sim::VisionStyle::ForgedAlliance);
     intel.update(roster.store, roster.catalog, armies, nullptr);
 
-    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0,
-                                        directFire(10.0f, 300.0f), roster.store, armies,
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, directFire(10.0f, 300.0f), roster.store, armies,
                                         &intel, &roster.catalog));
 }
 
@@ -1539,7 +1538,7 @@ TEST_CASE("automatic targeting obeys cloak, omni, and free-intel identity") {
         intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
                         rm::sim::VisionStyle::ForgedAlliance);
         intel.update(roster.store, roster.catalog, armies, nullptr);
-        return std::pair{rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon,
+        return std::pair{rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon,
                                                 roster.store, armies, &intel, &roster.catalog),
                          enemy};
     };
@@ -1563,7 +1562,7 @@ TEST_CASE("a dead enemy is not a target, and neither is a defeated army's unit")
 
     const Weapon weapon = directFire(10.0f, 300.0f);
 
-    auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies);
+    auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies);
     REQUIRE(target.has_value());
     CHECK(*target == living);  // skipped the corpse
 
@@ -1571,7 +1570,7 @@ TEST_CASE("a dead enemy is not a target, and neither is a defeated army's unit")
     // keeps shooting a side that is already out.
     armies[1].defeated = true;
     CHECK_FALSE(
-        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies).has_value());
+        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies).has_value());
 }
 
 TEST_CASE("a minimum range is a hole a unit can stand in") {
@@ -1588,11 +1587,11 @@ TEST_CASE("a minimum range is a hole a unit can stand in") {
     artillery.minRange = rm::test::fx(100.0f);
 
     CHECK_FALSE(
-        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, artillery, roster.store, armies).has_value());
+        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, artillery, roster.store, armies).has_value());
 
     // ...and the same weapon does reach something outside it.
     roster.transform(hider).z = rm::test::fx(200.0f);
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, artillery, roster.store, armies).has_value());
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, artillery, roster.store, armies).has_value());
 }
 
 TEST_CASE("a flat shot flies straight at its target") {
@@ -2065,7 +2064,10 @@ TEST_CASE("a unit with nothing to shoot at holds its fire and stays loaded") {
 
     std::vector<Projectile> shots;
     for (int tick = 0; tick < 50; ++tick) {
-        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 0);
+        // `C-093`: a failed scan reschedules, so the loop must advance the
+        // tick for the cadence to matter — and for the test to mean 50 ticks.
+        CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{},
+                                   nullptr, nullptr, nullptr, static_cast<rm::TickIndex>(tick)) == 0);
     }
     CHECK(shots.empty());
 
@@ -2078,7 +2080,8 @@ TEST_CASE("a unit with nothing to shoot at holds its fire and stays loaded") {
     roster.transform(enemy).x = rm::test::fx(0.0f);
     roster.transform(enemy).z = rm::test::fx(50.0f);
     roster.reindex();
-    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 1);
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{},
+                               nullptr, nullptr, nullptr, 50) == 1);
 }
 
 TEST_CASE("the dead neither shoot nor are shot") {
@@ -3220,7 +3223,7 @@ TEST_CASE("a priority row outranks distance, however far away it is") {
     Weapon weapon = directFire(10.0f, 300.0f);
     weapon.targetPriorities = {{"AIR"}, {"LAND"}};
 
-    const auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
+    const auto target = rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store,
                                                armies, nullptr, &roster.catalog);
     REQUIRE(target.has_value());
     CHECK(*target == farAir);  // the distant air unit, not the tank at arm's length
@@ -3253,9 +3256,12 @@ TEST_CASE("automatic acquisition keeps a per-weapon incumbent until a strictly b
     CHECK(roster.health(gunner).automaticTargets == std::vector<UnitId>{incumbent});
 
     // A strictly nearer candidate replaces the incumbent. Equal score did not; this one does.
+    // The second call is a LATER tick — `C-093`'s cadence means a weapon scans
+    // once per tick, so a same-tick re-fire would hold the incumbent it has.
     const UnitId better = roster.add(target, 0.0f, -50.0f, 1, 100.0f);
     roster.health(gunner).reloadRemaining[0] = 0;
-    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 1);
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate,
+                               nullptr, nullptr, nullptr, 1) == 1);
     CHECK(roster.health(better).current == rm::test::mag(90.0f));
     CHECK(roster.health(gunner).automaticTargets == std::vector<UnitId>{better});
 }
@@ -3379,13 +3385,13 @@ TEST_CASE("a target beyond the weapon's height reach is not a target at all") {
     Weapon weapon = directFire(10.0f, 300.0f);
     weapon.maxHeightDifference = rm::test::fx(50.0f);
 
-    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
+    CHECK_FALSE(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies)
                     .has_value());
 
     // Zero means UNLIMITED, not "must be exactly level" — no shipped weapon states 0, and
     // reading it literally would stop every weapon shooting anything on a slope.
     weapon.maxHeightDifference = rm::sim::Fx{};
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies)
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies)
               .has_value());
 }
 
@@ -3596,4 +3602,245 @@ TEST_CASE("a redirector turns an enemy missile back on its launcher") {
         CHECK(roster.store.health()[launcher.index].current
               == roster.store.health()[launcher.index].maximum);
     }
+}
+
+// --- C-092/C-093/C-095/C-171/C-172/C-262: targeting score, cadence, caps, weave,
+//     gravity, ringed warheads -------------------------------------------------
+
+TEST_CASE("a turreted weapon scores candidates by slew from its aim, not distance") {
+    // `C-092`: retail's turret score is a weighted dot product against the aim
+    // direction — the candidate the barrel is already pointing at wins over a
+    // nearer one it would have to swing for.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId ahead = roster.add(type, 0.0f, 100.0f, 1, 100.0f);   // dead ahead, far
+    const UnitId flank = roster.add(type, 50.0f, 0.0f, 1, 100.0f);    // abeam, near
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.turreted = true;
+
+    // Distance-only scoring (no aim bearing) prefers the nearer target.
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store,
+                                 armies, nullptr, &roster.catalog)
+          == flank);
+    // A barrel already on +Z takes the far target it is pointing at.
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store,
+                                 armies, nullptr, &roster.catalog, std::nullopt,
+                                 std::nullopt, nullptr, {}, std::nullopt, 0,
+                                 rm::sim::TickRate{}, rm::TargetFocus::Default,
+                                 rm::Brad{0})
+          == ahead);
+}
+
+TEST_CASE("a failed target scan waits the authored TargetCheckInterval") {
+    // `C-093`: retail reschedules a failed acquire at `TargetCheckInterval`;
+    // a weapon that found nothing does not re-scan every tick.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.targetCheckIntervalSeconds = 1.0f;  // ~11 ticks at 10 Hz
+    const rm::UnitTypeIndex gunner = roster.addType(gunnerDef(weapon));
+    const UnitId shooter = roster.add(gunner, 0.0f, 0.0f, 0, 100.0f);
+
+    std::vector<Projectile> shots;
+    // Tick 0: nothing in range — the scan fails and schedules its next check.
+    (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                               roster.rate, nullptr, nullptr, nullptr, 0);
+    // Tick 1: a target appears inside the interval — the weapon must NOT see it.
+    const rm::UnitTypeIndex target = roster.addType(targetDef());
+    (void)roster.add(target, 0.0f, 50.0f, 1, 100.0f);
+    (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                               roster.rate, nullptr, nullptr, nullptr, 1);
+    CHECK(shots.empty());
+    CHECK((roster.health(shooter).automaticTargets.empty()
+           || !roster.health(shooter).automaticTargets[0].generation));
+    // Past the interval the scan runs again and acquires.
+    (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                               roster.rate, nullptr, nullptr, nullptr, 20);
+    CHECK(shots.size() == 1);
+}
+
+TEST_CASE("a capped projectile is not engaged by more shooters than DesiredShooterCap") {
+    // `C-095`: the anti-overkill gate — a second point-defence mount does not
+    // spend a shot on a projectile already answered by the cap's count.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon pointDefence = directFire(10.0f, 300.0f);
+    pointDefence.targetsProjectiles = true;
+    const rm::UnitTypeIndex pd = roster.addType(gunnerDef(pointDefence));
+    (void)roster.add(pd, 0.0f, 0.0f, 0, 100.0f);
+    (void)roster.add(pd, 5.0f, 0.0f, 0, 100.0f);  // a second mount in reach
+
+    // The incoming shot caps at one shooter, and one interceptor is already
+    // committed to it (index+serial recorded at its launch).
+    Projectile nuke{.position = rm::test::at(0, 4, 50), .firedByArmy = 1,
+                    .ticksRemaining = 10};
+    nuke.desiredShooterCap = 1;
+    nuke.serial = 42;
+    Projectile interceptor{.position = rm::test::at(0, 4, 40), .firedByArmy = 0,
+                           .interceptor = true, .ticksRemaining = 10};
+    interceptor.interceptTargetIndex = 0;
+    interceptor.interceptTargetSerial = 42;
+    std::vector<Projectile> shots{nuke, interceptor};
+
+    // Both mounts see the nuke in reach, but the cap is already met — no fire.
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                               roster.rate) == 0);
+    CHECK(shots.size() == 2);
+
+    // Uncap it and the same world fires.
+    shots[0].desiredShooterCap = 0;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                               roster.rate) == 2);
+}
+
+TEST_CASE("a weaving shot leaves its course line and returns to it") {
+    // `C-171`: `MaxZigZag`/`ZigZagFrequency` — the shot oscillates off its
+    // course line mid-period and the applied offset never accumulates.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    rm::sim::RandomStream random{std::uint32_t{7}};
+
+    Projectile shot{.position = rm::test::at(0, 4, 0),
+                    .velocity = rm::test::at(0, 0, 10),
+                    .firedByArmy = 0, .ticksRemaining = 100};
+    shot.zigZagAmplitudeElmos = rm::test::fx(5.0f);
+    shot.zigZagPeriodTicks = 10;
+    shot.zigZagNextRoll = 0;  // due: the first tick draws this period's offsets
+    std::vector<Projectile> shots{shot};
+
+    bool offCourse = false;
+    for (int tick = 0; tick < 11; ++tick) {
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                    nullptr, &roster.catalog, {}, nullptr, &random);
+        if (!shots.empty()
+            && (shots[0].zigZagApplied[0] != rm::sim::Fx{}
+                || shots[0].zigZagApplied[1] != rm::sim::Fx{}
+                || shots[0].zigZagApplied[2] != rm::sim::Fx{})) {
+            offCourse = true;
+        }
+    }
+    CHECK(offCourse);
+    // At the period boundary the weave returns to the course line.
+    if (!shots.empty()) {
+        CHECK(shots[0].zigZagApplied[0] == rm::sim::Fx{});
+        CHECK(shots[0].zigZagApplied[1] == rm::sim::Fx{});
+        CHECK(shots[0].zigZagApplied[2] == rm::sim::Fx{});
+    }
+}
+
+TEST_CASE("a UseGravity shot falls; a tracking shot's steering owns its velocity") {
+    // `C-172`: gravity is per-projectile — `Physics.UseGravity` adds the
+    // ballistic accel to a non-tracking shot, while `TrackTarget` suppresses it.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Projectile falling{.position = rm::test::at(0, 100, 0),
+                       .velocity = rm::test::at(10, 0, 0),
+                       .firedByArmy = 0, .ticksRemaining = 50};
+    falling.useGravity = true;
+    Projectile tracking = falling;
+    tracking.turnPerTick = 100;  // a homing shot: steering, not gravity
+    tracking.guidanceTarget = UnitId{1, 1};  // dead — the shot coasts
+
+    std::vector<Projectile> shots{falling, tracking};
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                nullptr, &roster.catalog);
+    REQUIRE(shots.size() == 2);
+    CHECK(shots[0].velocity[1] < rm::sim::Fx{});   // gravity pulled it down
+    CHECK(shots[1].velocity[1] == rm::sim::Fx{});  // the tracker coasts, no gravity
+}
+
+TEST_CASE("a ringed warhead lands its inner and outer discs on impact") {
+    // `C-262`: `NukeInner/OuterRing*` — the swept Lua bands net out to nested
+    // discs, so the impact applies each ring's profile over its own radius.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId innerVictim = roster.add(type, 0.0f, 10.0f, 1, 100.0f);
+    const UnitId outerVictim = roster.add(type, 0.0f, 40.0f, 1, 100.0f);
+
+    Projectile nuke{.position = rm::test::at(0, 4, 0),
+                    .velocity = rm::test::at(0, -10, 0),
+                    .firedByArmy = 0, .ticksRemaining = 1};
+    nuke.damage = rm::unitdef::flatDamage(rm::test::mag(10.0f));
+    nuke.damageRadiusElmos = rm::test::fx(5.0f);
+    nuke.innerRing = rm::unitdef::flatDamage(rm::test::mag(50.0f));
+    nuke.innerRingRadiusElmos = rm::test::fx(20.0f);
+    nuke.outerRing = rm::unitdef::flatDamage(rm::test::mag(20.0f));
+    nuke.outerRingRadiusElmos = rm::test::fx(50.0f);
+    nuke.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    std::vector<Projectile> shots{nuke};
+
+    // The shot expires this tick and resolves as a targetless impact NEXT
+    // tick — `C-173`'s deferred beat.
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                nullptr, &roster.catalog);
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                nullptr, &roster.catalog);
+    // Inner victim: inner 50 + outer 20 = 70 of 100 (the 5-elmo base misses).
+    CHECK(roster.health(innerVictim).current == rm::test::mag(30.0f));
+    // Outer victim: outside the inner disc — outer 20 of 100.
+    CHECK(roster.health(outerVictim).current == rm::test::mag(80.0f));
+}
+
+TEST_CASE("a ring of damage spares what sits wholly inside the inner radius") {
+    // `C-059`: kind-2 ring damage — the annulus between the radii, no falloff.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId sheltered = roster.add(type, 0.0f, 0.0f, 1, 100.0f);   // inside the hole
+    const UnitId ringed = roster.add(type, 0.0f, 30.0f, 1, 100.0f);     // in the band
+
+    (void)rm::sim::damageRing(rm::test::at(0, 0, 0), rm::test::fx(20.0f),
+                              rm::test::fx(50.0f),
+                              rm::unitdef::flatDamage(rm::test::mag(40.0f)),
+                              0, roster.store, armies, &roster.catalog, UnitId{},
+                              nullptr, rm::unitdef::TargetLayerMask::Surface);
+    CHECK(roster.health(sheltered).current == rm::test::mag(100.0f));
+    CHECK(roster.health(ringed).current == rm::test::mag(60.0f));
+}
+
+TEST_CASE("a NOSPLASHDAMAGE target is immune to area damage but not a point hit") {
+    // `C-061`: the sphere worker's per-target category filter — splash skips
+    // the tagged unit, while a direct hit still lands.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    UnitDef immune = targetDef();
+    immune.name = "splash_immune";
+    immune.categories = {"LAND", "NOSPLASHDAMAGE"};
+    const UnitId tagged = roster.add(roster.addType(immune), 0.0f, 10.0f, 1, 100.0f);
+    const UnitId plain = roster.add(roster.addType(targetDef()), 0.0f, 20.0f, 1, 100.0f);
+
+    (void)rm::sim::damageArea(rm::test::at(0, 0, 0), rm::test::fx(50.0f),
+                              rm::test::mag(40.0f), 0, roster.store, armies,
+                              UnitId{}, nullptr, &roster.catalog);
+    CHECK(roster.health(tagged).current == rm::test::mag(100.0f));  // splash skipped it
+    CHECK(roster.health(plain).current == rm::test::mag(60.0f));
+
+    // A point hit is not splash — the same unit takes it.
+    (void)rm::sim::damageArea(rm::test::at(0, 0, 10), rm::sim::Fx{},
+                              rm::test::mag(30.0f), 0, roster.store, armies,
+                              UnitId{}, nullptr, &roster.catalog);
+    CHECK(roster.health(tagged).current == rm::test::mag(70.0f));
+}
+
+TEST_CASE("a handicapped army's units take divided damage") {
+    // `C-060`: `DealDamage` divides by `(handicap + 1)` on the TARGET's army —
+    // handicap 1 halves what its units take.
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    armies[1].handicap = 1;
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId victim = roster.add(type, 0.0f, 10.0f, 1, 100.0f);
+
+    (void)rm::sim::damageArea(rm::test::at(0, 0, 0), rm::test::fx(50.0f),
+                              rm::test::mag(40.0f), 0, roster.store, armies,
+                              UnitId{}, nullptr, &roster.catalog);
+    CHECK(roster.health(victim).current == rm::test::mag(80.0f));  // 40 / (1+1)
 }

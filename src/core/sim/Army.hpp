@@ -141,6 +141,13 @@ struct Army {
     /// fixed-point count: blueprint `CapCost` is fractional (0.1 sonars).
     Fx unitCap = Fx::fromInt(500);
 
+    /// Retail's per-army handicap (`C-060`): `DealDamage` divides the damage a
+    /// unit takes by `(handicap + 1)` — the TARGET's army, not the shooter's.
+    /// Zero is the unhandicapped default; the skirmish option never sets it in
+    /// this engine, so the field exists for the damage rule rather than for
+    /// content.
+    int handicap = 0;
+
     /// `aibrain.lua:374`'s AIx flag (C-360): a personality whose name contains
     /// 'cheat' calls `AIUtils.SetupCheat`, which sets `brain.CheatEnabled` and runs
     /// `ApplyCheatBuffs` over the army — `CheatIncome` (MassProduction/

@@ -1,5 +1,6 @@
 #include "core/sim/Combat.hpp"
 #include "core/sim/Adjacency.hpp"
+#include "core/sim/Enhancement.hpp"
 #include "core/sim/Reclaim.hpp"
 #include "core/TaskPool.hpp"
 #include "core/unit/BuildTree.hpp"
@@ -222,20 +223,33 @@ void divertToFlareOwner(Projectile& shot, const UnitStore& store, const UnitCata
 
 /// The nearest hostile in-flight projectile inside this weapon's authored 2-D reach.
 /// Ties retain vector order, which is deterministic projectile insertion order.
+///
+/// `engaged` is `C-095`'s anti-overkill gate: entry i counts the in-flight
+/// interceptors already committed to projectile i (see `fireWeapons`), and a
+/// candidate at its authored `DesiredShooterCap` is skipped — a nuke missile
+/// states 1-2, so a second SMD does not spend a counted round on a shot that
+/// is already answered. An empty span means "no gate", which is what every
+/// caller without a live projectile world wants.
 [[nodiscard]] const Projectile* nearestProjectileTarget(std::array<Fx, 3> from, int fromArmy,
                                                           const unitdef::Weapon& weapon,
                                                           const std::vector<Projectile>& projectiles,
-                                                          std::span<const Army> armies) noexcept {
+                                                          std::span<const Army> armies,
+                                                          std::span<const int> engaged = {}) noexcept {
     const Projectile* nearest = nullptr;
     Fx bestDistance{};
     // `TrackingRadius` belongs exclusively to point-defence acquisition. A multiplier at or
     // below one cannot shorten ordinary `MaxRadius`; no unit-targeting path consults it.
     const Fx reach = std::max(weapon.maxRange, weapon.maxRange * weapon.trackingRadius);
-    for (const Projectile& candidate : projectiles) {
+    for (std::size_t index = 0; index < projectiles.size(); ++index) {
+        const Projectile& candidate = projectiles[index];
         if (candidate.ticksRemaining <= 0 || candidate.pendingImpact != ImpactType::Invalid
             || !projectileHostile(fromArmy, candidate, armies)
             || !passesProjectileRestrictions(weapon, candidate)) {
             continue;
+        }
+        if (candidate.desiredShooterCap > 0 && index < engaged.size()
+            && engaged[index] >= candidate.desiredShooterCap) {
+            continue;  // already answered by that many shooters (C-095)
         }
         const Fx distance = groundDistanceElmos(from, candidate.position);
         if (distance > reach || (nearest != nullptr && distance >= bestDistance)) {
@@ -246,6 +260,7 @@ void divertToFlareOwner(Projectile& shot, const UnitStore& store, const UnitCata
     }
     return nearest;
 }
+
 
 /// The cruise speed an interceptor plans around: a homing shot spends most of its
 /// flight at its authored maximum, so the lead uses that; anything else plans on
@@ -496,6 +511,35 @@ struct ProjectileTickStart {
         }
     }
     return earliest;
+}
+/// How many in-flight interceptors are committed to each projectile — the
+/// `engaged` table `nearestProjectileTarget` reads (`C-095`). An interceptor
+/// counts against the projectile it was FIRED at, recorded at launch as the
+/// target's index and serial; the serial check is what keeps a compacted
+/// list's shifted indices honest — a stale pair simply matches nothing.
+[[nodiscard]] std::vector<int> engagedShooters(
+    const std::vector<Projectile>& projectiles) noexcept {
+    std::vector<int> engaged(projectiles.size(), 0);
+    for (const Projectile& shot : projectiles) {
+        if (!shot.interceptor || shot.ticksRemaining <= 0
+            || shot.interceptTargetIndex >= projectiles.size()
+            || projectiles[shot.interceptTargetIndex].serial
+                   != shot.interceptTargetSerial) {
+            continue;
+        }
+        ++engaged[shot.interceptTargetIndex];
+    }
+    return engaged;
+}
+
+/// The serial a freshly pushed shot gets: launch tick in the high word, push
+/// index in the low — unique among live shots because the index is unique
+/// within a tick and a restored shot keeps the tick it was minted on
+/// (`C-095`). Zero is the unminted value a hand-built test shot carries.
+[[nodiscard]] std::uint64_t projectileSerial(TickIndex tick,
+                                             std::size_t pushIndex) noexcept {
+    return (static_cast<std::uint64_t>(tick) << 32)
+           | static_cast<std::uint64_t>(pushIndex);
 }
 
 /// Earliest point an extended flight segment enters a spherical ordinary shield.  The search is
@@ -1116,15 +1160,23 @@ void consumeSiloAmmo(const UnitId owner, const unitdef::Weapon& weapon,
 } // namespace
 
 std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
+                                      UnitIndex shooter,
                                       const unitdef::Weapon& weapon, const UnitStore& store,
-                                       std::span<const Army> armies, const Intel* intel,
-                                       const UnitCatalog* catalog, std::optional<Brad> heading,
-                                       std::optional<UnitId> incumbent,
-                                       const PlayableRect* playableRect,
-                                       std::span<const WorkClaim> claims,
-                                       std::optional<bool> sourceSubmerged, TickIndex tick,
-                                       TickRate rate, TargetFocus focus) {
-    if (!weapon.fires() || weapon.targetsProjectiles || weapon.targetPriorities.empty()) {
+                                      std::span<const Army> armies, const Intel* intel,
+                                      const UnitCatalog* catalog, std::optional<Brad> heading,
+                                      std::optional<UnitId> incumbent,
+                                      const PlayableRect* playableRect,
+                                      std::span<const WorkClaim> claims,
+                                      std::optional<bool> sourceSubmerged, TickIndex tick,
+                                      TickRate rate, TargetFocus focus,
+                                      std::optional<Brad> aimBearing) {
+    // The enhancement gate needs the shooter's def, so it is asked only when a
+    // catalog came along; a catalog-less caller gets the def-level answer,
+    // which is the only one it could check anyway.
+    const bool fires = catalog != nullptr
+        ? weaponFiresFor(store, *catalog, shooter, weapon)
+        : (weapon.fires() && !weapon.targetsProjectiles);
+    if (!fires || weapon.targetPriorities.empty()) {
         return std::nullopt;
     }
 
@@ -1269,10 +1321,24 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
             ++row;
         }
 
-        const FxWide dxRaw = dx.raw();
-        const FxWide dzRaw = dz.raw();
-        std::uint64_t score = static_cast<std::uint64_t>(dxRaw * dxRaw)
-                            + static_cast<std::uint64_t>(dzRaw * dzRaw);
+        // `C-092`: the score is not always distance. A turreted or
+        // `SlavedToBody` weapon answers "least slew" — retail's weighted dot
+        // product against the current aim direction — so its score is the
+        // angular error to the candidate, scaled by distance to keep the
+        // ordering total. A candidate dead ahead scores zero and wins
+        // outright, which is exactly "prefers what it is already pointing at".
+        std::uint64_t score;
+        if (aimBearing && (weapon.turreted || weapon.slavedToBody)) {
+            const std::uint32_t slew =
+                headingError(*aimBearing, bearingTo(from, aimAt));
+            score = static_cast<std::uint64_t>(distance.raw())
+                    * static_cast<std::uint64_t>(slew);
+        } else {
+            const FxWide dxRaw = dx.raw();
+            const FxWide dzRaw = dz.raw();
+            score = static_cast<std::uint64_t>(dxRaw * dxRaw)
+                  + static_cast<std::uint64_t>(dzRaw * dzRaw);
+        }
         if (reach != ReachClass::InRange) {
             score *= 4;
         }
@@ -1688,7 +1754,9 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
             const auto& sourceMotion = store.motion()[slot];
             const std::optional<bool> sourceSubmerged = sourceMotion.submersible
                 ? std::optional<bool>{sourceMotion.submerged} : std::nullopt;
-            if ((!weapon.fires() && !weapon.firesAtProjectiles()) || weapon.turreted) {
+            if ((!weaponFiresFor(store, catalog, slot, weapon)
+                 && !weaponFiresAtProjectilesFor(store, catalog, slot, weapon))
+                || weapon.turreted) {
                 continue;
             }
             // A weapon the water gates silence (`C-321`/`C-327`) is not worth
@@ -1727,11 +1795,26 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                         slot < healths.size() && w < healths[slot].automaticTargets.size()
                             ? std::optional<UnitId>{healths[slot].automaticTargets[w]}
                             : std::nullopt;
-                    candidateUnit = nearestTarget(from, motion[slot].armyIndex, weapon, store,
-                                                   armies, intel, &catalog,
-                                                   transforms[slot].heading, incumbent, playableRect,
-                                                   claims, sourceSubmerged, tick, rate,
-                                                   store.targetFocuses()[slot]);
+                    // `C-093`: aim follows the same cadence the fire pass keeps —
+                    // a weapon between scans holds its incumbent rather than
+                    // re-asking, so the hull cannot be turned toward a target
+                    // the gun will not fire at.
+                    const bool gated =
+                        slot < healths.size()
+                        && w < healths[slot].targetCheckTick.size()
+                        && tick < healths[slot].targetCheckTick[w];
+                    if (gated) {
+                        candidateUnit = incumbent;
+                    } else {
+                        const Brad aim = static_cast<Brad>(
+                            static_cast<std::uint16_t>(transforms[slot].heading)
+                            + static_cast<std::uint16_t>(sourceMotion.turretYaw));
+                        candidateUnit = nearestTarget(from, motion[slot].armyIndex, slot, weapon, store,
+                                                       armies, intel, &catalog,
+                                                       transforms[slot].heading, incumbent, playableRect,
+                                                       claims, sourceSubmerged, tick, rate,
+                                                       store.targetFocuses()[slot], aim);
+                    }
                 }
                 if (candidateUnit) {
                     const Fx muzzlePerTick =
@@ -1933,7 +2016,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             row.resize(def->weapons.size());
             for (std::size_t w = 0; w < def->weapons.size(); ++w) {
                 const unitdef::Weapon& weapon = def->weapons[w];
-                if (!weapon.fires()) {
+                if (!weaponFiresFor(store, catalog, slot, weapon)) {
                     continue;  // projectile intercepts and non-firing weapons
                 }
                 const int reload = w < healths[slot].reloadRemaining.size()
@@ -1946,13 +2029,49 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     w < healths[slot].automaticTargets.size()
                         ? std::optional<UnitId>{healths[slot].automaticTargets[w]}
                         : std::nullopt;
-                row[w] = nearestTarget(from, army, weapon, store, armies, intel,
+                // `C-093`: the re-acquisition cadence. A weapon whose last scan
+                // found nothing waits `targetCheckTicks` before asking again —
+                // retail's `max(1, ceil(TargetCheckInterval x rate)) + 1`
+                // reschedule — while a live incumbent re-checks every tick, the
+                // "reschedule at 1" of a successful acquire. A stale incumbent
+                // is kept rather than re-validated: retail holds the target
+                // until the task next runs, and the firing pass's own gates
+                // still apply to it.
+                Health& health = healths[slot];
+                if (w >= health.targetCheckTick.size()) {
+                    health.targetCheckTick.resize(def->weapons.size(), 0);
+                }
+                if (tick < health.targetCheckTick[w]) {
+                    row[w] = incumbent && store.alive(*incumbent)
+                                 ? incumbent
+                                 : std::optional<UnitId>{};
+                    continue;
+                }
+                // `C-092`: the aim the score is measured against — the hull's
+                // heading plus the mounted turret's slew, which is the same
+                // bearing the barrel currently points along.
+                const Brad aim = static_cast<Brad>(
+                    static_cast<std::uint16_t>(transforms[slot].heading)
+                    + static_cast<std::uint16_t>(sourceMotion.turretYaw));
+                row[w] = nearestTarget(from, army, slot, weapon, store, armies, intel,
                                        &catalog, transforms[slot].heading, incumbent,
                                        playableRect, claims, sourceSubmerged, tick,
-                                       rate, store.targetFocuses()[slot]);
+                                       rate, store.targetFocuses()[slot], aim);
+                health.targetCheckTick[w] =
+                    tick + (row[w] ? TickIndex{1}
+                                   : TickIndex{catalog.weaponRates(
+                                                 store.typeAt(slot), w)
+                                                 .targetCheckTicks});
             }
         }
     });
+
+    // `C-095`: the anti-overkill table the point-defence branch reads — how
+    // many in-flight interceptors are already committed to each projectile.
+    // Computed once per tick from launch-time intent, not per weapon: a
+    // projectile's engaged count is a fact about the world, not about the
+    // weapon asking.
+    const std::vector<int> engaged = engagedShooters(projectiles);
 
     for (UnitIndex slot = 0; slot < transforms.size(); ++slot) {
         if (slot >= healths.size() || !healths[slot].alive()) {
@@ -1990,12 +2109,14 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             const auto& sourceMotion = store.motion()[slot];
             const std::optional<bool> sourceSubmerged = sourceMotion.submersible
                 ? std::optional<bool>{sourceMotion.submerged} : std::nullopt;
-            if (!weapon.fires() && !weapon.firesAtProjectiles()) {
+            if (!weaponFiresFor(store, catalog, slot, weapon)
+                && !weaponFiresAtProjectilesFor(store, catalog, slot, weapon)) {
                 // A MANUAL weapon's reload still counts down here, where every reload
                 // does — `fireOvercharge` only checks readiness, and a cooldown that
                 // ticked only while an order was held would punish the second click for
                 // the first one's timing.
-                if (weapon.manuallyFired() && health.reloadRemaining[w] > 0) {
+                if (weaponManuallyFiredFor(store, catalog, slot, weapon)
+                    && health.reloadRemaining[w] > 0) {
                     --health.reloadRemaining[w];
                 }
                 continue;
@@ -2070,7 +2191,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 
             if (weapon.targetsProjectiles) {
                 const Projectile* target =
-                    nearestProjectileTarget(from, army, weapon, projectiles, armies);
+                    nearestProjectileTarget(from, army, weapon, projectiles, armies,
+                                            engaged);
                 if (target == nullptr) {
                     continue;
                 }
@@ -2114,6 +2236,12 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     continue;
                 }
                 const int volley = weapon.bursts() ? 1 : rates.burstSize;
+                // `C-095`: the engagement this volley represents, captured
+                // BEFORE the push — `push_back` may reallocate and `target`
+                // would dangle.
+                const std::size_t targetIndex =
+                    static_cast<std::size_t>(target - projectiles.data());
+                const std::uint64_t targetSerial = target->serial;
                 const bool muzzled = mounted && slot < motions.size();
                 // The event below describes the volley's LAST shot: remember
                 // which barrel that was, so its bore line can ride along.
@@ -2122,6 +2250,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     const bool second =
                         muzzled && mount.dual && motions[slot].turretMuzzlePhase != 0;
                     lastSecond = second;
+                    const std::size_t pushIndex = projectiles.size();
                     projectiles.push_back(
                         launch(from, targetPosition, weapon, army, rate,
                                rates.muzzlePerTick, rates.damage, store.idAt(slot), true, {},
@@ -2129,6 +2258,12 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                    ? std::optional{mountMuzzleWorld(mount, transforms[slot],
                                                                     motions[slot], second)}
                                    : std::nullopt));
+                    // `C-095`: the shot's serial and the engagement it
+                    // represents — the pair `engagedShooters` counts next tick.
+                    Projectile& interceptor = projectiles.back();
+                    interceptor.serial = projectileSerial(tick, pushIndex);
+                    interceptor.interceptTargetIndex = targetIndex;
+                    interceptor.interceptTargetSerial = targetSerial;
                     if (muzzled && mount.dual) {
                         motions[slot].turretMuzzlePhase ^= 1;
                     }
@@ -2351,6 +2486,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     const bool second =
                         muzzled && mount.dual && motions[slot].turretMuzzlePhase != 0;
                     lastSecond = second;
+                    const std::size_t pushIndex = projectiles.size();
                     projectiles.push_back(
                         launch(from, to, weapon, army, rate, rates.muzzlePerTick,
                                rates.damage, store.idAt(slot), false, *target,
@@ -2358,6 +2494,15 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                    ? std::optional{mountMuzzleWorld(mount, transforms[slot],
                                                                     motions[slot], second)}
                                    : std::nullopt));
+                    Projectile& launched = projectiles.back();
+                    launched.serial = projectileSerial(tick, pushIndex);
+                    // `C-262`: a ringed warhead carries its bands with it —
+                    // resolved at launch like `damage`, so the impact path
+                    // does not reach back into the catalog.
+                    launched.innerRing = rates.innerRing;
+                    launched.outerRing = rates.outerRing;
+                    launched.innerRingRadiusElmos = weapon.innerRingRadius;
+                    launched.outerRingRadiusElmos = weapon.outerRingRadius;
                     if (muzzled && mount.dual) {
                         motions[slot].turretMuzzlePhase ^= 1;
                     }
@@ -2420,7 +2565,7 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                            std::span<const Army> armies,
                            std::vector<Projectile>& projectiles,
                            std::span<Economy> economies, TickRate rate, EventQueue* events,
-                           std::span<const AdjacencyEffects> adjacency) {
+                           std::span<const AdjacencyEffects> adjacency, TickIndex tick) {
     std::size_t fired = 0;
 
     const std::span<const Transform> transforms = store.transforms();
@@ -2458,7 +2603,7 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
             const auto& sourceMotion = store.motion()[slot];
             const std::optional<bool> sourceSubmerged = sourceMotion.submersible
                 ? std::optional<bool>{sourceMotion.submerged} : std::nullopt;
-            if (!weapon.manuallyFired()) {
+            if (!weaponManuallyFiredFor(store, catalog, slot, weapon)) {
                 continue;
             }
             if (!weapon.canTarget(store.motion()[head->target().index].airborne,
@@ -2507,6 +2652,7 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
             const std::span<const MoveState> motions = store.motion();
             const bool muzzled =
                 mount.present && mount.weapon == w && slot < motions.size();
+            const std::size_t pushIndex = projectiles.size();
             projectiles.push_back(
                 launch(from, to, weapon, army, rate, rates.muzzlePerTick,
                        rates.damage, store.idAt(slot), false, head->target(),
@@ -2514,6 +2660,7 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                            ? std::optional{mountMuzzleWorld(mount, transforms[slot],
                                                             motions[slot], false)}
                            : std::nullopt));
+            projectiles.back().serial = projectileSerial(tick, pushIndex);
             healths[slot].reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
             emit(events, Event{
                              .kind = EventKind::WeaponFired,
@@ -2543,7 +2690,7 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
                          std::span<const Army> armies,
                          std::vector<Projectile>& projectiles,
                          std::span<SiloAmmo> siloAmmo, const Terrain& terrain, TickRate rate,
-                         EventQueue* events) {
+                         EventQueue* events, TickIndex tick) {
     std::size_t fired = 0;
 
     const std::span<const Transform> transforms = store.transforms();
@@ -2595,7 +2742,7 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
             ? std::optional<bool>{sourceMotion.submerged} : std::nullopt;
         for (std::size_t w = 0; w < def->weapons.size(); ++w) {
             const unitdef::Weapon& weapon = def->weapons[w];
-            if (!weapon.siloLaunched()) {
+            if (!weaponSiloLaunchedFor(store, catalog, slot, weapon)) {
                 continue;
             }
             if (aimTarget.generation != 0
@@ -2632,6 +2779,7 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
             const std::span<const MoveState> motions = store.motion();
             const bool muzzled =
                 mount.present && mount.weapon == w && slot < motions.size();
+            const std::size_t pushIndex = projectiles.size();
             projectiles.push_back(
                 launch(from, to, weapon, army, rate, rates.muzzlePerTick,
                        rates.damage, store.idAt(slot), false, aimTarget,
@@ -2639,6 +2787,14 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
                            ? std::optional{mountMuzzleWorld(mount, transforms[slot],
                                                             motions[slot], false)}
                            : std::nullopt));
+            Projectile& missile = projectiles.back();
+            missile.serial = projectileSerial(tick, pushIndex);
+            // `C-262`: a ringed warhead carries its bands — the Yolona Oss's
+            // `NukeInner/OuterRing*` — resolved at launch like `damage`.
+            missile.innerRing = rates.innerRing;
+            missile.outerRing = rates.outerRing;
+            missile.innerRingRadiusElmos = weapon.innerRingRadius;
+            missile.outerRingRadiusElmos = weapon.outerRingRadius;
             consumeSiloAmmo(store.idAt(slot), weapon, siloAmmo);
             healths[slot].reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
             emit(events, Event{
@@ -2666,7 +2822,8 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
     return fired;
 }
 
-void tickShields(UnitStore& store, const UnitCatalog& catalog, EventQueue* events) {
+void tickShields(UnitStore& store, const UnitCatalog& catalog, EventQueue* events,
+                 std::span<const Economy> economies) {
     const std::span<Health> health = store.health();
     for (UnitIndex slot = 0; slot < health.size(); ++slot) {
         if (!store.slotAlive(slot) || !health[slot].alive()) {
@@ -2685,8 +2842,23 @@ void tickShields(UnitStore& store, const UnitCatalog& catalog, EventQueue* event
             continue;
         }
         if (state.rechargeRemaining > 0) {
-            --state.rechargeRemaining;
+            // `C-145`: recharge progress accrues at the army's funded fraction —
+            // `shield.lua`'s `ChargingUp` adds `GetResourceConsumed()/10` per
+            // tick, so a brownout stretches the recharge instead of the
+            // countdown running flat out. An army with no economy row — tests
+            // and scenes that never built one — pays in full.
+            const int army = armyAt(store, slot);
+            const Fx paid = (army >= 0
+                             && static_cast<std::size_t>(army) < economies.size())
+                                ? economies[static_cast<std::size_t>(army)].fundedFraction
+                                : kFxOne;
+            state.rechargeProgress += paid;
+            while (state.rechargeProgress >= kFxOne && state.rechargeRemaining > 0) {
+                --state.rechargeRemaining;
+                state.rechargeProgress -= kFxOne;
+            }
             if (state.rechargeRemaining == 0) {
+                state.rechargeProgress = Fx{};
                 if (state.rechargeRestoresFull) {
                     state.current = state.maximum;
                 }
@@ -2758,6 +2930,11 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     // projectile blueprint's own keys, resolved into `projectileTraits` at load.
     shot.stayUnderwater = weapon.projectileTraits.stayUnderwater;
     shot.destroyOnWater = weapon.projectileTraits.destroyOnWater;
+    // `C-095`/`C-169`: the cap the shot's targeters respect and the gravity
+    // flag its flight reads — both authored on the projectile blueprint,
+    // carried on the shot like `maxHealth` above.
+    shot.desiredShooterCap = weapon.projectileTraits.desiredShooterCap;
+    shot.useGravity = weapon.projectileTraits.useGravity;
     shot.arc = weapon.arc;
     shot.ticksRemaining = static_cast<int>(rate.ticks(kProjectileLifetime));
 
@@ -2814,14 +2991,13 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, Mag damage, int byArmy,
 }
 
 namespace {
-
 Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
                   const unitdef::DamageProfile& damage, int byArmy, UnitStore& store,
-                   std::span<const Army> armies, const UnitCatalog* catalog, UnitId by,
-                   EventQueue* events, unitdef::TargetLayerMask targetLayers, bool damageFriendly,
-                   std::optional<UnitIndex> exactTarget,
-                   std::optional<UnitIndex> impactTarget, FeatureStore* features = nullptr,
-                   bool damageSelf = false) {
+                  std::span<const Army> armies, const UnitCatalog* catalog, UnitId by,
+                  EventQueue* events, unitdef::TargetLayerMask targetLayers, bool damageFriendly,
+                  std::optional<UnitIndex> exactTarget,
+                  std::optional<UnitIndex> impactTarget, FeatureStore* features = nullptr,
+                  bool damageSelf = false, Fx innerRadiusElmos = Fx{}) {
     Mag dealt{};
 
     // C-086/C-137: area queries (0xF00) include props; ordinary projectile sweeps (0xD00)
@@ -2989,6 +3165,13 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
             if (targetDef != nullptr && targetDef->invulnerable) {
                 return;
             }
+            // `C-061`'s second per-target filter: a `NOSPLASHDAMAGE` target is
+            // immune to AREA damage — the sphere worker's category test. A
+            // point hit (`radiusElmos == 0`) is not splash and still lands.
+            if (radiusElmos > Fx{} && targetDef != nullptr
+                && targetDef->hasCategory("NOSPLASHDAMAGE")) {
+                return;
+            }
         }
         if (slot >= motion.size()
             || ((static_cast<std::uint8_t>(targetLayers)
@@ -3048,6 +3231,30 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
                       : Fx{};
         }
 
+        // `C-059`'s ring: a target wholly inside the inner radius takes
+        // nothing — the annulus is the region between the two radii. "Wholly"
+        // is the farthest box corner, the complement of the overlap test above.
+        if (innerRadiusElmos > Fx{} && radiusElmos > Fx{}) {
+            const Fx bodyRadius = motion[slot].radiusElmos;
+            const std::array<Fx, 3> feet = positionOf(transforms[slot]);
+            const Fx farX = (feet[0] > centre[0] ? feet[0] - centre[0]
+                                                 : centre[0] - feet[0]) + bodyRadius;
+            const Fx farZ = (feet[2] > centre[2] ? feet[2] - centre[2]
+                                                 : centre[2] - feet[2]) + bodyRadius;
+            Fx height = catalog != nullptr
+                            ? catalog->intel(store.typeAt(slot)).eyeHeight
+                            : Fx{};
+            if (height <= Fx{}) {
+                height = bodyRadius * Fx::fromInt(2);
+            }
+            const Fx farY = feet[1] + height > centre[1]
+                                ? feet[1] + height - centre[1]
+                                : centre[1] - feet[1];
+            if (fxHypot(fxHypot(farX, farZ), farY) < innerRadiusElmos) {
+                return;
+            }
+        }
+
         if (share <= Fx{}) {
             return;
         }
@@ -3080,7 +3287,14 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
             return;   // fully covered: this target takes nothing at all
         }
 
-        const Mag wanted = damage.against(armor) * share * shielded;
+        Mag wanted = damage.against(armor) * share * shielded;
+        // `C-060`'s handicap divide, in retail's place between armour and the
+        // non-positive return: the TARGET's army's `handicap` scales the
+        // amount down — `/(h+1)`, so the default zero changes nothing.
+        if (const Army* targetArmy = armyFor(armyAt(store, slot), armies);
+            targetArmy != nullptr && targetArmy->handicap > 0) {
+            wanted = wanted * Fx::fromRatio(1, targetArmy->handicap + 1);
+        }
         // Retail returns after mitigation when the final amount is non-positive. Besides
         // preventing negative damage from healing, this matters for the shipped 0.0 armour
         // multipliers: no `UnitDamaged` callback is raised for a blow that became nothing.
@@ -3171,6 +3385,20 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
 
     return dealt;
 }
+
+} // namespace
+
+Mag damageRing(std::array<Fx, 3> centre, Fx innerRadiusElmos, Fx outerRadiusElmos,
+               const unitdef::DamageProfile& damage, int byArmy, UnitStore& store,
+               std::span<const Army> armies, const UnitCatalog* catalog, UnitId by,
+               EventQueue* events, unitdef::TargetLayerMask targetLayers,
+               FeatureStore* features) {
+    return damageTargets(centre, outerRadiusElmos, damage, byArmy, store, armies,
+                         catalog, by, events, targetLayers, false, std::nullopt,
+                         std::nullopt, features, false, innerRadiusElmos);
+}
+
+namespace {
 
 [[nodiscard]] Mag damageTarget(UnitIndex target, const unitdef::DamageProfile& damage,
                                int byArmy, UnitStore& store, std::span<const Army> armies,
@@ -3263,7 +3491,12 @@ inline constexpr Fx kStayUnderwaterClampElmos = Fx::fromRatio(2, 25);
         shot.velocity = {fxSin(nextYaw) * fxCos(nextPitch) * speed,
                          fxSin(nextPitch) * speed, fxCos(nextYaw) * fxCos(nextPitch) * speed};
     }
-    if (shot.arc != unitdef::BallisticArc::None) {
+    // `C-172`: gravity is per-projectile, never global. An arced shot gets the
+    // ballistic term it was solved for; a `UseGravity` shot gets the same
+    // downward accel — except a TRACKING shot, whose steering owns the
+    // velocity vector (retail's `TrackTarget` suppresses the accel).
+    const bool tracking = shot.turnPerTick > 0;
+    if (shot.arc != unitdef::BallisticArc::None || (shot.useGravity && !tracking)) {
         shot.velocity[1] -= gravityPerTickSquared;
     }
 
@@ -3449,6 +3682,24 @@ void resolvePendingImpact(Projectile& shot, UnitStore& store,
                                                         ? std::optional<UnitIndex>{
                                                               target.index}
                                                         : std::nullopt;
+        // `C-262`: a ringed warhead resolves as two nested discs — the Lua
+        // controllers' swept `DamageRing` bands each apply the ring's full
+        // damage once, so the union over the sweep is a disc per ring. The
+        // inner disc lands first, matching `explodeOnDeath`'s order.
+        if (shot.innerRing.harmful() && shot.innerRingRadiusElmos > Fx{}) {
+            (void)damageTargets(shot.position, shot.innerRingRadiusElmos,
+                                 shot.innerRing, shot.firedByArmy, store, armies,
+                                 catalog, shot.firedBy, events, shot.targetLayers,
+                                 shot.friendlyFire, std::nullopt, impactTarget,
+                                 features, shot.friendlyFire);
+        }
+        if (shot.outerRing.harmful() && shot.outerRingRadiusElmos > Fx{}) {
+            (void)damageTargets(shot.position, shot.outerRingRadiusElmos,
+                                 shot.outerRing, shot.firedByArmy, store, armies,
+                                 catalog, shot.firedBy, events, shot.targetLayers,
+                                 shot.friendlyFire, std::nullopt, impactTarget,
+                                 features, shot.friendlyFire);
+        }
         (void)damageTargets(shot.position, shot.damageRadiusElmos, shot.damage,
                              shot.firedByArmy, store, armies, catalog, shot.firedBy,
                              events, shot.targetLayers, shot.friendlyFire, std::nullopt,

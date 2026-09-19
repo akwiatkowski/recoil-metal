@@ -179,6 +179,34 @@ struct Projectile {
     /// and never by the sim. Zero until then. The projectile list compacts on impact, so an
     /// index cannot name a shot across ticks; this can.
     std::uint32_t visualSerial = 0;
+
+    /// `C-095`: the target projectile's authored `DesiredShooterCap` — how many
+    /// shooters may engage it at once. Copied at launch like `maxHealth`; zero
+    /// means uncapped. Point-defence acquisition skips a capped target already
+    /// engaged by that many in-flight interceptors.
+    int desiredShooterCap = 0;
+
+    /// `C-172`: `Physics.UseGravity` — the shot takes the ballistic
+    /// acceleration even with no arc, and only while it is not tracking.
+    bool useGravity = false;
+
+    /// `C-262`: a ringed warhead's two bands, resolved at launch like `damage`.
+    /// Non-harmful profiles mean a plain blast. The Lua controllers' swept
+    /// `DamageRing` bands net out to nested discs — each band applies the
+    /// ring's full damage once — so the impact resolves as two disc calls.
+    unitdef::DamageProfile innerRing{};
+    unitdef::DamageProfile outerRing{};
+    Fx innerRingRadiusElmos{};
+    Fx outerRingRadiusElmos{};
+
+    /// `C-095`: the shot's launch serial — `(tick << 32) | push index`, unique
+    /// among live shots — and, for an interceptor, the index+serial of the
+    /// projectile it was fired at. The pair is what `DesiredShooterCap`
+    /// engagement counting survives list compaction with: a shifted index
+    /// fails the serial check instead of pointing at the wrong shot.
+    std::uint64_t serial = 0;
+    std::size_t interceptTargetIndex = 0;
+    std::uint64_t interceptTargetSerial = 0;
 };
 
 /// Gravity applied to an arced shot, in elmos per second squared.
@@ -276,6 +304,7 @@ struct WorkClaim {
 /// distance, and ties still keep the first minimum. `tick`/`rate` drive the blip's drift;
 /// callers without a clock get the tick-0 blip, which is deterministic but does not wander.
 [[nodiscard]] std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
+                                                  UnitIndex shooter,
                                                   const unitdef::Weapon& weapon,
                                                    const UnitStore& store,
                                                    std::span<const Army> armies,
@@ -288,7 +317,13 @@ struct WorkClaim {
                                                     std::optional<bool> sourceSubmerged = std::nullopt,
                                                     TickIndex tick = 0,
                                                     TickRate rate = TickRate{},
-                                                    TargetFocus focus = TargetFocus::Default);
+                                                    TargetFocus focus = TargetFocus::Default,
+                                                    /// `C-092`: the bearing the weapon is
+                                                    /// currently aimed along — hull heading
+                                                    /// plus turret slew for a mounted gun.
+                                                    /// Turreted/`SlavedToBody` weapons score
+                                                    /// candidates by least slew, not distance.
+                                                    std::optional<Brad> aimBearing = std::nullopt);
 
 /// The bearing from `from` to `to`, in radians, measured the way a unit's yaw is.
 ///
@@ -369,7 +404,8 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                            std::vector<Projectile>& projectiles,
                            std::span<Economy> economies, TickRate rate,
                            EventQueue* events = nullptr,
-                           std::span<const AdjacencyEffects> adjacency = {});
+                           std::span<const AdjacencyEffects> adjacency = {},
+                           TickIndex tick = 0);
 
 /// Fires every held MISSILE LAUNCH whose moment has come: a live hostile target or a
 /// clicked ground zero, inside the silo weapon's `[minRange, maxRange]` envelope, reload
@@ -379,7 +415,6 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
 /// An EMPTY silo HOLDS rather than fails: the order stands while the stockpile build
 /// catches up, which is what a queued retail launch does. One shot retires the order by
 /// aiming it at the LAUNCHER ITSELF — a target no click can produce — which
-/// `advanceOrders` then completes like any arrival. That self-marker is what a
 /// position-target launch needs: a ground zero has no target to forget, so the overcharge
 /// trick cannot work there. Returns shots fired.
 /// No facing gate: the corpus's launchers are unturreted racks that fire straight up.
@@ -387,11 +422,30 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
                          std::span<const Army> armies,
                          std::vector<Projectile>& projectiles,
                          std::span<SiloAmmo> siloAmmo, const Terrain& terrain, TickRate rate,
-                         EventQueue* events = nullptr);
+                         EventQueue* events = nullptr, TickIndex tick = 0);
 
 /// Advances partial regeneration and damage-collapse recovery for ordinary bubbles.
+///
+/// `economies` feeds `C-145`'s brownout stretch: `shield.lua`'s `ChargingUp`
+/// accrues `GetResourceConsumed()/10` per tick, so a recharging shield's
+/// progress is the fraction of its upkeep the army actually paid. An empty
+/// span — every test and every scene without an economy — charges at full
+/// power, which is what the countdown-only version did.
 void tickShields(UnitStore& store, const UnitCatalog& catalog,
-                 EventQueue* events = nullptr);
+                 EventQueue* events = nullptr,
+                 std::span<const Economy> economies = {});
+
+/// `C-059`'s kind-2 worker: a ring (annulus) of damage — every damageable
+/// entity whose collision box overlaps the outer radius but lies wholly
+/// outside the inner one takes the full amount, no falloff. The Lua
+/// `DamageRing` native entry point's shape; `damageArea` is the inner-radius-0
+/// case.
+[[nodiscard]] Mag damageRing(std::array<Fx, 3> centre, Fx innerRadiusElmos,
+                             Fx outerRadiusElmos, const unitdef::DamageProfile& damage,
+                             int byArmy, UnitStore& store, std::span<const Army> armies,
+                             const UnitCatalog* catalog, UnitId by, EventQueue* events,
+                             unitdef::TargetLayerMask targetLayers,
+                             FeatureStore* features = nullptr);
 
 /// Moves every projectile one tick, applies what lands, and removes what is spent.
 ///

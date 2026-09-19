@@ -226,7 +226,7 @@ Role roleOf(const UnitDef& def) noexcept {
 bool isMobileCombat(const UnitDef& def) noexcept {
     return def.speedElmosPerSecond > 0.0f
         && std::any_of(def.weapons.begin(), def.weapons.end(),
-                       [](const Weapon& weapon) { return weapon.automaticallyFires(); });
+                       [](const Weapon& weapon) { return weapon.firesIgnoringEnhancement(); });
 }
 
 } // namespace rm::unitdef

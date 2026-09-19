@@ -211,7 +211,7 @@ TEST_CASE("a radar contact resolves to the live enemy for the muzzle", "[radar]"
     const auto& gun = def->weapons[0];
     REQUIRE(gun.fires());
     const auto from = std::array<rm::sim::Fx, 3>{rm::sim::fxFromFloat(20.0f), {}, {}};
-    CHECK(rm::sim::nearestTarget(from, 0, gun, job.scene.store, job.scene.armies,
+    CHECK(rm::sim::nearestTarget(from, 0, rm::UnitIndex{0}, gun, job.scene.store, job.scene.armies,
                                   &job.scene.intel, &job.scene.catalog)
           == job.enemy);
 }

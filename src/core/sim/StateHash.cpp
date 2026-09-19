@@ -219,6 +219,10 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
         if (!health.shield.rechargeRestoresFull) {
             feed(h, false);
         }
+        // `C-145`: partial recharge progress — two shields at the same
+        // remaining count but different accrued fractions finish on different
+        // ticks under a brownout.
+        feed(h, health.shield.rechargeProgress);
     }
     feed(h, health.reloadRemaining.size());
     for (const int remaining : health.reloadRemaining) {
@@ -242,6 +246,13 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
         }
     }
 
+    // `C-093`: the per-weapon re-scan schedule — two units with identical
+    // targets but different pending check ticks acquire on different beats.
+    feed(h, health.targetCheckTick.size());
+    for (const TickIndex next : health.targetCheckTick) {
+        feed(h, static_cast<std::size_t>(next));
+    }
+
     // WHO LAST HIT IT. State, not provenance — unlike a command's issuing player, this decides
     // something: it is the instigator a `UnitDestroyed` event names, and a consumer that awards
     // a kill, plays a sound or scores a match reads it. Two runs that disagree about who is
@@ -257,6 +268,14 @@ void feedHealth(StateHash& h, const Health& health) noexcept {
         feed(h, true);
         feed(h, health.veterancy.kills);
         feed(h, health.veterancy.level);
+    }
+
+    // `C-258`'s regen write state, fed only when a write stands — the same
+    // empty-preserves-history trick as veterancy above. Two units with equal
+    // health but different writers heal at different rates from the next tick.
+    if (health.regenWrite != Health::RegenWrite::None) {
+        feed(h, true);
+        feed(h, static_cast<std::uint8_t>(health.regenWrite));
     }
 }
 
@@ -894,6 +913,22 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 feed(h, shot.zigZagApplied);
                 feed(h, shot.aimPoint);
                 feed(h, shot.friendlyFire);
+            }
+            // `C-095`/`C-172`/`C-262`: the cap, the gravity flag, the launch
+            // serial and engagement pair, and the ring bands — all conditional
+            // so an ordinary shot keeps its byte stream.
+            if (shot.desiredShooterCap > 0 || shot.useGravity || shot.serial != 0
+                || shot.innerRing.harmful() || shot.outerRing.harmful()) {
+                feed(h, true);
+                feed(h, static_cast<std::size_t>(shot.desiredShooterCap));
+                feed(h, shot.useGravity);
+                feed(h, static_cast<std::size_t>(shot.serial));
+                feed(h, shot.interceptTargetIndex);
+                feed(h, static_cast<std::size_t>(shot.interceptTargetSerial));
+                feed(h, shot.innerRing.base);
+                feed(h, shot.outerRing.base);
+                feed(h, shot.innerRingRadiusElmos);
+                feed(h, shot.outerRingRadiusElmos);
             }
         }
     }

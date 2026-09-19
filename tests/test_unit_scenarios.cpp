@@ -331,7 +331,7 @@ TEST_CASE("script-gated enhancement weapons parse as enhancement-gated",
                     return std::ranges::find(gated, weapon.label) != gated.end();
                 });
             REQUIRE(missile != parsed->weapons.end());
-            CHECK(!missile->automaticallyFires());
+            CHECK(!missile->fires());  // gated: the enhancement gate keeps it out of the fire path
             CHECK(!missile->manuallyFired());
         }
     }
@@ -660,12 +660,18 @@ TEST_CASE("Tigershark depth clamps above the seabed and its plasma waits for Wat
         rm::sim::placeOnMotionLayer(job.scene.store.transforms()[target.index],
             job.scene.store.motion()[target.index], terrain);
         auto& motion = job.scene.store.motion()[unit.index];
+        rm::TickIndex fireTick = 0;
         const auto firesPlasma = [&] {
             job.scene.store.health()[unit.index].reloadRemaining.assign(sub->weapons.size(), 0);
             rm::sim::EventQueue events;
             std::vector<rm::sim::Projectile> shots;
+            // `C-093`: a failed scan reschedules by the weapon's
+            // TargetCheckInterval (2s on this gun ≈ 21 ticks), so each probe
+            // stands a full cadence apart — the submerged probes' misses must
+            // not gate the surfaced one.
             (void)rm::sim::fireWeapons(job.scene.store, job.scene.catalog, job.scene.armies,
-                shots, rm::app::gAppTickRate, &events);
+                shots, rm::app::gAppTickRate, &events, nullptr, nullptr, fireTick);
+            fireTick += 100;
             return std::ranges::any_of(events.all(), [&](const auto& event) {
                 return event.visualId == sub->name + ":PlasmaGun";
             });

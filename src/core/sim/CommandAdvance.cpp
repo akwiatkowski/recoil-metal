@@ -1150,7 +1150,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     Fx reach{};
                     Fx widest{};
                     for (const unitdef::Weapon& weapon : guardDef->weapons) {
-                        if (!weapon.fires() || weapon.manuallyFired()
+                        if (!weaponFiresFor(store, catalog, slot, weapon)
+                            || weaponManuallyFiredFor(store, catalog, slot, weapon)
                             || weapon.targetsProjectiles
                             || !weapon.canTarget(targetAirborne)) {
                             continue;
@@ -1388,8 +1389,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             } else if (def != nullptr) {
                 const bool targetAirborne = store.motion()[head->target().index].airborne;
                 for (const unitdef::Weapon& weapon : def->weapons) {
-                    if ((missile ? weapon.siloLaunched()
-                                 : manual ? weapon.manuallyFired() : weapon.fires())
+                    if ((missile ? weaponSiloLaunchedFor(store, catalog, slot, weapon)
+                                 : manual ? weaponManuallyFiredFor(store, catalog, slot, weapon)
+                                          : weaponFiresFor(store, catalog, slot, weapon))
                         && weapon.canTarget(targetAirborne)
                         && weapon.maxRange > reach) {
                         reach = weapon.maxRange;
@@ -1488,7 +1490,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             Fx reach{};
             if (def != nullptr) {
                 for (const unitdef::Weapon& weapon : def->weapons) {
-                    if (weapon.siloLaunched() && weapon.maxRange > reach) {
+                    if (weaponSiloLaunchedFor(store, catalog, slot, weapon)
+                        && weapon.maxRange > reach) {
                         reach = weapon.maxRange;
                     }
                 }
@@ -1897,7 +1900,7 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
 
         bool armed = false;
         for (const unitdef::Weapon& weapon : def->weapons) {
-            if (weapon.fires()) {
+            if (weaponFiresFor(store, catalog, slot, weapon)) {
                 armed = true;
             }
         }
@@ -1941,11 +1944,11 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
             std::optional<UnitId> nearest;
             Fx nearestDistance{};
             for (const unitdef::Weapon& weapon : def->weapons) {
-                if (!weapon.fires()) {
+                if (!weaponFiresFor(store, catalog, slot, weapon)) {
                     continue;
                 }
                 const std::optional<UnitId> candidate =
-                    nearestTarget(from, owner, weapon, store, armies, intel, &catalog,
+                    nearestTarget(from, owner, slot, weapon, store, armies, intel, &catalog,
                                    store.transforms()[slot].heading, std::nullopt, playableRect,
                                    {}, std::nullopt, tick, rate, store.targetFocuses()[slot]);
                 if (!candidate) {
@@ -1974,8 +1977,9 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
         const Fx gap = groundDistanceElmos(positionOf(mineAt), positionOf(targetAt));
         const bool canEngage = std::any_of(
             def->weapons.begin(), def->weapons.end(),
-            [gap, targetAirborne](const unitdef::Weapon& weapon) {
-                return weapon.fires() && weapon.canTarget(targetAirborne)
+            [&, gap, targetAirborne](const unitdef::Weapon& weapon) {
+                return weaponFiresFor(store, catalog, slot, weapon)
+                    && weapon.canTarget(targetAirborne)
                     && gap >= weapon.minRange && gap <= weapon.maxRange;
             });
         if (canEngage) {
@@ -2041,7 +2045,8 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         if (def != nullptr) {
             const bool targetAirborne = store.motion()[command.target.index].airborne;
             for (const unitdef::Weapon& weapon : def->weapons) {
-                if (weapon.manuallyFired() && weapon.canTarget(targetAirborne)
+                if (weaponManuallyFiredFor(store, catalog, command.unit.index, weapon)
+                    && weapon.canTarget(targetAirborne)
                     && weapon.maxRange > reach) {
                     reach = weapon.maxRange;
                 }
@@ -2075,7 +2080,8 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         Fx reach{};
         if (def != nullptr) {
             for (const unitdef::Weapon& weapon : def->weapons) {
-                if (weapon.siloLaunched() && weapon.maxRange > reach) {
+                if (weaponSiloLaunchedFor(store, catalog, command.unit.index, weapon)
+                    && weapon.maxRange > reach) {
                     reach = weapon.maxRange;
                 }
             }
@@ -2153,8 +2159,10 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         const bool targetAirborne = store.motion()[command.target.index].airborne;
         if (def == nullptr
             || std::none_of(def->weapons.begin(), def->weapons.end(),
-                            [targetAirborne](const unitdef::Weapon& weapon) {
-                                return weapon.fires() && weapon.canTarget(targetAirborne);
+                            [&](const unitdef::Weapon& weapon) {
+                                return weaponFiresFor(store, catalog,
+                                                      command.unit.index, weapon)
+                                    && weapon.canTarget(targetAirborne);
                             })) {
             return false;
         }

@@ -232,9 +232,13 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
                 // `C-093`: retail's reschedule is `max(1, ceil(interval x
                 // ticksPerSecond)) + 1`; `ticks()` rounds rather than ceilings,
                 // which is within a tick of the same answer and keeps the
-                // conversion at the load boundary like every other rate.
-                .targetCheckTicks = static_cast<TickCount>(std::max<TickCount>(
-                    1, rate.ticks(seconds(weapon.targetCheckIntervalSeconds))) + 1),
+                // conversion at the load boundary like every other rate. An
+                // unauthored interval means every-tick scanning — 1, so the
+                // gate `tick < tick + 1` never holds.
+                .targetCheckTicks = weapon.targetCheckIntervalSeconds > 0.0f
+                    ? static_cast<TickCount>(std::max<TickCount>(
+                          1, rate.ticks(seconds(weapon.targetCheckIntervalSeconds))) + 1)
+                    : 1,
                 .innerRing = profileFor(weapon, weapon.innerRingDamage),
                 .outerRing = profileFor(weapon, weapon.outerRingDamage),
             });

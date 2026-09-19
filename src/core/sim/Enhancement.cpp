@@ -61,15 +61,233 @@ std::expected<void, std::string> validateEnhancementSequence(
     if (!def) return std::unexpected("enhancement owner has no blueprint");
     const auto& slots = store.enhancements()[unit.index];
     if (sequence.empty()) return std::unexpected("empty enhancement sequence");
-    if (const auto valid = def->validateEnhancements(slots, sequence); !valid) return valid;
-    // Faction CreateEnhancement handlers: engineering is a replacement-rate buff,
-    // additive health/regen, and an additional build category (retail ACU scripts).
-    for (const auto& name : sequence) if (name != "AdvancedEngineering" && name != "T3Engineering"
-        && name != "AdvancedEngineeringRemove" && name != "T3EngineeringRemove") {
-        return std::unexpected("enhancement effect handler not implemented: " + std::string{name});
+    // C-255: every authored enhancement installs — the slot/prerequisite chain
+    // is the whole gate (retail's `OnWorkBegin`), and the per-name effects are
+    // the script table below plus the blueprint's own parameters. Names whose
+    // effect has no sim home yet install and record like the rest.
+    return def->validateEnhancements(slots, sequence);
+}
+namespace {
+
+// `C-255`/`C-379`: the per-name effect table standing in for each unit script's
+// `CreateEnhancement`/`XxxRemove` elseif chain. Only the effects the sim can
+// honour are listed; weapon-label enables, intel-radius writes, shield/pod
+// creation and weapon stat mods are script-side too but have no per-unit home
+// in the sim yet, so their names carry an empty record — they still install
+// and record, which is the registry half of the claim.
+//
+// The cap lists are the literal `AddCommandCap`/`RemoveCommandCap` and
+// `AddToggleCap`/`RemoveToggleCap` arguments from the eight shipped scripts —
+// including retail's asymmetries, like `CloakingGenerator` adding no toggle cap
+// while its Remove takes one away (URL0001/URL0301).
+constexpr std::string_view kCapTeleport[]{"RULEUCC_Teleport"};
+constexpr std::string_view kCapSacrifice[]{"RULEUCC_Sacrifice"};
+constexpr std::string_view kCapOvercharge[]{"RULEUCC_Overcharge"};
+constexpr std::string_view kCapTacticalPair[]{"RULEUCC_Tactical", "RULEUCC_SiloBuildTactical"};
+constexpr std::string_view kCapNukePair[]{"RULEUCC_Nuke", "RULEUCC_SiloBuildNuke"};
+constexpr std::string_view kCapAllSilo[]{
+    "RULEUCC_Nuke", "RULEUCC_SiloBuildNuke", "RULEUCC_Tactical", "RULEUCC_SiloBuildTactical"};
+constexpr std::string_view kToggleShield[]{"RULEUTC_ShieldToggle"};
+constexpr std::string_view kToggleJamming[]{"RULEUTC_JammingToggle"};
+constexpr std::string_view kToggleCloak[]{"RULEUTC_CloakToggle"};
+
+struct ScriptEffectRow {
+    std::string_view name;
+    EnhancementScriptEffects effects;
+};
+
+constexpr std::string_view kWeaponChrono[]{"ChronoDampener"};
+constexpr std::string_view kWeaponMissile[]{"Missile"};
+constexpr std::string_view kWeaponNMissile[]{"NMissile"};
+constexpr std::string_view kWeaponTacMissile[]{"TacMissile"};
+constexpr std::string_view kWeaponTacNuke[]{"TacNukeMissile"};
+constexpr std::string_view kWeaponTacBoth[]{"TacMissile", "TacNukeMissile"};
+constexpr std::string_view kWeaponOvercharge[]{"OverCharge"};
+
+constexpr ScriptEffectRow kScriptEffects[] = {
+    // Teleporter — all eight scripts: AddCommandCap / RemoveCommandCap.
+    {"Teleporter", {.commandCapAdds = kCapTeleport}},
+    {"TeleporterRemove", {.commandCapRemoves = kCapTeleport}},
+    // UAL0301 Sacrifice.
+    {"Sacrifice", {.commandCapAdds = kCapSacrifice}},
+    {"SacrificeRemove", {.commandCapRemoves = kCapSacrifice}},
+    // XSL0301 Overcharge: cap plus the weapon-label enable.
+    {"Overcharge", {.commandCapAdds = kCapOvercharge,
+                    .weaponEnables = kWeaponOvercharge}},
+    {"OverchargeRemove", {.commandCapRemoves = kCapOvercharge,
+                          .weaponDisables = kWeaponOvercharge}},
+    // XSL0001/XSL0301 Missile and UEL0001's TacticalMissile/TacticalNukeMissile
+    // pair — the nuke swap drops the tactical caps, disables TacMissile and
+    // enables TacNukeMissile; both Removes silence the pair.
+    {"Missile", {.commandCapAdds = kCapTacticalPair,
+                 .weaponEnables = kWeaponMissile}},
+    {"MissileRemove", {.commandCapRemoves = kCapTacticalPair,
+                       .weaponDisables = kWeaponMissile}},
+    {"TacticalMissile", {.commandCapAdds = kCapTacticalPair,
+                         .weaponEnables = kWeaponTacMissile}},
+    {"TacticalNukeMissile",
+     {.commandCapAdds = kCapNukePair, .commandCapRemoves = kCapTacticalPair,
+      .weaponEnables = kWeaponTacNuke, .weaponDisables = kWeaponTacMissile}},
+    {"TacticalMissileRemove", {.commandCapRemoves = kCapAllSilo,
+                               .weaponDisables = kWeaponTacBoth}},
+    {"TacticalNukeMissileRemove", {.commandCapRemoves = kCapAllSilo,
+                                   .weaponDisables = kWeaponTacBoth}},
+    // UAL0001's ChronoDampener: the enhancement IS the weapon's label.
+    {"ChronoDampener", {.weaponEnables = kWeaponChrono}},
+    {"ChronoDampenerRemove", {.weaponDisables = kWeaponChrono}},
+    // URL0301's NaniteMissileSystem enables the NMissile label.
+    {"NaniteMissileSystem", {.weaponEnables = kWeaponNMissile}},
+    {"NaniteMissileSystemRemove", {.weaponDisables = kWeaponNMissile}},
+    // Shields: `Shield` adds the toggle cap everywhere; `ShieldHeavy` and
+    // `ShieldGeneratorField` do not — the Remove branches still take it away.
+    {"Shield", {.toggleCapAdds = kToggleShield}},
+    {"ShieldRemove", {.toggleCapRemoves = kToggleShield}},
+    {"ShieldHeavyRemove", {.toggleCapRemoves = kToggleShield}},
+    {"ShieldGeneratorFieldRemove", {.toggleCapRemoves = kToggleShield}},
+    // UEL0301's RadarJammer adds the jamming toggle; the stealth/cloak
+    // generators ride the cloak toggle (URL0001/URL0301).
+    {"RadarJammer", {.toggleCapAdds = kToggleJamming}},
+    {"RadarJammerRemove", {.toggleCapRemoves = kToggleJamming}},
+    {"StealthGenerator", {.toggleCapAdds = kToggleCloak}},
+    {"StealthGeneratorRemove", {.toggleCapRemoves = kToggleCloak}},
+    {"CloakingGeneratorRemove", {.toggleCapRemoves = kToggleCloak}},
+    // `C-258`: the three `SetRegenRate` writes — absolute, not adds. UEL0001's
+    // name is retail's own typo (`DamageStablization`); the Seraphim
+    // `DamageStabilization` is a Regen buff and is NOT in this list.
+    {"DamageStablization", {.regenRateOverride = true}},
+    {"SelfRepairSystem", {.regenRateOverride = true}},
+    {"SystemIntegrityCompensator", {.regenRateOverride = true}},
+};
+
+[[nodiscard]] bool capListHas(std::span<const std::string_view> list,
+                              std::string_view cap) noexcept {
+    return std::ranges::find(list, cap) != list.end();
+}
+
+} // namespace
+
+EnhancementScriptEffects enhancementScriptEffects(std::string_view name) noexcept {
+    for (const ScriptEffectRow& row : kScriptEffects) {
+        if (row.name == name) return row.effects;
     }
     return {};
 }
+
+bool enhancementRegenIsOverride(std::string_view name) noexcept {
+    return enhancementScriptEffects(name).regenRateOverride;
+}
+
+std::vector<std::string> enhancementOrderSequence(
+    const UnitStore& store, const UnitCatalog& catalog, UnitId unit,
+    std::string_view name) {
+    const unitdef::UnitDef* def = catalog.def(store.typeAt(unit.index));
+    const unitdef::EnhancementSpec* spec = def != nullptr ? def->enhancement(name) : nullptr;
+    if (spec == nullptr) return {};
+    const auto& slots = store.enhancements()[unit.index];
+    const auto occupant = slots.find(spec->slot);
+    if (occupant == slots.end() || occupant->second == spec->prerequisite) {
+        // Empty slot, or the chain's own prerequisite — the install replaces
+        // its occupant directly, no Remove needed (construction.lua:975-981).
+        return {std::string{name}};
+    }
+    if (occupant->second == name) {
+        return {};  // already installed: retail's click is a no-op
+    }
+    // Occupied by something else: `<occupant>Remove` then the new id, both
+    // clear-queue — the two-command protocol (construction.lua:955-968).
+    return {occupant->second + "Remove", std::string{name}};
+}
+
+bool unitHasCommandCap(const UnitStore& store, const UnitCatalog& catalog,
+                       UnitIndex slot, std::string_view cap) noexcept {
+    const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+    bool granted = def == nullptr || !def->commandCapsDeclared || def->hasCommandCap(cap);
+    for (const auto& [position, installed] : store.enhancements()[slot]) {
+        const EnhancementScriptEffects effects = enhancementScriptEffects(installed);
+        if (capListHas(effects.commandCapAdds, cap)) granted = true;
+        if (capListHas(effects.commandCapRemoves, cap)) granted = false;
+    }
+    return granted;
+}
+
+bool unitHasToggleCap(const UnitStore& store, const UnitCatalog& catalog,
+                      UnitIndex slot, std::string_view cap) noexcept {
+    const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+    bool granted = def != nullptr && def->toggleCapsDeclared && def->hasToggleCap(cap);
+    for (const auto& [position, installed] : store.enhancements()[slot]) {
+        const EnhancementScriptEffects effects = enhancementScriptEffects(installed);
+        if (capListHas(effects.toggleCapAdds, cap)) granted = true;
+        if (capListHas(effects.toggleCapRemoves, cap)) granted = false;
+    }
+    return granted;
+}
+Mag enhancementMaintenancePerTick(const UnitStore& store,
+                                  const UnitCatalog& catalog, UnitIndex slot) noexcept {
+    Mag result{};
+    for (const auto& [position, name] : store.enhancements()[slot]) {
+        if (const auto* effects = catalog.enhancementEffects(store.typeAt(slot), name)) {
+            result += effects->maintenanceEnergyPerTick;
+        }
+    }
+    return result;
+}
+
+bool weaponGatedByEnhancement(const UnitStore& store, const UnitCatalog& catalog,
+                              UnitIndex slot, std::string_view label) noexcept {
+    if (slot >= store.enhancements().size()) return false;
+    const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+    if (def == nullptr) return false;
+    for (const unitdef::EnhancementSpec& spec : def->enhancements) {
+        const EnhancementScriptEffects effects = enhancementScriptEffects(spec.name);
+        if (capListHas(effects.weaponEnables, label)
+            || capListHas(effects.weaponDisables, label)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool weaponEnabledForUnit(const UnitStore& store, const UnitCatalog& catalog,
+                          UnitIndex slot, const unitdef::Weapon& weapon) noexcept {
+    // Ungated weapons are always enabled; a gated one needs an installed
+    // branch that enables its label and none that disables it — the
+    // `SetWeaponEnabledByLabel` net effect (`C-255`/`C-379`).
+    if (!weapon.enabledByEnhancement
+        && !weaponGatedByEnhancement(store, catalog, slot, weapon.label)) {
+        return true;
+    }
+    if (slot >= store.enhancements().size()) return false;
+    bool enabled = false;
+    for (const auto& [position, installed] : store.enhancements()[slot]) {
+        const EnhancementScriptEffects effects = enhancementScriptEffects(installed);
+        if (capListHas(effects.weaponEnables, weapon.label)) enabled = true;
+        if (capListHas(effects.weaponDisables, weapon.label)) enabled = false;
+    }
+    return enabled;
+}
+Resources enhancementProductionPerTick(const UnitStore& store,
+                                       const UnitCatalog& catalog, UnitIndex slot) noexcept {
+    Resources result{};
+    for (const auto& [position, name] : store.enhancements()[slot]) {
+        if (const auto* effects = catalog.enhancementEffects(store.typeAt(slot), name)) {
+            result.mass += effects->producesMassPerTick;
+            result.energy += effects->producesEnergyPerTick;
+        }
+    }
+    return result;
+}
+
+std::optional<Mag> enhancementRegenOverride(const UnitStore& store,
+                                          const UnitCatalog& catalog, UnitIndex slot) noexcept {
+    for (const auto& [position, name] : store.enhancements()[slot]) {
+        if (const auto* effects = catalog.enhancementEffects(store.typeAt(slot), name);
+            effects != nullptr && effects->regenPerTickOverride.has_value()) {
+            return effects->regenPerTickOverride;
+        }
+    }
+    return std::nullopt;
+}
+
 std::expected<void, std::string> canInstallEnhancement(
     const UnitStore& store, const UnitCatalog& catalog, UnitId unit, std::string_view name) {
     const std::array sequence{std::string{name}};
@@ -86,6 +304,31 @@ std::expected<void, std::string> installEnhancement(
         return std::find(spec->removes.begin(), spec->removes.end(), entry.second) != spec->removes.end();
     });
     auto& health = store.health()[unit.index];
+    // `C-258`'s last-writer-wins regen, replicated: a `SetRegenRate`
+    // enhancement writes its absolute rate; a `XxxRemove` whose `removes` list
+    // names one runs `RevertRegenRate`, which erases the regen buffs too; and
+    // any other regen-affecting install — a buff add landing or leaving — is a
+    // recompute that erases the direct write. Installs that touch no regen
+    // leave the standing write alone.
+    const EnhancementScriptEffects own = enhancementScriptEffects(name);
+    const bool removesOverride = std::ranges::any_of(spec->removes, [](std::string_view removed) {
+        return enhancementRegenIsOverride(removed);
+    });
+    const bool touchesRegenBuff =
+        (catalog.enhancementEffects(store.typeAt(unit.index), name) != nullptr
+         && catalog.enhancementEffects(store.typeAt(unit.index), name)->regenPerTickAdd > Mag{})
+        || std::ranges::any_of(spec->removes, [&](std::string_view removed) {
+               const auto* effects =
+                   catalog.enhancementEffects(store.typeAt(unit.index), removed);
+               return effects != nullptr && effects->regenPerTickAdd > Mag{};
+           });
+    if (own.regenRateOverride) {
+        health.regenWrite = Health::RegenWrite::Overridden;
+    } else if (removesOverride) {
+        health.regenWrite = Health::RegenWrite::Reverted;
+    } else if (touchesRegenBuff) {
+        health.regenWrite = Health::RegenWrite::None;
+    }
     const Mag previous = health.maximum;
     health.maximum = veterancyMaxHealth(def->health + enhancementHealthAdd(store, catalog, unit.index), health.veterancy.level);
     // Buff.lua preserves absolute damage when max HP grows, and clamps when it shrinks.

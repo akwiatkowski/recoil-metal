@@ -261,6 +261,15 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
             std::max(0.0f, numberOr(entry, "NukeOuterRingRadius", 0.0f))
             * scmap::kElmosPerOgrid);
 
+        // `C-092`/`C-093`: `SlavedToBody` switches the candidate score to the
+        // aim-direction dot product like a turret's; `TargetCheckInterval` is the
+        // re-acquisition cadence after a failed scan.
+        if (const lua::Value* slaved = entry.find("SlavedToBody")) {
+            weapon.slavedToBody = slaved->asBoolean().value_or(false);
+        }
+        weapon.targetCheckIntervalSeconds =
+            numberOr(entry, "TargetCheckInterval", 0.0f);
+
         weapon.rateOfFire = numberOr(entry, "RateOfFire", 0.0f);
 
         // The muzzle's bone: the turret's, or the first rack's first muzzle. A name for

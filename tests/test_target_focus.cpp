@@ -135,11 +135,11 @@ TEST_CASE("a snipe focus prefers a high-tier target over a nearer ordinary one",
     const Weapon weapon = directFire(300.0f, {{"LAND"}});
 
     // Unfocused acquisition takes the near one.
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store,
                                  armies, nullptr, &roster.catalog)
           == nearGrunt);
     // Sniping walks the far TECH3 past it.
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store,
                                  armies, nullptr, &roster.catalog, std::nullopt,
                                  std::nullopt, nullptr, {}, std::nullopt, 0, {},
                                  rm::TargetFocus::Snipe)
@@ -166,7 +166,7 @@ TEST_CASE("an air-only focus engages aircraft and declines a ground-only field",
     const Weapon weapon = directFire(300.0f, {{"LAND"}, {"AIR"}});
 
     const auto picked =
-        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
+        rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store,
                                armies, nullptr, &roster.catalog, std::nullopt,
                                std::nullopt, nullptr, {}, std::nullopt, 0, {},
                                rm::TargetFocus::AirOnly);
@@ -179,7 +179,7 @@ TEST_CASE("an air-only focus engages aircraft and declines a ground-only field",
     rm::test::Roster groundOnly;
     (void)groundOnly.add(groundOnly.addType(tank), 0.0f, 50.0f, 1, 100.0f);
     CHECK_FALSE(rm::sim::nearestTarget(
-        rm::test::at(0, 0, 0), 0, weapon, groundOnly.store, armies, nullptr,
+        rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, groundOnly.store, armies, nullptr,
         &groundOnly.catalog, std::nullopt, std::nullopt, nullptr, {},
         std::nullopt, 0, {}, rm::TargetFocus::AirOnly)
                     .has_value());
@@ -203,7 +203,7 @@ TEST_CASE("an economy-only focus walks past troops to the base",
 
     const Weapon weapon = directFire(300.0f, {{"LAND"}});
 
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store,
                                  armies, nullptr, &roster.catalog, std::nullopt,
                                  std::nullopt, nullptr, {}, std::nullopt, 0, {},
                                  rm::TargetFocus::EconomyOnly)

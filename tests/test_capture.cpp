@@ -393,7 +393,7 @@ TEST_CASE("own guns spare a capture target", "[capture]") {
     const UnitId captor = f.roster.add(f.captorType, 212.0f, 200.0f, 0, 100.0f);
     const UnitId victim = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
     const auto acquired = [&] {
-        return rm::sim::nearestTarget(rm::test::at(200, 0, 200), 0, gun,
+        return rm::sim::nearestTarget(rm::test::at(200, 0, 200), 0, rm::UnitIndex{0}, gun,
                                       f.roster.store, f.armies, nullptr, &f.roster.catalog,
                                       std::nullopt, std::nullopt, nullptr,
                                       rm::sim::collectCaptureClaims(f.roster.store));

@@ -716,3 +716,32 @@ TEST_CASE("a damaged shield waits, regenerates, and a collapsed one returns full
         CHECK(eventOf(events, rm::sim::EventKind::ShieldRestored) != nullptr);
     }
 }
+
+TEST_CASE("a brownout stretches shield recharge instead of running it flat out") {
+    // `C-145`: `shield.lua`'s `ChargingUp` accrues `GetResourceConsumed()/10`
+    // per tick — a half-funded army's collapsed bubble takes twice as long to
+    // return. No economy row at all means full power, the countdown-only case.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(shieldDef());
+    const rm::sim::UnitId generator = roster.add(type, 0.0f, 0.0f, 0, 100.0f);
+    roster.health(generator).shield.current = rm::sim::Mag{};
+    roster.health(generator).shield.rechargeRemaining = roster.catalog.shield(type).recharge;
+    roster.health(generator).shield.rechargeRestoresFull = true;
+
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    economies[0].fundedFraction = rm::sim::Fx::fromRatio(1, 2);  // half power
+
+    // 21 ticks at full power would restore; at half power it is still charging.
+    for (int tick = 0; tick < 21; ++tick) {
+        rm::sim::tickShields(roster.store, roster.catalog, nullptr, economies);
+    }
+    CHECK(roster.health(generator).shield.current == rm::sim::Mag{});
+    CHECK(roster.health(generator).shield.rechargeRemaining > 0);
+    // Another 21 finishes it — the recharge took twice the authored time.
+    for (int tick = 0; tick < 21; ++tick) {
+        rm::sim::tickShields(roster.store, roster.catalog, nullptr, economies);
+    }
+    CHECK(roster.health(generator).shield.current
+          == roster.health(generator).shield.maximum);
+}
