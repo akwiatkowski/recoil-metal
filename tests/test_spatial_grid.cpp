@@ -329,3 +329,37 @@ TEST_CASE("a query answered twice gives the same answer") {
 
     CHECK(std::equal(first.begin(), first.end(), again.begin(), again.end()));
 }
+
+TEST_CASE("equal distances resolve in ascending slot order, and quantized ties widen the set") {
+    // `C-107`: our distance compare is fixed-point — `nearestTarget` scores on
+    // raw dx²+dz² and the grid answers in ascending slot order — so two
+    // candidates at genuinely different real distances can collapse to an
+    // exact tie, and every tie lands on the lower slot. Retail's float32
+    // squared-distance compare separates them. The divergence is accepted;
+    // this pins both halves: the grid's slot-ordered answer and the
+    // quantization that creates the wider tie set.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    const rm::UnitTypeIndex type = roster.addType(def);
+    // Two units at the same distance from the query point, placed so the
+    // HIGHER slot is reached first by neither ordering — the answer must be
+    // slot order, not insertion or cell order.
+    place(roster, type, 110.0f, 100.0f);   // slot 0: dx=10
+    place(roster, type, 90.0f, 100.0f);    // slot 1: dx=-10, same distance
+    SpatialGrid grid;
+    grid.rebuild(roster.store, Fx::fromInt(32));
+    const std::vector<UnitIndex> found{grid.within(Fx::fromInt(100), Fx::fromInt(100),
+                                                   Fx::fromInt(15)).begin(),
+                                       grid.within(Fx::fromInt(100), Fx::fromInt(100),
+                                                   Fx::fromInt(15)).end()};
+    REQUIRE(found.size() == 2);
+    CHECK(found[0] < found[1]);  // ascending slot order, the tie-break a reader sees
+
+    // The quantization half: (1000,z) for z in 0..31 raw units have
+    // genuinely different squared lengths, yet fxHypot returns the same
+    // value — the collapse that makes our tie set wider than retail's float
+    // compare. z=32 crosses the boundary and separates.
+    const Fx b = rm::sim::fxHypot(Fx::fromRaw(1000), Fx::fromRaw(0));
+    CHECK(rm::sim::fxHypot(Fx::fromRaw(1000), Fx::fromRaw(31)) == b);
+    CHECK(rm::sim::fxHypot(Fx::fromRaw(1000), Fx::fromRaw(32)) != b);
+}

@@ -130,7 +130,7 @@ TEST_CASE("C-107: an exact distance tie falls to slot order, deterministically",
     const rm::UnitTypeIndex type = first.addType(targetDef());
     const rm::sim::UnitId a = first.add(type, 3.0f, 4.0f, 1, 100.0f);  // slot 0
     const rm::sim::UnitId b = first.add(type, 4.0f, 3.0f, 1, 100.0f);  // slot 1
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon,
                                first.store, armies, nullptr, &first.catalog) == a);
 
     // Swap the spawn order and the OTHER position wins: the tie-break follows
@@ -139,7 +139,7 @@ TEST_CASE("C-107: an exact distance tie falls to slot order, deterministically",
     const rm::UnitTypeIndex type2 = second.addType(targetDef());
     const rm::sim::UnitId b2 = second.add(type2, 4.0f, 3.0f, 1, 100.0f);  // slot 0 now
     const rm::sim::UnitId a2 = second.add(type2, 3.0f, 4.0f, 1, 100.0f);
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon,
                                second.store, armies, nullptr, &second.catalog) == b2);
     (void)b;
     (void)a2;
@@ -160,14 +160,14 @@ TEST_CASE("C-107: an incumbent holds an exact tie but loses to a nearer enemy",
 
     // Equal score: the incumbent wins over the earlier slot it would lose to
     // as a fresh candidate.
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                  nullptr, &roster.catalog, std::nullopt, incumbent)
           == incumbent);
 
     // A strictly nearer candidate dislodges it — stickiness is a tie-break,
     // not a lock.
     const rm::sim::UnitId nearer = roster.add(type, 0.0f, 4.0f, 1, 100.0f);  // dist 4
-    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, weapon, roster.store, armies,
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
                                  nullptr, &roster.catalog, std::nullopt, incumbent)
           == nearer);
     (void)earlier;

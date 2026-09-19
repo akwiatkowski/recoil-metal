@@ -338,6 +338,10 @@ TEST_CASE("C-202/C-323: a submerged deck gun stays silent while the torpedo answ
 
     const auto fires = [&](std::string_view label) {
         roster.health(boat).reloadRemaining.assign(sub.weapons.size(), 0);
+        // `C-093`'s rescan cadence persists `targetCheckTick` across calls; this
+        // probe fires at tick 0 every time, so a failed scan would gate the next
+        // one forever. Reset it the way the reload row already is.
+        roster.health(boat).targetCheckTick.assign(sub.weapons.size(), 0);
         rm::sim::EventQueue events;
         std::vector<rm::sim::Projectile> shots;
         (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
@@ -413,6 +417,10 @@ TEST_CASE("C-321: the fire gates compare the firer's Y against its own Elevation
 
     const auto fires = [&](UnitId shooter, const UnitDef& def, std::string_view label) {
         roster.health(shooter).reloadRemaining.assign(def.weapons.size(), 0);
+        // `C-093`'s rescan cadence persists `targetCheckTick` across calls; this
+        // probe fires at tick 0 every time, so a failed scan would gate the next
+        // one forever. Reset it the way the reload row already is.
+        roster.health(shooter).targetCheckTick.assign(def.weapons.size(), 0);
         rm::sim::EventQueue events;
         std::vector<rm::sim::Projectile> shots;
         (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
@@ -499,6 +507,10 @@ TEST_CASE("C-322: the target gates apply to Seabed-layer candidates only",
     std::vector<Army> armies = rm::sim::freeForAll(2);
     const auto firesAt = [&](std::string_view label, UnitId victim) {
         roster.health(shooter).reloadRemaining.assign(ship.weapons.size(), 0);
+        // `C-093`'s rescan cadence persists `targetCheckTick` across calls; this
+        // probe fires at tick 0 every time, so a failed scan would gate the next
+        // one forever. Reset it the way the reload row already is.
+        roster.health(shooter).targetCheckTick.assign(ship.weapons.size(), 0);
         rm::sim::EventQueue events;
         std::vector<rm::sim::Projectile> shots;
         (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
@@ -582,6 +594,10 @@ TEST_CASE("C-327: an Air-layer unit below the waterline cannot fire unless FlyIn
     std::vector<Army> armies = rm::sim::freeForAll(2);
     const auto fires = [&](UnitId shooter, const UnitDef& def) {
         roster.health(shooter).reloadRemaining.assign(def.weapons.size(), 0);
+        // `C-093`'s rescan cadence persists `targetCheckTick` across calls; this
+        // probe fires at tick 0 every time, so a failed scan would gate the next
+        // one forever. Reset it the way the reload row already is.
+        roster.health(shooter).targetCheckTick.assign(def.weapons.size(), 0);
         rm::sim::EventQueue events;
         std::vector<rm::sim::Projectile> shots;
         (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,

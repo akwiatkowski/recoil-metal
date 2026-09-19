@@ -463,6 +463,13 @@ std::expected<void, std::string> installEnhancement(
             (void)store.setIntelEnabled(unit, type, false);
         }
     }
+    // The health write runs BEFORE the pod spawn below: `store.spawn` may grow
+    // `health_`, which would leave this reference dangling.
+    const Mag previous = health.maximum;
+    health.maximum = veterancyMaxHealth(def->health + enhancementHealthAdd(store, catalog, unit.index), health.veterancy.level);
+    // Buff.lua preserves absolute damage when max HP grows, and clamps when it shrinks.
+    health.current = health.maximum > previous ? health.current + health.maximum - previous
+                                               : std::min(health.current, health.maximum);
     if (!own.podBlueprint.empty()) {
         // `CreateUnitHPR` + `SetParent`: the pod is a real unit of its own
         // blueprint, spawned at the bone and attached to the commander. A
@@ -507,11 +514,6 @@ std::expected<void, std::string> installEnhancement(
             }
         }
     }
-    const Mag previous = health.maximum;
-    health.maximum = veterancyMaxHealth(def->health + enhancementHealthAdd(store, catalog, unit.index), health.veterancy.level);
-    // Buff.lua preserves absolute damage when max HP grows, and clamps when it shrinks.
-    health.current = health.maximum > previous ? health.current + health.maximum - previous
-                                               : std::min(health.current, health.maximum);
     return {};
 }
 namespace {

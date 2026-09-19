@@ -384,21 +384,12 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     }
 
     // `C-231` (`0x006f6460`): `Sim::IssueCommand`'s per-unit gate refuses a
-    // unit still being built unless it is a FACTORY. A rising structure is a
-    // `Construction` row here, not a live unit, so the only live being-built
-    // unit is an upgrade's target — the row's `upgradeOf`. A factory mid-tier
-    // keeps taking production orders; anything else under the knife refuses.
-    if (building != nullptr) {
-        const bool beingBuilt = std::ranges::any_of(*building, [&](const Construction& work) {
-            return !work.finished() && work.upgradeOf == command.unit;
-        });
-        if (beingBuilt) {
-            const unitdef::UnitDef* def = catalog.def(store.typeAt(command.unit.index));
-            if (def == nullptr || !def->hasCategory("FACTORY")) {
-                return false;
-            }
-        }
-    }
+    // unit still being built unless it is a FACTORY. Retail's `IsBeingBuilt`
+    // is the scaffold state — a unit that exists but is not yet complete. This
+    // sim has no such thing: a rising structure is a `Construction` row, not a
+    // live unit, and an upgrade's `upgradeOf` target is already complete —
+    // retail accepts a queued next tier on it (the extractor test proves it).
+    // The gate is therefore vacuous here and stays a comment, not code.
 
     const Player* player = playerFor(command.player, players);
     if (player == nullptr || !authorised(*player, store, command.unit, armies)) {

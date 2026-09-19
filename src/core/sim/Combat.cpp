@@ -1810,7 +1810,13 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                         && w < healths[slot].targetCheckTick.size()
                         && tick < healths[slot].targetCheckTick[w];
                     if (gated) {
-                        candidateUnit = incumbent;
+                        // Same liveness check the firing pass applies: a dead or
+                        // never-set incumbent (UnitId{} names slot 0!) is nobody's
+                        // target — without this the hull aims at whatever lives in
+                        // slot 0 while the gun correctly holds its fire.
+                        candidateUnit = incumbent && store.alive(*incumbent)
+                                            ? incumbent
+                                            : std::nullopt;
                     } else {
                         const Brad aim = static_cast<Brad>(
                             static_cast<std::uint16_t>(transforms[slot].heading)

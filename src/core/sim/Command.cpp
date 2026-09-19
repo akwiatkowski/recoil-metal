@@ -12,6 +12,7 @@
 #include "core/sim/CommandInternal.hpp"
 
 #include "core/sim/Combat.hpp"
+#include "core/sim/Enhancement.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/UnitStore.hpp"
 
@@ -423,7 +424,7 @@ std::optional<SacrificeWork> sacrificeWork(
         ranged.maxRange = guard->guardScanRadiusElmos;
         const auto& cache = store.health()[slot].automaticTargets;
         const auto incumbent = w < cache.size() ? std::optional{cache[w]} : std::nullopt;
-        const auto found = nearestTarget(positionOf(at), store.motion()[slot].armyIndex, ranged,
+        const auto found = nearestTarget(positionOf(at), store.motion()[slot].armyIndex, slot, ranged,
             store, armies, intel, &catalog, at.heading, incumbent, playableRect,
             {}, std::nullopt, tick, rate, store.targetFocuses()[slot]);
         if (!found) continue;
