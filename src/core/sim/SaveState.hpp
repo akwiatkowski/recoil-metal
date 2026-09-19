@@ -84,6 +84,11 @@ struct SaveState {
     /// from v45 — null when the match keeps no effects, like `projectiles`.
     /// Restored straight into `Match::effects`'s storage by the caller.
     std::optional<std::vector<SimEmitter>> effects;
+    /// The terrain-type grid's journal (`C-289`): `SetTerrainTypeRect` writes
+    /// and unit-owned tarmac stamps, from v48 — null when the match has no
+    /// type grid, like `features`. Restored by replaying the entries into the
+    /// scene's `TerrainTypeGrid`, which re-derives the effective cells.
+    std::optional<std::vector<TerrainStamp>> terrainStamps;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);

@@ -1126,6 +1126,25 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         }
     }
 
+    // `C-289`'s terrain-type journal: a `SetTerrainTypeRect` write or a live
+    // tarmac stamp changes what pathing and placement answer, so two matches
+    // differing only in the journal must hash apart. Present-only like
+    // `effects` — a scene with no type grid feeds nothing.
+    if (match.terrainTypes != nullptr) {
+        feed(h, true);
+        const auto& journal = match.terrainTypes->journal();
+        feed(h, journal.size());
+        for (const TerrainStamp& stamp : journal) {
+            feed(h, static_cast<std::size_t>(stamp.owner.index));
+            feed(h, static_cast<std::size_t>(stamp.owner.generation));
+            feed(h, stamp.x0);
+            feed(h, stamp.z0);
+            feed(h, stamp.x1);
+            feed(h, stamp.z1);
+            feed(h, static_cast<std::uint64_t>(stamp.type));
+        }
+    }
+
     return h;
 }
 

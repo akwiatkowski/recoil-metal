@@ -17,6 +17,7 @@
 
 #include "support/FxMatchers.hpp"
 
+#include <algorithm>
 #include <cstdint>
 
 using Catch::Approx;
@@ -357,4 +358,89 @@ TEST_CASE("a mobile or skirtless spawn leaves the terrain alone") {
     REQUIRE(spawned);
     CHECK(field.heightAt(4, 4) == Approx(56.5f));
     CHECK(field.heightAt(3, 3) == Approx(12.5f + (3 * 800 + 3 * 300) * 0.01f));
+}
+
+TEST_CASE("C-289: SetTerrainTypeRect rewrites the type grid pathing reads", "[terrain]") {
+    // `SetTerrainTypeRect` (`0x763be0`) is the one runtime mutation the
+    // terrain-type grid takes: retail writes the type bytes and — because it
+    // never dirties the path tables — comments its sole caller out
+    // (`defaultunits.lua:99`). Ours writes through: the grid the C-288
+    // blocking LUT reads is the grid this mutates, so a rect stamped with a
+    // `Blocking = true` code (Dirt09, TypeCode 9 — TerrainTypes.lua:703)
+    // changes what pathing and placement answer for those squares.
+    rm::HeightField field;
+    field.squaresX = 32;
+    field.squaresZ = 32;
+    field.baseHeight = 0.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+
+    // The map's own type grid: every square the default, non-blocking code.
+    std::vector<std::uint8_t> base(
+        static_cast<std::size_t>(field.squaresX) * static_cast<std::size_t>(field.squaresZ),
+        std::uint8_t{0});
+    rm::sim::TerrainTypeGrid types{base, field.squaresX, field.squaresZ};
+
+    const auto passable = [&] {
+        return rm::sim::buildPassability(field, 0.0f, 17.0f, 12.0f, types.types());
+    };
+    const rm::sim::PassabilityGrid before = passable();
+    CHECK(before.passableAt(1, 1));
+    CHECK(rm::sim::sitePlaceable(before, Fx::fromInt(96), Fx::fromInt(96),
+                                 Fx::fromInt(8)));
+
+    // Squares 8..15 in both axes — exactly path cell (1,1) — become Dirt09.
+    types.setRect(Fx::fromInt(64), Fx::fromInt(64), Fx::fromInt(128),
+                  Fx::fromInt(128), std::uint8_t{9});
+    CHECK(types.types()[9 * 32 + 9] == 9);
+    CHECK(types.types()[0] == 0);
+
+    const rm::sim::PassabilityGrid after = passable();
+    CHECK_FALSE(after.passableAt(1, 1));
+    CHECK(after.passableAt(0, 0));
+    CHECK_FALSE(rm::sim::sitePlaceable(after, Fx::fromInt(96), Fx::fromInt(96),
+                                       Fx::fromInt(8)));
+    // The version is the cache-buster a memoised grid compares: a mutation
+    // must move it or a cached grid answers the old map forever.
+    CHECK(types.version() > 0);
+}
+
+TEST_CASE("C-289: a unit-owned stamp reverts to the write beneath it", "[terrain]") {
+    // The tarmac's lifecycle: `CreateTarmac` stamps the footprint when the
+    // structure stands and `DestroyTarmac` lifts it on death. Reverting is
+    // NOT "restore the base grid" — a rect write underneath the stamp is the
+    // state the cell returns to, which is why the grid keeps a journal rather
+    // than a diff.
+    rm::sim::TerrainTypeGrid types{std::span<const std::uint8_t>{}, 8, 8};
+    // An empty base still has geometry: stamps write over the default type.
+    types.setRect(Fx::fromInt(0), Fx::fromInt(0), Fx::fromInt(64),
+                  Fx::fromInt(64), std::uint8_t{9});
+    CHECK(types.types()[4 * 8 + 4] == 9);
+
+    const rm::sim::UnitId pad{.index = 3, .generation = 1};
+    types.stamp(Fx::fromInt(16), Fx::fromInt(16), Fx::fromInt(48),
+                Fx::fromInt(48), std::uint8_t{190}, pad);
+    CHECK(types.types()[4 * 8 + 4] == 190);
+
+    // The owner dies: the stamp lifts and the Dirt09 write underneath shows
+    // through again — the journal's last-write-wins rule, not a reset.
+    types.sweep([pad](rm::sim::UnitId id) { return id.index != pad.index; });
+    CHECK(types.types()[4 * 8 + 4] == 9);
+    CHECK(types.journal().size() == 1);
+}
+
+TEST_CASE("C-289: the journal is the save: a restore replays it", "[terrain]") {
+    // The effective grid is a pure function of the map's base grid plus the
+    // journal, so serialization carries the journal — the same shape as the
+    // flow field's expansion count: replay the deterministic writes rather
+    // than serialize the derived bytes.
+    rm::sim::TerrainTypeGrid live{std::span<const std::uint8_t>{}, 8, 8};
+    const rm::sim::UnitId pad{.index = 1, .generation = 2};
+    live.stamp(Fx::fromInt(8), Fx::fromInt(8), Fx::fromInt(24), Fx::fromInt(24),
+               std::uint8_t{191}, pad);
+
+    rm::sim::TerrainTypeGrid restored{std::span<const std::uint8_t>{}, 8, 8};
+    restored.restoreJournal(live.journal());
+    CHECK(std::ranges::equal(restored.types(), live.types()));
+    CHECK(restored.journal().size() == live.journal().size());
 }

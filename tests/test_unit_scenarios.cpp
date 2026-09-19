@@ -1651,6 +1651,12 @@ TEST_CASE("saved economies and armies continue construction sharing and defeat t
         runner.match.pendingWinner = 0;
         runner.match.winnerStableTicks = 100;
         runner.match.defeatCleanupRemainingTicks = {0, 0, 25};
+        // `simInit.lua:200` (`C-346`): armies teamed at setup request the
+        // allied victory — the gate `victory.lua` checks before a
+        // multi-member surviving alliance can win. Armies 0 and 1 share
+        // alliance 0 above, so both opt in the way setup would have.
+        live.scene.armies[0].requestingAlliedVictory = true;
+        live.scene.armies[1].requestingAlliedVictory = true;
     }
     const auto encoded = rm::sim::SaveState::encode({.tick = 10, .random = runner.match.random.snapshot(),
         .pathServiceBeats = runner.pathService.serviceBeats(), .units = live.scene.store.snapshot(),

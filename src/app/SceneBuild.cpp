@@ -612,7 +612,21 @@ resolveAttachBones(const rm::Model& model, const rm::unitdef::UnitDef& def) {
         return std::nullopt;
     }
 
-    for (rm::unitdef::Weapon& gun : def->weapons) {
+    VfsUnit resolved;
+    resolved.def = std::move(*def);
+    // `Display.Tarmacs` (`C-289`): the gate `CreateTarmac` checks before it
+    // would stamp the footprint — `bp and table.getn(bp) > 0`
+    // (defaultunits.lua:80-81). `unitbp::load` does not carry decal-only
+    // fields, so the source table is read once more for this one key; the
+    // parse is per-type, at registration, not per spawn.
+    if (const auto parsed = rm::lua::parseTable(text)) {
+        if (const rm::lua::Value* tarmacs = parsed->path("Display", "Tarmacs");
+            tarmacs != nullptr && !tarmacs->items.empty()) {
+            resolved.hasTarmac = true;
+        }
+    }
+
+    for (rm::unitdef::Weapon& gun : resolved.def.weapons) {
         if (gun.projectileId.empty()) continue;
         const auto projectile = content.read(gun.projectileId);
         if (!projectile) continue;
@@ -623,10 +637,11 @@ resolveAttachBones(const rm::Model& model, const rm::unitdef::UnitDef& def) {
         }
     }
 
-    const std::string meshPath = rm::unitbp::resolveMeshInVfs(*def, blueprintPath, content);
+    const std::string meshPath =
+        rm::unitbp::resolveMeshInVfs(resolved.def, blueprintPath, content);
     if (meshPath.empty()) {
         rm::log::writef(rm::log::Level::Error, "unit",
-                        "\"%s\" has no mesh in the mounted content", def->name.c_str());
+                        "\"%s\" has no mesh in the mounted content", resolved.def.name.c_str());
         return std::nullopt;
     }
 
@@ -640,29 +655,26 @@ resolveAttachBones(const rm::Model& model, const rm::unitdef::UnitDef& def) {
                         meshPath.c_str(), model.error().message.c_str());
         return std::nullopt;
     }
-
     std::printf("unit %s: %.0f elmos/s, %.2f rad/s, radius %.1f elmos, %.0f hp, %s\n",
-                def->name.c_str(), static_cast<double>(def->speedElmosPerSecond),
-                static_cast<double>(def->turnRateRadiansPerSecond),
-                static_cast<double>(def->collisionRadiusElmos),
-                static_cast<double>(rm::sim::magToFloat(def->health)),
-                rm::unitdef::travelsOnGround(def->motion) ? "on the ground"
-                : def->canFly                            ? "flying"
-                                                         : "not a ground mover");
+                resolved.def.name.c_str(), static_cast<double>(resolved.def.speedElmosPerSecond),
+                static_cast<double>(resolved.def.turnRateRadiansPerSecond),
+                static_cast<double>(resolved.def.collisionRadiusElmos),
+                static_cast<double>(rm::sim::magToFloat(resolved.def.health)),
+                rm::unitdef::travelsOnGround(resolved.def.motion) ? "on the ground"
+                : resolved.def.canFly                            ? "flying"
+                                                                 : "not a ground mover");
 
     // A mesh read from bytes has no file to take its name from, so it arrives
     // nameless — and the name is what every log line and the batch report identify
     // it by. The blueprint's id is the better answer anyway: it is what the rest of
     // the content calls this unit.
-    model->name = def->name;
+    model->name = resolved.def.name;
 
-    return VfsUnit{
-        .def = *def,
-        .model = std::move(*model),
-        .albedoPath = scmTextureInVfs(meshPath, kScmDiffuseSuffix, content),
-        .shadingPath = scmTextureInVfs(meshPath, kScmShadingSuffix, content),
-        .normalsPath = scmTextureInVfs(meshPath, kScmNormalsSuffix, content),
-    };
+    resolved.model = std::move(*model);
+    resolved.albedoPath = scmTextureInVfs(meshPath, kScmDiffuseSuffix, content);
+    resolved.shadingPath = scmTextureInVfs(meshPath, kScmShadingSuffix, content);
+    resolved.normalsPath = scmTextureInVfs(meshPath, kScmNormalsSuffix, content);
+    return resolved;
 }
 
 
@@ -1024,6 +1036,10 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         scene.setBatchForType(type, scene.batches.size() - 1);
         scene.setPathForType(type, blueprintPath);
         scene.setTypeTraits(type, move, unit->def.meshToElmos);
+        // `Display.Tarmacs` (`C-289`): the flag `stampTarmacAt` gates on,
+        // resolved once at registration like the rest of the type's traits.
+        scene.tarmacForType[static_cast<std::size_t>(type)] =
+            unit->hasTarmac ? std::uint8_t{1} : std::uint8_t{0};
         // The sim's copy of the ring (see publishTurretMount): fine mesh only.
         // The coarse batch reuses this mount; resolving it again would
         // overwrite it with merged-bone approximations.
@@ -1119,6 +1135,44 @@ static void flattenSkirtAt(UnitScene& scene, const rm::HeightField& field,
     }
 }
 
+/// `StructureUnit.CreateTarmac`'s terrain half (`C-289`): retail's
+/// `SetTerrainTypeRect(self.tarmacRect, {TypeCode = factionIndex + 189})` —
+/// commented out in shipped Lua (`defaultunits.lua:99`, "disabling this for
+/// now") because the write never dirtied retail's path tables. Ours is live:
+/// a structure whose blueprint carries `Display.Tarmacs` stamps its
+/// footprint with the owner's faction tarmac code (UEF 190, Aeon 191, Cybran
+/// 192 — TerrainTypes.lua:1714-1746; Seraphim's 193 is unauthored but the
+/// formula's answer), and the tick's owner sweep lifts it when the structure
+/// is gone — `DestroyTarmac`'s counterpart.
+///
+/// The gates are retail's own: `GetCurrentLayer() == 'Land'` (the same
+/// exclusion `flattenSkirtAt` makes), a non-empty `Display.Tarmacs`, and a
+/// footprint to stamp — `self.tarmacRect` is never assigned in shipped Lua,
+/// so the footprint rect is the only rect the dead call could have meant.
+/// The stamp is keyed to the unit so the sweep knows whose it is.
+static void stampTarmacAt(UnitScene& scene, rm::UnitTypeIndex type,
+                          rm::sim::UnitId id, const rm::sim::Transform& transform,
+                          const rm::sim::MoveState& motion,
+                          const rm::sim::Army& army) {
+    const auto index = static_cast<std::size_t>(type);
+    const rm::unitdef::UnitDef* def = scene.catalog.def(type);
+    if (def == nullptr || index >= scene.tarmacForType.size()
+        || scene.tarmacForType[index] == 0 || motion.surfaceWater
+        || motion.airborne || motion.submersible
+        || (scene.hasWater && transform.y < rm::sim::fxFromFloat(scene.waterLevelElmos))) {
+        return;
+    }
+    // `factionIndex + 189` on retail's 1-based index; `Faction` is 0-based.
+    const auto type8 = static_cast<std::uint8_t>(
+        std::min(255, static_cast<int>(army.faction) + 1 + 189));
+    const rm::sim::Fx halfX =
+        rm::sim::Fx::fromInt(std::max(1, def->footprintSquaresX) * rm::kSquareSize / 2);
+    const rm::sim::Fx halfZ =
+        rm::sim::Fx::fromInt(std::max(1, def->footprintSquaresZ) * rm::kSquareSize / 2);
+    scene.terrainTypeGrid.stamp(transform.x - halfX, transform.z - halfZ,
+                                transform.x + halfX, transform.z + halfZ, type8, id);
+}
+
 [[nodiscard]] std::optional<rm::sim::UnitId> spawnUnit(UnitScene& scene,
                                                           const rm::vfs::Vfs& content,
                                                           const rm::HeightField& field,
@@ -1156,6 +1210,11 @@ static void flattenSkirtAt(UnitScene& scene, const rm::HeightField& field,
         .motion = motion,
         .health = rm::sim::initialHealth(def.health, scene.catalog.shield(type).maximum),
     });
+    // `CreateTarmac`'s terrain half (`C-289`): the pad stamps the moment the
+    // unit exists — retail runs it from `OnCreate` like `FlattenSkirt`, and
+    // the stamp is keyed to this id so the tick's sweep lifts it on death.
+    stampTarmacAt(scene, type, id, transform, motion, army);
+
     // A flyer spawns cruising at its placed altitude: seed the reference the lift law
     // chases from the same ground-plus-clearance the align pass would assign (`C-221`).
     if (motion.canFly) {
@@ -1700,7 +1759,8 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
     UnitScene scene;
     scene.hasWater = hasWater;
     scene.waterLevelElmos = waterLevelElmos;
-    scene.terrainTypes = terrainTypes;
+    scene.terrainTypeGrid =
+        rm::sim::TerrainTypeGrid{terrainTypes, field.squaresX, field.squaresZ};
     scene.lookAhead = std::make_shared<const rm::MaxHeightPyramid>(field);
 
     for (std::size_t i = 0; i < requests.size(); ++i) {
@@ -1890,6 +1950,12 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         // rather than asserted here. The assertion this replaces — `type == batches.size()` —
         // is the one that made a buildable type impossible to register early (`#3090`).
         scene.setTypeTraits(type, move, def.has_value() ? def->meshToElmos : 1.0f);
+        // `Display.Tarmacs` (`C-289`), resolved with the blueprint — a crowd
+        // unit has no army to stamp for, but the flag is the type's fact and
+        // costs nothing to keep honest.
+        if (fromContent && fromContent->hasTarmac) {
+            scene.tarmacForType[static_cast<std::size_t>(type)] = 1;
+        }
 
         // A definition's speed and turn rate reach every unit of it. Slope and depth limits
         // do NOT yet: passability is one grid for the whole scene, so honouring them per

@@ -1248,6 +1248,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             return !store.alive(redirect.owner);
         });
     }
+    // Tarmac stamps die with their owners (`C-289`): retail's `DestroyTarmac`
+    // runs from `OnDestroy`, and the sweep is the same component-removal rule
+    // as the silo ammo above — a death, a reclaim, a capture-kill or an
+    // upgrade replace all lift the stamp the same way, and the type grid
+    // re-derives only the cells the lifted stamps covered.
+    if (match.terrainTypes != nullptr) {
+        match.terrainTypes->sweep([&store](UnitId owner) { return store.alive(owner); });
+    }
 
     // An upgrade whose unit died is CANCELLED, not completed: the work was that unit
     // becoming something, and there is no longer anything to become it. Before the economy

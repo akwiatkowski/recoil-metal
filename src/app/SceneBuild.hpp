@@ -73,6 +73,11 @@ struct VfsUnit {
     std::string albedoPath;
     std::string shadingPath;
     std::string normalsPath;
+    /// `Display.Tarmacs` present and non-empty — the gate `CreateTarmac`
+    /// (defaultunits.lua:78) checks before stamping the footprint (`C-289`).
+    /// Parsed here rather than carried on `UnitDef`, which the blueprint
+    /// loader does not extend for decal-only fields.
+    bool hasTarmac = false;
 };
 
 // --- What the build layer does ------------------------------------------------------------

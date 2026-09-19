@@ -1365,6 +1365,9 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 // The sim-owned emitter pool (`C-296`): the scene keeps the
                 // storage, the effect beat authors the records.
                 .effects = &scene.effects,
+                /// The terrain-type grid's runtime writes (`C-289`): the scene
+                /// owns the grid, the tick sweeps dead owners' tarmac stamps.
+                .terrainTypes = &scene.terrainTypeGrid,
             },
     };
 

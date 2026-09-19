@@ -267,6 +267,13 @@ struct Match {
     /// (`CreateEmitterAtBone`, `C-298`), the scene keeps the storage, and a
     /// scene with no effects passes null so the whole beat is a branch.
     std::vector<SimEmitter>* effects = nullptr;
+
+    /// The terrain-type grid's runtime writes (`C-289`): `SetTerrainTypeRect`
+    /// and the tarmac stamps structures lay under their footprints.
+    /// Caller-owned like `features` — the scene keeps the storage, the sim
+    /// sweeps dead owners' stamps each tick (retail's `DestroyTarmac`), and a
+    /// scene with no type grid passes null so the sweep is a branch.
+    TerrainTypeGrid* terrainTypes = nullptr;
 };
 
 /// The position and radius are CARRIED rather than looked up, because retiring a unit is

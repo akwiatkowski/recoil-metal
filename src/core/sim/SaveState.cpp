@@ -1511,6 +1511,7 @@ void writeEffects(PayloadWriter& w, const std::optional<std::vector<SimEmitter>>
         state.reset();
         return true;
     }
+
     std::size_t count{};
     if (!r.count(count, 8)) return false;
     state.emplace();
@@ -1523,6 +1524,47 @@ void writeEffects(PayloadWriter& w, const std::optional<std::vector<SimEmitter>>
             || !r.u64(emitter.viewerMask)) return false;
         emitter.alive = alive != 0;
         emitter.hidden = hidden != 0;
+    }
+    return true;
+}
+
+// V48 trails the payload after the emitter pool: the terrain-type journal
+// (`C-289`), nullable like `features` — a match with no type grid saves the
+// absent byte, and an older reader keeps the map's base grid unmutated.
+[[maybe_unused]] void writeTerrainStamps(PayloadWriter& w,
+                        const std::optional<std::vector<TerrainStamp>>& state) {
+    w.u8(state.has_value());
+    if (!state) {
+        return;
+    }
+    w.count(state->size());
+    for (const TerrainStamp& stamp : *state) {
+        writeId(w, stamp.owner);
+        w.i32(stamp.x0);
+        w.i32(stamp.z0);
+        w.i32(stamp.x1);
+        w.i32(stamp.z1);
+        w.u8(stamp.type);
+    }
+}
+
+[[maybe_unused]] [[nodiscard]] bool readTerrainStamps(PayloadReader& r,
+                                     std::optional<std::vector<TerrainStamp>>& state) {
+    bool present{};
+    if (!readFlag(r, present)) return false;
+    if (!present) {
+        state.reset();
+        return true;
+    }
+    std::size_t count{};
+    if (!r.count(count, 8)) return false;
+    state.emplace();
+    state->resize(count);
+    for (TerrainStamp& stamp : *state) {
+        if (!readId(r, stamp.owner) || !r.i32(stamp.x0) || !r.i32(stamp.z0)
+            || !r.i32(stamp.x1) || !r.i32(stamp.z1) || !r.u8(stamp.type)) {
+            return false;
+        }
     }
     return true;
 }
@@ -2222,6 +2264,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion42) writeProductionOverrides(payloadWriter, state.productionOverrides);
     if (version >= kVersion44) writeUnitPose(payloadWriter, state.units);
     if (version >= kVersion45) writeEffects(payloadWriter, state.effects);
+    if (version >= kVersion48) writeTerrainStamps(payloadWriter, state.terrainStamps);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -2354,6 +2397,10 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::optional<std::vector<SimEmitter>> effects;
     if (version >= kVersion44 && !readUnitPose(reader, units)) return std::nullopt;
     if (version >= kVersion45 && !readEffects(reader, effects)) return std::nullopt;
+    std::optional<std::vector<TerrainStamp>> terrainStamps;
+    if (version >= kVersion48 && !readTerrainStamps(reader, terrainStamps)) {
+        return std::nullopt;
+    }
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
@@ -2368,7 +2415,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        .pathService = std::move(pathService),
                        .intel = std::move(intel),
                        .productionOverrides = std::move(productionOverrides),
-                       .effects = std::move(effects)};
+                       .effects = std::move(effects),
+                       .terrainStamps = std::move(terrainStamps)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -2392,7 +2440,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
     return rm::sim::decode(bytes, kVersion2);
 }
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion46);
+    return rm::sim::encode(state, kVersion48);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

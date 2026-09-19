@@ -185,4 +185,90 @@ Fx Terrain::maxSurfaceHeightNear(Fx x, Fx z, Fx reachElmos) const noexcept {
     return hasWater_ ? std::max(highest, waterLevel_) : highest;
 }
 
+TerrainTypeGrid::TerrainTypeGrid(std::span<const std::uint8_t> base, int squaresX,
+                                 int squaresZ)
+    : squaresX_(std::max(0, squaresX)), squaresZ_(std::max(0, squaresZ)) {
+    const std::size_t cells = static_cast<std::size_t>(squaresX_)
+                              * static_cast<std::size_t>(squaresZ_);
+    if (base.size() == cells) {
+        base_.assign(base.begin(), base.end());
+    } else {
+        // A mismatched or absent grid reads as all-default — the same answer
+        // `buildPassability` gives a span that does not match the field.
+        base_.assign(cells, std::uint8_t{0});
+    }
+    effective_ = base_;
+}
+
+bool TerrainTypeGrid::cellRect(Fx x0Elmos, Fx z0Elmos, Fx x1Elmos, Fx z1Elmos,
+                               TerrainStamp& out) const noexcept {
+    // Elmos to cells: `floor` on the near edge, `ceil` on the far — the same
+    // pair `StructureUnit.FlattenSkirt` applies to `GetSkirtRect`
+    // (defaultunits.lua:70-71) and `flattenRect` applies above. Raw-word
+    // arithmetic, not `Fx` division: `Fx::divide` rounds to nearest, which
+    // would grow the far edge a cell whenever the remainder rounds up.
+    const auto floorDiv = [](std::int64_t n, std::int64_t d) noexcept -> std::int32_t {
+        const std::int64_t q = n / d;
+        return static_cast<std::int32_t>((n < 0 && n % d != 0) ? q - 1 : q);
+    };
+    const std::int64_t pitch = Fx::fromInt(kSquareSize).raw();
+    out.x0 = std::clamp(floorDiv(x0Elmos.raw(), pitch), 0, squaresX_);
+    out.z0 = std::clamp(floorDiv(z0Elmos.raw(), pitch), 0, squaresZ_);
+    out.x1 = std::clamp(floorDiv(x1Elmos.raw() + pitch - 1, pitch), 0, squaresX_);
+    out.z1 = std::clamp(floorDiv(z1Elmos.raw() + pitch - 1, pitch), 0, squaresZ_);
+    return out.x0 < out.x1 && out.z0 < out.z1;
+}
+
+void TerrainTypeGrid::rematerialize(int x0, int z0, int x1, int z1) noexcept {
+    for (int z = z0; z < z1; ++z) {
+        for (int x = x0; x < x1; ++x) {
+            const std::size_t cell = static_cast<std::size_t>(z)
+                                         * static_cast<std::size_t>(squaresX_)
+                                     + static_cast<std::size_t>(x);
+            std::uint8_t type = base_[cell];
+            // Last write wins: the newest journal entry covering the cell is
+            // its type, so a lifted stamp reveals the write beneath it rather
+            // than the map's base.
+            for (const TerrainStamp& entry : journal_) {
+                if (x >= entry.x0 && x < entry.x1 && z >= entry.z0 && z < entry.z1) {
+                    type = entry.type;
+                }
+            }
+            effective_[cell] = type;
+        }
+    }
+}
+
+void TerrainTypeGrid::setRect(Fx x0Elmos, Fx z0Elmos, Fx x1Elmos, Fx z1Elmos,
+                              std::uint8_t type) {
+    stamp(x0Elmos, z0Elmos, x1Elmos, z1Elmos, type, UnitId{});
+}
+
+void TerrainTypeGrid::stamp(Fx x0Elmos, Fx z0Elmos, Fx x1Elmos, Fx z1Elmos,
+                            std::uint8_t type, UnitId owner) {
+    if (effective_.empty()) {
+        return;  // no geometry: a map with no squares has nothing to stamp
+    }
+    TerrainStamp entry{.owner = owner, .type = type};
+    if (!cellRect(x0Elmos, z0Elmos, x1Elmos, z1Elmos, entry)) {
+        return;  // entirely off the map — retail's clamped-empty case
+    }
+    journal_.push_back(entry);
+    for (int z = entry.z0; z < entry.z1; ++z) {
+        for (int x = entry.x0; x < entry.x1; ++x) {
+            effective_[static_cast<std::size_t>(z)
+                           * static_cast<std::size_t>(squaresX_)
+                       + static_cast<std::size_t>(x)] = type;
+        }
+    }
+    ++version_;
+}
+
+void TerrainTypeGrid::restoreJournal(std::span<const TerrainStamp> journal) {
+    journal_.assign(journal.begin(), journal.end());
+    effective_ = base_;
+    rematerialize(0, 0, squaresX_, squaresZ_);
+    ++version_;
+}
+
 } // namespace rm::sim

@@ -210,7 +210,7 @@ int main(int argc, const char* argv[]) {
         // BEFORE the skirmish block, because `orderFirstExtractors` issues real build commands
         // and `applyCommand` takes a grid for every kind of order.
         PassabilitySet passability{map->field, map->hasWater, map->waterLevel,
-                                   map->terrainTypes};
+                                   &units.terrainTypeGrid};
         for (const auto& marker : map->markers) {
             const auto kind = rm::app::depositKind(marker);
             if (kind != rm::unitdef::BuildRestriction::None) {
@@ -230,6 +230,17 @@ int main(int argc, const char* argv[]) {
                 alliances > 1 && alliances < units.armies.size()) {
                 for (rm::sim::Army& army : units.armies) {
                     army.alliance = army.index % static_cast<int>(alliances);
+                }
+                // `simInit.lua:200`: armies teamed at SETUP request the allied
+                // victory — the gate `victory.lua` checks before a multi-member
+                // surviving alliance can win. Alliances formed mid-match opt in
+                // through `RequestAlliedVictory` instead.
+                for (rm::sim::Army& army : units.armies) {
+                    army.requestingAlliedVictory =
+                        std::ranges::any_of(units.armies, [&army](const rm::sim::Army& other) {
+                            return other.index != army.index
+                                && other.alliance == army.alliance;
+                        });
                 }
                 std::printf("skirmish: %zu armies in %zu alliances\n", units.armies.size(),
                             alliances);

@@ -15,7 +15,9 @@
 #include "core/sim/Events.hpp"
 #include "core/sim/FeatureStore.hpp"
 #include "core/sim/Pathfinding.hpp"
+#include "core/sim/SaveState.hpp"
 #include "core/sim/Skirmish.hpp"
+#include "core/sim/Terrain.hpp"
 #include "core/sim/StateHash.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -288,4 +290,108 @@ TEST_CASE("C-292: a shot into the sea leaves no scorch", "[fa-terrain]") {
         CHECK(impact->impactType == rm::sim::ImpactType::Unit);
         CHECK(scene.impactMarks.empty());
     }
+}
+
+TEST_CASE("C-289: a tarmac structure stamps its pad and the stamp dies with it",
+          "[fa-terrain]") {
+    // Retail's `CreateTarmac` (defaultunits.lua:75) is decal-only because its
+    // `SetTerrainTypeRect(self.tarmacRect, {TypeCode = factionIndex + 189})`
+    // is commented out — the write never dirtied path tables anyway. Ours is
+    // live: a structure carrying `Display.Tarmacs` stamps its footprint with
+    // the owner's faction tarmac code (UEF 190, Aeon 191, Cybran 192,
+    // Seraphim 193 — TerrainTypes.lua:1714-1746) the moment it stands, and
+    // `DestroyTarmac`'s counterpart is the tick's owner sweep.
+    rm::HeightField field = flatField(128, 0.0f);
+    rm::app::UnitScene scene = makeScene(false, 0.0f);
+
+    // The pad sits on Dirt09 — a `Blocking = true` code (TerrainTypes.lua:703)
+    // — so the stamp's effect is observable through the C-288 LUT: the cells
+    // are unwalkable until the tarmac covers them, and unwalkable again once
+    // the structure is gone.
+    std::vector<std::uint8_t> base(128 * 128, std::uint8_t{0});
+    for (int z = 6; z <= 10; ++z) {
+        for (int x = 6; x <= 10; ++x) {
+            base[static_cast<std::size_t>(z) * 128 + static_cast<std::size_t>(x)] = 9;
+        }
+    }
+    scene.terrainTypeGrid = rm::sim::TerrainTypeGrid{base, 128, 128};
+    rm::app::PassabilitySet passability{field, false, 0.0f, &scene.terrainTypeGrid};
+
+    rm::unitdef::UnitDef factory;
+    factory.name = "TESTFAC";
+    factory.footprintSquaresX = 2;
+    factory.footprintSquaresZ = 2;
+    factory.health = rm::sim::magFromFloat(1000.0f);
+    // A radius, because `retireDead` reads `radiusElmos <= 0` as "already
+    // retired" — without one the corpse is never reaped and the stamp's
+    // owner stays alive.
+    factory.collisionRadiusElmos = 1.0f;
+    const rm::UnitTypeIndex type = [&] {
+        scene.definitions.push_back(factory);
+        const auto added =
+            scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+        scene.setTypeTraits(added, rm::data::moveDefFor(factory), 1.0f);
+        const std::string path = "/units/TESTFAC/TESTFAC_unit.bp";
+        scene.setPathForType(added, path);
+        scene.typeForBlueprint.emplace(path, added);
+        // `Display.Tarmacs` — the flag `CreateTarmac` gates on. A synthetic
+        // def has no blueprint to read it from, so the type is marked the way
+        // `ensureDrawableType` marks a real one.
+        scene.tarmacForType[static_cast<std::size_t>(added)] = 1;
+        return added;
+    }();
+    (void)type;
+
+    rm::vfs::Vfs content;
+    const auto spawned = rm::app::spawnUnit(scene, content, field,
+                                            "/units/TESTFAC/TESTFAC_unit.bp",
+                                            {64.0f, 0.0f, 64.0f}, scene.armies[0],
+                                            rm::Brad{0});
+    REQUIRE(spawned);
+
+    // The footprint is 2x2 squares centred on (64,64): cells 7..8 each way,
+    // stamped with the UEF tarmac code — army 0's faction is Uef, and retail's
+    // formula is `factionIndex + 189` on the 1-based index.
+    CHECK(scene.terrainTypeGrid.types()[7 * 128 + 7] == 190);
+    CHECK(scene.terrainTypeGrid.types()[8 * 128 + 8] == 190);
+    CHECK(scene.terrainTypeGrid.types()[6 * 128 + 6] == 9);
+
+    // Pathing sees it through the same PassabilitySet the match routes on:
+    // the stamped squares are walkable while the factory stands.
+    const rm::sim::PassabilityGrid& stamped = passability.gridFor(17.0f, 12.0f);
+    CHECK(stamped.passableAt(0, 0));
+
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+
+    // The stamp is sim state: two matches differing only in it must hash
+    // apart, and a save must carry it.
+    const rm::StateHash withPad = rm::sim::hashMatch(scene.store, runner.match);
+    scene.terrainTypeGrid.setRect(rm::test::fx(0.0f), rm::test::fx(0.0f),
+                                  rm::test::fx(8.0f), rm::test::fx(8.0f),
+                                  std::uint8_t{9});
+    CHECK(rm::sim::hashMatch(scene.store, runner.match) != withPad);
+
+    // The journal round-trips through SaveState: the restored grid answers
+    // the same type question the live one does.
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+        .tick = 1,
+        .random = runner.match.random.snapshot(),
+        .terrainStamps = std::vector<rm::sim::TerrainStamp>{
+            scene.terrainTypeGrid.journal().begin(),
+            scene.terrainTypeGrid.journal().end()}}));
+    REQUIRE(saved);
+    REQUIRE(saved->terrainStamps.has_value());
+    rm::sim::TerrainTypeGrid restored{base, 128, 128};
+    restored.restoreJournal(*saved->terrainStamps);
+    CHECK(std::ranges::equal(restored.types(), scene.terrainTypeGrid.types()));
+    scene.store.health()[spawned->index].current = rm::sim::Mag{};
+    (void)rm::app::advanceMatch(runner, 0, 0.0f);
+    CHECK(scene.terrainTypeGrid.types()[7 * 128 + 7] == 9);
+    CHECK(scene.terrainTypeGrid.types()[8 * 128 + 8] == 9);
+    // `passableAt` is "any walkable square" — a partially blocked cell still
+    // answers true. The pad's unwalkable-again is `divisorAt != 1`: not
+    // pristine, which is the same bar `sitePlaceable` holds a footprint to.
+    CHECK(passability.gridFor(17.0f, 12.0f).divisorAt(0, 0) != 1);
 }

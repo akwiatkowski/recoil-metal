@@ -383,13 +383,19 @@ struct UnitScene {
     bool hasWater = false;
     float waterLevelElmos = 0.0f;
 
-    /// The map's per-square terrain-type grid (C-288), `.scmap` only — the
-    /// same span `PassabilitySet` builds its ground grids against. Kept on the
-    /// scene so consumers that see the world through it (the FAF opponent's
-    /// placement grids and path probes) answer the same blocking question the
-    /// match's own grids do. Empty on every other map family; the map outlives
-    /// the scene.
-    std::span<const std::uint8_t> terrainTypes;
+    /// The map's per-square terrain-type grid (C-288), `.scmap` only — plus
+    /// the runtime writes C-289 adds: `SetTerrainTypeRect` and the tarmac
+    /// stamps structures lay under their footprints. `PassabilitySet` builds
+    /// its ground grids against `types()` and re-derives when `version()`
+    /// moves; `Match::terrainTypes` points here so the tick can sweep dead
+    /// owners' stamps. Empty on every other map family.
+    rm::sim::TerrainTypeGrid terrainTypeGrid;
+
+    /// Per TYPE, whether the blueprint carries `Display.Tarmacs` — the flag
+    /// `CreateTarmac` (defaultunits.lua:78) gates on before it would stamp
+    /// the footprint. Index-aligned with `moveDefForType`/`typeScale`;
+    /// `setTypeTraits` keeps the size.
+    std::vector<std::uint8_t> tarmacForType;
 
     /// The map's max-height pyramid, built once at scene construction for the flyers'
     /// terrain look-ahead (`C-246`). Shared because scenes are copied; null in the synthetic
@@ -708,6 +714,7 @@ struct UnitScene {
         if (moveDefForType.size() <= index) {
             moveDefForType.resize(index + 1);
             typeScale.resize(index + 1, 1.0f);
+            tarmacForType.resize(index + 1);
         }
         moveDefForType[index] = move;
         typeScale[index] = scale;
@@ -1289,24 +1296,34 @@ struct UnitScene {
 // The passability grids a scene needs, one per distinct pair of limits.
 //
 // Keyed on the LIMITS rather than on the unit type, because the grid depends on
-// nothing else — every unit that climbs 17 degrees and wades 12 elmos sees the
-// same map, whatever model it wears. On a scene of a dozen unit types that is
-// usually two or three grids rather than a dozen.
 class PassabilitySet {
 public:
+    /// `terrainTypes` is the scene's mutable type grid (`C-289`), or null for
+    /// a map with none — the pointer, not a span, because `SetTerrainTypeRect`
+    /// and tarmac stamps mutate it at runtime and `version()` is what tells
+    /// the memoised grids their answer went stale.
     PassabilitySet(const rm::HeightField& field, bool hasWater, float waterLevel,
-                   std::span<const std::uint8_t> terrainTypes = {})
+                   const rm::sim::TerrainTypeGrid* terrainTypes = nullptr)
         : field_{&field}, hasWater_{hasWater}, waterLevel_{waterLevel},
-          terrainTypes_{terrainTypes} {}
+          terrainTypes_{terrainTypes},
+          terrainVersion_{terrainTypes != nullptr ? terrainTypes->version() : 0} {}
 
     [[nodiscard]] bool matches(const rm::HeightField& field, bool hasWater, float waterLevel,
-                               std::span<const std::uint8_t> terrainTypes = {}) const noexcept {
+                               const rm::sim::TerrainTypeGrid* terrainTypes = nullptr) const noexcept {
         return field_==&field && hasWater_==hasWater && waterLevel_==waterLevel
-               && terrainTypes_.data() == terrainTypes.data()
-               && terrainTypes_.size() == terrainTypes.size();
+               && terrainTypes_ == terrainTypes
+               && (terrainTypes_ == nullptr || terrainTypes_->version() == terrainVersion_);
     }
 
     [[nodiscard]] const rm::sim::PassabilityGrid& gridFor(float slopeDegrees, float depthElmos) {
+        // A terrain-type write (`C-289`) changes which squares the blocking
+        // LUT refuses, so every cached ground grid is stale the moment the
+        // version moves. Surface-water grids are untouched — they never read
+        // the type grid.
+        if (terrainTypes_ != nullptr && terrainTypes_->version() != terrainVersion_) {
+            grids_.clear();
+            terrainVersion_ = terrainTypes_->version();
+        }
         const auto key = std::make_pair(slopeDegrees, depthElmos);
         const auto existing = grids_.find(key);
         if (existing != grids_.end()) {
@@ -1315,7 +1332,8 @@ public:
 
         rm::sim::PassabilityGrid grid =
             rm::sim::buildPassability(*field_, waterLevel_, slopeDegrees, depthElmos,
-                                      terrainTypes_);
+                                      terrainTypes_ != nullptr ? terrainTypes_->types()
+                                                               : std::span<const std::uint8_t>{});
         std::printf("passability: %d x %d cells of %.0f elmos, %zu%% walkable"
                     " (maxslope %.0f deg, maxwaterdepth %.0f)\n",
                     grid.cellsX, grid.cellsZ,
@@ -1425,9 +1443,11 @@ private:
     const rm::HeightField* field_;
     bool hasWater_;
     float waterLevel_;
-    /// The map's per-square terrain-type grid (C-288): `.scmap` only, empty on
-    /// every other map family. A span — the map outlives the set.
-    std::span<const std::uint8_t> terrainTypes_;
+    /// The scene's mutable terrain-type grid (C-288/C-289), or null on every
+    /// map family without one. A pointer — the scene outlives the set, and
+    /// `terrainVersion_` is the last version the cached grids were built on.
+    const rm::sim::TerrainTypeGrid* terrainTypes_ = nullptr;
+    std::uint64_t terrainVersion_ = 0;
     std::map<std::pair<float, float>, rm::sim::PassabilityGrid> grids_;
     std::map<float, rm::sim::PassabilityGrid> surfaceWater_;
     rm::sim::PassabilityGrid empty_;

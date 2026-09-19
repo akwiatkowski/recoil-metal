@@ -3,8 +3,12 @@
 #include "core/map/HeightField.hpp"
 #include "core/map/MaxHeightPyramid.hpp"
 #include "core/sim/Fx.hpp"
+#include "core/sim/IdPool.hpp"
 #include "core/unit/UnitDef.hpp"
+#include <algorithm>
+#include <cstdint>
 #include <span>
+#include <vector>
 
 namespace rm::sim {
 
@@ -162,4 +166,139 @@ private:
     FxWide heightScale_;
 };
 
+
+/// One recorded write to the terrain-type grid (`C-289`).
+///
+/// The journal entry, not the diff: the effective grid is base-plus-journal
+/// with LAST WRITE WINNING, so a save carries the journal and a revert
+/// re-derives the cells underneath rather than restoring a snapshot. `owner`
+/// is what makes a write a tarmac — `CreateTarmac`'s stamp lives exactly as
+/// long as the structure that laid it, and the tick's sweep lifts it when the
+/// owner is gone; a generation-zero owner is a bare `SetTerrainTypeRect`,
+/// which nothing reverts.
+struct TerrainStamp {
+    UnitId owner{};
+    /// Cell range in the type grid, half-open [x0,x1) × [z0,z1) — already in
+    /// cells, because the journal is what a save replays and the elmo→cell
+    /// conversion is the writer's job, done once.
+    std::int32_t x0 = 0, z0 = 0, x1 = 0, z1 = 0;
+    std::uint8_t type = 0;
+};
+
+/// The map's per-square terrain-type grid, plus the runtime writes C-289 adds.
+///
+/// Retail keeps this on `STIMap` (`+0x1428` cell→typeCode) and mutates it from
+/// exactly one place: `SetTerrainTypeRect` (`0x763be0`), which writes the type
+/// bytes and — never dirtying the path tables — is why retail commented its
+/// sole caller out (`defaultunits.lua:99`: "disabling this for now"). Ours is
+/// live: `types()` is the span `buildPassability` reads through the C-288
+/// blocking LUT, so a write is visible to pathing and placement the moment a
+/// derived grid is rebuilt, and `version()` is the cache-buster that tells a
+/// memoised grid its answer is stale.
+///
+/// THE JOURNAL IS THE STATE. `effective_` is a pure function of the map's
+/// base grid and `journal_`, last write winning — which is what makes both
+/// directions cheap: a save serializes the journal (a handful of stamps, not
+/// a megabyte of cells), and `sweep` reverts a dead owner's stamp by
+/// re-deriving only the cells it covered, so a `SetTerrainTypeRect` written
+/// UNDER a tarmac shows through again when the tarmac lifts.
+class TerrainTypeGrid {
+public:
+    /// `base` is the map's own type grid (`.scmap`'s `terrainType`, one byte
+    /// per square). A span that does not match `squaresX × squaresZ` is
+    /// ignored rather than read at a guessed stride — the same refusal
+    /// `buildPassability` makes — and the grid then reads as all-default,
+    /// which is what an SMF map's absent type grid means anyway.
+    /// An empty grid — every `types()` query reads as all-default, which is
+    /// what an SMF map's absent type grid means anyway. Needed so `UnitScene`
+    /// can hold the grid by value and still default-construct.
+    TerrainTypeGrid() = default;
+
+    TerrainTypeGrid(std::span<const std::uint8_t> base, int squaresX,
+                    int squaresZ);
+
+    [[nodiscard]] int squaresX() const noexcept { return squaresX_; }
+    [[nodiscard]] int squaresZ() const noexcept { return squaresZ_; }
+    [[nodiscard]] bool empty() const noexcept { return effective_.empty(); }
+
+    /// The effective type grid — what `buildPassability` and the blocking LUT
+    /// read. Empty only when the grid has no geometry at all.
+    [[nodiscard]] std::span<const std::uint8_t> types() const noexcept {
+        return effective_;
+    }
+
+    /// The recorded writes, in order — the serialized form of this state.
+    [[nodiscard]] std::span<const TerrainStamp> journal() const noexcept {
+        return journal_;
+    }
+
+    /// Bumped on every mutation. A cache keyed on the grid's contents
+    /// (`PassabilitySet`) compares this rather than re-reading the cells.
+    [[nodiscard]] std::uint64_t version() const noexcept { return version_; }
+
+    /// `Sim::SetTerrainTypeRect` (`C-289`, `0x763be0`): writes `type` over the
+    /// squares the elmo rect covers — `floor` on the near edge, `ceil` on the
+    /// far, the same pair `FlattenSkirt` applies to `GetSkirtRect`
+    /// (defaultunits.lua:70-71). Clamped to the map like retail's rect clamp;
+    /// a rect entirely outside writes nothing and records nothing.
+    void setRect(Fx x0Elmos, Fx z0Elmos, Fx x1Elmos, Fx z1Elmos,
+                 std::uint8_t type);
+
+    /// The same write, owned: a tarmac's stamp, which `sweep` lifts when the
+    /// owning unit is gone. The owner is journaled so a save keeps the
+    /// revert contract, not just the bytes.
+    void stamp(Fx x0Elmos, Fx z0Elmos, Fx x1Elmos, Fx z1Elmos,
+               std::uint8_t type, UnitId owner);
+
+    /// Drops every stamp whose owner fails `alive` — the `DestroyTarmac`
+    /// counterpart (defaultunits.lua:159), run by the tick so a death, a
+    /// reclaim, a capture-kill and an upgrade replace all revert the same
+    /// way. Re-derives only the cells the lifted stamps covered.
+    template <typename Alive>
+    void sweep(Alive&& alive) {
+        int x0 = squaresX_, z0 = squaresZ_, x1 = 0, z1 = 0;
+        std::size_t kept = 0;
+        for (std::size_t i = 0; i < journal_.size(); ++i) {
+            const TerrainStamp& entry = journal_[i];
+            if (entry.owner.generation != 0 && !alive(entry.owner)) {
+                x0 = std::min(x0, entry.x0);
+                z0 = std::min(z0, entry.z0);
+                x1 = std::max(x1, entry.x1);
+                z1 = std::max(z1, entry.z1);
+                continue;
+            }
+            journal_[kept++] = entry;
+        }
+        if (kept == journal_.size()) {
+            return;
+        }
+        journal_.resize(kept);
+        rematerialize(x0, z0, x1, z1);
+        ++version_;
+    }
+
+    /// Replays a serialized journal — the restore half of the save contract.
+    /// Entries apply in order over the base grid, exactly as if the writes
+    /// had been made live.
+    void restoreJournal(std::span<const TerrainStamp> journal);
+
+private:
+    /// Recomputes `effective_` over the cell rect from base plus journal —
+    /// last write wins, so a cell's type is the newest entry covering it, or
+    /// the map's own byte where none does.
+    void rematerialize(int x0, int z0, int x1, int z1) noexcept;
+
+    /// The elmo→cell conversion shared by `setRect` and `stamp`: floor on the
+    /// near edge, ceil on the far, clamped to the grid. Returns false when
+    /// the rect misses the map entirely.
+    [[nodiscard]] bool cellRect(Fx x0Elmos, Fx z0Elmos, Fx x1Elmos,
+                                Fx z1Elmos, TerrainStamp& out) const noexcept;
+
+    int squaresX_ = 0;
+    int squaresZ_ = 0;
+    std::vector<std::uint8_t> base_;
+    std::vector<std::uint8_t> effective_;
+    std::vector<TerrainStamp> journal_;
+    std::uint64_t version_ = 0;
+};
 } // namespace rm::sim
