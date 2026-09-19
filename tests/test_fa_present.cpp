@@ -183,3 +183,58 @@ TEST_CASE("C-294/C-303: the manipulator list is precedence-sorted and bone visib
     rm::sim::Match match{.armies = armies, .economies = economies};
     CHECK(rm::sim::hashMatch(roster.store, match) != rm::sim::hashMatch(shown, match));
 }
+
+TEST_CASE("C-304: the storage manipulator slides a bone by the stored fraction",
+          "[fa-present][manipulator]") {
+    // `CStorageManipulator` slides a bone as a function of stored
+    // `U4EconResource` (`manip+0xa8`) — the pods that fill and empty with the
+    // army's MASS/ENERGY. The observable half: the offset is deterministic
+    // fixed point, follows the fraction, and serializes.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "storage_silo";
+    // The capacity is AUTHORED, not set on the economy: `recomputeIncome`
+    // rebuilds `storage` from standing units every tick, so a hand-set cap
+    // would be wiped before the second reading.
+    def.storageMass = rm::sim::Mag::fromInt(1000);
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    REQUIRE(roster.store.addManipulator(unit,
+        {.kind = rm::sim::ManipulatorKind::StorageSlide,
+         .slideResource = 0,  // mass
+         .slideBone = 2,
+         .slideRange = rm::sim::Fx::fromInt(8)}));
+
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    economies[0].storage.mass = rm::sim::Mag::fromInt(1000);
+    economies[0].stored.mass = rm::sim::Mag::fromInt(500);
+    rm::sim::Match match{.armies = armies, .economies = economies};
+
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                roster.rate, 0);
+    // Half full is half the travel: 8 elmos × 500/1000.
+    CHECK(roster.store.manipulators()[unit.index][0].slideOffset
+          == rm::sim::Fx::fromInt(4));
+
+    // And it follows the fraction — draining the store slides the bone back.
+    economies[0].stored.mass = rm::sim::Mag::fromInt(250);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                roster.rate, 1);
+    CHECK(roster.store.manipulators()[unit.index][0].slideOffset
+          == rm::sim::Fx::fromInt(2));
+
+    // The computed offset is serialized pose state (C-293): a save mid-slide
+    // restores the bone where it was.
+    rm::sim::RandomStream random{std::uint32_t{1}};
+    const std::vector<std::byte> bytes = rm::sim::SaveState::encode(
+        {.tick = 7, .random = random.snapshot(), .units = roster.store.snapshot()});
+    const auto saved = rm::sim::SaveState::decode(bytes);
+    REQUIRE(saved.has_value());
+    const rm::sim::UnitStore restored{saved->units};
+    REQUIRE(restored.manipulators()[unit.index].size() == 1);
+    CHECK(restored.manipulators()[unit.index][0].slideOffset
+          == rm::sim::Fx::fromInt(2));
+}

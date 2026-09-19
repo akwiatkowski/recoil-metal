@@ -735,6 +735,15 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     resolveCongestion(store, terrain, match.passability, match.armies,
                       match.passabilitySubmerged);
 
+    //    THE MANIPULATOR BEAT — retail's `CAniActor::UpdateManipulators`
+    //    (`C-293`, `0x641550`, sole caller `0x6afb65` inside `Unit::MotionTick`).
+    //    Here, on the post-movement world, because the collision manipulator's
+    //    contact tests read where units ENDED the tick — the same rule the
+    //    intel stamp follows below. Storage slides read the economies as they
+    //    stood at the last recompute: a slide is a gauge, and a gauge shows
+    //    the reading it has, not the one being taken.
+    tickManipulators(store, match.economies, match.events);
+
     // `C-265`'s blueprint `Lifetime`, retail's `seraphimunits.lua` Othuy timer:
     // a spawned unit with `UnitDef::lifetimeSeconds` counts down and
     // `Destroy()`s itself — no wreck, no report, no kill credit. Armed LAZILY
