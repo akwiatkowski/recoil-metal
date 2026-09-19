@@ -164,6 +164,20 @@ struct Fixture {
                                      grid, roster.rate, &building, nullptr, &features);
     }
 
+    /// A structure build order at an exact site — the path `startCommand`'s Build case walks
+    /// when the builder already stands in reach.
+    [[nodiscard]] bool build(UnitId who, rm::UnitTypeIndex what, float x, float z) {
+        return rm::sim::applyCommand(Command{.tick = 0,
+                                             .player = 0,
+                                             .kind = CommandKind::Build,
+                                             .unit = who,
+                                             .targetX = rm::sim::fxFromFloat(x),
+                                             .targetZ = rm::sim::fxFromFloat(z),
+                                             .buildType = what},
+                                     roster.store, roster.catalog, players, armies, terrain,
+                                     grid, roster.rate, &building, nullptr, &features);
+    }
+
     [[nodiscard]] rm::sim::Match liveMatch(float storageMass = 1000.0f) {
         grids.assign(roster.catalog.size(), &grid);
         return rm::sim::Match{.armies = armies,
@@ -930,4 +944,121 @@ TEST_CASE("reclaim fields cluster the wrecks a label can price", "[scene][reclai
     const std::vector<rm::ReclaimField> after = rm::reclaimFields(f.features);
     REQUIRE(after.size() == 1);
     CHECK(rm::sim::magToFloat(after[0].mass) == Approx(180.0f));
+}
+
+// THE REBUILD BONUS (C-148/C-191). Retail's `LookForStructureRebuilder` (`0x005fd970`)
+// finds the NEAREST reclaimable prop inside the new building's footprint, `stricmp`s its
+// `AssociatedBP` — the blueprint id of the unit that died — against the new blueprint's
+// `Economy.RebuildBonusIds`, and on a match consumes the wreck (C-190) and materialises the
+// new structure at `wreckFraction × GetRebuildBonus()` — a hardcoded 0.5
+// (`Unit.lua:2723-2726`: "everything re-built is 50% complete to begin with"). A head start
+// on build progress, not a refund.
+
+TEST_CASE("a structure built over a matching wreck starts half built and eats the wreck",
+          "[reclaim][rebuild]") {
+    Fixture f;
+
+    rm::unitdef::UnitDef builder;
+    builder.name = "test_builder";
+    builder.buildRate = 10.0f;
+    builder.buildableCategory = {{"TESTSTRUCTURE"}};
+    const rm::UnitTypeIndex builderType = f.roster.addType(builder);
+
+    rm::unitdef::UnitDef structure;
+    structure.name = "test_structure";
+    structure.categories = {"TESTSTRUCTURE"};
+    structure.buildCostMass = rm::sim::magFromFloat(100.0f);
+    structure.buildCostEnergy = rm::sim::magFromFloat(200.0f);
+    structure.buildTime = rm::sim::magFromFloat(100.0f);
+    // 2 ogrids a side: the footprint rect reaches 8 elmos from the site centre.
+    structure.footprintSquaresX = 2;
+    structure.footprintSquaresZ = 2;
+    // The corpus spells these lowercase ('xsb2108') while `UnitDef::name` keeps the file's
+    // casing — the mismatch is deliberate, because retail's match is `stricmp` (C-148).
+    structure.rebuildBonusIds = {"TEST_TANK"};
+    const rm::UnitTypeIndex structureType = f.roster.addType(structure);
+
+    const UnitId engineer = f.roster.add(builderType, 295.0f, 300.0f, 0, 100.0f);
+    // A `test_tank` wreck 4 elmos from the site centre — inside the footprint rect.
+    const FeatureId wreck = f.wreckAt(304.0f, 300.0f);
+
+    REQUIRE(f.build(engineer, structureType, 300.0f, 300.0f));
+    REQUIRE(f.building.size() == 1);
+
+    // 0.5 × a whole wreck's fraction: half the build is already done (C-191's
+    // `Materialize(helper+0x1c)`), and the wreck is consumed at rebuild start (C-190).
+    CHECK(f.building.front().fraction() == rm::sim::Fx::fromRatio(1, 2));
+    CHECK(f.features.find(wreck) == nullptr);
+}
+
+TEST_CASE("a wreck the blueprint does not list grants no head start and stays",
+          "[reclaim][rebuild]") {
+    Fixture f;
+
+    rm::unitdef::UnitDef builder;
+    builder.name = "test_builder";
+    builder.buildRate = 10.0f;
+    builder.buildableCategory = {{"TESTSTRUCTURE"}};
+    const rm::UnitTypeIndex builderType = f.roster.addType(builder);
+
+    rm::unitdef::UnitDef structure;
+    structure.name = "test_structure";
+    structure.categories = {"TESTSTRUCTURE"};
+    structure.buildTime = rm::sim::magFromFloat(100.0f);
+    structure.footprintSquaresX = 2;
+    structure.footprintSquaresZ = 2;
+    structure.rebuildBonusIds = {"test_guard"};  // the wreck is a test_tank — no match
+    const rm::UnitTypeIndex structureType = f.roster.addType(structure);
+
+    const UnitId engineer = f.roster.add(builderType, 295.0f, 300.0f, 0, 100.0f);
+    const FeatureId wreck = f.wreckAt(304.0f, 300.0f);
+
+    REQUIRE(f.build(engineer, structureType, 300.0f, 300.0f));
+    REQUIRE(f.building.size() == 1);
+    CHECK(f.building.front().fraction() == rm::sim::Fx{});
+    CHECK(f.features.find(wreck) != nullptr);
+}
+
+TEST_CASE("no rebuild list and no wreck in the footprint both start at zero",
+          "[reclaim][rebuild]") {
+    Fixture f;
+
+    rm::unitdef::UnitDef builder;
+    builder.name = "test_builder";
+    builder.buildRate = 10.0f;
+    builder.buildableCategory = {{"TESTSTRUCTURE"}};
+    const rm::UnitTypeIndex builderType = f.roster.addType(builder);
+
+    rm::unitdef::UnitDef structure;
+    structure.name = "test_structure";
+    structure.categories = {"TESTSTRUCTURE"};
+    structure.buildTime = rm::sim::magFromFloat(100.0f);
+    structure.footprintSquaresX = 2;
+    structure.footprintSquaresZ = 2;
+    // `rebuildBonusIds` left empty — ~110 corpus structures state a list, the rest get
+    // nothing even over their own wreck.
+    const rm::UnitTypeIndex structureType = f.roster.addType(structure);
+
+    const UnitId engineer = f.roster.add(builderType, 295.0f, 300.0f, 0, 100.0f);
+    const FeatureId wreck = f.wreckAt(304.0f, 300.0f);
+
+    REQUIRE(f.build(engineer, structureType, 300.0f, 300.0f));
+    REQUIRE(f.building.size() == 1);
+    CHECK(f.building.front().fraction() == rm::sim::Fx{});
+    CHECK(f.features.find(wreck) != nullptr);
+
+    // A matching list still misses a wreck OUTSIDE the footprint rect: 20 elmos from the
+    // centre is past the 8-elmo half-extent of a 2-ogrid footprint. A second site and a
+    // second engineer, so the first build's row does not occupy the ground.
+    rm::unitdef::UnitDef listed = structure;
+    listed.name = "test_structure_listed";
+    listed.rebuildBonusIds = {"test_tank"};
+    const rm::UnitTypeIndex listedType = f.roster.addType(listed);
+    const UnitId second = f.roster.add(builderType, 395.0f, 300.0f, 0, 100.0f);
+    const FeatureId far = f.wreckAt(420.0f, 300.0f);
+
+    REQUIRE(f.build(second, listedType, 400.0f, 300.0f));
+    REQUIRE(f.building.size() == 2);
+    CHECK(f.building.back().fraction() == rm::sim::Fx{});
+    CHECK(f.features.find(far) != nullptr);
 }

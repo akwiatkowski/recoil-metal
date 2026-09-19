@@ -76,7 +76,7 @@ void teardownMovement(MoveState& motion);
                                 const UnitCatalog& catalog, const Terrain& terrain,
                                 const PassabilityGrid& grid, TickRate rate,
                                 std::vector<Construction>* building, EventQueue* events,
-                                const FeatureStore* features,
+                                FeatureStore* features,
                                 std::span<const Army> armies,
                                 const PassabilityGrid* approachGrid = nullptr);
 

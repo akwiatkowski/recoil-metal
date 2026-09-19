@@ -7,7 +7,10 @@
 #include "core/sim/Combat.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <limits>
 #include <optional>
+#include <string_view>
 
 namespace rm::sim {
 namespace {
@@ -175,6 +178,73 @@ Mag damageFeature(FeatureStore& features, FeatureId id, Mag damage) {
         }
     }
     return Mag::fromRaw(static_cast<MagRaw>(whole + quotient));
+}
+
+std::optional<RebuildBonus> findRebuildBonus(const FeatureStore& features,
+                                             const UnitCatalog& catalog,
+                                             const unitdef::UnitDef& product, Fx siteX,
+                                             Fx siteZ) noexcept {
+    if (product.rebuildBonusIds.empty()) {
+        return std::nullopt;
+    }
+
+    // The footprint rect, centred on the site: `bp[0xd8]`/`bp[0xd9]` are whole ogrids and an
+    // ogrid is 8 elmos (`scmap::kElmosPerOgrid`), so a 2-ogrid footprint reaches 8 elmos out.
+    const Fx halfX = Fx::fromInt(product.footprintSquaresX * 4);
+    const Fx halfZ = Fx::fromInt(product.footprintSquaresZ * 4);
+
+    // NEAREST candidate by squared distance — retail keeps one winner and reads only ITS
+    // `AssociatedBP`, so a closer non-matching wreck shadows a farther matching one.
+    const Feature* nearest = nullptr;
+    FeatureId nearestId{};
+    FxWide nearestDist2 = FxWide{std::numeric_limits<std::int64_t>::max()};
+    const std::span<const Feature> all = features.all();
+    for (UnitIndex slot = 0; slot < all.size(); ++slot) {
+        if (!features.slotAlive(slot)) {
+            continue;
+        }
+        const Feature& wreck = all[slot];
+        const Fx dx = wreck.at[0] - siteX;
+        const Fx dz = wreck.at[2] - siteZ;
+        if (dx < -halfX || dx > halfX || dz < -halfZ || dz > halfZ) {
+            continue;  // outside the footprint rect
+        }
+        const FxWide dist2 = FxWide{dx.raw()} * dx.raw() + FxWide{dz.raw()} * dz.raw();
+        if (dist2 < nearestDist2) {
+            nearestDist2 = dist2;
+            nearest = &wreck;
+            nearestId = features.idAt(slot);
+        }
+    }
+    if (nearest == nullptr) {
+        return std::nullopt;
+    }
+
+    // `AssociatedBP` is the dead unit's blueprint id — our `Feature::fromType` resolved
+    // through the catalog. `stricmp`, because the corpus writes `RebuildBonusIds` lowercase
+    // ('xsb2108') while `UnitDef::name` keeps the file's casing.
+    const unitdef::UnitDef* dead = catalog.def(nearest->fromType);
+    if (dead == nullptr) {
+        return std::nullopt;
+    }
+    const auto iequals = [](std::string_view a, std::string_view b) noexcept {
+        return a.size() == b.size()
+            && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+                   return std::tolower(static_cast<unsigned char>(x))
+                       == std::tolower(static_cast<unsigned char>(y));
+               });
+    };
+    const bool match = std::ranges::any_of(product.rebuildBonusIds, [&](const std::string& id) {
+        return iequals(id, dead->name);
+    });
+    if (!match) {
+        return std::nullopt;
+    }
+
+    // `task+0x5C = wreck's Entity+0xD8 × bonus`: the wreck's fraction complete — our
+    // `reclaimFraction`, which reclaim drains — times the hardcoded 0.5.
+    return RebuildBonus{.wreck = nearestId,
+                        .headStart = nearest->reclaimFraction * Fx::fromRatio(1, 2)};
 }
 
 std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,

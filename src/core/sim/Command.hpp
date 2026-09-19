@@ -434,7 +434,8 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// computed now would be a route from the wrong place. It is checked when it is reached, and an
 /// order that cannot be started then is dropped and the next one tried (`advanceOrders`). Recoil
 /// validates queued orders no earlier either.
-/// `features` is where a `Reclaim` resolves its target; null refuses the kind outright,
+/// `features` is where a `Reclaim` resolves its target and where a `Build` over a matching
+/// wreck finds — and consumes — its rebuild bonus (C-148); null refuses the kind outright,
 /// which is what a scene with nothing on the ground should do.
 [[nodiscard]] bool applyCommand(const Command& command, UnitStore& store,
                                 const UnitCatalog& catalog, std::span<const Player> players,
@@ -442,7 +443,7 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
                                  const PassabilityGrid& grid, TickRate rate,
                                   std::vector<Construction>* building = nullptr,
                                    EventQueue* events = nullptr,
-                                   const FeatureStore* features = nullptr,
+                                   FeatureStore* features = nullptr,
                                    PathService* pathService = nullptr,
                                    ScriptTaskHost* scriptTasks = nullptr,
                                    std::vector<SiloAmmo>* siloAmmo = nullptr,
@@ -466,7 +467,7 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
     std::span<const Player> players, std::span<Army> armies, const Terrain& terrain,
     const CommandGridForUnit& gridForUnit, TickRate rate,
     std::vector<Construction>* building = nullptr, EventQueue* events = nullptr,
-    const FeatureStore* features = nullptr, PathService* pathService = nullptr,
+    FeatureStore* features = nullptr, PathService* pathService = nullptr,
     ScriptTaskHost* scriptTasks = nullptr,
     const CommandGridForUnit& approachGridForUnit = {},
     std::vector<SiloAmmo>* siloAmmo = nullptr,
@@ -555,7 +556,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                            std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                            std::vector<Construction>* building = nullptr,
                            EventQueue* events = nullptr,
-                            const FeatureStore* features = nullptr,
+                            FeatureStore* features = nullptr,
                             std::vector<Construction>* finished = nullptr,
                               PathService* pathService = nullptr,
                               std::span<const Army> armies = {},

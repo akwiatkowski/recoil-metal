@@ -8,6 +8,7 @@
 #include "core/sim/UnitStore.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -127,5 +128,37 @@ std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
 /// without overflowing the 64-bit raw representation. Shared with capture budgeting, which
 /// spreads a build-energy cost over a work-tick budget the same way.
 [[nodiscard]] Mag proportionalWork(Mag value, Mag work, Mag total) noexcept;
+
+// THE REBUILD BONUS (C-148, `LookForStructureRebuilder` `0x005fd970`; applied by C-191,
+// `Helper::SetTarget` `0x005fc65f`). When a structure begins construction, retail finds the
+// NEAREST `RECLAIMABLE` prop inside the new building's footprint rect — built from the
+// blueprint's footprint bytes `bp[0xd8]`/`bp[0xd9]` — reads the winner's `AssociatedBP`
+// (the blueprint id of the unit that died, `Unit.lua:1137`), and `stricmp`s it against the
+// new blueprint's `Economy.RebuildBonusIds` (`bp+0x518`, our `UnitDef::rebuildBonusIds`).
+// On a match the wreck is CONSUMED at rebuild start (C-190 passes it to a reclaim-family
+// function) and the build gets a HEAD START, not a refund: `task+0x5C` holds
+// `wreck's Entity+0xD8 × GetRebuildBonus()`, where `Entity+0xD8` is the wreck's fraction
+// complete (C-133) and `GetRebuildBonus` is a hardcoded 0.5 (`Unit.lua:2723-2726`,
+// "everything re-built is 50% complete to begin with"). `Helper::SetTarget` then applies it
+// once via `Materialize(helper+0x1c)`.
+
+/// What a matching wreck under a new structure is worth: which feature, and the fraction of
+/// the new build already complete — `wreck fraction × 0.5`, so a whole wreck halves the
+/// build and a half-reclaimed one quarters it.
+struct RebuildBonus {
+    FeatureId wreck{};
+    Fx headStart{};
+};
+
+/// The rebuild bonus a structure of `product` placed at (`siteX`, `siteZ`) earns, if any.
+/// Searches every live feature whose centre lies inside the footprint rect — half-extents
+/// `footprintSquaresX/Z` ogrids, 8 elmos each — keeps the nearest by squared distance, and
+/// matches only that one's type name against `product.rebuildBonusIds`, case-insensitively
+/// like retail's `stricmp` (the corpus spells the ids lowercase, `'xsb2108'`, while
+/// `UnitDef::name` keeps the file's casing). Nullopt when nothing matches: the build then
+/// starts at zero and the wreck stays.
+[[nodiscard]] std::optional<RebuildBonus> findRebuildBonus(
+    const FeatureStore& features, const UnitCatalog& catalog,
+    const unitdef::UnitDef& product, Fx siteX, Fx siteZ) noexcept;
 
 } // namespace rm::sim

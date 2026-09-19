@@ -276,7 +276,7 @@ bool publishPathResult(const PathResult& result, UnitStore& store,
 std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
                            std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                            std::vector<Construction>* building, EventQueue* events,
-                           const FeatureStore* features, std::vector<Construction>* finished,
+                           FeatureStore* features, std::vector<Construction>* finished,
                              PathService* pathService, std::span<const Army> armies,
                              const Intel* intel, const PlayableRect* playableRect,
                              ScriptTaskHost* scriptTasks, std::vector<GuardWork>* guardWork,
@@ -1790,7 +1790,7 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
 bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
                   const Terrain& terrain, const PassabilityGrid& grid, TickRate,
                   std::vector<Construction>* building, EventQueue* events,
-                  const FeatureStore* features, std::span<const Army> armies,
+                  FeatureStore* features, std::span<const Army> armies,
                   const PassabilityGrid* approachGrid) {
     // to be live, and a `Build` started for a unit that died this tick would charge a dead
     // army. The handle check belongs to `applyCommand`, where a stale handle is the ordinary
@@ -2088,6 +2088,24 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         // keep moving the founder while it builds remotely.
         teardownMovement(motion);
 
+        // THE REBUILD BONUS (C-148/C-191). A placed structure — never an upgrade or a
+        // factory product, which retail's `CUnitMobileBuildTask` never founds — checks the
+        // nearest reclaimable prop inside its footprint for an `AssociatedBP` in
+        // `RebuildBonusIds`. On a match the wreck is consumed at rebuild start (C-190) and
+        // the row is born `wreckFraction × 0.5` complete — retail's `Materialize(headStart)`
+        // in `Helper::SetTarget` (`0x005fc65f`), which is progress granted, not cost
+        // refunded: the remaining work still bills at the same share per tick, so the
+        // head-start fraction is the part the wreck paid for.
+        Mag headStartWork{};
+        FeatureId consumedWreck{};
+        if (!upgrade && !factoryProduction && features != nullptr) {
+            if (const std::optional<RebuildBonus> bonus =
+                    findRebuildBonus(*features, catalog, *def, siteX, siteZ)) {
+                headStartWork = def->buildTime * bonus->headStart;
+                consumedWreck = bonus->wreck;
+            }
+        }
+
         building->push_back(Construction{
             .armyIndex = store.motion()[command.unit.index].armyIndex,
             // Straight through. This used to be `{fxToFloat(targetX), 0.0f,
@@ -2096,7 +2114,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             // on the map and the ground decides the height.
             .position = {siteX, Fx{}, siteZ},
             .cost = {.mass = def->buildCostMass, .energy = def->buildCostEnergy},
-            .buildTimeRemaining = def->buildTime,
+            .buildTimeRemaining = def->buildTime - headStartWork,
             .totalBuildTime = def->buildTime,
             .buildPerTick = effectiveBuildPerTick(store, catalog, command.unit.index),
             .blueprintIndex = command.buildType,
@@ -2106,6 +2124,11 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             // started under a hold must not bill its first beat as if unpaused.
             .paused = store.productionPaused(command.unit),
         });
+        if (consumedWreck.generation != 0) {
+            // The wreck paid for the head start and is gone (C-190): retail hands it to a
+            // reclaim-family function the moment the rebuild task starts.
+            features->remove(consumedWreck);
+        }
         emit(events, Event{
                          .kind = EventKind::ConstructionStarted,
                          .instigator = command.unit,
