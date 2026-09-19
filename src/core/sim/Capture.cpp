@@ -231,6 +231,14 @@ std::size_t applyCaptureWork(UnitStore& store, std::vector<CaptureWork>& capture
         const Transform transform = store.transforms()[victim];
         const Health health = store.health()[victim];
         MoveState motion = store.motion()[victim];
+        // `SimUtils.lua:68-132` restores more than the health record after
+        // `ChangeUnitArmy`: the installed enhancement names (re-run through
+        // `CreateEnhancement`) and the shield on/off toggle. The spawn clears
+        // both, so they are snapshotted here and restored on the replacement —
+        // the health record above already carries shield health, veterancy
+        // and fuel.
+        const auto installedEnhancements = store.enhancements()[victim];
+        const bool shieldToggledOff = store.scriptBitDisabledAt(victim, 0);
         motion.armyIndex = work.armyIndex;
         motion.moving = false;
         motion.path.clear();
@@ -244,6 +252,10 @@ std::size_t applyCaptureWork(UnitStore& store, std::vector<CaptureWork>& capture
             // targets, veterancy — not just current/maximum.
             .health = health,
         });
+        store.enhancements()[replacement.index] = installedEnhancements;
+        if (shieldToggledOff) {
+            (void)store.setScriptBitDisabled(replacement, 0, true);
+        }
         // And the match-side records that keyed on the old handle follow it:
         // Lua restores silo ammo and in-flight enhancement work onto the
         // replacement, so a captured silo keeps its stockpile and a

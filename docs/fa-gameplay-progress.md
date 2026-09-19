@@ -430,8 +430,10 @@ run make test and make verify before updating FA-CMD.
 **Largest gap:** Capture now follows `C-250` end to end — footprint-edge gates
 (approach stops at 5 ogrids, work admits out to 10, so a closing captor banks
 progress on the way in), the concurrent-captor refcount, funded progress,
-transfer identity, cancellation, replay and save/load. General transfer parity
-(attachments, enhancements, fuel, ammo, shields) stays open. The
+transfer identity, cancellation, replay and save/load. Transfer parity now
+also carries installed enhancements and the shield on/off toggle
+(`SimUtils.lua:68-132`'s `CreateEnhancement`/`EnableShield` restores).
+Transport-attachment transfer stays open per the spec's boundary. The
 [minimum retail Capture specification](capture-implementation-spec.md) corrects
 earlier readings: the captor supplies the cost method, attached target children add
 costs, and `Unit+0x690` counts active capture tasks.

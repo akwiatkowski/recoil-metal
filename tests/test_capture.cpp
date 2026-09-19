@@ -407,3 +407,38 @@ TEST_CASE("captures survive save load", "[capture][save]") {
     CHECK(resumed.funded == kFxOne);
     CHECK(SaveState::encode(*restored) == saved);
 }
+
+TEST_CASE("a capture keeps the target's enhancements and shield toggle", "[capture]") {
+    // `SimUtils.lua:68-132` snapshots the installed enhancement names and the
+    // shield on/off state before `ChangeUnitArmy`, then restores both on the
+    // replacement — `CreateEnhancement` per name, `EnableShield`/`DisableShield`
+    // for the toggle. Our replacement-entity transfer must carry the same two
+    // pieces of live state or a captured enhanced unit silently reverts to
+    // stock.
+    Fixture f;
+    // Give the structure type an installable enhancement so the map has a
+    // real entry to carry over.
+    rm::unitdef::UnitDef enhanced = *f.roster.catalog.def(f.structureType);
+    const auto parameters = rm::lua::parseTable("{ NewBuildRate=30, NewHealth=20 }");
+    REQUIRE(parameters);
+    enhanced.enhancements.push_back(
+        rm::unitdef::EnhancementSpec{.name = "AdvancedEngineering",
+                                     .slot = "LCH",
+                                     .parameters = *parameters});
+    const rm::UnitTypeIndex enhancedType = f.roster.addType(enhanced);
+
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(enhancedType, 206.0f, 200.0f, 1, 100.0f);
+    f.roster.store.enhancements()[target.index]["LCH"] = "AdvancedEngineering";
+    REQUIRE(f.roster.store.setScriptBitDisabled(target, 0, true));  // shield off
+
+    REQUIRE(f.capture(captor, target));
+    f.tick(50);
+
+    CHECK_FALSE(f.roster.store.alive(target));
+    const UnitId replacement = f.roster.store.idAt(target.index);
+    REQUIRE(f.roster.store.alive(replacement));
+    CHECK(f.roster.store.enhancements()[replacement.index].at("LCH")
+          == "AdvancedEngineering");
+    CHECK(f.roster.store.scriptBitDisabled(replacement, 0));
+}

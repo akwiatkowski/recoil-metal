@@ -2874,6 +2874,18 @@ the shipped corpus, so retail's carrier-refuel path is dead code and no
 pad half of `C-225`) remains open. All tests pass (transport suite plus the
 new `C-225` case; full suite 4,266,286 assertions / 1,931 cases).
 
+### 2026-09-19 / Capture transfer parity update
+
+`C-240`/`SimUtils.lua:68-132` transfer parity extended in
+`applyCaptureWork`: the replacement-entity transfer now also carries the
+installed enhancement map (retail re-runs `CreateEnhancement` per name) and
+the shield on/off toggle (script bit 0 — retail's `EnableShield`/
+`DisableShield` restore). Health record copy already covered shield health,
+veterancy, fuel ratio and reload clocks; silo ammo and in-flight
+enhancement work already re-keyed. Attachments remain excluded per the
+spec's boundary (`0x0074DD15` recursive re-attachment is later work).
+New `[capture]` case covers both restores; all 14 capture cases pass.
+
 ## Confirmation gate
 
 A work package may move to **Confirmed with EXE analysis** only when all are true:
