@@ -106,6 +106,27 @@ public:
     /// renderer's.
     [[nodiscard]] const HeightField& field() const noexcept { return *field_; }
 
+    /// `Sim::FlattenMapRect` (`C-286`, `0x007524e0`): writes a uniform elevation over a
+    /// world-space rect — the sole shipped caller is `StructureUnit.FlattenSkirt`
+    /// (`defaultunits.lua:72`), a structure levelling its build site.
+    ///
+    /// The rect is in ELMOS and covers whole heightmap cells: `floor` on the near edge,
+    /// `ceil` on the far, exactly the `math.floor`/`math.ceil` pair the Lua caller applies
+    /// to `GetSkirtRect`. Corners at both ends are written, so the flattened area is flat
+    /// out to its boundary rather than sloping away inside the last cell.
+    ///
+    /// Retail's re-seat of Land/Seabed entities in the rect (`CUnitMotion+0x90 = 1`)
+    /// needs no counterpart here: `placeOnMotionLayer` re-reads this view every movement
+    /// tick, so anything standing in the rect is seated on the new ground next tick.
+    /// Retail also queues the rect for the render heightfield (`Sim+0x9f8`/`+0xa08`);
+    /// our `TerrainMesh` is baked once at load and has no dirty-rect path, so the
+    /// mutation is sim-visible only — matching retail's own choice to leave pathing,
+    /// occupancy and (here) the max-height pyramid stale.
+    ///
+    /// NON-CONST: the one write the sim makes to the map it otherwise only reads.
+    void flattenRect(Fx x0Elmos, Fx z0Elmos, Fx x1Elmos, Fx z1Elmos,
+                     Fx elevation) noexcept;
+
     [[nodiscard]] bool hasWater() const noexcept { return hasWater_; }
     [[nodiscard]] Fx waterLevel() const noexcept { return waterLevel_; }
 

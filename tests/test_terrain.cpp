@@ -7,8 +7,13 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "app/Scene.hpp"
+#include "app/SceneBuild.hpp"
+#include "core/data/MoveDef.hpp"
 #include "core/map/MaxHeightPyramid.hpp"
+#include "core/sim/Movement.hpp"
 #include "core/sim/Terrain.hpp"
+#include "core/vfs/Vfs.hpp"
 
 #include "support/FxMatchers.hpp"
 
@@ -210,4 +215,146 @@ TEST_CASE("a downhill vertical scale bypasses the pyramid") {
     const Terrain fast{field, false, 0.0f, &pyramid};
     CHECK(fast.maxSurfaceHeightNear(Fx::fromInt(8), Fx::fromInt(8), Fx::fromInt(100))
           == Fx::fromInt(100));
+}
+
+TEST_CASE("flattenRect writes a uniform elevation over the rect's cells") {
+    // C-286 (`Sim::FlattenMapRect`, `0x007524e0`): the sim-side heightfield is mutable —
+    // a uniform u16 write over the rect, clamped to the map, with no pathing or terrain-type
+    // invalidation. The rect arrives in elmos and covers whole heightmap cells: a corner-
+    // sampled grid needs the corner at each end of the span written, so cells 2..5 of the
+    // rect below are corners 2..6 inclusive.
+    rm::HeightField field = rampField();
+    Terrain terrain{field};
+
+    terrain.flattenRect(Fx::fromInt(16), Fx::fromInt(16), Fx::fromInt(48), Fx::fromInt(48),
+                        Fx::fromInt(50));
+
+    for (int z = 2; z <= 6; ++z) {
+        for (int x = 2; x <= 6; ++x) {
+            CHECK(field.heightAt(x, z) == Approx(50.0f));
+        }
+    }
+    // The write is bounded: the first corner outside the rect keeps its ramp value.
+    CHECK(field.heightAt(7, 3) == Approx(12.5f + (7 * 800 + 3 * 300) * 0.01f));
+    CHECK(field.heightAt(1, 3) == Approx(12.5f + (1 * 800 + 3 * 300) * 0.01f));
+    // And the sim view agrees with the float accessor inside the flattened area.
+    CHECK(terrain.heightAt(Fx::fromInt(32), Fx::fromInt(32)) == Fx::fromInt(50));
+}
+
+TEST_CASE("flattenRect clamps to the map instead of writing outside it") {
+    // Retail logs "Attempted to flatten terrain outside map boundary!" and returns only
+    // when the CLAMPED rect is empty; a rect that overlaps the map still writes the part
+    // that is on it (`0x75251b`-`0x75255c`).
+    rm::HeightField field = rampField();
+    Terrain terrain{field};
+
+    terrain.flattenRect(Fx::fromInt(-64), Fx::fromInt(-64), Fx::fromInt(16), Fx::fromInt(16),
+                        Fx::fromInt(50));
+
+    CHECK(field.heightAt(0, 0) == Approx(50.0f));
+    CHECK(field.heightAt(2, 2) == Approx(50.0f));
+    CHECK(field.heightAt(3, 3) == Approx(12.5f + (3 * 800 + 3 * 300) * 0.01f));
+}
+
+namespace {
+
+/// A skirted structure def: the shape `Physics.FlattenSkirt` marks in retail (a factory
+/// authors `SkirtSizeX/Z` in ogrids). `isMobile()` keys on speed, so a zero-speed def is
+/// the structure case.
+[[nodiscard]] rm::unitdef::UnitDef testFactory() {
+    rm::unitdef::UnitDef def;
+    def.name = "TESTFAC";
+    def.skirtSquaresX = 4.0f;
+    def.skirtSquaresZ = 4.0f;
+    def.health = rm::sim::magFromFloat(1000.0f);
+    return def;
+}
+
+/// Registers a def the way the scenario harness does: the type lives in the catalog and
+/// `typeForBlueprint` is primed so `spawnUnit` skips its VFS model load.
+[[nodiscard]] rm::UnitTypeIndex registerDef(rm::app::UnitScene& scene,
+                                            const rm::unitdef::UnitDef& def) {
+    scene.definitions.push_back(def);
+    const auto type = scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(type, rm::data::moveDefFor(def), def.meshToElmos);
+    const std::string path = "/units/" + def.name + "/" + def.name + "_unit.bp";
+    scene.setPathForType(type, path);
+    scene.typeForBlueprint.emplace(path, type);
+    return type;
+}
+
+} // namespace
+
+TEST_CASE("a structure spawn flattens its skirt to the placement height") {
+    // C-286's sole shipped caller: `StructureUnit.FlattenSkirt` (defaultunits.lua:72)
+    // runs from `OnCreate` on the Land layer and flattens the skirt rect to the unit's
+    // own Y. Our unit entity materialises at spawn, so `spawnUnit` is the seam.
+    rm::HeightField field = rampField();
+    rm::app::UnitScene scene;
+    rm::vfs::Vfs content;
+
+    (void)registerDef(scene, testFactory());
+    const rm::sim::Army army{};
+    const auto spawned = rm::app::spawnUnit(scene, content, field,
+                                            "/units/TESTFAC/TESTFAC_unit.bp",
+                                            {32.0f, 0.0f, 32.0f}, army, rm::Brad{0});
+    REQUIRE(spawned);
+
+    // The placement point's height — what the structure stands on, and the elevation the
+    // whole skirt takes: 12.5 + (4*800 + 4*300) * 0.01 = 56.5.
+    const float flat = field.heightAtWorld(32.0f, 32.0f);
+    CHECK(flat == Approx(56.5f));
+    // A 4x4-ogrid skirt is 32 elmos across, so cells 2..5 around the centre are flat —
+    // corners 2..6 inclusive, the boundary corner belonging to the flattened area…
+    for (int z = 2; z <= 6; ++z) {
+        for (int x = 2; x <= 6; ++x) {
+            CHECK(field.heightAt(x, z) == Approx(56.5f));
+        }
+    }
+    // …and the ramp resumes outside it.
+    CHECK(field.heightAt(7, 7) == Approx(12.5f + (7 * 800 + 7 * 300) * 0.01f));
+
+    // A unit standing inside the rect is re-seated on the new ground by the ordinary
+    // movement pass — retail's `CUnitMotion+0x90` re-seat flag is our `placeOnMotionLayer`,
+    // which re-reads the terrain every tick.
+    rm::unitdef::UnitDef tank;
+    tank.name = "TESTTANK";
+    tank.motion = rm::unitdef::MotionType::Land;
+    tank.speedElmosPerSecond = 30.0f;
+    tank.health = rm::sim::magFromFloat(100.0f);
+    const auto tankType = registerDef(scene, tank);
+    const auto parked = scene.store.spawn({
+        .type = tankType,
+        .transform = {.x = rm::sim::fxFromFloat(24.0f), .z = rm::sim::fxFromFloat(24.0f)},
+        .motion = rm::app::motionFor(tank, 0),
+        .health = rm::sim::initialHealth(tank.health),
+    });
+    rm::sim::Transform& at = scene.store.transforms()[parked.index];
+    rm::sim::placeOnMotionLayer(at, scene.store.motion()[parked.index],
+                                scene.terrain(field));
+    CHECK(at.y == rm::sim::fxFromFloat(56.5f));
+}
+
+TEST_CASE("a mobile or skirtless spawn leaves the terrain alone") {
+    // The gate is the skirt, not the category: retail's `Physics.FlattenSkirt` flag is
+    // unparsed, and a skirtless structure's flatten is a retail no-op anyway — the rect
+    // is empty.
+    rm::HeightField field = rampField();
+    rm::app::UnitScene scene;
+    rm::vfs::Vfs content;
+
+    rm::unitdef::UnitDef tank;
+    tank.name = "TESTTANK";
+    tank.motion = rm::unitdef::MotionType::Land;
+    tank.speedElmosPerSecond = 30.0f;
+    tank.health = rm::sim::magFromFloat(100.0f);
+    (void)registerDef(scene, tank);
+
+    const rm::sim::Army army{};
+    const auto spawned = rm::app::spawnUnit(scene, content, field,
+                                            "/units/TESTTANK/TESTTANK_unit.bp",
+                                            {32.0f, 0.0f, 32.0f}, army, rm::Brad{0});
+    REQUIRE(spawned);
+    CHECK(field.heightAt(4, 4) == Approx(56.5f));
+    CHECK(field.heightAt(3, 3) == Approx(12.5f + (3 * 800 + 3 * 300) * 0.01f));
 }

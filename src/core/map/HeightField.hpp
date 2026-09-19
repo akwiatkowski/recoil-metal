@@ -85,6 +85,22 @@ struct HeightField {
     /// 128-square map is 1024 elmos wide and has 129 height samples.
     [[nodiscard]] float widthElmos() const noexcept;
     [[nodiscard]] float depthElmos() const noexcept;
+
+    /// Writes a uniform elevation over an inclusive range of grid corners — the
+    /// mutable half of the field (`C-286`: retail `CHeightField::SetElevationRect`
+    /// at `0x00477e10`, reached only through `Sim::FlattenMapRect` `0x007524e0`).
+    ///
+    /// The range is CLAMPED to the grid like retail's (`0x75251b`-`0x75255c`): a
+    /// rect that overlaps the map writes the part that is on it, and one entirely
+    /// outside writes nothing — retail's "Attempted to flatten terrain outside
+    /// map boundary!" case. Corners, not cells: a skirt covering cells 2..5 needs
+    /// corners 2..6 written or its last cell still interpolates downhill.
+    ///
+    /// The elevation is encoded back through the same affine the reads decode —
+    /// `raw = round((elev - baseHeight) / heightScale)` clamped to u16 — so a
+    /// flattened corner reads back what was asked, up to the grid's own
+    /// quantisation.
+    void setElevationRect(int x0, int z0, int x1, int z1, float elevationElmos) noexcept;
 };
 
 } // namespace rm

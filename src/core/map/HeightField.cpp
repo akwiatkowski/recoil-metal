@@ -80,4 +80,40 @@ float HeightField::depthElmos() const noexcept {
     return static_cast<float>(squaresZ) * static_cast<float>(kSquareSize);
 }
 
+void HeightField::setElevationRect(int x0, int z0, int x1, int z1,
+                                   float elevationElmos) noexcept {
+    // Clamp to the grid, matching retail's two-stage clamp (`0x75251b` then
+    // `0x00477e10` again). An empty result is the "outside map boundary" case —
+    // a silent no-op here; the log line lives at the sim call site that knows it
+    // was asked for terrain work.
+    const int cx0 = std::clamp(std::min(x0, x1), 0, squaresX);
+    const int cx1 = std::clamp(std::max(x0, x1), 0, squaresX);
+    const int cz0 = std::clamp(std::min(z0, z1), 0, squaresZ);
+    const int cz1 = std::clamp(std::max(z0, z1), 0, squaresZ);
+    if (cx0 > cx1 || cz0 > cz1 || raw.empty()) {
+        return;
+    }
+
+    // The inverse of the decode every reader shares. A zero scale means the
+    // field cannot express any elevation but its base — raw 0 is the honest
+    // answer, not a divide-by-zero.
+    const std::uint16_t word =
+        heightScale == 0.0f
+            ? std::uint16_t{0}
+            : static_cast<std::uint16_t>(std::clamp(
+                  std::lround((elevationElmos - baseHeight) / heightScale), 0l, 0xFFFFl));
+
+    const auto stride = static_cast<std::size_t>(verticesX());
+    for (int z = cz0; z <= cz1; ++z) {
+        const auto row = static_cast<std::size_t>(z) * stride;
+        // Per-row bound, the same tolerance `heightAt` shows a short raw vector:
+        // write what exists rather than assuming the grid is full-size.
+        const auto last = std::min<std::size_t>(row + static_cast<std::size_t>(cx1),
+                                                raw.size() - 1);
+        for (auto i = row + static_cast<std::size_t>(cx0); i <= last; ++i) {
+            raw[i] = word;
+        }
+    }
+}
+
 } // namespace rm

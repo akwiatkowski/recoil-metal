@@ -112,6 +112,33 @@ Fx Terrain::surfaceHeightAt(Fx x, Fx z) const noexcept {
     return hasWater_ ? std::max(ground, waterLevel_) : ground;
 }
 
+void Terrain::flattenRect(Fx x0Elmos, Fx z0Elmos, Fx x1Elmos, Fx z1Elmos,
+                          Fx elevation) noexcept {
+    // Elmos to cells: `floor` on the near edge, `ceil` on the far — the same pair
+    // `StructureUnit.FlattenSkirt` applies to `GetSkirtRect` (defaultunits.lua:70-71).
+    // Raw-word arithmetic, NOT `Fx` division: `Fx::divide` rounds to nearest, which would
+    // grow the far edge a cell whenever the remainder rounds up. `ceil(v/p)` as integer
+    // `floor((v + p - 1)/p)` is exact, and floor division needs the negative-remainder
+    // correction because C++ truncates toward zero.
+    const auto floorDiv = [](std::int64_t n, std::int64_t d) noexcept -> std::int32_t {
+        const std::int64_t q = n / d;
+        return static_cast<std::int32_t>((n < 0 && n % d != 0) ? q - 1 : q);
+    };
+    const std::int64_t pitch = Fx::fromInt(kSquareSize).raw();
+    const int x0 = floorDiv(x0Elmos.raw(), pitch);
+    const int z0 = floorDiv(z0Elmos.raw(), pitch);
+    const int x1 = floorDiv(x1Elmos.raw() + pitch - 1, pitch);
+    const int z1 = floorDiv(z1Elmos.raw() + pitch - 1, pitch);
+
+    // The field is plumbed const because mutation is the exception — this is the one
+    // write the sim makes to the map it otherwise only reads (`Sim::FlattenMapRect`
+    // mutates retail's `STIMap` heightfield the same way). Every field this view wraps
+    // is mutable storage (`LoadedMap::field`, test locals), so the cast is the
+    // sanctioned write, not a lie about a truly-const object.
+    HeightField& field = const_cast<HeightField&>(*field_);
+    field.setElevationRect(x0, z0, x1, z1, fxToFloat(elevation));
+}
+
 Fx Terrain::maxSurfaceHeightNear(Fx x, Fx z, Fx reachElmos) const noexcept {
     // Retail works in ogrids — one heightmap sample per ogrid, one square here — and
     // takes the point sample under a reach of one (`0x006340f0`).

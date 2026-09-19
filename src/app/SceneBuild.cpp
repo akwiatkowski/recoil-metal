@@ -1093,6 +1093,32 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     return found->second;
 }
 
+/// `StructureUnit.FlattenSkirt` (C-286, defaultunits.lua:68-73): a structure on the
+/// LAND layer flattens its skirt rect to its own Y the moment it exists — retail runs
+/// it from `OnCreate`, and our unit entity materialises at spawn. The skirt is the gate:
+/// `Physics.FlattenSkirt` is unparsed, and a skirtless structure's rect is empty, which
+/// is retail's no-op anyway. Floating, seabed and airborne structures are not Land —
+/// the same exclusion retail's `GetCurrentLayer() == 'Land'` makes.
+///
+/// Shared by `spawnUnit` and the `resolveUnits` crowd path: both are "the unit now
+/// exists" seams, and retail flattens scenario-placed structures the same way
+/// (`CreateUnitHPR` → `OnCreate`).
+static void flattenSkirtAt(UnitScene& scene, const rm::HeightField& field,
+                           rm::UnitTypeIndex type, const rm::sim::Transform& transform,
+                           const rm::sim::MoveState& motion) {
+    rm::sim::Terrain terrain = scene.terrain(field);
+    const rm::sim::UnitCatalog::AdjacencyInfo& skirt = scene.catalog.adjacency(type);
+    if (skirt.participates() && !motion.surfaceWater && !motion.airborne
+        && !motion.submersible
+        && (!terrain.hasWater() || transform.y >= terrain.waterLevel())) {
+        const rm::sim::Fx cx = transform.x + skirt.skirtCentreOffsetXElmos;
+        const rm::sim::Fx cz = transform.z + skirt.skirtCentreOffsetZElmos;
+        terrain.flattenRect(cx - skirt.skirtHalfXElmos, cz - skirt.skirtHalfZElmos,
+                            cx + skirt.skirtHalfXElmos, cz + skirt.skirtHalfZElmos,
+                            transform.y);
+    }
+}
+
 [[nodiscard]] std::optional<rm::sim::UnitId> spawnUnit(UnitScene& scene,
                                                           const rm::vfs::Vfs& content,
                                                           const rm::HeightField& field,
@@ -1119,7 +1145,10 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
     transform.heading = yaw;
 
     const rm::sim::MoveState motion = motionFor(def, army.index);
-    rm::sim::placeOnMotionLayer(transform, motion, scene.terrain(field));
+    rm::sim::Terrain terrain = scene.terrain(field);
+    rm::sim::placeOnMotionLayer(transform, motion, terrain);
+
+    flattenSkirtAt(scene, field, type, transform, motion);
 
     const rm::sim::UnitId id = scene.store.spawn(rm::sim::UnitStore::Spawn{
         .type = type,
@@ -1873,6 +1902,11 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             }
             rm::sim::Transform transform = transformAt(instance.position, instance.rotationY);
             rm::sim::placeOnMotionLayer(transform, state, scene.terrain(field));
+            // Scenario-placed structures flatten their pads too — retail's
+            // `CreateUnitHPR` runs the same `OnCreate` → `FlattenSkirt` a built one does.
+            if (def) {
+                flattenSkirtAt(scene, field, type, transform, state);
+            }
             // The lift law chases this from the first tick: seed it from the same
             // ground-plus-clearance the align pass just assigned (`C-221`).
             if (state.canFly) {
