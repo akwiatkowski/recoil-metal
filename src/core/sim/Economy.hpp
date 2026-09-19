@@ -230,6 +230,18 @@ struct Economy {
     /// the state hash, the save format, and every allocation decision — both enumerate the
     /// fields they cover explicitly, so this counter changes neither.
     Resources generatedLifetime;
+
+    /// What `stored` held roughly ten seconds ago — the `CEconomy+0x30` sample
+    /// the `Economy_Trend_*` army stat subtracts (`C-071`).
+    ///
+    /// Reporting-only like `generatedLifetime`: refreshed on a phased ten-second
+    /// cadence inside `tickSkirmish`'s stat feed, read by nothing in the
+    /// allocation, and deliberately outside the state hash and the save format,
+    /// which both enumerate the fields they cover. A loaded save reports a zero
+    /// trend until the first refresh — the same honesty `generatedLifetime`
+    /// accepts, and cheaper than a serialized ring buffer for a figure whose
+    /// only consumer is a stat row.
+    Resources storedAgo;
 };
 
 /// The base rate of income every army gets, per second, whatever it has built.

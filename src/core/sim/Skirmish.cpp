@@ -1344,7 +1344,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         for (std::size_t army = 0; army < match.armyStats->size()
              && army < match.economies.size(); ++army) {
             ArmyStats& stats = (*match.armyStats)[army];
-            const Economy& economy = match.economies[army];
+            Economy& economy = match.economies[army];
             // `Economy_Ratio_*`: stored over capacity — the figure the low/full-store
             // triggers compare against 0.1 / 0.9. An army with no storage reports a
             // full ratio, which is the honest reading of "nothing fits anywhere".
@@ -1367,6 +1367,28 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             setArmyStat(stats, "Economy_TotalProduced_Energy", economy.generatedLifetime.energy);
             addArmyStat(stats, "Economy_TotalConsumed_Mass", economy.usageLastTick.mass);
             addArmyStat(stats, "Economy_TotalConsumed_Energy", economy.usageLastTick.energy);
+            // `Economy_Trend_*` (`C-071`): `(storedNow − stored10sAgo) × 10` —
+            // the `CEconomy+0x30` sample subtracted from the live one. This is
+            // DELIBERATELY not `CAiBrain::GetEconomyTrend`'s `income − usage`
+            // (`0x005967c0`): retail ships both numbers under the word "trend"
+            // and they disagree — the stat is the stored-delta one, and the
+            // income-minus-usage reading stays available as
+            // `Economy_Income_*` minus `Economy_Output_*` above.
+            setArmyStat(stats, "Economy_Trend_Mass",
+                        (economy.stored.mass - economy.storedAgo.mass)
+                            * Fx::fromInt(10));
+            setArmyStat(stats, "Economy_Trend_Energy",
+                        (economy.stored.energy - economy.storedAgo.energy)
+                            * Fx::fromInt(10));
+            // The sample the next window subtracts, refreshed per army on a
+            // phased ten-second cadence — the same spread the deficit-cover
+            // pass uses, so every army does not sample on one beat.
+            const TickIndex trendPeriod = rate.ticks(Seconds{10.0f});
+            if (trendPeriod > 0
+                && (tickIndex % trendPeriod)
+                       == static_cast<TickIndex>(army % trendPeriod)) {
+                economy.storedAgo = economy.stored;
+            }
             // `UnitCap_Current`/`UnitCap_MaxCap` — `aibrain.lua`'s score row and
             // `AIBehaviors.lua`'s experimental gate read both (`CArmyStats`,
             // `C-227`). The cap is the army's configured ceiling; the count is

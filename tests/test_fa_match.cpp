@@ -418,6 +418,59 @@ TEST_CASE("C-227: a stat trigger fires once when its threshold is crossed",
     CHECK(again.armyStatsFired.empty());
 }
 
+TEST_CASE("C-071: the trend stat is the stored delta over ten seconds, times ten",
+          "[fa-match]") {
+    // `Economy_Trend_*` = `(storedNow − stored10sAgo) × 10` — the
+    // `CEconomy+0x30` sample subtracted from the live store. Deliberately NOT
+    // `GetEconomyTrend`'s `income − usage` (`0x005967c0`): retail ships both
+    // numbers under the word "trend" and they disagree.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::TickRate rate{};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex tank = roster.addType(tankDef());
+    (void)roster.add(tank, 0.0f, 0.0f, 0, 500.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    economies[0].storage = {.mass = rm::sim::magFromFloat(1000.0f),
+                            .energy = rm::sim::magFromFloat(1000.0f)};
+    std::vector<rm::sim::ArmyStats> stats(1);
+    std::vector<rm::sim::Projectile> projectiles;
+    const std::vector<int> commandersEver{0};
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .commandersEver = commandersEver,
+                .baseStorage = {.mass = rm::sim::magFromFloat(1000.0f),
+                                .energy = rm::sim::magFromFloat(1000.0f)},
+                .armyStats = &stats};
+
+    // Tick 0 samples the baseline (army 0's phase is tick 0): trend reads 0.
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate, 0);
+    CHECK(rm::test::asFloat(rm::sim::armyStat(stats[0], "Economy_Trend_Mass"))
+          == Catch::Approx(0.0f));
+
+    // Bank 50 mass mid-window; the trend still subtracts the OLD sample.
+    economies[0].stored.mass = rm::sim::magFromFloat(50.0f);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate, 1);
+    CHECK(rm::test::asFloat(rm::sim::armyStat(stats[0], "Economy_Trend_Mass"))
+          == Catch::Approx(500.0f).margin(1.0f));  // (50 − 0) × 10
+
+    // One window later the sample has refreshed. `rate.ticks` counts the
+    // `WaitTicks(n*10+1)` way, so the boundary is period ticks after the
+    // baseline; the refresh lands after the stat write on that beat, and the
+    // tick after reads zero.
+    const rm::TickCount period = rate.ticks(rm::sim::seconds(10.0f));
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate,
+                                period);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate,
+                                period + 1);
+    CHECK(rm::test::asFloat(rm::sim::armyStat(stats[0], "Economy_Trend_Mass"))
+          == Catch::Approx(0.0f).margin(1.0f));
+}
+
 TEST_CASE("C-227: every condition must pass and the stats survive a save",
           "[fa-match]") {
     // ALL of a trigger's conditions must hold — a two-condition trigger with
