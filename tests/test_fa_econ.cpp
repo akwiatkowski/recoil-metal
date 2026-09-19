@@ -605,3 +605,66 @@ TEST_CASE("C-192: a unit being enhanced is a sacrifice target", "[fa-econ]") {
           == Catch::Approx(50.0f).margin(0.01f));
     CHECK_FALSE(f.roster.store.alive(sacrificer));
 }
+
+TEST_CASE("C-161: a unit's production is throttled by its own consumption ratio",
+          "[fa-econ]") {
+    // `0x006b1769`–`0x006b17c6`: `produced[k] = production[k] x ratio`, where
+    // the ratio is the unit's own `CEconRequest` grant fraction (`Unit+0x53c`,
+    // `C-071`). An extractor whose upkeep the army can only half-fund makes
+    // half its mass — the stall reaches production, not just construction.
+    rm::HeightField field = flatField();
+    rm::sim::Terrain terrain{field};
+    rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    rm::test::Roster roster;
+
+    rm::unitdef::UnitDef mex;
+    mex.name = "test_mex";
+    mex.producesMassPerSecond = 2.0f;
+    mex.upkeepEnergyPerSecond = 2.0f;
+    const auto mexType = roster.addType(mex);
+    rm::unitdef::UnitDef pgen;
+    pgen.name = "test_pgen";
+    pgen.producesEnergyPerSecond = 1.0f;  // half the upkeep the mex asks
+    const auto pgenType = roster.addType(pgen);
+
+    (void)roster.add(mexType, 200.0f, 200.0f, 0, 500.0f);
+    (void)roster.add(pgenType, 220.0f, 200.0f, 0, 500.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<Player> players = rm::sim::onePlayerPerArmy(1, 0);
+    std::vector<rm::sim::Economy> economies{1};
+    economies[0].storage = {.mass = rm::sim::magFromFloat(1000.0f),
+                           .energy = rm::sim::magFromFloat(1000.0f)};
+    std::vector<rm::sim::Projectile> shots;
+    std::vector<rm::sim::Construction> building;
+    std::vector<int> commandersEver{0};
+    const std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(),
+                                                             &grid);
+    const auto tick = [&] {
+        rm::sim::Match match{.armies = armies,
+                             .economies = economies,
+                             .projectiles = &shots,
+                             .building = &building,
+                             .passability = grids,
+                             .commandersEver = commandersEver,
+                             .baseStorage = {.mass = rm::sim::magFromFloat(1000.0f),
+                                             .energy = rm::sim::magFromFloat(1000.0f)}};
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                    roster.rate);
+    };
+
+    // Beat one: the ratio cache still reads fully funded, so the mex makes its
+    // whole 0.2 mass — and the allocator learns upkeep is half-funded.
+    tick();
+    CHECK(rm::test::asFloat(economies[0].incomePerTick.mass)
+          == Catch::Approx(0.2f).margin(0.001));
+    // Beat two: last beat's grant ratio (0.1 delivered of 0.2 asked) throttles
+    // the mex's own production to half — 0.1 mass a tick.
+    tick();
+    CHECK(rm::test::asFloat(economies[0].incomePerTick.mass)
+          == Catch::Approx(0.1f).margin(0.001));
+    // The generator asks for nothing, so its own ratio stays 1 and it keeps
+    // making the whole 0.1 energy — the throttle is per unit, not per army.
+    CHECK(rm::test::asFloat(economies[0].incomePerTick.energy)
+          == Catch::Approx(0.1f).margin(0.001));
+}

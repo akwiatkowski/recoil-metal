@@ -217,6 +217,43 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
                      terrain.placement() == PlacementMode::Grid ? Fx{} : kAdjacencyGapElmos,
                      match.building != nullptr ? std::span<const Construction>{*match.building}
                                                : std::span<const Construction>{});
+    // `C-161`(a): every unit's PRODUCTION is throttled by its own consumption
+    // ratio — retail's `Unit+0x53c`, the grant fraction of its single
+    // `CEconRequest`, which `Unit.lua` fills with upkeep and build cost summed
+    // into one number (`0x006b1769`–`0x006b17c6`: `produced[k] = production[k]
+    // x ratio`). `Economy::consumedRatio` recovers the per-unit answer from the
+    // bucket sums, so what is needed per slot is the SHAPE of what the unit
+    // asks this beat: upkeep plus whatever it is building or enhancing. The
+    // build half mirrors `tickEconomy`'s `buildDrain` — the builder's own
+    // adjacency discount included, because retail's request carries it too.
+    std::vector<Resources> unitDemand;
+    if (match.building != nullptr || match.enhancements != nullptr) {
+        unitDemand.assign(store.slotCount(), Resources{});
+        if (match.building != nullptr) {
+            for (const Construction& work : *match.building) {
+                if (work.finished() || work.paused
+                    || work.builder.index >= unitDemand.size()) {
+                    continue;
+                }
+                Resources demand = drainPerTick(work);
+                if (work.builder.index < adjacency.size()) {
+                    demand.mass *= adjacency[work.builder.index].massBuild;
+                    demand.energy *= adjacency[work.builder.index].energyBuild;
+                }
+                unitDemand[work.builder.index] += demand;
+            }
+        }
+        if (match.enhancements != nullptr) {
+            for (const EnhancementWork& work : *match.enhancements) {
+                if (work.finished() || work.paused
+                    || work.owner.index >= unitDemand.size()) {
+                    continue;
+                }
+                unitDemand[work.owner.index] += drainPerTick(work);
+            }
+        }
+    }
+
     if (match.resourceFlows) match.resourceFlows->assign(store.slotCount(), {});
     if (match.productionOverrides != nullptr
         && match.productionOverrides->size() < store.slotCount()) {
@@ -279,6 +316,17 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
         const bool cheats = static_cast<std::size_t>(owner) < match.armies.size()
                             && match.armies[static_cast<std::size_t>(owner)].cheatEnabled;
 
+        // `C-161`(a): the unit's own consumption ratio — last beat's grant
+        // fraction over the shape of what it asks (upkeep plus build/enhance
+        // demand, gathered above). A unit that wants nothing gets 1, which
+        // keeps the multiply neutral for the common producer.
+        Resources demand = slot < unitDemand.size() ? unitDemand[slot] : Resources{};
+        if (!store.productionPaused(store.idAt(slot))
+            && store.maintenanceActive(store.idAt(slot))) {
+            demand.energy += rates.upkeepEnergyPerTick * adjacency[slot].energyUpkeep;
+        }
+        const Fx throttle = economy.consumedRatio(demand);
+
         if (isCommanderId(def->name)) {
             // The commander is the trickle, OURS (see kCommanderTrickle*) — not its
             // blueprint's production fields, which the spawn does not read either.
@@ -287,11 +335,14 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
             // whatever its blueprint says. A cheating commander's trickle doubles
             // like any other production — retail's buff multiplies the ACU's own
             // `ProductionPerSecondMass`/`Energy`, which is what the trickle stands in.
-            economy.incomePerTick.mass += trickle.mass;
-            economy.incomePerTick.energy += trickle.energy;
+            // The `C-161` throttle reaches it too: an ACU's request is its build
+            // demand, so a stalled build slows the trickle exactly as retail's
+            // produced[k] x ratio does.
+            economy.incomePerTick.mass += trickle.mass * throttle;
+            economy.incomePerTick.energy += trickle.energy * throttle;
             if (cheats) {
-                economy.incomePerTick.mass += trickle.mass;
-                economy.incomePerTick.energy += trickle.energy;
+                economy.incomePerTick.mass += trickle.mass * throttle;
+                economy.incomePerTick.energy += trickle.energy * throttle;
             }
         } else {
             // Production and upkeep through this unit's adjacency multipliers — one for
@@ -308,16 +359,19 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
                     // multiplier applies to the override too: retail's buff
                     // multiplies the unit's production fields, which the override
                     // is standing in for.
-                    economy.incomePerTick += (*match.productionOverrides)[slot];
+                    economy.incomePerTick += (*match.productionOverrides)[slot] * throttle;
                     if (cheats) {
-                        economy.incomePerTick += (*match.productionOverrides)[slot];
+                        economy.incomePerTick += (*match.productionOverrides)[slot] * throttle;
                     }
                 } else {
-                    economy.incomePerTick.mass += rates.massPerTick * beside.massProduction;
-                    economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction;
+                    // `C-161`(a): `produced[k] = production[k] x ratio` — the
+                    // unit's own consumption ratio throttles what it makes, so
+                    // unfunded upkeep slows a producer's output natively.
+                    economy.incomePerTick.mass += rates.massPerTick * beside.massProduction * throttle;
+                    economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction * throttle;
                     if (cheats) {
-                        economy.incomePerTick.mass += rates.massPerTick * beside.massProduction;
-                        economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction;
+                        economy.incomePerTick.mass += rates.massPerTick * beside.massProduction * throttle;
+                        economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction * throttle;
                     }
                 }
                 // `SetMaintenanceConsumption{Active,Inactive}` gates upkeep only —
