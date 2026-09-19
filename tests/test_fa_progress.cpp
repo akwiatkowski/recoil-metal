@@ -9,6 +9,7 @@
 #include "app/Match.hpp"
 #include "app/SceneBuild.hpp"
 #include "core/lua/LuaTable.hpp"
+#include "core/sim/Combat.hpp"
 #include "core/sim/Enhancement.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/StateHash.hpp"
@@ -491,4 +492,151 @@ TEST_CASE("C-263: a deficit-covering producer tops up the shortfall, clamped "
     REQUIRE(decoded->productionOverrides.has_value());
     CHECK(rm::test::asFloat(decoded->productionOverrides->at(para.index).mass)
           == Catch::Approx(rm::test::asFloat(overrides[para.index].mass)));
+}
+
+TEST_CASE("C-265: a dying Ythotha spawns an invulnerable Othuy that destroys "
+          "itself when its Lifetime runs out", "[fa-progress][othuy]") {
+    // `XSL0401_Script.lua:124-135`: the Ythotha's `DeathThread` `CreateUnitHPR`s
+    // an XSL0402 Othuy at its own position under the same army. The Othuy's
+    // script (`seraphimunits.lua:614-700`) calls `SetCanTakeDamage(false)` /
+    // `SetCanBeKilled(false)` and `self:Destroy()`s when the blueprint's
+    // `Lifetime` (30 s retail) expires — no wreck, no kill, no report.
+    Scenario job;
+    rm::unitdef::UnitDef ythotha;
+    ythotha.name = "XSL0401";
+    ythotha.categories = {"EXPERIMENTAL", "MOBILE"};  // sorted: hasCategory binary-searches
+    ythotha.health = rm::test::mag(100.0f);
+    ythotha.collisionRadiusElmos = 4.0f;  // a corpse needs a radius to be retired
+    ythotha.deathSpawn = "xsl0402";  // lowercase on purpose: the id is case-folded
+    rm::unitdef::UnitDef othuy;
+    othuy.name = "XSL0402";
+    othuy.categories = {"MOBILE"};
+    othuy.health = rm::test::mag(500.0f);
+    othuy.collisionRadiusElmos = 3.0f;  // a body the blast can overlap
+    othuy.invulnerable = true;
+    othuy.lifetimeSeconds = 2.0f;  // short, so the test watches it expire
+    const rm::UnitTypeIndex othuyType = job.registerType(othuy);
+    const auto giant = job.spawn(ythotha, 300.0f, 300.0f, 0);
+    // A bystander beside the corpse, same army: proves the blast gate rejects
+    // the Othuy specifically rather than muting damage outright.
+    rm::unitdef::UnitDef tank;
+    tank.name = "bystander";
+    tank.categories = {"MOBILE"};
+    tank.health = rm::test::mag(100.0f);
+    tank.collisionRadiusElmos = 2.0f;
+    const auto bystander = job.spawn(tank, 304.0f, 300.0f, 0);
+    auto runner = job.runner();
+    int tick = 0;
+
+    // The Ythotha dies this tick; the Othuy stands where it fell.
+    job.scene.store.health()[giant.index].current = rm::sim::Mag{};
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+    rm::sim::UnitId spawned{};
+    for (rm::UnitIndex slot = 0; slot < job.scene.store.slotCount(); ++slot) {
+        if (job.scene.store.slotAlive(slot)
+            && job.scene.store.typeAt(slot) == othuyType) {
+            spawned = job.scene.store.idAt(slot);
+        }
+    }
+    REQUIRE(job.scene.store.alive(spawned));
+    CHECK(rm::test::asFloat(job.scene.store.transforms()[spawned.index].x)
+          == Catch::Approx(300.0f));
+    CHECK(rm::test::asFloat(job.scene.store.transforms()[spawned.index].z)
+          == Catch::Approx(300.0f));
+    CHECK(job.scene.store.motion()[spawned.index].armyIndex == 0);
+
+    // `SetCanTakeDamage(false)`: a blast centred on the Othuy hurts the
+    // bystander and leaves the Othuy untouched. The reindex first is load-
+    // bearing: the Othuy spawned after the tick's last spatial rebuild, so
+    // without it `damageArea`'s grid query never reaches the new unit and the
+    // gate below would pass untested.
+    job.scene.store.reindex(rm::sim::Fx::fromInt(128));
+    const rm::sim::Mag dealt = rm::sim::damageArea(
+        {rm::sim::fxFromFloat(300.0f), rm::sim::Fx{}, rm::sim::fxFromFloat(300.0f)},
+        rm::sim::fxFromFloat(10.0f), rm::test::mag(50.0f), 1, job.scene.store,
+        job.scene.armies, rm::sim::UnitId{}, nullptr, &job.scene.catalog);
+    CHECK(rm::test::near(dealt) == 50.0f);
+    CHECK(rm::test::near(job.scene.store.health()[spawned.index].current) == 500.0f);
+    CHECK(rm::test::near(job.scene.store.health()[bystander.index].current) == 50.0f);
+
+    // `Lifetime` counts down and the Othuy `Destroy()`s itself: gone, with no
+    // wreck and no death report — the Ythotha's wreck is the only feature.
+    const std::size_t wrecksBefore = job.scene.features.size();
+    const std::size_t destroyedBefore = runner.unitsDestroyed;
+    for (int i = 0; i < 30 && job.scene.store.alive(spawned); ++i) {
+        (void)rm::app::advanceMatch(runner, tick++, 0);
+    }
+    CHECK_FALSE(job.scene.store.alive(spawned));
+    CHECK(job.scene.features.size() == wrecksBefore);
+    CHECK(runner.unitsDestroyed == destroyedBefore);
+}
+
+TEST_CASE("C-261: a finished crab egg hatches its Economy.BuildUnit and is "
+          "gone", "[fa-progress][crabegg]") {
+    // `cybranunits.lua:355-400`: the Megalith's eggs are `CConstructionEggUnit`s
+    // — FACTORY+STRUCTURE units it builds like any other product — whose
+    // `OnStopBeingBuilt` `CreateUnitHPR`s `bp.Economy.BuildUnit` at the egg's
+    // position under the same army, then `Destroy()`s the egg (no wreck).
+    Scenario job;
+    rm::unitdef::UnitDef megalith;
+    megalith.name = "XRL0403";
+    megalith.categories = {"EXPERIMENTAL", "FACTORY", "MOBILE"};
+    megalith.health = rm::test::mag(1000.0f);
+    megalith.buildRate = 100.0f;
+    megalith.motion = rm::unitdef::MotionType::Land;  // a None mover has no grid to build on
+    megalith.speedElmosPerSecond = 20.0f;
+    megalith.buildableCategory = {rm::unitdef::parseCategoryTerm("CRABEGG")};
+    rm::unitdef::UnitDef egg;
+    egg.name = "XRL0002";
+    egg.categories = {"CRABEGG", "FACTORY", "STRUCTURE"};
+    egg.health = rm::test::mag(50.0f);
+    egg.collisionRadiusElmos = 4.0f;
+    egg.buildCostMass = rm::test::mag(10.0f);
+    egg.buildCostEnergy = rm::test::mag(10.0f);
+    egg.buildTime = rm::test::mag(1.0f);
+    egg.economyBuildUnit = "xrl0305";  // lowercase on purpose: case-folded at use
+    rm::unitdef::UnitDef crab;
+    crab.name = "XRL0305";
+    crab.categories = {"MOBILE"};
+    crab.health = rm::test::mag(200.0f);
+    crab.collisionRadiusElmos = 3.0f;
+    const auto eggType = job.registerType(egg);
+    (void)job.registerType(crab);
+    const auto layer = job.spawn(megalith, 300.0f, 300.0f, 0);
+    auto runner = job.runner();
+    int tick = 0;
+
+    job.scene.economies[0].stored = {rm::test::mag(1000.0f), rm::test::mag(1000.0f)};
+    REQUIRE(rm::app::issueBuild(job.scene, layer, 0, static_cast<rm::TickIndex>(tick),
+                              eggType, rm::sim::fxFromFloat(320.0f),
+                              rm::sim::fxFromFloat(300.0f)));
+    rm::sim::UnitId hatched{};
+    for (int i = 0; i < 60 && !job.scene.store.alive(hatched); ++i) {
+        (void)rm::app::advanceMatch(runner, tick++, 0);
+        for (rm::UnitIndex slot = 0; slot < job.scene.store.slotCount(); ++slot) {
+            const rm::unitdef::UnitDef* def =
+                job.scene.catalog.def(job.scene.store.typeAt(slot));
+            if (job.scene.store.slotAlive(slot) && def != nullptr && def->name == "XRL0305") {
+                hatched = job.scene.store.idAt(slot);
+            }
+        }
+    }
+    REQUIRE(job.scene.store.alive(hatched));
+    // The click at x=320 snapped to the 8-elmo build grid's cell centre (the
+    // egg's odd footprint): the crab stands where the egg stood, at 324.
+    CHECK(rm::test::asFloat(job.scene.store.transforms()[hatched.index].x)
+          == Catch::Approx(324.0f));
+    CHECK(job.scene.store.motion()[hatched.index].armyIndex == 0);
+
+    // The egg is gone — `Destroy()`, not a death: no egg unit stands, no wreck
+    // was left, and the death tally never moved.
+    for (rm::UnitIndex slot = 0; slot < job.scene.store.slotCount(); ++slot) {
+        const rm::unitdef::UnitDef* def =
+            job.scene.catalog.def(job.scene.store.typeAt(slot));
+        if (job.scene.store.slotAlive(slot) && def != nullptr) {
+            CHECK(def->name != "XRL0002");
+        }
+    }
+    CHECK(job.scene.features.size() == 0);
+    CHECK(runner.unitsDestroyed == 0);
 }

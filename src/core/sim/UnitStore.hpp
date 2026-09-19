@@ -12,6 +12,7 @@
 #include <array>
 #include <map>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -21,6 +22,12 @@ namespace rm::sim {
 /// No bone: an attachment sits at its carrier's origin. Namespace scope (rather
 /// than a class constant) so nested record initializers may name it.
 inline constexpr std::int32_t kNoBone = -1;
+
+/// `C-265`'s "not yet armed" marker for `UnitStore::lifetimeRemainingTicks`:
+/// the tick's lifetime pass writes the blueprint's `Lifetime` here on first
+/// sight of the slot. `std::numeric_limits<TickCount>::max()` rather than a
+/// second flag array — a unit can never legitimately outlive it.
+inline constexpr TickCount kLifetimeUnset = std::numeric_limits<TickCount>::max();
 
 /// A retreating unit's live bookkeeping: where it broke off, and which builder it
 /// ran to. `active` is what separates "owes the front a return trip" from a slot
@@ -106,6 +113,8 @@ public:
         std::vector<Fx> attachmentParentRestHeights;
         std::vector<std::array<Fx, 2>> attachmentSelfRest;
         std::vector<Fx> attachmentSelfRestHeights;
+        /// `C-265`'s per-slot lifetime countdowns (see `lifetimeRemainingTicks`).
+        std::vector<TickCount> lifetimeRemainingTicks;
         CommandSerial nextCommandSerial = 0;
         std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters{};
         std::vector<SharedCommand> sharedCommands;
@@ -128,6 +137,19 @@ public:
     /// Marks a unit dead. Its slot stays put and its arrays keep their last values — see
     /// the note on tombstones above. Killing an already-dead unit does nothing.
     void kill(UnitId id);
+
+    /// Retail's `unit:Destroy()` (`C-261`, `C-265`): the unit leaves WITHOUT the
+    /// death path — no wreck, no `UnitDestroyed` event, no kill credit, no death
+    /// weapon — which is what a crab egg hatching and an Othuy expiring both do.
+    ///
+    /// `kill` alone is NOT this: it releases the handle but leaves health and
+    /// collision radius standing, so the corpse stays targetable and keeps
+    /// shoving the living until its slot is recycled. Destroy zeroes the radius
+    /// FIRST — that is `retireDead`'s once-per-death guard, so the corpse is
+    /// never reported — then the health, then releases the handle. Attached
+    /// cargo is destroyed with it, the way a carrier's load dies with the
+    /// carrier.
+    void destroy(UnitId id);
 
     [[nodiscard]] bool alive(UnitId id) const noexcept { return ids_.alive(id); }
 
@@ -322,6 +344,19 @@ public:
     [[nodiscard]] bool setMaintenanceActive(UnitId unit, bool active) noexcept;
     [[nodiscard]] bool maintenanceActive(UnitId unit) const noexcept;
 
+    /// `C-265`'s per-slot self-destruct timer, retail's blueprint `Lifetime`
+    /// (the Othuy's 30 s). Slot-indexed like the other pass-facing arrays.
+    /// `kLifetimeUnset` means "not yet armed": the tick's lifetime pass arms it
+    /// from the type's `UnitDef::lifetimeSeconds` on first sight, so every spawn
+    /// path — scene placement, finished construction, death-spawn — gets the
+    /// countdown without the caller knowing it exists. Zero means "no lifetime".
+    [[nodiscard]] std::span<TickCount> lifetimeRemainingTicks() noexcept {
+        return lifetimeRemainingTicks_;
+    }
+    [[nodiscard]] std::span<const TickCount> lifetimeRemainingTicks() const noexcept {
+        return lifetimeRemainingTicks_;
+    }
+
     /// Shared repeat/count operations. Exhaustion removes this exact object from every member
     /// queue, matching retail's cross-queue `DecreaseCommandCount` path.
     [[nodiscard]] bool increaseCommandCount(CommandId id, std::uint32_t amount = 1);
@@ -403,6 +438,11 @@ private:
     std::vector<Fx> attachmentParentRestHeights_;
     std::vector<std::array<Fx, 2>> attachmentSelfRest_;
     std::vector<Fx> attachmentSelfRestHeights_;
+
+    /// `C-265`: ticks until the unit `Destroy()`s itself — the Othuy's
+    /// `Lifetime`. `kLifetimeUnset` until the tick's lifetime pass arms it from
+    /// the blueprint; zero for a unit with no lifetime.
+    std::vector<TickCount> lifetimeRemainingTicks_;
 
     CommandSerial nextCommandSerial_ = 0;
     std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters_{};

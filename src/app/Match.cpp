@@ -380,6 +380,16 @@ bool issueCancelFactoryBuild(UnitScene& scene, rm::sim::UnitId factory,
     return def != nullptr ? *def : kNone;
 }
 
+/// "/units/XSL0402/XSL0402_unit.bp" from "xsl0402" — the id in the corpus's own
+/// case. `UnitDef::deathSpawn` and `UnitDef::economyBuildUnit` carry blueprint
+/// ids (C-265, C-261), not paths, so the one place the corpus's
+/// `/units/<ID>/<ID>_unit.bp` layout is needed gets it spelled out here.
+[[nodiscard]] std::string unitBlueprintPath(std::string id) {
+    std::transform(id.begin(), id.end(), id.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return "/units/" + id + "/" + id + "_unit.bp";
+}
+
 /// The display personality of one seat: the raw `--ai-personalities` name, cycled like
 /// `--factions`, or the shared template when only `--ai-personality` was given, or
 /// "scripted" when no FAF opponent plays the seat at all.
@@ -1709,6 +1719,34 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             }
         }
     }
+
+    // `C-265`'s death-spawn, retail's `XSL0401_Script.lua:124-135`: the
+    // Ythotha's `DeathThread` `CreateUnitHPR`s an XSL0402 Othuy at its own
+    // position under the same army. From `report.died` rather than the events:
+    // the corpse's slot still holds its type and transform (the tombstone
+    // rule), and `Death::at` carries the position the spawn needs. The spawn is
+    // the caller's work for the same reason a finished construction's is — it
+    // needs a model out of the VFS. `UnitCreated` fires inside `spawnUnit`;
+    // `UnitFinished` does not, because `CreateUnitHPR` is a spawn, not a build.
+    for (const rm::sim::Death& death : report.died) {
+        const rm::unitdef::UnitDef& victim =
+            buildableDef(scene, static_cast<std::size_t>(
+                                    scene.store.typeAt(death.ref.index)));
+        if (victim.deathSpawn.empty()
+            || death.ref.index >= scene.store.motion().size()) {
+            continue;
+        }
+        const int owner = scene.store.motion()[death.ref.index].armyIndex;
+        if (owner < 0 || static_cast<std::size_t>(owner) >= scene.armies.size()) {
+            continue;
+        }
+        (void)spawnUnit(scene, runner.content, runner.field,
+                        unitBlueprintPath(victim.deathSpawn),
+                        {rm::sim::fxToFloat(death.at[0]), rm::sim::fxToFloat(death.at[1]),
+                         rm::sim::fxToFloat(death.at[2])},
+                        scene.armies[static_cast<std::size_t>(owner)],
+                        scene.store.transforms()[death.ref.index].heading);
+    }
     refreshWreckDecals(scene, runner.field);
 
     // What finished this tick BECOMES A UNIT: an extractor that is done stands on its
@@ -1788,7 +1826,8 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             if (!work.isUpgrade() && scene.store.alive(work.builder)) {
                 const rm::unitdef::UnitDef* risen =
                     &buildableDef(scene, work.blueprintIndex);
-                if (risen->hasCategory("FACTORY") && !risen->isMobile()) {
+                if (risen->hasCategory("FACTORY") && !risen->isMobile()
+                    && risen->economyBuildUnit.empty()) {
                     std::vector<rm::sim::QueuedCommand> handover;
                     for (const auto& entry : scene.store.orders()[work.builder.index].entries()) {
                         if (entry.kind() != rm::sim::CommandKind::Build) continue;
@@ -1822,6 +1861,27 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 .amount = work.cost.mass,
                 .at = work.position,
             });
+        }
+        // `C-261`'s crab-egg hatch, retail's `cybranunits.lua:355-400`: a
+        // `CConstructionEggUnit` — the Megalith's FACTORY+STRUCTURE product —
+        // runs its `OnStopBeingBuilt` the moment it stands, which
+        // `CreateUnitHPR`s `bp.Economy.BuildUnit` at the egg's position under
+        // the same army and then `Destroy()`s the egg. Here rather than in the
+        // sim for the same reason the egg itself spawned here: the hatch needs
+        // a model out of the VFS. `Destroy()`, not a death — the egg leaves no
+        // wreck, no report and no kill credit, and its `UnitFinished` above is
+        // the last word it ever gets. The product gets `UnitCreated` inside
+        // `spawnUnit` and nothing more: it was never under construction.
+        if (spawned) {
+            const rm::unitdef::UnitDef& eggDef =
+                buildableDef(scene, work.blueprintIndex);
+            if (!eggDef.economyBuildUnit.empty()) {
+                (void)spawnUnit(scene, runner.content, runner.field,
+                                unitBlueprintPath(eggDef.economyBuildUnit), site,
+                                scene.armies[army], yaw);
+                scene.store.destroy(*spawned);
+                continue;
+            }
         }
         // `C-225`: a CARRIER stores its air product in internal storage
         // instead of rolling it off — retail's `AddUnitToStorage` gated by

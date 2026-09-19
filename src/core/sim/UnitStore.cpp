@@ -34,8 +34,9 @@ UnitStore::UnitStore(const Snapshot& snapshot)
         attachmentParentRest_(snapshot.attachmentParentRest),
         attachmentParentRestHeights_(snapshot.attachmentParentRestHeights),
         attachmentSelfRest_(snapshot.attachmentSelfRest),
-        attachmentSelfRestHeights_(snapshot.attachmentSelfRestHeights),
-        nextCommandSerial_(snapshot.nextCommandSerial),
+       attachmentSelfRestHeights_(snapshot.attachmentSelfRestHeights),
+       lifetimeRemainingTicks_(snapshot.lifetimeRemainingTicks),
+       nextCommandSerial_(snapshot.nextCommandSerial),
         nextCommandCounters_(snapshot.nextCommandCounters) {
     std::vector<std::shared_ptr<SharedCommand>> mutableCommands;
     mutableCommands.reserve(snapshot.sharedCommands.size());
@@ -80,6 +81,10 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     // feature on, maintenance consuming — rather than fail the load.
     scriptBitsDisabled_.resize(transforms_.size(), 0);
     maintenanceActive_.resize(transforms_.size(), true);
+    // Older snapshots carry no lifetime array: `kLifetimeUnset` re-arms every
+    // slot from its blueprint on the next tick — a restored Othuy restarts its
+    // `Lifetime` rather than failing to load (C-265).
+    lifetimeRemainingTicks_.resize(transforms_.size(), kLifetimeUnset);
     for (std::size_t child = 0; child < transforms_.size(); ++child) {
         if (parents_[child]) {
             if (deriveAttachmentHeights) {
@@ -117,6 +122,7 @@ UnitStore::Snapshot UnitStore::snapshot() const {
                    .attachmentParentRestHeights = attachmentParentRestHeights_,
                    .attachmentSelfRest = attachmentSelfRest_,
                    .attachmentSelfRestHeights = attachmentSelfRestHeights_,
+                   .lifetimeRemainingTicks = lifetimeRemainingTicks_,
                    .nextCommandSerial = nextCommandSerial_,
                    .nextCommandCounters = nextCommandCounters_};
     std::map<const SharedCommand*, std::size_t> sharedCommands;
@@ -170,6 +176,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         attachmentParentRestHeights_.emplace_back();
         attachmentSelfRest_.emplace_back();
         attachmentSelfRestHeights_.emplace_back();
+        lifetimeRemainingTicks_.emplace_back(kLifetimeUnset);
         generations_.emplace_back();
     }
 
@@ -203,6 +210,9 @@ UnitId UnitStore::spawn(const Spawn& request) {
     attachmentParentRestHeights_[slot] = {};
     attachmentSelfRest_[slot] = {};
     attachmentSelfRestHeights_[slot] = {};
+    // `C-265`: the newcomer re-arms its `Lifetime` from its own blueprint on the
+    // next tick — never inheriting the corpse's remaining seconds.
+    lifetimeRemainingTicks_[slot] = kLifetimeUnset;
     // And the same for who last hit the PREVIOUS occupant: `request.health` sets the fresh
     // unit's own, but a caller that leaves it unset would have the newcomer already remember
     // being shot by whoever killed its predecessor. Set from the request so an explicit value
@@ -393,6 +403,7 @@ void UnitStore::kill(UnitId id) {
     // commander's installed upgrades leave the registry with it, so a respawned or
     // recycled slot never inherits a tombstone's enhancements.
     enhancements_[id.index].clear();
+    lifetimeRemainingTicks_[id.index] = kLifetimeUnset;
     (void)detach(id);
     // Cargo dies with its carrier: retail disperses veterancy for the attached
     // units at their remaining health when a loaded transport is destroyed
@@ -413,6 +424,29 @@ void UnitStore::kill(UnitId id) {
     // The generation mirror is NOT updated: the slot now holds a generation the pool has
     // moved past, so `idAt` returns a handle that fails `alive`, which is exactly what a
     // caller asking about an empty slot should get.
+}
+
+void UnitStore::destroy(UnitId id) {
+    if (!ids_.alive(id)) {
+        return;
+    }
+    // `C-261`/`C-265`, retail's `unit:Destroy()`: gone WITHOUT the death path.
+    // The radius goes first because it is `retireDead`'s once-per-death guard —
+    // zeroed here, the corpse is never reported, never wrecked, never scored.
+    // The health goes next because `shootable` reads health, not the handle:
+    // without this the destroyed unit stays a valid target until its slot is
+    // recycled. Attached cargo is destroyed with it, recursively — a carrier's
+    // load dies with the carrier here exactly as it does under `kill`.
+    const UnitIndex slot = id.index;
+    motion_[slot].moving = false;
+    motion_[slot].speedPerTick = Fx{};
+    motion_[slot].radiusElmos = Fx{};
+    health_[slot].current = Mag{};
+    const std::vector<UnitId> cargo = children_[slot];
+    for (const UnitId child : cargo) {
+        destroy(child);
+    }
+    kill(id);
 }
 
 std::optional<CommandId> UnitStore::allocateCommandId(CommandSource source) {

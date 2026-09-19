@@ -2840,6 +2840,22 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         if (!damageable(slot)) {
             return;
         }
+        // `C-265`'s invulnerability, retail's `SetCanTakeDamage(false)` — the
+        // Othuy's script calls it (`seraphimunits.lua:614-700`) and no blueprint
+        // key exists, so `UnitCatalog` sets `UnitDef::invulnerable` by id. The
+        // gate sits at the one point damage lands: every path — projectile
+        // impacts, area blasts, death explosions, overcharge — resolves through
+        // this lambda, so the unit is still aimed at and still hit, and simply
+        // takes nothing, which is exactly what the retail flag does. What it
+        // does NOT gate is `UnitStore::destroy`: retail's `SetCanBeKilled(false)`
+        // blocks `Kill()` but never `Destroy()`, which is how the Othuy's own
+        // `Lifetime` expiry still removes it.
+        if (catalog != nullptr) {
+            const unitdef::UnitDef* targetDef = catalog->def(store.typeAt(slot));
+            if (targetDef != nullptr && targetDef->invulnerable) {
+                return;
+            }
+        }
         if (slot >= motion.size()
             || ((static_cast<std::uint8_t>(targetLayers)
                  & static_cast<std::uint8_t>(motion[slot].airborne
