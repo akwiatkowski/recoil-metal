@@ -225,6 +225,7 @@ add_library(rm_core STATIC
     src/core/sim/Transport.cpp
     src/core/unit/Adjacency.cpp
     src/core/unit/UnitBlueprint.cpp
+    src/core/unit/UnitCatalog.cpp
     src/core/unit/Weapon.cpp
     src/core/unit/Armor.cpp
     src/core/unit/FaDuration.cpp
@@ -431,6 +432,7 @@ if(BUILD_TESTING)
         tests/test_terrain_type.cpp
         tests/test_real_scmap.cpp
         tests/test_blueprint_mesh.cpp
+        tests/test_blueprint_merge.cpp
         tests/test_prop_blueprint.cpp
         tests/test_settings.cpp
         tests/test_real_stratum_normals.cpp
