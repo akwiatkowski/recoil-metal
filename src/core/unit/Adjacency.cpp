@@ -56,6 +56,9 @@ constexpr AdjacencyGrants kT1PowerGenerator{
     // `T1PowerRateOfFireBonusSize4` — the ONLY live row. Sizes 8..20 are defined in the
     // file but appear in no producer list (`C-051`(c)), so they grant nothing.
     .rateOfFire = {-0.025f, 0.0f, 0.0f, 0.0f, 0.0f},
+    // `T1PowerEnergyWeaponBonusSize4..20` — the same -0.1 ring total as RateOfFire:
+    // -0.025 a neighbour, four of them around a SIZE4.
+    .energyWeapon = {-0.025f, -0.0125f, -0.008333f, -0.00625f, -0.005f},
 };
 constexpr AdjacencyGrants kT2PowerGenerator{
     .energyMaintenance = {-0.125f, -0.125f, -0.125f, -0.125f, -0.125f},
@@ -64,12 +67,16 @@ constexpr AdjacencyGrants kT2PowerGenerator{
     // the intended discount. Reproduced deliberately, not fixed (`C-051`(a)).
     .energyBuild = {-0.125f, -0.125f, -0.125f, -0.125f, -0.0125f},
     .rateOfFire = {-0.05f, 0.0f, 0.0f, 0.0f, 0.0f},
+    // `T2PowerEnergyWeaponBonusSize4..20` — flat -0.05, like its RateOfFire row.
+    .energyWeapon = {-0.05f, -0.05f, -0.05f, -0.05f, -0.05f},
 };
 constexpr AdjacencyGrants kT3PowerGenerator{
     .energyMaintenance = {-0.1875f, -0.1875f, -0.1875f, -0.1875f, -0.1875f},
     // `T3PowerEnergyBuildBonusSize4..20` — flat -0.1875 like its maintenance row.
     .energyBuild = {-0.1875f, -0.1875f, -0.1875f, -0.1875f, -0.1875f},
     .rateOfFire = {-0.075f, 0.0f, 0.0f, 0.0f, 0.0f},
+    // `T3PowerEnergyWeaponBonusSize4..20` — flat -0.075, like its RateOfFire row.
+    .energyWeapon = {-0.075f, -0.075f, -0.075f, -0.075f, -0.075f},
 };
 // The extractors' `T*MEXMassBuildBonusSize4..20` rows — the mass half of the build-drain
 // discount, ring totals -0.40 / -0.60 / -0.80 (`C-050`). The fabricators' flat rows sit

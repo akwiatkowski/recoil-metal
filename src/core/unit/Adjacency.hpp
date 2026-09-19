@@ -81,6 +81,13 @@ struct AdjacencyGrants {
     /// Only the Size4 row is ever live: the Size8/12/16/20 buffs are defined but
     /// referenced by no producer list — `C-051`(c)'s dead code, reproduced as zeroes.
     std::array<float, kAdjacencySizeSteps> rateOfFire{};
+    /// `EnergyWeapon`: added to the receiving weapon's per-shot energy cost —
+    /// negative, a discount (`AdjacencyBuffs.lua` `*EnergyWeaponBonus*`, gated on
+    /// `EnergyWeaponBuffCheck`: any weapon with `EnergyRequired > 0`). The mod lands
+    /// on the weapon's `AdjEnergyMod`, which `GetWeaponEnergyRequired` multiplies
+    /// into `EnergyRequired` — the OVERALL cost, not the drain rate
+    /// (`defaultweapons.lua:153`).
+    std::array<float, kAdjacencySizeSteps> energyWeapon{};
 };
 
 /// The table for one class — `AdjacencyBuffs.lua:206-247`, transcribed. Zeroes for `None`.

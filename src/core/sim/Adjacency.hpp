@@ -37,6 +37,12 @@ struct AdjacencyEffects {
     /// multiplier lands on the weapon's rate, so `Add < 0` fires slower (`C-051`(b)).
     /// Only SIZE4 artillery receivers ever see it move off one (`C-051`(c)).
     Fx rateOfFire = kFxOne;
+    /// `EnergyWeapon` adjacency: a discount on the per-shot `EnergyRequired` drain —
+    /// `AdjEnergyMod` lands on the weapon's `GetWeaponEnergyRequired`
+    /// (`defaultweapons.lua:153`), so `Add < 0` makes each shot cheaper. Gated on the
+    /// receiver owning an energy weapon (`EnergyWeaponBuffCheck`), which no shipped
+    /// structure has — the plumbing is live, the table is ready for the first one.
+    Fx energyWeapon = kFxOne;
 };
 
 /// How far apart two skirts may stand and still count as touching, in elmos.
@@ -97,6 +103,7 @@ struct AdjacencyFlow {
     Fx massBuild{};
     Fx energyBuild{};
     Fx rateOfFire{};
+    Fx energyWeapon{};
 
     /// True when a grant crosses in this direction. Every authored grant is a bonus —
     /// production adds, maintenance and build discounts subtract — so a link is always
@@ -104,7 +111,8 @@ struct AdjacencyFlow {
     /// retail's penalty-by-bug, `C-051`(b), still counts as a link.)
     [[nodiscard]] bool any() const noexcept {
         return massProduction != Fx{} || energyProduction != Fx{} || energyUpkeep != Fx{}
-            || massBuild != Fx{} || energyBuild != Fx{} || rateOfFire != Fx{};
+            || massBuild != Fx{} || energyBuild != Fx{} || rateOfFire != Fx{}
+            || energyWeapon != Fx{};
     }
 };
 

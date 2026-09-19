@@ -2292,7 +2292,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
 std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                            std::span<const Army> armies,
                            std::vector<Projectile>& projectiles,
-                           std::span<Economy> economies, TickRate rate, EventQueue* events) {
+                           std::span<Economy> economies, TickRate rate, EventQueue* events,
+                           std::span<const AdjacencyEffects> adjacency) {
     std::size_t fired = 0;
 
     const std::span<const Transform> transforms = store.transforms();
@@ -2358,15 +2359,21 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
 
             // THE ENERGY GATE, and the mechanic: the shot costs `EnergyRequired` from the
             // army's store the tick it fires, and a short bar holds the shot rather than
-            // spending what is not there.
+            // spending what is not there. `C-051`'s `EnergyWeapon` adjacency discounts
+            // the cost — `AdjEnergyMod` multiplies `EnergyRequired` in retail's
+            // `GetWeaponEnergyRequired` (`defaultweapons.lua:153`), floored at zero.
             if (army < 0 || static_cast<std::size_t>(army) >= economies.size()) {
                 continue;
             }
+            const Mag shotCost =
+                slot < adjacency.size()
+                    ? std::max(Mag{}, weapon.energyRequired * adjacency[slot].energyWeapon)
+                    : weapon.energyRequired;
             Economy& economy = economies[static_cast<std::size_t>(army)];
-            if (economy.stored.energy < weapon.energyRequired) {
+            if (economy.stored.energy < shotCost) {
                 continue;
             }
-            economy.stored.energy -= weapon.energyRequired;
+            economy.stored.energy -= shotCost;
 
             const UnitCatalog::WeaponRates& rates = catalog.weaponRates(store.typeAt(slot), w);
             const UnitCatalog::TurretMount& mount = catalog.turretMount(store.typeAt(slot));

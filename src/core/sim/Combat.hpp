@@ -368,7 +368,8 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                            std::span<const Army> armies,
                            std::vector<Projectile>& projectiles,
                            std::span<Economy> economies, TickRate rate,
-                           EventQueue* events = nullptr);
+                           EventQueue* events = nullptr,
+                           std::span<const AdjacencyEffects> adjacency = {});
 
 /// Fires every held MISSILE LAUNCH whose moment has come: a live hostile target or a
 /// clicked ground zero, inside the silo weapon's `[minRange, maxRange]` envelope, reload

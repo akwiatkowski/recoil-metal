@@ -115,6 +115,15 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
             // rows for every other size are zero by `C-051`(c)'s dead code.
             adjacency.receivesRateOfFire =
                 def->hasCategory("ARTILLERY") && !def->weapons.empty();
+            // `EnergyWeaponBuffCheck` (`AdjacencyBuffFunctions.lua:89`): the receiver
+            // needs a weapon that spends energy — `EnergyRequired > 0`
+            // (`weapon.lua:387`). The only shipped one is the commander's OverCharge,
+            // which is mobile and never reaches this branch; the plumbing is here for
+            // the structure that authors one.
+            adjacency.receivesEnergyWeapon = std::ranges::any_of(
+                def->weapons, [](const unitdef::Weapon& w) {
+                    return w.energyRequired > sim::Mag{};
+                });
         }
         const unitdef::AdjacencyGrants& grants = unitdef::adjacencyGrants(
             unitdef::adjacencyClassFromName(def->adjacencyBuffs));
@@ -125,6 +134,7 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
             adjacency.givesMassBuild[i] = fxFromFloat(grants.massBuild[i]);
             adjacency.givesEnergyBuild[i] = fxFromFloat(grants.energyBuild[i]);
             adjacency.givesRateOfFire[i] = fxFromFloat(grants.rateOfFire[i]);
+            adjacency.givesEnergyWeapon[i] = fxFromFloat(grants.energyWeapon[i]);
         }
     }
     adjacency_.push_back(adjacency);

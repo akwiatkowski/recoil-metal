@@ -186,6 +186,11 @@ public:
         /// weapon count, so a SIZE4 radar never slows a gun it does not have (`C-051`).
         bool receivesRateOfFire = false;
 
+        /// Whether this type may receive the `EnergyWeapon` grant — retail's
+        /// `EnergyWeaponBuffCheck`: any weapon with `EnergyRequired > 0`
+        /// (`weapon.lua:387`). The `STRUCTURE SIZEn` half is `receives` itself.
+        bool receivesEnergyWeapon = false;
+
         /// What standing beside this type ADDS to a neighbour, indexed by the
         /// NEIGHBOUR's `sizeIndex`. Already fixed point; already per the giver's table.
         std::array<Fx, unitdef::kAdjacencySizeSteps> givesMassProduction{};
@@ -194,6 +199,7 @@ public:
         std::array<Fx, unitdef::kAdjacencySizeSteps> givesMassBuild{};
         std::array<Fx, unitdef::kAdjacencySizeSteps> givesEnergyBuild{};
         std::array<Fx, unitdef::kAdjacencySizeSteps> givesRateOfFire{};
+        std::array<Fx, unitdef::kAdjacencySizeSteps> givesEnergyWeapon{};
 
         /// Whether this type sits in the adjacency game at all — a structure with a
         /// skirt. The pair scan skips everything else without touching the arrays.

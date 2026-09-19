@@ -571,3 +571,62 @@ TEST_CASE("C-052: capture clears the unit's adjacency links", "[fa-econ]") {
     rm::sim::adjacencyEffects(f.roster.store, f.roster.catalog, effects);
     CHECK(effects[replacement.index].massProduction == rm::sim::kFxOne);
 }
+
+TEST_CASE("C-051: an EnergyWeapon receiver's shots cost less beside a generator",
+          "[fa-econ]") {
+    // `EnergyWeaponBuffCheck` (`AdjacencyBuffFunctions.lua:89`): the receiver needs a
+    // weapon with `EnergyRequired > 0` (`weapon.lua:387`). The grant lands on the
+    // weapon's `AdjEnergyMod`, which `GetWeaponEnergyRequired` multiplies into the
+    // per-shot cost (`defaultweapons.lua:153`) — a discount, not a drain change.
+    Fixture f;
+
+    // A SIZE4 structure with a manual energy weapon — the shape no shipped unit has,
+    // which is why the plumbing is tested rather than the content.
+    rm::unitdef::UnitDef turret = smallStructure("test_energy_turret");
+    rm::unitdef::Weapon cannon;
+    cannon.label = "EnergyGun";
+    cannon.role = rm::unitdef::WeaponRole::DirectFire;
+    cannon.damage = rm::sim::magFromFloat(100.0f);
+    cannon.maxRange = rm::sim::fxFromFloat(200.0f);
+    cannon.rateOfFire = 1.0f;
+    cannon.muzzleVelocityElmosPerSecond = 200.0f;
+    cannon.turreted = true;
+    cannon.manualFire = true;
+    cannon.energyRequired = rm::sim::magFromFloat(1000.0f);
+    turret.weapons.push_back(cannon);
+    const rm::UnitTypeIndex turretType = f.roster.addType(turret);
+
+    rm::unitdef::UnitDef pgen = smallStructure("test_pgen");
+    pgen.adjacencyBuffs = "T1PowerGeneratorAdjacencyBuffs";
+    const rm::UnitTypeIndex pgenType = f.roster.addType(pgen);
+
+    const UnitId gun = f.roster.add(turretType, 200.0f, 200.0f, 0, 500.0f);
+    (void)f.roster.add(pgenType, 216.0f, 200.0f, 0, 500.0f);  // skirts abutting
+
+    std::vector<rm::sim::AdjacencyEffects> effects;
+    rm::sim::adjacencyEffects(f.roster.store, f.roster.catalog, effects);
+    // T1's EnergyWeaponBonusSize4 is -0.025 a neighbour: one generator, one discount.
+    CHECK(rm::test::asFloat(effects[gun.index].energyWeapon)
+          == Approx(0.975f).margin(0.001));
+
+    // And the shot pays the discounted cost: 1000 × 0.975 = 975, not the full 1000.
+    f.economies[0].stored.energy = rm::sim::magFromFloat(1000.0f);
+    const UnitId victim = f.roster.add(f.roster.addType([] {
+        rm::unitdef::UnitDef tank;
+        tank.name = "test_tank";
+        return tank;
+    }()), 230.0f, 200.0f, 1, 500.0f);
+    const rm::sim::Transform& at = f.roster.store.transforms()[victim.index];
+    rm::sim::PassabilityGrid grid = rm::sim::buildPassability(f.field, 0.0f);
+    const std::vector<rm::sim::Player> players = rm::sim::onePlayerPerArmy(2, 0);
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::Command{.kind = rm::sim::CommandKind::Overcharge,
+                         .unit = gun,
+                         .targetX = at.x,
+                         .targetZ = at.z,
+                         .target = victim},
+        f.roster.store, f.roster.catalog, players, f.armies, f.terrain, grid,
+        f.roster.rate, nullptr));
+    f.tick();
+    CHECK(rm::test::asFloat(f.economies[0].stored.energy) == Approx(25.0f).margin(0.5f));
+}

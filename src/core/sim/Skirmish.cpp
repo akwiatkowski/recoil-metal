@@ -948,7 +948,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         // this tick flies this tick, and the energy it burned is gone before the economy
         // pass reads the store.
         report.shotsFired += fireOvercharge(store, catalog, match.armies, *match.projectiles,
-                                            match.economies, rate, match.events);
+                                            match.economies, rate, match.events, fireAdjacency);
         // The silo's round, same slot in the beat: a launch authorised this tick flies
         // this tick, and the round it burned leaves the stockpile before the economy
         // pass reads it.
