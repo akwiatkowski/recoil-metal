@@ -3844,3 +3844,33 @@ TEST_CASE("a handicapped army's units take divided damage") {
                               UnitId{}, nullptr, &roster.catalog);
     CHECK(roster.health(victim).current == rm::test::mag(80.0f));  // 40 / (1+1)
 }
+
+TEST_CASE("equidistant targets resolve deterministically, incumbent first (C-107)") {
+    // `C-107`: our tie set is wider than retail's — the score is exact squared
+    // distance in fixed point, so two candidates at the same range tie where
+    // retail's float hypot might not. The pin is the RESOLUTION, not the tie:
+    // an incumbent wins its own tie, and a fresh query picks the lower slot.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId shooter = roster.add(type, 0.0f, 0.0f, 0, 100.0f);
+    // Two enemies at exactly the same distance, opposite bearings.
+    const UnitId east = roster.add(type, 50.0f, 0.0f, 1, 100.0f);
+    const UnitId west = roster.add(type, -50.0f, 0.0f, 1, 100.0f);
+    const Weapon weapon = directFire(10.0f, 300.0f);
+
+    // Fresh query: the lower slot wins the tie — deterministic, not arbitrary.
+    const auto picked = rm::sim::nearestTarget(
+        rm::test::at(0, 0, 0), 0, shooter.index, weapon, roster.store, armies,
+        nullptr, &roster.catalog);
+    REQUIRE(picked.has_value());
+    CHECK(*picked == (east.index < west.index ? east : west));
+
+    // The incumbent holds its tie even when it is the HIGHER slot.
+    const UnitId incumbent = east.index > west.index ? east : west;
+    const auto held = rm::sim::nearestTarget(
+        rm::test::at(0, 0, 0), 0, shooter.index, weapon, roster.store, armies,
+        nullptr, &roster.catalog, std::nullopt, incumbent);
+    REQUIRE(held.has_value());
+    CHECK(*held == incumbent);
+}

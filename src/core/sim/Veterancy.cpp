@@ -65,6 +65,11 @@ bool creditKill(UnitStore& store, const UnitCatalog& catalog, UnitId killer,
         return false;
     }
     health.veterancy.level = earned;
+    // `C-258`: promotion applies the veteran `Regen` buff, and a buff event
+    // recomputes the regen rate — erasing any standing `SetRegenRate` write or
+    // `RevertRegenRate` suppression. The incoherence is retail's: a promoted
+    // commander quietly loses its Nano-Repair System rate.
+    health.regenWrite = Health::RegenWrite::None;
 
     // THE PROMOTION ITSELF (`C-028`, `C-029`). Recomputed from the blueprint maximum rather
     // than scaled from the current one, which is what stops the levels compounding — the
@@ -112,9 +117,26 @@ void tickRegeneration(UnitStore& store, const UnitCatalog& catalog, TickRate rat
         const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
         const VeterancyRegen& ladder =
             def != nullptr ? def->veterancyRegenPerSecond : kVeterancyRegenPerSecond;
-        const Mag perTick = catalog.rates(store.typeAt(slot)).regenPerTick
-                            + veteranRegenPerTick(rate, health.veterancy.level, ladder)
-                            + enhancementRegenPerTick(store, catalog, slot);
+        // `C-258`: the two writers retail lets fight over the regen rate. A
+        // standing `SetRegenRate` enhancement supplies the whole figure — the
+        // buffs it overwrote stay overwritten until the next buff event (the
+        // write state lives on the unit, `Health::regenWrite`). A `Reverted`
+        // unit heals at the bare blueprint rate: `RevertRegenRate` erased the
+        // adds. `None` is the recompute — base plus every active add.
+        Mag perTick{};
+        switch (health.regenWrite) {
+        case Health::RegenWrite::Overridden:
+            perTick = enhancementRegenOverride(store, catalog, slot).value_or(Mag{});
+            break;
+        case Health::RegenWrite::Reverted:
+            perTick = catalog.rates(store.typeAt(slot)).regenPerTick;
+            break;
+        case Health::RegenWrite::None:
+            perTick = catalog.rates(store.typeAt(slot)).regenPerTick
+                      + veteranRegenPerTick(rate, health.veterancy.level, ladder)
+                      + enhancementRegenPerTick(store, catalog, slot);
+            break;
+        }
         if (perTick <= Mag{}) {
             continue;
         }

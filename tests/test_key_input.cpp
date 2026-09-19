@@ -2,7 +2,11 @@
 
 #include "platform/KeyInput.hpp"
 
+#include "core/sim/Command.hpp"
+#include "core/ui/CommandMode.hpp"
+
 #include <array>
+#include <optional>
 #include <utility>
 
 TEST_CASE("a character becomes one semantic event without losing event state") {
@@ -51,4 +55,24 @@ TEST_CASE("control-group digits keep their numeric identity") {
     CHECK(rm::digitForKey(rm::Key::Digit4) == 4);
     CHECK(rm::digitForKey(rm::Key::Digit9) == 9);
     CHECK_FALSE(rm::digitForKey(rm::Key::A).has_value());
+}
+
+TEST_CASE("an issued armed command disarms unless shift queues it") {
+    // `C-339`: retail's `commandmode.lua` keeps the armed command while Shift
+    // is held (`issuedOneCommand` + `IsKeyDown('Shift')`) and drops it
+    // otherwise; `EndCommandMode` cancels unconditionally. Our dispatch is
+    // typed, so the state machine is `commandModeIssued` over the optional.
+    std::optional<rm::sim::CommandKind> armed = rm::sim::CommandKind::AttackMove;
+
+    rm::ui::commandModeIssued(armed, false);
+    CHECK_FALSE(armed.has_value());
+
+    armed = rm::sim::CommandKind::Patrol;
+    rm::ui::commandModeIssued(armed, true);
+    CHECK(armed == rm::sim::CommandKind::Patrol);
+    // Shift-held issues chain: the command stays armed for the next click.
+    rm::ui::commandModeIssued(armed, true);
+    CHECK(armed == rm::sim::CommandKind::Patrol);
+    rm::ui::commandModeIssued(armed, false);
+    CHECK_FALSE(armed.has_value());
 }

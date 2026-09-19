@@ -139,4 +139,91 @@ preferMobileCombat(std::span<const std::type_identity_t<Id>> inBox, Pred&& isCom
     return fighters;
 }
 
+/// `C-336`: what a control-group recall selects. Retail's `ApplySelectionSet`
+/// filters the stored set to `ALLUNITS - (FACTORY - MOBILE)` — everything
+/// except an immobile factory — and falls back to the immobile factories only
+/// when that leaves nothing, so a group that IS a row of factories still
+/// recalls. `isImmobileFactory` is the caller's predicate over the stored ids;
+/// dead-unit pruning happens before this runs (the session's recall already
+/// erases the dead).
+template <typename Id, typename Pred>
+[[nodiscard]] std::vector<Id>
+applySelectionSet(std::span<const std::type_identity_t<Id>> stored, Pred&& isImmobileFactory) {
+    std::vector<Id> mobile;
+    std::vector<Id> factories;
+    for (const Id& id : stored) {
+        (isImmobileFactory(id) ? factories : mobile).push_back(id);
+    }
+    return mobile.empty() ? factories : mobile;
+}
+
+/// `C-367`: the `UI_SelectByCategory` modifier flags, closed alphabet —
+/// `+add +nearest +idle +inview +goto +excludeengineers` — as data rather than
+/// as a console string, since our dispatch is typed (`C-338` divergence).
+struct SelectModifiers {
+    /// `+add`: union with the current selection instead of replacing it.
+    bool add = false;
+    /// `+nearest`: keep only the candidate closest to the caller's point.
+    bool nearest = false;
+    /// `+idle`: keep only candidates the `isIdle` predicate accepts.
+    bool idle = false;
+    /// `+inview`: keep only candidates the `inView` predicate accepts.
+    bool inView = false;
+    /// `+goto`: the caller moves the camera to the result — reported back
+    /// through `SelectByCategoryResult::goTo` rather than acted on here.
+    bool goTo = false;
+    /// `+excludeengineers`: drop candidates the `isEngineer` predicate accepts.
+    bool excludeEngineers = false;
+};
+
+template <typename Id>
+struct SelectByCategoryResult {
+    std::vector<Id> selection;
+    /// `+goto` was passed: the caller moves the camera to the result's centre.
+    bool goTo = false;
+};
+
+/// `C-367`'s modifier algebra over a candidate set, in retail's order: the
+/// filters (`+inview`, `+idle`, `+excludeengineers`) narrow the candidates,
+/// `+nearest` keeps the single closest, and `+add` decides whether the result
+/// unions with or replaces the current selection. `+goto` is reported, not
+/// applied — the camera belongs to the caller. Predicates answer per-id;
+/// `distanceTo` is asked only under `+nearest`.
+template <typename Id, typename InView, typename IsIdle, typename IsEngineer,
+          typename DistanceTo>
+[[nodiscard]] SelectByCategoryResult<Id> selectByCategory(
+    std::span<const std::type_identity_t<Id>> current,
+    std::span<const std::type_identity_t<Id>> candidates,
+    const SelectModifiers& modifiers, InView&& inView, IsIdle&& isIdle,
+    IsEngineer&& isEngineer, DistanceTo&& distanceTo) {
+    std::vector<Id> kept;
+    for (const Id& id : candidates) {
+        if (modifiers.inView && !inView(id)) continue;
+        if (modifiers.idle && !isIdle(id)) continue;
+        if (modifiers.excludeEngineers && isEngineer(id)) continue;
+        kept.push_back(id);
+    }
+    if (modifiers.nearest && !kept.empty()) {
+        const auto closest = std::min_element(kept.begin(), kept.end(),
+            [&distanceTo](const Id& a, const Id& b) {
+                return distanceTo(a) < distanceTo(b);
+            });
+        kept = {*closest};
+    }
+    SelectByCategoryResult<Id> result{.goTo = modifiers.goTo};
+    if (modifiers.add) {
+        result.selection.assign(current.begin(), current.end());
+        for (const Id& id : kept) {
+            if (std::find(result.selection.begin(), result.selection.end(), id)
+                == result.selection.end()) {
+                result.selection.push_back(id);
+            }
+        }
+    } else {
+        result.selection = std::move(kept);
+    }
+    return result;
+}
+
+
 } // namespace rm

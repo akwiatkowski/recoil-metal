@@ -12,6 +12,7 @@
 #include "core/sim/Adjacency.hpp"
 #include "core/sim/Replay.hpp"
 #include "core/sim/StateHash.hpp"
+#include "core/ui/CommandMode.hpp"
 #include "core/ui/CommandPanel.hpp"
 #include "core/ui/PanelPages.hpp"
 
@@ -450,23 +451,46 @@ int runWindowed(const Session& session) {
                 // there is no on-screen limit here the way there is for a double-click.
                 // Shift adds them to the current selection rather than replacing it, the
                 // same modifier rule the click and the box use.
-                std::vector<rm::sim::UnitId> idle = event.key == rm::Key::I
-                    ? rm::app::idleFieldEngineers(units) : rm::app::idleMobileCombatUnits(units);
-                const char* kind = event.key == rm::Key::I ? "engineer" : "combat unit";
-                if (idle.empty()) {
-                    std::printf("no idle %ss\n", kind);
-                } else if (event.modifiers.shift) {
-                    std::size_t added = 0;
-                    for (const rm::sim::UnitId id : idle) {
-                        if (std::find(selected.begin(), selected.end(), id) == selected.end()) {
-                            selected.push_back(id);
-                            ++added;
-                        }
+                //
+                // Routed through `C-367`'s `selectByCategory` algebra: the candidates are
+                // the player army's units of the key's kind, `+idle` keeps the ones with an
+                // empty order queue, and `+add` is what Shift passes.
+                const bool engineers = event.key == rm::Key::I;
+                const auto ofKind = [&units, engineers](rm::sim::UnitId id) {
+                    const rm::unitdef::UnitDef* def =
+                        units.catalog.def(units.store.typeAt(id.index));
+                    if (def == nullptr) return false;
+                    return engineers ? (def->isBuilder() && def->speedElmosPerSecond > 0.0f)
+                                     : rm::unitdef::isMobileCombat(*def);
+                };
+                std::vector<rm::sim::UnitId> candidates;
+                for (rm::UnitIndex slot = 0; slot < units.store.slotCount(); ++slot) {
+                    if (units.store.slotAlive(slot)
+                        && units.armyOf(slot) == units.playerArmy) {
+                        const rm::sim::UnitId id = units.store.idAt(slot);
+                        if (ofKind(id)) candidates.push_back(id);
                     }
-                    std::printf("idle: %zu %s(s) added to the selection\n", added, kind);
+                }
+                const auto idle = [&units](rm::sim::UnitId id) {
+                    return units.store.orders()[id.index].active() == nullptr;
+                };
+                const auto result = rm::selectByCategory<rm::sim::UnitId>(
+                    selected, candidates,
+                    rm::SelectModifiers{.add = event.modifiers.shift, .idle = true},
+                    [](rm::sim::UnitId) { return true; }, idle,
+                    [](rm::sim::UnitId) { return false; },
+                    [](rm::sim::UnitId) { return 0.0f; });
+                const char* kind = engineers ? "engineer" : "combat unit";
+                const std::size_t added = result.selection.size() - selected.size();
+                if (!event.modifiers.shift && result.selection.empty()) {
+                    std::printf("no idle %ss\n", kind);
                 } else {
-                    selected = std::move(idle);
-                    std::printf("idle: selected %zu %s(s)\n", selected.size(), kind);
+                    selected = std::move(result.selection);
+                    if (event.modifiers.shift) {
+                        std::printf("idle: %zu %s(s) added to the selection\n", added, kind);
+                    } else {
+                        std::printf("idle: selected %zu %s(s)\n", selected.size(), kind);
+                    }
                 }
                 std::fflush(stdout);
             } else if (event.key == rm::Key::G && !event.repeat) {
@@ -601,8 +625,20 @@ int runWindowed(const Session& session) {
                     std::erase_if(group, [&units](rm::sim::UnitId id) {
                         return !units.store.alive(id);
                     });
-                    if (!group.empty()) {
-                        selected = group;
+                    // `C-336`'s `ApplySelectionSet` filter: the recall drops
+                    // immobile factories when anything else is in the group —
+                    // `ALLUNITS - (FACTORY - MOBILE)` — and falls back to them
+                    // only when they are all the group holds.
+                    const auto immobileFactory = [&units](rm::sim::UnitId id) {
+                        const rm::unitdef::UnitDef* def =
+                            units.catalog.def(units.store.typeAt(id.index));
+                        return def != nullptr && def->hasCategory("FACTORY")
+                               && !def->isMobile();
+                    };
+                    const std::vector<rm::sim::UnitId> recalled =
+                        rm::applySelectionSet<rm::sim::UnitId>(group, immobileFactory);
+                    if (!recalled.empty()) {
+                        selected = recalled;
                     }
                 }
             }
@@ -1182,7 +1218,7 @@ int runWindowed(const Session& session) {
                         orderSelectionTo(ground, mods.shift, std::nullopt,
                                          armedCommand.value_or(
                                              rm::sim::CommandKind::Move));
-                        armedCommand.reset();
+                        rm::ui::commandModeIssued(armedCommand, mods.shift);
                     }
                     return;
                 }
@@ -1512,17 +1548,6 @@ int runWindowed(const Session& session) {
 
                 // DOUBLE-CLICK WIDENS TO THE TYPE, on screen: every one of the player's
                 // units of the clicked type whose position projects into the viewport.
-                // On screen rather than map-wide because that is what both reference games
-                // do, and because "everything like this, everywhere" silently commits units
-                // the player cannot see. The first click of the pair selected the unit
-                // normally; this refines it, so a double-click on empty ground still means
-                // what a single click there meant.
-                //
-                // CONTROL-CLICK widens the same way but always ADDS — BAR's "select all of
-                // this type on screen, on top of what I have". `addToSet` is already true
-                // under control, so the band's additive rule does the appending, and a
-                // re-clicked type is NOT toggled out: a widening click aims at a type, not
-                // at a unit.
                 if (pick && (mods.clicks >= 2 || mods.control)) {
                     const rm::UnitTypeIndex wanted = units.store.typeAt(pick->index);
                     const float w = clickViewport.logicalExtent.width;
@@ -1534,19 +1559,30 @@ int runWindowed(const Session& session) {
                             || units.armyOf(slot) != units.playerArmy) {
                             continue;
                         }
-                        const rm::sim::Transform& at = units.store.transforms()[slot];
+                        ofType.push_back(units.store.idAt(slot));
+                    }
+                    // `C-337`'s double-click is `UI_SelectByCategory` with
+                    // `+inview` — the type's units filtered to the frustum —
+                    // and `+add` under control. Routed through `C-367`'s
+                    // algebra so the flag's meaning is tested once.
+                    const auto inView = [&](rm::sim::UnitId id) {
+                        const rm::sim::Transform& at = units.store.transforms()[id.index];
                         const auto screen = rm::worldToScreen(
                             window.camera(),
                             simd_make_float3(rm::sim::fxToFloat(at.x),
                                              rm::sim::fxToFloat(at.y),
                                              rm::sim::fxToFloat(at.z)),
                             w, h);
-                        if (screen && (*screen)[0] >= 0.0f && (*screen)[0] <= w
-                            && (*screen)[1] >= 0.0f && (*screen)[1] <= h) {
-                            ofType.push_back(units.store.idAt(slot));
-                        }
-                    }
-                    selected = rm::applyBand<rm::sim::UnitId>(selected, ofType, addToSet);
+                        return screen && (*screen)[0] >= 0.0f && (*screen)[0] <= w
+                               && (*screen)[1] >= 0.0f && (*screen)[1] <= h;
+                    };
+                    const auto result = rm::selectByCategory<rm::sim::UnitId>(
+                        selected, ofType,
+                        rm::SelectModifiers{.add = addToSet, .inView = true},
+                        inView, [](rm::sim::UnitId) { return true; },
+                        [](rm::sim::UnitId) { return false; },
+                        [](rm::sim::UnitId) { return 0.0f; });
+                    selected = std::move(result.selection);
                     return;
                 }
 
@@ -1645,7 +1681,7 @@ int runWindowed(const Session& session) {
                     (void)issueAttack(units, selected, player, tick, *hit, at.x, at.z,
                                       mods.shift);
                 }
-                armedCommand.reset();
+                rm::ui::commandModeIssued(armedCommand, mods.shift);
                 return;
             }
 
@@ -1695,7 +1731,7 @@ int runWindowed(const Session& session) {
                                 static_cast<double>(rm::sim::fxToFloat(aimZ)));
                     std::fflush(stdout);
                 }
-                armedCommand.reset();
+                rm::ui::commandModeIssued(armedCommand, mods.shift);
                 return;
             }
 
@@ -1735,7 +1771,7 @@ int runWindowed(const Session& session) {
                                      rm::sim::fxToFloat(at.z)},
                         .age = 0.0f,
                     });
-                    armedCommand.reset();
+                    rm::ui::commandModeIssued(armedCommand, mods.shift);
                 }
                 return;
             }
@@ -1812,7 +1848,7 @@ int runWindowed(const Session& session) {
                     std::printf("repair: %zu builder(s) submitted\n", builders.size());
                 }
                 if (explicitRepair) {
-                    armedCommand.reset();
+                    rm::ui::commandModeIssued(armedCommand, mods.shift);
                 }
                 return;
             }
@@ -1855,7 +1891,7 @@ int runWindowed(const Session& session) {
                                     targetDef->name.c_str());
                     }
                     if (explicitAssist) {
-                        armedCommand.reset();
+                        rm::ui::commandModeIssued(armedCommand, mods.shift);
                     }
                     return;
                 }
@@ -1909,7 +1945,7 @@ int runWindowed(const Session& session) {
                                                 rm::sim::fxFromFloat((*ground).x),
                                                 rm::sim::fxFromFloat((*ground).z), mods.shift));
                         if (explicitAssist) {
-                            armedCommand.reset();
+                            rm::ui::commandModeIssued(armedCommand, mods.shift);
                         }
                         return;
                     }
@@ -1987,7 +2023,7 @@ int runWindowed(const Session& session) {
                                         rm::sim::magToFloat(found->massRemaining)));
                     }
                     if (explicitReclaim) {
-                        armedCommand.reset();
+                        rm::ui::commandModeIssued(armedCommand, mods.shift);
                     }
                     return;
                 }
@@ -2032,7 +2068,7 @@ int runWindowed(const Session& session) {
                                  ? hit
                                  : std::optional<rm::sim::UnitId>{},
                              armedCommand.value_or(rm::sim::CommandKind::Move));
-            armedCommand.reset();
+            rm::ui::commandModeIssued(armedCommand, mods.shift);
         });
 
         // Scratch for the icon pass, held outside the frame callback so a frame costs no

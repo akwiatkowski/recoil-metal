@@ -2,6 +2,7 @@
 
 #include "core/sim/Adjacency.hpp"
 #include "core/sim/Assist.hpp"
+#include "core/sim/Enhancement.hpp"
 #include "core/sim/Reclaim.hpp"
 #include "core/sim/Retreat.hpp"
 #include "core/sim/Transport.hpp"
@@ -354,6 +355,20 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
         }
         const Fx throttle = economy.consumedRatio(demand);
 
+        // `C-255`: an installed `ResourceAllocation` enhancement's
+        // `SetProductionPerSecond*(bp + base)` — the base half is the unit's own
+        // rate below, so only the enhancement's fields add here. Throttled and
+        // cheat-doubled with the rest of the unit's production, which is what
+        // retail's buffs do to the production fields it stands in for.
+        const Resources enhancementIncome =
+            store.productionPaused(store.idAt(slot))
+                ? Resources{}
+                : enhancementProductionPerTick(store, catalog, slot) * throttle;
+        economy.incomePerTick += enhancementIncome;
+        if (cheats) {
+            economy.incomePerTick += enhancementIncome;
+        }
+
         if (isCommanderId(def->name)) {
             // The commander is the trickle, OURS (see kCommanderTrickle*) — not its
             // blueprint's production fields, which the spawn does not read either.
@@ -407,6 +422,13 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
                 if (store.maintenanceActive(store.idAt(slot))) {
                     economy.upkeepPerTick.energy +=
                         rates.upkeepEnergyPerTick * beside.energyUpkeep;
+                    // `C-255`: an installed enhancement's
+                    // `MaintenanceConsumptionPerSecondEnergy` — the shield and
+                    // cloak generators' `SetEnergyMaintenanceConsumptionOverride`
+                    // — drains on top of the unit's own upkeep while the
+                    // enhancement stands (install/remove is the active switch).
+                    economy.upkeepPerTick.energy +=
+                        enhancementMaintenancePerTick(store, catalog, slot);
                 }
             }
         }

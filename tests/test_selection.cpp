@@ -138,3 +138,77 @@ TEST_CASE("a box prefers mobile combat units over the workers caught with them")
     // An empty box stays empty.
     CHECK(rm::preferMobileCombat<SelectionEntry>({}, isCombat).empty());
 }
+
+TEST_CASE("a control-group recall drops immobile factories when anything else is in it") {
+    // `C-336`: retail's `ApplySelectionSet` filters the stored set to
+    // `ALLUNITS - (FACTORY - MOBILE)` — a group of tanks plus the factory that
+    // built them recalls the tanks alone — and falls back to the factories
+    // only when nothing else is stored, so a group that IS factories still
+    // recalls.
+    const auto isFactory = [](SelectionEntry e) { return e == kC; };
+
+    const auto mixed = rm::applySelectionSet<SelectionEntry>(std::vector<SelectionEntry>{kA, kC, kD}, isFactory);
+    REQUIRE(mixed.size() == 2);
+    CHECK(mixed[0] == kA);
+    CHECK(mixed[1] == kD);
+
+    // All factories: the fallback keeps them rather than recalling nothing.
+    const auto onlyFactories =
+        rm::applySelectionSet<SelectionEntry>(std::vector<SelectionEntry>{kC}, isFactory);
+    REQUIRE(onlyFactories.size() == 1);
+    CHECK(onlyFactories[0] == kC);
+
+    // No factories at all: the set passes through.
+    const auto plain = rm::applySelectionSet<SelectionEntry>(std::vector<SelectionEntry>{kA, kB}, isFactory);
+    CHECK(plain == std::vector<SelectionEntry>{kA, kB});
+}
+
+TEST_CASE("select-by-category applies the retail modifier flags in order") {
+    // `C-367`: `UI_SelectByCategory`'s flag alphabet — `+inview`, `+idle`,
+    // `+excludeengineers` narrow the candidates, `+nearest` keeps the closest,
+    // `+add` unions with the current selection, `+goto` is reported for the
+    // caller to act on.
+    const std::vector<SelectionEntry> current{kA};
+    const std::vector<SelectionEntry> candidates{kA, kB, kC, kD};
+    const auto inView = [](SelectionEntry e) { return e != kD; };
+    const auto isIdle = [](SelectionEntry e) { return e == kB || e == kC; };
+    const auto isEngineer = [](SelectionEntry e) { return e == kC; };
+    const auto distanceTo = [](SelectionEntry e) {
+        return e == kB ? 1.0f : e == kC ? 2.0f : 9.0f;
+    };
+    const auto run = [&](rm::SelectModifiers mods) {
+        return rm::selectByCategory<SelectionEntry>(current, candidates, mods,
+                                                  inView, isIdle, isEngineer,
+                                                  distanceTo);
+    };
+
+    // No flags: the candidates replace the selection.
+    CHECK(run({}).selection == candidates);
+
+    // `+inview` drops the off-screen candidate.
+    CHECK(run({.inView = true}).selection
+          == std::vector<SelectionEntry>{kA, kB, kC});
+
+    // `+idle` keeps only the idle candidates.
+    CHECK(run({.idle = true}).selection
+          == std::vector<SelectionEntry>{kB, kC});
+
+    // `+excludeengineers` drops the engineer.
+    CHECK(run({.excludeEngineers = true}).selection
+          == std::vector<SelectionEntry>{kA, kB, kD});
+
+    // `+nearest` keeps the single closest of what the filters left.
+    CHECK(run({.nearest = true, .idle = true}).selection
+          == std::vector<SelectionEntry>{kB});
+
+    // `+add` unions without duplicating the already-selected candidate.
+    CHECK(run({.add = true, .inView = true}).selection
+          == std::vector<SelectionEntry>{kA, kB, kC});
+
+    // `+goto` reports rather than selects differently.
+    const auto goTo = run({.nearest = true, .idle = true, .goTo = true});
+    CHECK(goTo.goTo);
+    CHECK(goTo.selection == std::vector<SelectionEntry>{kB});
+    CHECK_FALSE(run({}).goTo);
+}
+
