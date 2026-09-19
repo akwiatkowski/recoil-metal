@@ -253,12 +253,14 @@ TEST_CASE("C-196: attached cargo stays in the collision grid and can be hit", "[
     CHECK(roster.health(transport).current == rm::sim::Mag::fromInt(500));
 }
 
-TEST_CASE("C-197: a shot-down transport takes its passengers with it", "[fa-transport]") {
-    // Retail's TransportDetachAllUnits kills the cargo before Lua ever hears
-    // OnKilled — the player sees the whole lift die in the same explosion.
-    // The claim's 99% survival roll is NOT modelled here (the cascade is
-    // unconditional); what this pins is the observable contract that cargo
-    // never outlives its carrier.
+TEST_CASE("C-197: a shot-down transport rolls each passenger's fate from the sim RNG",
+          "[fa-transport]") {
+    // `Moho::Unit::Kill` runs `TransportDetachAllUnits(destroySome = true)` before
+    // `OnKilled` (`0x006aee5f`): every external cargo child draws from the sim
+    // MT19937 (`Sim+0x904`) and dies iff `r < 0.99` (`0x005edeb0`, constant
+    // `0x00ea2c5c = 0.99f`). The survivors detach where the carrier fell — a 1%
+    // chance per child, which is why this test asserts the deterministic outcome
+    // of the seeded stream rather than "everyone dies".
     const rm::HeightField field = flatField();
     const rm::sim::Terrain terrain{field};
 
@@ -266,6 +268,7 @@ TEST_CASE("C-197: a shot-down transport takes its passengers with it", "[fa-tran
     const rm::UnitTypeIndex transportType = roster.addType(transportDef());
     const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
     const rm::UnitTypeIndex shooterType = roster.addType(shooterDef());
+
     const UnitId transport = landedTransport(roster, transportType, 50.0f, 50.0f);
     // Cargo racks BEHIND the carrier relative to the firing line: attached
     // units keep a collision box (they can be hit, C-196), so cargo spawned
@@ -290,8 +293,11 @@ TEST_CASE("C-197: a shot-down transport takes its passengers with it", "[fa-tran
     }
 
     REQUIRE_FALSE(roster.store.alive(transport));
+    // The seeded stream's first draw kills `first` (r < 0.99); the second draw
+    // lands in the top 1% and `second` walks away from the wreck — the
+    // deterministic proof the roll is per-child and from the sim's own RNG.
     CHECK_FALSE(roster.store.alive(first));
-    CHECK_FALSE(roster.store.alive(second));
+    CHECK(roster.store.alive(second));
     CHECK(roster.store.childrenOf(transport).empty());
 }
 
