@@ -1499,3 +1499,129 @@ TEST_CASE("C-283: intel enable flags survive a save", "[intel]") {
     CHECK(resumed.intelEnabled(unit, rm::sim::IntelType::Sonar));
     CHECK(rm::sim::SaveState::encode(*restored) == saved);
 }
+
+TEST_CASE("C-282: intel bit edges emit IntelChanged and the first blip DetectedBy",
+          "[intel]") {
+    // `C-282` (`0x005D1E30`, `0x005D1F30`): `CIntel::Update` writes four recon
+    // bits per blip — Radar, Sonar, Omni, LOSNow — and every bit's edge is one
+    // `OnIntelChange(blip, type, val)`; a blip's birth is `OnDetectedBy(army)`
+    // once per army in the viewing alliance.
+    const rm::unitdef::UnitDef def = seer(80.0f, 200.0f);
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex type = catalog.add(&def);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(512), Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, type, 0, 256.0f, 256.0f);          // army 0's seer
+    const rm::sim::UnitId enemy = place(store, type, 1, 400.0f, 256.0f);
+    std::vector<Army> armies = twoArmies(false);
+    rm::sim::EventQueue events;
+
+    const auto count = [&](rm::sim::EventKind kind) { return events.count(kind); };
+    const auto intelChanges = [&](rm::sim::IntelType type, bool value) {
+        std::size_t n = 0;
+        for (const rm::sim::Event& event : events.all()) {
+            if (event.kind == rm::sim::EventKind::IntelChanged
+                && event.intelType == static_cast<std::uint8_t>(type)
+                && event.intelValue == value && event.unit == enemy
+                && event.army == 0) {
+                ++n;
+            }
+        }
+        return n;
+    };
+    const auto detectedBy = [&] {
+        std::size_t n = 0;
+        for (const rm::sim::Event& event : events.all()) {
+            if (event.kind == rm::sim::EventKind::DetectedBy && event.unit == enemy
+                && event.army == 0) {
+                ++n;
+            }
+        }
+        return n;
+    };
+
+    // First pass: the enemy is a radar blip only for army 0 — outside the
+    // 80-elmo vision radius, inside the 200-elmo dish. Radar true, DetectedBy
+    // once, no LOS. (Every unit also blips for its OWN alliance — own units are
+    // always visually known — so the counts filter to the enemy viewed by 0.)
+    intel.update(store, catalog, armies, nullptr, rm::sim::TickRate{}, {}, &events);
+    CHECK(detectedBy() == 1);
+    CHECK(intelChanges(rm::sim::IntelType::Radar, true) == 1);
+    CHECK(intelChanges(rm::sim::IntelType::Vision, true) == 0);
+    CHECK(intelChanges(rm::sim::IntelType::Sonar, true) == 0);
+    CHECK(intelChanges(rm::sim::IntelType::Omni, true) == 0);
+    for (const rm::sim::Event& event : events.all()) {
+        if ((event.kind == rm::sim::EventKind::DetectedBy
+             || event.kind == rm::sim::EventKind::IntelChanged)
+            && event.unit == enemy && event.army == 0) {
+            CHECK(event.army == 0);  // the VIEWING army, not the owner
+        }
+    }
+
+    // Steady state: a second pass with nothing changed emits nothing.
+    events.beginFrame(1);
+    intel.update(store, catalog, armies, nullptr, rm::sim::TickRate{}, {}, &events);
+    CHECK(events.empty());
+
+    // The unit steps into vision: LOSNow rises — one more IntelChanged, and no
+    // second DetectedBy (the blip already exists).
+    events.beginFrame(2);
+    store.transforms()[enemy.index].x = rm::sim::fxFromFloat(290.0f);
+    intel.update(store, catalog, armies, nullptr, rm::sim::TickRate{}, {}, &events);
+    CHECK(count(rm::sim::EventKind::DetectedBy) == 0);
+    CHECK(intelChanges(rm::sim::IntelType::Vision, true) == 1);
+    CHECK(intelChanges(rm::sim::IntelType::Radar, true) == 0);
+
+    // It walks out of both radii: both bits fall, two IntelChanged(false).
+    events.beginFrame(3);
+    store.transforms()[enemy.index].x = rm::sim::fxFromFloat(500.0f);
+    intel.update(store, catalog, armies, nullptr, rm::sim::TickRate{}, {}, &events);
+    CHECK(intelChanges(rm::sim::IntelType::Vision, false) == 1);
+    CHECK(intelChanges(rm::sim::IntelType::Radar, false) == 1);
+}
+
+TEST_CASE("C-282: a dying unit's blip falls bit by bit", "[intel]") {
+    const rm::unitdef::UnitDef def = seer(80.0f, 200.0f);
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex type = catalog.add(&def);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(512), Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, type, 0, 256.0f, 256.0f);
+    const rm::sim::UnitId enemy = place(store, type, 1, 400.0f, 256.0f);
+    std::vector<Army> armies = twoArmies(false);
+    rm::sim::EventQueue events;
+
+    intel.update(store, catalog, armies, nullptr, rm::sim::TickRate{}, {}, &events);
+    // Four blip births in all — each unit for each alliance — but the enemy's
+    // for army 0 exactly once.
+    std::size_t enemyDetected = 0;
+    for (const rm::sim::Event& event : events.all()) {
+        if (event.kind == rm::sim::EventKind::DetectedBy && event.unit == enemy
+            && event.army == 0) {
+            ++enemyDetected;
+        }
+    }
+    REQUIRE(enemyDetected == 1);
+
+    // The blip dies: its stored bits fall to zero — the same per-bit diff as
+    // walking out of range, which is what retail's blip-destroyed path emits.
+    events.beginFrame(1);
+    store.kill(enemy);
+    intel.update(store, catalog, armies, nullptr, rm::sim::TickRate{}, {}, &events);
+    std::size_t falses = 0;
+    for (const rm::sim::Event& event : events.all()) {
+        if (event.kind == rm::sim::EventKind::IntelChanged && event.unit == enemy
+            && event.army == 0 && !event.intelValue) {
+            ++falses;
+        }
+    }
+    CHECK(falses == 1);  // only Radar was set for army 0
+}

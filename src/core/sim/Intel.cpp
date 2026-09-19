@@ -15,6 +15,29 @@
 
 namespace rm::sim {
 
+/// `C-282`: the four `CIntel::Update` recon bits, packed — Radar, Sonar, Omni,
+/// LOSNow. `contactKindForUnit` reads them as a precedence ladder; the intel
+/// event diff reads them as four independent edges.
+inline constexpr std::uint8_t kReconRadar = 1u << 0;
+inline constexpr std::uint8_t kReconSonar = 1u << 1;
+inline constexpr std::uint8_t kReconOmni = 1u << 2;
+inline constexpr std::uint8_t kReconLos = 1u << 3;
+
+/// The recon bitfield one unit presents to one alliance this tick — the same
+/// gates `contactKindForUnit` applies, kept per-bit instead of collapsed into a
+/// kind so the `C-282` diff can report each sense's edge separately.
+[[nodiscard]] std::uint8_t reconBitsForUnit(int alliance, UnitIndex target,
+                                            const UnitStore& store,
+                                            const UnitCatalog& catalog,
+                                            std::span<const Army> armies,
+                                            const Intel& intel) noexcept;
+
+/// `C-282`: one `IntelChanged` event per flipped bit, per army in the viewing
+/// alliance — the sim-side record behind `OnIntelChange(blip, type, val)`.
+void emitIntelDiff(EventQueue* events, UnitId unit, std::uint8_t before,
+                   std::uint8_t after, int alliance, std::span<const Army> armies,
+                   const UnitStore& store, UnitIndex slot);
+
 namespace {
 
 /// Added to every square's height before its angle is taken — Recoil's `LOS_BONUS_HEIGHT`
@@ -372,6 +395,11 @@ void Intel::configure(std::size_t alliances, Fx widthElmos, Fx depthElmos,
     // brown-out has a full recovery banked — see `update`.
     intelRecovery_.clear();
     intelRecoveryUnit_.clear();
+    // `C-282`: a fresh match's first detections are real blip births — the first
+    // `update` emits `DetectedBy`/`IntelChanged` for them.
+    recon_.clear();
+    recon_.resize(alliances);
+    reconPrimed_ = true;
 
     // ONE GRID PER KIND PER ALLIANCE, IN `IntelKind` ORDER, because every index into this is
     // `alliance * kIntelKindCount + kind` and nothing bounds-checks it. Adding a kind without
@@ -534,12 +562,11 @@ void Intel::withdraw(UnitIndex slot) {
         hiddenGrids_[index].remove(squares);
         squares.clear();
     }
-    placement.square = IntelGrid::kNoSquare;
 }
 
 void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
                    std::span<const Army> armies, const Terrain* terrain, TickRate rate,
-                   std::span<const Economy> economies) {
+                   std::span<const Economy> economies, EventQueue* events) {
     if (!active()) {
         return;
     }
@@ -713,8 +740,16 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
     for (int alliance = 0; alliance < static_cast<int>(alliances()); ++alliance) {
         std::vector<UnitId>& known = seenEver_[static_cast<std::size_t>(alliance)];
         known.resize(slots);
+        std::vector<ReconRecord>& recon = recon_[static_cast<std::size_t>(alliance)];
+        recon.resize(slots);
         for (UnitIndex slot = 0; slot < slots; ++slot) {
+            ReconRecord& record = recon[slot];
             if (!store.slotAlive(slot)) {
+                // `C-282`: a dead unit's blip is destroyed — the stored bits fall
+                // to zero, which is the same per-bit diff as any other loss.
+                emitIntelDiff(events, record.unit, record.bits, 0, alliance,
+                              armies, store, slot);
+                record = {};
                 known[slot] = {};
                 continue;
             }
@@ -722,12 +757,43 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
             if (known[slot] != unit) {
                 known[slot] = {};
             }
-            if (contactKindForUnit(alliance, slot, store, catalog, armies, *this)
-                == ContactKind::Seen) {
+            if (record.unit != unit) {
+                // A recycled slot: the old unit's bits fall to zero before the
+                // new unit's are read, so the diff reports both edges.
+                emitIntelDiff(events, record.unit, record.bits, 0, alliance,
+                              armies, store, slot);
+                record = {};
+            }
+            const std::uint8_t bits =
+                reconBitsForUnit(alliance, slot, store, catalog, armies, *this);
+            if ((bits & kReconLos) != 0) {
                 known[slot] = unit;
             }
+            // `C-282`: per-bit edges emit `IntelChanged`; a 0→nonzero edge is a
+            // blip birth, which is `OnDetectedBy(army)` once per army in the
+            // viewing alliance. The first pass after a restore fills the records
+            // silently — those transitions already happened before the save.
+            if (reconPrimed_) {
+                emitIntelDiff(events, unit, record.bits, bits, alliance, armies,
+                              store, slot);
+                if (record.bits == 0 && bits != 0) {
+                    const Transform& at = store.transforms()[slot];
+                    for (const Army& army : armies) {
+                        if (army.alliance != alliance) {
+                            continue;
+                        }
+                        emit(events, Event{.kind = EventKind::DetectedBy,
+                                           .unit = unit,
+                                           .army = army.index,
+                                           .at = {at.x, at.y, at.z}});
+                    }
+                }
+            }
+            record.unit = unit;
+            record.bits = bits;
         }
     }
+    reconPrimed_ = true;
 
     // A radar return is knowledge owned by its VIEWER, not by the observed unit. Refresh the
     // last known position while radar sees a live source; leave it behind briefly if that
@@ -831,6 +897,116 @@ std::array<Fx, 2> radarBlipPosition(UnitId unit, Fx x, Fx z, TickIndex tick,
     const Fx toZ = fxSin(to) * radius;
 
     return {x + fromX + (toX - fromX) * blend, z + fromZ + (toZ - fromZ) * blend};
+}
+
+[[nodiscard]] std::uint8_t reconBitsForUnit(int alliance, UnitIndex target,
+                                            const UnitStore& store,
+                                            const UnitCatalog& catalog,
+                                            std::span<const Army> armies,
+                                            const Intel& intel) noexcept {
+    if (!store.slotAlive(target)) {
+        return 0;
+    }
+    // `C-225`: an aircraft stored inside a CARRIER is hidden — it projects no
+    // radar, sonar, or vision contact of its own until launched.
+    if (store.motion()[target].attached) {
+        const std::optional<UnitId> parent = store.parentOf(store.idAt(target));
+        if (parent.has_value()) {
+            const unitdef::UnitDef* parentDef =
+                catalog.def(store.typeAt(parent->index));
+            if (parentDef != nullptr && parentDef->isCarrier()) {
+                return 0;
+            }
+        }
+    }
+
+    const int armyIndex = store.motion()[target].armyIndex;
+    const auto army = std::ranges::find_if(
+        armies, [armyIndex](const Army& candidate) { return candidate.index == armyIndex; });
+    if (army == armies.end()) {
+        return 0;
+    }
+
+    const Transform& at = store.transforms()[target];
+    if (army->alliance == alliance || !intel.active()) {
+        return kReconLos;  // own units are always visually known
+    }
+
+    const UnitCatalog::IntelRadii& hiding = catalog.intel(store.typeAt(target));
+    const std::uint16_t counterIntel = store.intelDisabledMaskAt(target);
+    const bool cloakOff = (counterIntel & intelTypeBit(IntelType::Cloak)) != 0;
+    const bool radarStealthOff =
+        (counterIntel & intelTypeBit(IntelType::RadarStealth)) != 0;
+    const bool sonarStealthOff =
+        (counterIntel & intelTypeBit(IntelType::SonarStealth)) != 0;
+    // Depth gates the senses, never the geometry — see `contactKindForUnit` for
+    // the retail flag computation this mirrors (`0x005D1E30`).
+    const MoveState& targetMotion = store.motion()[target];
+    const bool submerged = targetMotion.submersible && targetMotion.submerged;
+    const bool underwater = submerged || targetMotion.seabed;
+    const bool sonarLayer = targetMotion.surfaceWater || targetMotion.submersible
+                            || targetMotion.seabed;
+
+    std::uint8_t bits = 0;
+    if (hiding.freeIntel
+        || (!(hiding.cloak && !cloakOff) && !underwater
+            && intel.sees(alliance, IntelKind::Vision, at.x, at.z))) {
+        bits |= kReconLos;
+    }
+    // Omni bypasses every counter-intel flag but does NOT identify (`C-280`) —
+    // its own bit, not LOSNow's.
+    if (intel.sees(alliance, IntelKind::Omni, at.x, at.z)) {
+        bits |= kReconOmni;
+    }
+    if (!underwater && !(hiding.radarStealth && !radarStealthOff)
+        && !intel.hiddenBy(army->alliance, HiddenKind::RadarField, at.x, at.z)
+        && intel.sees(alliance, IntelKind::Radar, at.x, at.z)) {
+        bits |= kReconRadar;
+    }
+    if (sonarLayer && !(hiding.sonarStealth && !sonarStealthOff)
+        && !intel.hiddenBy(army->alliance, HiddenKind::SonarField, at.x, at.z)
+        && intel.sees(alliance, IntelKind::Sonar, at.x, at.z)) {
+        bits |= kReconSonar;
+    }
+    return bits;
+}
+
+/// `C-282`: one `IntelChanged` event per flipped bit, per army in the viewing
+/// alliance — the sim-side record behind `OnIntelChange(blip, type, val)`. The
+/// LOSNow bit reports as `IntelType::Vision`, the closest retail name the enum
+/// has for the sight sense.
+void emitIntelDiff(EventQueue* events, UnitId unit, std::uint8_t before,
+                   std::uint8_t after, int alliance, std::span<const Army> armies,
+                   const UnitStore& store, UnitIndex slot) {
+    if (events == nullptr || before == after) {
+        return;
+    }
+    static constexpr struct {
+        std::uint8_t bit;
+        IntelType type;
+    } kBits[] = {{kReconRadar, IntelType::Radar},
+                 {kReconSonar, IntelType::Sonar},
+                 {kReconOmni, IntelType::Omni},
+                 {kReconLos, IntelType::Vision}};
+    const Transform& at = store.transforms()[slot];
+    for (const auto& [bit, type] : kBits) {
+        const bool was = (before & bit) != 0;
+        const bool now = (after & bit) != 0;
+        if (was == now) {
+            continue;
+        }
+        for (const Army& army : armies) {
+            if (army.alliance != alliance) {
+                continue;
+            }
+            emit(events, Event{.kind = EventKind::IntelChanged,
+                               .unit = unit,
+                               .army = army.index,
+                               .at = {at.x, at.y, at.z},
+                               .intelType = static_cast<std::uint8_t>(type),
+                               .intelValue = now});
+        }
+    }
 }
 
 std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,

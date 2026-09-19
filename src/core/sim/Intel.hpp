@@ -5,6 +5,7 @@
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/IdPool.hpp"
 #include "core/sim/TickRate.hpp"
+#include "core/sim/Events.hpp"
 
 #include <array>
 #include <cstddef>
@@ -310,7 +311,8 @@ public:
     void update(const UnitStore& store, const UnitCatalog& catalog,
                 std::span<const Army> armies, const Terrain* terrain,
                 TickRate rate = TickRate{},
-                std::span<const Economy> economies = {});
+                std::span<const Economy> economies = {},
+                EventQueue* events = nullptr);
 
     /// Whether `alliance` covers this position with this sense.
     ///
@@ -405,6 +407,10 @@ public:
             grid.clear();
         }
         placements_.clear();
+        // `C-282`: the restored match's listeners already saw these transitions —
+        // the first `update` rebuilds `recon_` without emitting.
+        recon_.clear();
+        reconPrimed_ = false;
         emitters_.clear();
         hiddenEmitters_.clear();
     }
@@ -453,6 +459,25 @@ private:
     /// presentation history: C-158 uses it to decide whether a current radar contact may match
     /// the weapon's target-priority categories.
     std::vector<std::vector<UnitId>> seenEver_;
+
+    /// `C-282`: the per-alliance, per-slot recon bitfield last reported — the
+    /// four `CIntel::Update` writes (Radar, Sonar, Omni, LOSNow) packed as bits
+    /// 0-3, plus the unit generation they belong to. Diffed each `update` so
+    /// every bit's edge emits one `IntelChanged` event and a 0→nonzero edge
+    /// emits `DetectedBy` — the blip-created callback. Recomputed state like
+    /// the grids: not saved, and `reconPrimed_` keeps a restore from
+    /// re-announcing a picture the listener already had.
+    struct ReconRecord {
+        UnitId unit{};
+        std::uint8_t bits = 0;
+    };
+    std::vector<std::vector<ReconRecord>> recon_;
+
+    /// Whether `recon_` has ever been filled. False after `restore` — the first
+    /// `update` after a load rebuilds the records WITHOUT emitting, because the
+    /// restored match's listeners already saw those transitions. True after
+    /// `configure`, where the first pass's detections are real blip births.
+    bool reconPrimed_ = true;
 
     /// `[slot]` ticks of uninterrupted recovery toward re-enabling this unit's intel
     /// after an energy brownout (`C-284`). An entry at or past the reactivate count
