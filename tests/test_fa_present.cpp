@@ -328,3 +328,65 @@ TEST_CASE("C-296/C-298: emitters are sim objects that spawn on fire and die with
                                 roster.rate, 2);
     CHECK(effects.empty());
 }
+
+TEST_CASE("C-301/C-372: the collision manipulator fires contact events on transitions",
+          "[fa-present][manipulator]") {
+    // `CCollisionManipulator::ManipulatorUpdate` (`0x63e760`) fires
+    // `OnAnimTerrainCollision`/`OnNotAnimTerrainCollision`/`OnAnimCollision`
+    // (`0xe71308`–`0xe71320`) when the animated volume touches terrain or
+    // another unit. With no skeleton, the bounded slice's honest triggers are
+    // the surface-resting flag and the collision pass's own overlap test —
+    // fired on the transitions the serialized latches record.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "walker";
+    const auto type = roster.addType(def);
+    const auto walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    (void)roster.add(type, 43.0f, 40.0f, 0, 100.0f);  // overlapping bystander
+    REQUIRE(roster.store.addManipulator(
+        walker, {.kind = rm::sim::ManipulatorKind::Collision}));
+
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    rm::sim::EventQueue events;
+    const std::vector<int> commandersEver(1, 0);
+    rm::sim::Match match{.armies = armies, .economies = economies,
+                         .events = &events, .commandersEver = commandersEver};
+
+    // First contact: a walker rests on the ground and overlaps its neighbour,
+    // so both edges fire once — and only once, because the latches serialize.
+    events.beginFrame(0);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                roster.rate, 0);
+    CHECK(events.count(rm::sim::EventKind::AnimTerrainCollision) == 1);
+    CHECK(events.count(rm::sim::EventKind::AnimCollision) == 1);
+
+    // Steady state: still touching, nothing re-fires.
+    events.beginFrame(1);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                roster.rate, 1);
+    CHECK(events.count(rm::sim::EventKind::AnimTerrainCollision) == 0);
+    CHECK(events.count(rm::sim::EventKind::AnimCollision) == 0);
+
+    // The leaving edge: lifting the walker onto a carrier ends BOTH contacts —
+    // cargo rides its carrier, not the ground, and the rack is not a volume.
+    const auto carrier = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    REQUIRE(roster.store.attach(carrier, walker));
+    events.beginFrame(2);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                roster.rate, 2);
+    CHECK(events.count(rm::sim::EventKind::AnimTerrainCollisionEnd) == 1);
+
+    // The latches are serialized pose state: a save mid-contact restores them,
+    // so a restored match does not re-fire the entry callbacks.
+    rm::sim::RandomStream random{std::uint32_t{1}};
+    const std::vector<std::byte> bytes = rm::sim::SaveState::encode(
+        {.tick = 7, .random = random.snapshot(), .units = roster.store.snapshot()});
+    const auto saved = rm::sim::SaveState::decode(bytes);
+    REQUIRE(saved.has_value());
+    const rm::sim::UnitStore restored{saved->units};
+    REQUIRE(restored.manipulators()[walker.index].size() == 1);
+    CHECK_FALSE(restored.manipulators()[walker.index][0].inTerrainContact);
+}
