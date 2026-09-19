@@ -247,6 +247,77 @@ TEST_CASE("a sole surviving alliance wins even with its draw offer standing",
     CHECK(report.winner == armies[0].alliance);  // a win, not a draw
 }
 
+TEST_CASE("a survivor dying inside the winning alliance restarts the fifteen seconds",
+          "[fa-match]") {
+    // `victory.lua` compares `stillAlive` to `potentialWinners` with
+    // `table.equal`: the confirmation clock is bound to the survivor SET, not
+    // the alliance. Alliance 0 wins with two armies standing; when one of them
+    // falls, the same alliance is still the only winner — but the set changed,
+    // so the fifteen seconds starts over rather than confirming on banked time.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex commander = roster.addType(commanderDef());
+    (void)roster.add(commander, 0.0f, 0.0f, 0, 12000.0f);
+    const UnitId oursB = roster.add(commander, 50.0f, 0.0f, 1, 12000.0f);
+    const UnitId enemyA = roster.add(commander, 400.0f, 0.0f, 2, 12000.0f);
+    const UnitId enemyB = roster.add(commander, 500.0f, 0.0f, 3, 12000.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(4);
+    armies[0].alliance = 0;
+    armies[1].alliance = 0;
+    armies[2].alliance = 1;
+    armies[3].alliance = 1;
+    std::vector<rm::sim::Economy> economies(4);
+    std::vector<rm::sim::Projectile> projectiles;
+    const std::vector<int> commandersEver(4, 1);
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .commandersEver = commandersEver};
+    const rm::sim::TickRate rate{};
+    const rm::TickCount pollTicks = rate.ticks(rm::sim::seconds(3.0f));
+    const rm::TickCount confirmTicks = rate.ticks(rm::sim::seconds(15.0f));
+
+    // Alliance 1 falls: alliance 0 becomes the pending winner with both its
+    // armies in the survivor set.
+    roster.health(enemyA).current = rm::sim::Mag{};
+    roster.health(enemyB).current = rm::sim::Mag{};
+    for (rm::TickCount tick = 0; tick < pollTicks; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    REQUIRE(match.pendingWinner.has_value());
+    REQUIRE(*match.pendingWinner == 0);
+
+    // Bank almost the whole window, then kill one of the two surviving
+    // alliance-0 armies inside the next poll. The verdict is unchanged —
+    // alliance 0 still wins alone — but the survivor set shrank, so retail
+    // restarts the clock.
+    for (rm::TickCount tick = 0; tick < confirmTicks - pollTicks - 5; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    REQUIRE_FALSE(match.over);
+    roster.health(oursB).current = rm::sim::Mag{};
+    for (rm::TickCount tick = 0; tick < pollTicks; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    REQUIRE(armies[1].defeated);
+    REQUIRE_FALSE(match.over);  // banked time was discarded with the old set
+    CHECK(match.pendingWinner.has_value());
+    CHECK(*match.pendingWinner == 0);
+    CHECK(match.winnerStableTicks < confirmTicks / 2);
+
+    // The restarted window then confirms normally.
+    TickReport report{};
+    for (rm::TickCount tick = 0; tick < confirmTicks && !report.matchEnded; ++tick) {
+        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    CHECK(match.over);
+    CHECK(report.matchEnded);
+    CHECK(report.winner == 0);
+}
+
 TEST_CASE("C-210: annihilation counts everything but walls, not commanders",
           "[fa-match]") {
     // The four modes are one category test. Under Annihilation an army that

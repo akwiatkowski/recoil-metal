@@ -203,7 +203,7 @@ excluded from the headline.
 | [`FA-CONTENT`](#fa-content---vfs-blueprints-maps-and-bootstrap) | VFS, blueprints, maps, bootstrap | `WP-05`, `06`, `09` | 70% | 40% | 85% | **Analyzed 2026-09-18 (C-266–C-275):** mount list is `bin/SupComDataPath.lua` executed at `0x004f86a0`; `gamedata/*.scd` mount at `/` sorted ascending, first-match-wins via `CVFSImpl` `0x00466c60`; `lua.scd` shadows `mohodata.scd`; mods act via hook concat (`SCR_LuaDoFileConcat` `0x004d4de0`) + `LoadBlueprints` mod pass, not VFS shadow. `schook.scd` is the shipped load-bearing hook payload. Blueprint boot: `RuleInit.lua` → `Blueprints.lua` `LoadBlueprints()` with fixed scan/registration order and deterministic category-bit assignment; bp→script binding defaults to `_script.lua`/`TypeClass` with fallbacks. Map bootstrap from `_scenario.lua` through `SetupSession`/`BeginSession` to initial-unit spawn and start markers mapped; `.scmap` binary chunk format remains bounded. |
 | [`FA-LUA`](#fa-lua---gameplay-lua-and-mod-contract) | Gameplay Lua and mod contract | `WP-07`-`08` | 35% | 15% | 85% | **Analyzed 2026-09-18 (C-305–C-319):** `CTaskStage` two-ring FIFO scheduler with full status contract and `WaitTicks(n)` `n−1` quirk; `ForkThread`/`WaitFor` suspend/resume; script class resolution and `OnPreCreate`/`OnCreate`/`OnDestroy` order; Lua state serializes wholesale. Mod hooks: `doscript`/`import` concatenate original + `/schook` + mod `hookdir` matches into one chunk; `__active_mods` from `gameInfo.GameMods`; `shadow/` unimplemented; no sim/UI sandbox. Dialect = LuaPlus 5.0.1 + `#`/`!=`/`continue`/bare-`for`; no retail watchdog. |
 | [`FA-CMD`](#fa-cmd---commands-controls-and-factories) | Commands, controls, factories | `WP-12`-`14` | 90% | 75% | 85% | **Analyzed 2026-09-18 (C-347–C-351):** guard task flag block `+0x74..0x7a` decoded (which guard-ladder branches are enabled; `+0x78`/`+0x79` factory/FERRYBEACON pair); ferry contract is `CUnitFerryTask`/`CUnitWaitForFerryTask`/`CUnitCallTransport`/`CUnitCallAirStaging`/`CUnitCallLandTransport` on the `FERRYBEACON` blueprint category (UEB5102); `RULEUTC_` maps 1:1 to script bits 0-8 via `ToggleScriptBit` named command → `Unit:ToggleScriptBit` `0x006ce4b0`; `CAiAttackerImpl` guard attack rung prefers longest-range weapon that can hit; `IssueFactoryCommand` `0x006f8ce0`/`0x006f8e70` is the native factory intake. |
-| [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 80% | 45% | 85% | Scenario Options wired: `_scenario.lua` `Options` parsed verbatim, `Victory` drives `Match::victoryMode` through `victory.lua`'s own keys (unrecognized = never-ends, like retail's else), `FogOfWar='none'` leaves intel unconfigured. Draw offers in (`C-382`): `OfferingDraw` ends the match immediately when all survivors offer; zero survivors is an immediate draw. Remaining: winner stability survivor-set semantics, delayed cleanup, unit caps. |
+| [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 80% | 50% | 85% | Scenario Options wired: `_scenario.lua` `Options` parsed verbatim, `Victory` drives `Match::victoryMode` through `victory.lua`'s own keys (unrecognized = never-ends, like retail's else), `FogOfWar='none'` leaves intel unconfigured. Draw offers in (`C-382`): immediate mutual/zero-survivor draw. Winner stability now tracks the survivor set (`potentialWinners` semantics). Remaining: unit caps. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 85% | 65% | 90% | Capture now follows `C-250` end to end: footprint-edge gates (approach stops at 5 ogrids, work admits out to 10 — a closing captor banks progress on the way in), the concurrent-captor refcount, funded progress, transfer identity, cancellation, replay, save/load. Transfer parity extended (`C-240`/`SimUtils.lua:68-132`): the replacement keeps the whole Health record — shield state, reload/burst clocks, automatic targets, veterancy — and the match-side silo-ammo and in-flight enhancement records re-key onto it, so a captured silo keeps its stockpile. Remaining: transport-attachment rebuild on transfer, the two shared manipulator handles. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 95% | 35% | 95% | P10 run complete: deterministic threading, congestion yield/reroute, shared flow fields and the per-cell speed divisor (golden re-recorded for the intended route change). Formation rotation stays engine-native without a Lua source. |
 | [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 60% | 95% | Retail winged controller (C-221/222/223/244–247) with states 1–7, banking, cargo mass ratio, bomb-drop prediction, staging-pad refuel and carrier storage pools (`C-225`); a takeoff committed to a sub-tick hop no longer strands `Down` on the deck (`c538105`). Three-axis solver, `Hover`, `POD` init, bone-keyed air staging stay open. |
@@ -368,18 +368,18 @@ and the rest parse but have no proven consumer. Draw offers are now in
 immediately when every surviving army offers, and a zero-survivor poll is an
 immediate draw like retail — `RequestingAlliedVictory` is deliberately not
 modelled (inert under fixed alliances). The 15-second winner stability window
-and the 20-second post-defeat unit cleanup remain incomplete.
+now tracks the survivor SET (`pendingSurvivorMask`, `victory.lua`'s
+`potentialWinners` `table.equal` semantics): a survivor dying inside the
+winning alliance restarts the clock. The 20-second post-defeat unit cleanup
+is already in. Unit caps remain the only open WP-11 gap.
 
 ```text
-/goal Advance FA-MATCH by closing the remaining WP-11 gaps: the 15-second
-winner stability window (already implemented — verify it matches
-`victory.lua`'s `potentialWinners` survivor-set semantics, which reset on
-survivor-set change, not just alliance change) and the 20-second post-defeat
-unit cleanup from `victory.lua`'s loop. Unit caps (`Options.UnitCap` →
-`SetArmyUnitCap`, `DoNotShareUnitCap` sharing in `SimUtils.UpdateUnitCap`)
-have no engine consumer yet — recover the retail cap mechanic before wiring
-the parsed option. Preserve the 3-second poll cadence and C-210's predicates,
-run make test and make verify, and refresh FA-MATCH.
+/goal Advance FA-MATCH by closing the last WP-11 gap: unit caps
+(`Options.UnitCap` → `SetArmyUnitCap`, `DoNotShareUnitCap` sharing in
+`SimUtils.UpdateUnitCap`) have no engine consumer yet — recover the retail
+cap mechanic before wiring the parsed option. Preserve the 3-second poll
+cadence and C-210's predicates, run make test and make verify, and refresh
+FA-MATCH.
 ```
 
 ### FA-CMD - Commands, Controls, And Factories

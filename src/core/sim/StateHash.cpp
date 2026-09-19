@@ -1002,6 +1002,12 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
     if (match.pendingWinner) {
         feed(h, *match.pendingWinner);
     }
+    // `potentialWinners` is the survivor set the pending verdict was computed
+    // from; it decides whether the fifteen seconds restarts, so it is
+    // authority while a verdict is pending and meaningless otherwise.
+    if (match.winnerPending) {
+        feed(h, match.pendingSurvivorMask);
+    }
     feed(h, static_cast<std::uint64_t>(match.winnerStableTicks));
     // C-210's poll phase and delayed cleanups decide future defeats and deaths, so they are
     // authority state rather than implementation detail.

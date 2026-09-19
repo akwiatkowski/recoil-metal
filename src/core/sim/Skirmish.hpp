@@ -226,6 +226,13 @@ struct Match {
     std::optional<int> pendingWinner;
     TickCount winnerStableTicks = 0;
 
+    /// `victory.lua`'s `potentialWinners`: the survivor SET the pending verdict
+    /// was computed from, one bit per army index. Retail compares `stillAlive`
+    /// to `potentialWinners` with `table.equal`, so a survivor dying inside the
+    /// winning alliance restarts the fifteen seconds even though the winning
+    /// alliance itself did not change. Meaningful only while `winnerPending`.
+    std::uint64_t pendingSurvivorMask = 0;
+
     /// C-210: commander defeat is sampled every three seconds, not every simulation tick.
     TickCount defeatPollElapsedTicks = 0;
 

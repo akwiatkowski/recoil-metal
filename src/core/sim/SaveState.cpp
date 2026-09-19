@@ -295,6 +295,7 @@ void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>&
     w.u8(s.over); w.u8(s.winnerPending); w.u8(s.pendingWinner.has_value());
     if (s.pendingWinner) w.i32(*s.pendingWinner);
     w.u32(s.winnerStableTicks); w.u32(s.defeatPollElapsedTicks);
+    if (includesOfferingDraw) w.u64(s.pendingSurvivorMask);
     w.count(s.defeatCleanupRemainingTicks.size());
     for (const auto ticks : s.defeatCleanupRemainingTicks) w.u32(ticks);
 }
@@ -358,6 +359,7 @@ bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
         s.pendingWinner = alliance;
     }
     if (!r.u32(s.winnerStableTicks) || !r.u32(s.defeatPollElapsedTicks)
+        || (includesOfferingDraw && !r.u64(s.pendingSurvivorMask))
         || !r.count(count, 4) || (count != 0 && count != s.armies.size())) return false;
     s.defeatCleanupRemainingTicks.resize(count);
     for (auto& ticks : s.defeatCleanupRemainingTicks) if (!r.u32(ticks)) return false;
@@ -2161,6 +2163,7 @@ EconomyArmyState EconomyArmyState::capture(const Match& match) {
         .victoryMode = match.victoryMode, .baseStorage = match.baseStorage,
         .over = match.over, .winnerPending = match.winnerPending,
         .pendingWinner = match.pendingWinner, .winnerStableTicks = match.winnerStableTicks,
+        .pendingSurvivorMask = match.pendingSurvivorMask,
         .defeatPollElapsedTicks = match.defeatPollElapsedTicks,
         .defeatCleanupRemainingTicks = match.defeatCleanupRemainingTicks};
 }
@@ -2182,6 +2185,7 @@ void EconomyArmyState::restore(Match& match, std::vector<Economy>& economyStorag
     match.winnerPending = winnerPending;
     match.pendingWinner = pendingWinner;
     match.winnerStableTicks = winnerStableTicks;
+    match.pendingSurvivorMask = pendingSurvivorMask;
     match.defeatPollElapsedTicks = defeatPollElapsedTicks;
     match.defeatCleanupRemainingTicks = defeatCleanupRemainingTicks;
 }

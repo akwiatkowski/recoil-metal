@@ -826,11 +826,24 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             if (!terminal) {
                 match.winnerPending = false;
                 match.pendingWinner.reset();
+                match.pendingSurvivorMask = 0;
                 match.winnerStableTicks = 0;
             } else {
-                if (!match.winnerPending || match.pendingWinner != winner) {
+                // `victory.lua` compares `stillAlive` to `potentialWinners`
+                // with `table.equal`: the fifteen seconds restarts when the
+                // survivor SET changes — a survivor dying inside the winning
+                // alliance counts — not only when the verdict does.
+                std::uint64_t survivorMask = 0;
+                for (const Army& army : match.armies) {
+                    if (!army.defeated && army.index < 64) {
+                        survivorMask |= std::uint64_t{1} << army.index;
+                    }
+                }
+                if (!match.winnerPending || match.pendingWinner != winner
+                    || match.pendingSurvivorMask != survivorMask) {
                     match.winnerPending = true;
                     match.pendingWinner = winner;
+                    match.pendingSurvivorMask = survivorMask;
                     match.winnerStableTicks = 0;
                 }
 

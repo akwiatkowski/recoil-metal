@@ -27,6 +27,8 @@ struct EconomyArmyState {
     bool winnerPending = false;
     std::optional<int> pendingWinner;
     TickCount winnerStableTicks = 0;
+    /// `victory.lua`'s `potentialWinners` survivor set — see `Match::pendingSurvivorMask`.
+    std::uint64_t pendingSurvivorMask = 0;
     TickCount defeatPollElapsedTicks = 0;
     std::vector<TickCount> defeatCleanupRemainingTicks;
 
