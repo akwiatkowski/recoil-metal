@@ -72,6 +72,7 @@ struct Scenario {
 
     rm::app::MatchRunner runner() {
         auto result = rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+        result.match.baseStorage = rm::app::kStartingStorage;
         result.scripts.clear();
         return result;
     }

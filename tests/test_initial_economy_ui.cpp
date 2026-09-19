@@ -251,6 +251,7 @@ TEST_CASE("a real T2 upgrade starts with an empty bank and progresses from incom
     rm::vfs::Vfs content;
     auto runner = rm::app::makeMatchRunner(fixture->scene, fixture->field,
                                           fixture->passability, content, {}, {});
+    runner.match.baseStorage = rm::app::kStartingStorage;
     runner.scripts.clear();
     for (int tick = 0; tick < 10; ++tick) {
         (void)rm::app::advanceMatch(runner, tick, 0.0f);
@@ -296,6 +297,7 @@ TEST_CASE("HUD flow includes construction spending from a single power generator
     rm::vfs::Vfs content;
     auto runner = rm::app::makeMatchRunner(fixture->scene, fixture->field,
                                           fixture->passability, content, {}, {});
+    runner.match.baseStorage = rm::app::kStartingStorage;
     runner.scripts.clear();
     auto& economy = fixture->scene.economies[0];
     const auto tickAndCheckFlow = [&](int tick) {
@@ -363,6 +365,7 @@ TEST_CASE("enemy construction cannot spend or borrow the player's resources",
     rm::vfs::Vfs content;
     auto runner = rm::app::makeMatchRunner(fixture->scene, fixture->field,
                                           fixture->passability, content, {}, {});
+    runner.match.baseStorage = rm::app::kStartingStorage;
     runner.scripts.clear();
     for (int tick = 0; tick < 20; ++tick) {
         const auto before = fixture->scene.economies[0].stored;

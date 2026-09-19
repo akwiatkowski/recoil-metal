@@ -90,6 +90,11 @@ struct Scenario {
 
     rm::app::MatchRunner runner() {
         auto result = rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+        // The fixture's bank: tests seed `stored` directly, and capacity is
+        // `baseStorage` plus standing units — without a floor the first tick
+        // clamps the seed away. The app path leaves this zero (retail's
+        // ceiling is units only); a test match is not a stock skirmish.
+        result.match.baseStorage = rm::app::kStartingStorage;
         result.scripts.clear();
         return result;
     }

@@ -1312,7 +1312,11 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                     ? rm::sim::victoryModeFromScenarioKey(
                           *scenarioOptions.get("Victory"))
                     : rm::sim::VictoryMode::Assassination,
-                .baseStorage = kStartingStorage,
+                // No flat capacity floor: retail's ceiling is the sum of standing
+                // units' `Economy.Storage*` (`CEconStorage::Apply`), so the ACU's
+                // own 650/4000 is the whole of a fresh army's storage — and dies
+                // with it.
+                .baseStorage = {},
                 .resourceFlows = &scene.resourceFlows,
                 .assistLinks = &scene.assistLinks,
                 .intel = &scene.intel,

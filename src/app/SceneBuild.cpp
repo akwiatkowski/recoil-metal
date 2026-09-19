@@ -933,13 +933,14 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             .mass = gAppTickRate.magPerTick(rm::sim::kCommanderTrickleMassPerSecond),
             .energy = gAppTickRate.magPerTick(rm::sim::kCommanderTrickleEnergyPerSecond),
         };
-        economy.storage = kStartingStorage;
-        // FULL at spawn, which is what the game does — a match opens with the
-        // starting storage banked, and that bank is what pays for the first base.
-        // Milestone 19 started empty, which worked only because the extractor was
-        // the sole build: a power generator costs 750 energy against a 5-a-second
-        // trickle, and an empty start parks the whole build order for four minutes.
-        economy.stored = kStartingStorage;
+        economy.storage = {};
+        // EMPTY at spawn, which is what retail does — `SetArmyEconomy` seeds from
+        // the map's `_save.lua` `Economy` record (nothing for a stock skirmish),
+        // and the bank a match opens with is the ACU's `GiveInitialResources`
+        // grant landing on the fifth beat (`kInitialResourceGrantTick`), not a
+        // starting balance. Milestone 19's empty start stalled only because the
+        // grant did not exist yet.
+        economy.stored = {};
     }
 
     std::printf("skirmish: %zu armies, %zu commander model(s)\n", scene.armies.size(),

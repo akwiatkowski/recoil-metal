@@ -244,6 +244,13 @@ struct Economy {
 inline constexpr float kCommanderTrickleMassPerSecond = 0.5f;
 inline constexpr float kCommanderTrickleEnergyPerSecond = 5.0f;
 
+/// The sim beat on which a starting ACU's `GiveInitialResources` lands. Retail:
+/// the ACU script forks the grant at `OnCreate` (before beat 1), `WaitTicks(5)`
+/// resumes on the fourth beat after the yield under the `n−1` quirk (`C-305`,
+/// `0x40932f` sets `counter = n−1`), so the deposit lands on the fifth beat —
+/// `tickIndex` 4 with the run loop's first beat at index 0.
+inline constexpr TickIndex kInitialResourceGrantTick = 4;
+
 /// What one thing under construction wants, per second, and what it has had.
 struct Construction {
     /// Who is paying, and where it is being built.

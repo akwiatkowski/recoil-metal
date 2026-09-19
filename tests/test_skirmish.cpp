@@ -111,6 +111,65 @@ TEST_CASE("one tick both moves a unit and fires its gun") {
     CHECK(projectiles.size() == 1);
 }
 
+TEST_CASE("the ACU grants its own storage on the fifth beat, and its death takes the bank") {
+    // Retail's `GiveInitialResources` (`UEL0001_script.lua:159`): the ACU forks the
+    // grant at `OnCreate`, `WaitTicks(5)` resumes on the fourth beat after the yield
+    // (`C-305`'s `n−1` quirk), and the brain is handed the ACU's OWN blueprint
+    // `Economy.Storage*` — 650 mass / 4000 energy on all four ACUs. The same fields
+    // count toward capacity through `CEconStorage::Apply`, so a dead ACU takes the
+    // ceiling — and the clamped bank — with it.
+    const rm::HeightField field = flatField();
+
+    Roster roster;
+    UnitDef acuDef;
+    acuDef.name = "UEL0001";  // a real ACU id: isCommanderId keys on the name
+    acuDef.storageMass = rm::test::mag(650.0f);
+    acuDef.storageEnergy = rm::test::mag(4000.0f);
+    const rm::sim::UnitId acu = roster.add(roster.addType(acuDef), 0.0f, 0.0f, 0, 500.0f);
+
+    std::vector<Army> armies = twoSides();
+    std::vector<Projectile> projectiles;
+    std::vector<Construction> building;
+    std::vector<Economy> economies(2);
+    const std::vector<int> commandersEver(2, 0);
+
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .building = &building,
+                .commandersEver = commandersEver};
+
+    // Before the grant beat: capacity already counts the ACU, the bank is still
+    // empty — `SetArmyEconomy` seeds nothing for a stock skirmish.
+    rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field},
+                          rm::sim::TickRate{}, /*tickIndex=*/0);
+    CHECK(rm::test::asFloat(match.economies[0].storage.mass) == Approx(650.0f));
+    CHECK(rm::test::asFloat(match.economies[0].storage.energy) == Approx(4000.0f));
+    CHECK(rm::test::asFloat(match.economies[0].stored.mass) < 1.0f);
+
+    // Beats 2-4: still nothing — the thread is still waiting.
+    for (rm::TickIndex beat = 1; beat < rm::sim::kInitialResourceGrantTick; ++beat) {
+        rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field},
+                              rm::sim::TickRate{}, beat);
+    }
+    CHECK(rm::test::asFloat(match.economies[0].stored.mass) < 1.0f);
+
+    // The fifth beat: the grant lands, clamped at the capacity the ACU provides.
+    rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field},
+                          rm::sim::TickRate{}, rm::sim::kInitialResourceGrantTick);
+    CHECK(rm::test::asFloat(match.economies[0].stored.mass) == Approx(650.0f).margin(1.0f));
+    CHECK(rm::test::asFloat(match.economies[0].stored.energy) == Approx(4000.0f).margin(1.0f));
+
+    // And it is a grant, not a balance: the ACU's death drops the ceiling to zero
+    // and the carried-in bank clamps away with it.
+    roster.health(acu).current = rm::test::mag(0.0f);
+    rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field},
+                          rm::sim::TickRate{}, rm::sim::kInitialResourceGrantTick + 1);
+    CHECK(match.economies[0].storage.mass == rm::sim::Mag{});
+    CHECK(match.economies[0].stored.mass == rm::sim::Mag{});
+    CHECK(match.economies[0].stored.energy == rm::sim::Mag{});
+}
+
 TEST_CASE("a unit with no enemy in range moves without firing") {
     // The other half of the same property: the tick must not invent a shot. An
     // always-firing tick would make the test above pass for the wrong reason.

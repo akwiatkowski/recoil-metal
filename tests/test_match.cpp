@@ -739,6 +739,7 @@ TEST_CASE("opponent construction queues complete in order and replay identically
         rm::app::PassabilitySet passability{field, false, 0};
         rm::vfs::Vfs content;
         auto runner = rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+        runner.match.baseStorage = {.mass = Mag::fromInt(1000), .energy = Mag::fromInt(1000)};
         runner.scripts.clear();
         runner.replay = replay;
         std::vector<Event> observedCompletions;
@@ -816,6 +817,7 @@ TEST_CASE("app match runner executes a logged paid engineering enhancement", "[e
     rm::app::PassabilitySet passability{field, false, 0};
     rm::vfs::Vfs content;
     auto runner = rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.match.baseStorage = {.mass = Mag::fromInt(1000), .energy = Mag::fromInt(1000)};
     runner.scripts.clear();
     const std::string name = "AdvancedEngineering";
     SECTION("logged intake") {
@@ -1214,6 +1216,8 @@ TEST_CASE("a commander that built a factory still assists its upgrade") {
     rm::vfs::Vfs content;
     rm::app::MatchRunner runner =
         rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.match.baseStorage = {.mass = rm::sim::magFromFloat(1000000.0f),
+                                .energy = rm::sim::magFromFloat(1000000.0f)};
     runner.scripts.clear();
 
     // The reported sequence: the commander puts up the T1 factory itself — the build order

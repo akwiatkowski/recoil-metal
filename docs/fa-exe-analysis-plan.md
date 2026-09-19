@@ -1513,6 +1513,7 @@ claim changes: mark it superseded and add the replacement.
 | `C-381` | `WP-36` | **Galactic Colossus tractor claw is fully shipped Lua — the native-drag hypothesis is refuted:** `TractorThread` sliders the target to the muzzle, `AttachBoneTo(-1, unit, muzzle)` (the only engine primitive, native `0x00692b20`), `SetDoNotTarget`, then `Kill(unit,'Damage',100)`; `TractorWatchThread` detaches on target death. `ADFTractorClawStructure` is defined but unused by any shipped unit. | [LUA-R] `lua.scd` `lua/lua/aeonweapons.lua:121-170,186`; [EXE] `ART-E001` `0x00692b20` | High | Confirmed | Claw drag is Lua slider+attach, not a native beam mechanic. |
 | `C-382` | `WP-11` | **Draw offers are a per-brain flag, not a negotiation protocol:** `SimUtils.SetOfferDraw` flips `brain.OfferingDraw` (`SimUtils.lua:180`), and `victory.lua`'s poll ends the match `CallEndGame(true, false)` the instant every surviving brain offers — **immediate, no 15-second stability window**, unlike a win. Zero survivors is also an immediate draw. A sole surviving alliance still wins through the ordinary window even with its own offer standing (win checked before draw). **`RequestingAlliedVictory` is inert under fixed alliances:** `simInit.lua:200` sets it for teamed armies at setup, `RequestAlliedVictory` refuses in team games, and FFA never reads it — it only matters when alliances can change mid-match. | [LUA-R] `lua.scd` `lua/victory.lua:50-56`, `lua/SimUtils.lua:180`, `mohodata.scd` `lua/simInit.lua:200` | High | Confirmed | `OfferingDraw` implemented as `Army::offeringDraw` + `CommandKind::OfferDraw`; `RequestingAlliedVictory` deliberately not modelled. |
 | `C-383` | `WP-11` | **The unit cap is a per-army creation gate, not a queue gate.** `CArmyImpl` exposes `GetArmyUnitCap` (vfunc `0xa4`), `SetArmyUnitCap` (`0xa8`), `GetArmyUnitCostTotal` (`0x4c`) and `SetIgnoreArmyUnitCap` (`0xac`); the gate at `0x0074fda0` refuses a unit's creation when `costTotal + new CapCost > unitCap`, firing `OnUnitCapLimitReached` (vfunc `0x1c`) when the caller asks for the callback. Nine call sites include `CFactoryBuildTask::TaskTick` — production retries the create every beat, so a capped factory holds rather than dropping its order. `CapCost` is `RUnitBlueprintGeneral+0x7c` (read as `unit+0x1f8`), engine default 1; the corpus only overrides down (drones/walls 0, T1 sonar 0.1). `Options.UnitCap` defaults to **500** at session create (`0x008e8035`). `SimUtils.UpdateUnitCap` is a literal no-op (`floor(alive × initial / alive)` = `initial`), so `DoNotShareUnitCap` has no live consumer. | [EXE] `ART-E001` `0x0074fda0`, `0x0070f7e0`–`0x0070fb20`, `0x008e8035`; [LUA-R] `lua.scd` `lua/SimUtils.lua:187-201`, `lua/sim/Unit.lua:586-593`; [BP] `General.CapCost` in `units.scd` | High | Confirmed | Implemented: `Army::unitCap`/`unitCostTotal`, `UnitDef::capCost`, `unitCapBlocks` in `startCommand`, `factoryProductionCapped` hold, `UnitCap_*` army stats, SaveState v41. |
+| `C-384` | `WP-11` | **`InitialMass`/`InitialEnergy` are dead options — the starting bank is the ACU's own storage.** The session-create reader (`0x8e7fef`–`0x8e8011`) parses `InitialEnergy`/`InitialMass`/`InitialResearch` with defaults 1000.0/1000.0/5.0 (`0xe4cea0`/`0xe4d960`) into the options table, and nothing in the binary or the shipped corpus consumes them — same class as `DoNotShareUnitCap`. The real mechanic is per-ACU script: `GiveInitialResources` (`UEL0001_script.lua:159`, `URL0001:254`, `UAL0001:193`, `XSL0001:246` — the corpus's only callers) forks at `OnCreate`, `WaitTicks(5)` → 4 beats under the `n−1` quirk (`C-305`), then `brain:GiveResource` the unit's OWN `Economy.StorageMass`/`StorageEnergy` (650/4000 on all four ACUs). The same fields count toward capacity through `CEconStorage::Apply` — no commander special-case — so a dead ACU drops the ceiling and the clamped bank with it. `SetArmyEconomy` (`ScenarioUtilities.lua:456,535`) seeds from `_save.lua` `Armies[x].Economy`, which a stock skirmish leaves empty. | [EXE] `ART-E001` `0x8e7fef`–`0x8e8011`, `0xe4cea0`, `0xe4d960`; [LUA-R] `units.scd` `UEL0001_script.lua:159,180-184` + 3 siblings, `mohodata.scd` `lua/sim/ScenarioUtilities.lua:456,535`; corpus-wide negative for `InitialMass`/`InitialEnergy` consumers | High | Confirmed | Implemented: commander storage counts in `recomputeIncome`, `kInitialResourceGrantTick`=4 grant in `tickSkirmish`, `baseStorage`={} on the app path, `stored` seeded empty. |
 
 `C-091` is now implemented in `WP-27`: `Health` carries one generation-safe automatic target per
 weapon. Automatic acquisition seeds its comparison with that incumbent, retaining it through any
@@ -2919,6 +2920,28 @@ creation end to end:
 alive)` = `initial`), so `DoNotShareUnitCap` needs no consumer — recorded in
 `C-383`. Regression: `the unit cap holds factory production and refuses a
 mobile scaffold` in `test_command.cpp`.
+
+### 2026-09-19 / Initial resources implementation update
+
+`C-384` implemented — the last WP-11 gap closed. `InitialMass`/`InitialEnergy`
+proved dead options (parsed at `0x8e7fef`, no consumer in binary or corpus);
+the real mechanic is the ACU script's `GiveInitialResources`:
+
+- `FA-MATCH`: `recomputeIncome` now counts commander `Economy.Storage*`
+  toward capacity like every other unit — retail's `CEconStorage::Apply`
+  has no ACU special-case. `Match::baseStorage` on the app path is `{}`:
+  a fresh army's ceiling is exactly its ACU's 650/4000, and dies with it.
+- `FA-ECON`: `tickSkirmish` deposits each living ACU's blueprint storage
+  into `stored` at `kInitialResourceGrantTick` (beat 5 — `WaitTicks(5)`
+  under the `n−1` quirk), clamped to capacity. `SceneBuild` seeds `stored`
+  empty, matching `SetArmyEconomy`'s empty `_save.lua` seed.
+- Tests: `the ACU grants its own storage on the fifth beat, and its death
+  takes the bank` covers the delay, the grant, and the death clamp. The
+  scenario fixtures grant their runners a `baseStorage` floor — they seed
+  `stored` directly, which a units-only ceiling would clamp away.
+
+All 1,949 tests pass. WP-11 is now fully implemented on the analyzed
+contract; FA-MATCH's remaining axis is retail-validation, not gaps.
 
 ## Confirmation gate
 

@@ -48,9 +48,10 @@ namespace rm::app {
 /// UEF armies field the same one. What distinguishes them is the instance's colour,
 /// which is exactly the split UnitInstance was built for: the GPU gets the army's
 /// colour and never its index.
-/// What an army starts with, and the baseline its storage is recomputed from every
-/// tick: OUR constant, not a blueprint's — enough to afford the first extractor and
-/// see the bars move, per milestone 19.
+/// A test/scenario seed for "an army with enough banked to build" — OUR constant,
+/// not a blueprint's. NOT retail's starting bank: that is the ACU's own
+/// `Economy.Storage*` (650/4000) granted by `GiveInitialResources` on the fifth
+/// beat (`kInitialResourceGrantTick`), and the sim now models it directly.
 inline const rm::sim::Resources kStartingStorage{.mass = rm::sim::Mag::fromInt(650),
                                                 .energy = rm::sim::Mag::fromInt(5000)};
 

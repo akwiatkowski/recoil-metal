@@ -249,12 +249,27 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
         // of a later reader, which is the part that matters.
         const UnitCatalog::Rates& rates = catalog.rates(store.typeAt(slot));
 
+        // Capacity first, for EVERY unit — commanders included. Retail's
+        // `CEconStorage::Apply` runs on unit creation and does not special-case the
+        // ACU: its blueprint `Economy.StorageMass`/`StorageEnergy` (650/4000 on all
+        // four ACUs) is part of the army's ceiling, which is why the ACU's own
+        // `GiveInitialResources` grant can fill it. TRUNCATED PER STRUCTURE, and this
+        // is the only place the economy rounds (`C-069`, `C-104`(e), `C-160`). Retail
+        // keeps its capacity as a `uint64` and adds each contribution through
+        // `CEconStorage::Apply`, whose `__ftol2` truncates toward zero — so a
+        // structure offering 105.6 mass of storage contributes 105, and three of
+        // them contribute 315 rather than 316.8. Truncating the SUM instead would
+        // agree for whole-numbered blueprints and diverge for every other, which is
+        // the case that decides it.
+        economy.storage.mass += Mag::fromInt(def->storageMass.floorToInt());
+        economy.storage.energy += Mag::fromInt(def->storageEnergy.floorToInt());
+
         if (isCommanderId(def->name)) {
-            // The commander is the trickle and the starting storage, both OURS (see
-            // kCommanderTrickle*) — not its blueprint's fields, which the spawn does not
-            // read either. Converted through the rate here rather than in the catalog
-            // because it is not a property of any type: every commander gets the same
-            // trickle whatever its blueprint says.
+            // The commander is the trickle, OURS (see kCommanderTrickle*) — not its
+            // blueprint's production fields, which the spawn does not read either.
+            // Converted through the rate here rather than in the catalog because it
+            // is not a property of any type: every commander gets the same trickle
+            // whatever its blueprint says.
             economy.incomePerTick.mass += trickle.mass;
             economy.incomePerTick.energy += trickle.energy;
         } else {
@@ -275,15 +290,6 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
                         rates.upkeepEnergyPerTick * beside.energyUpkeep;
                 }
             }
-            // TRUNCATED PER STRUCTURE, and this is the only place the economy rounds
-            // (`C-069`, `C-104`(e), `C-160`). Retail keeps its capacity as a `uint64` and
-            // adds each contribution through `CEconStorage::Apply`, whose `__ftol2`
-            // truncates toward zero — so a structure offering 105.6 mass of storage
-            // contributes 105, and three of them contribute 315 rather than 316.8.
-            // Truncating the SUM instead would agree for whole-numbered blueprints and
-            // diverge for every other, which is the case that decides it.
-            economy.storage.mass += Mag::fromInt(def->storageMass.floorToInt());
-            economy.storage.energy += Mag::fromInt(def->storageEnergy.floorToInt());
         }
         if (match.resourceFlows) {
             (*match.resourceFlows)[slot] = {
@@ -897,6 +903,45 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    every other income (`core/sim/Reclaim.hpp`).
     std::vector<AdjacencyEffects> adjacency;
     recomputeIncome(store, catalog, match, rate, terrain, adjacency);
+    // The ACU's `GiveInitialResources` (`UEL0001_script.lua:159` and its three
+    // siblings — the four ACU scripts are the corpus's only callers): the unit
+    // script forks the grant at `OnCreate`, `WaitTicks(5)` resumes on the fourth
+    // beat after the yield under the `n−1` quirk (`C-305`), and the brain is
+    // handed the ACU's OWN blueprint storage — 650 mass / 4000 energy on all
+    // four ACUs. `ScenarioInfo.Options.InitialMass`/`InitialEnergy` are NOT this
+    // mechanic: the session-create reader (`0x8e7fef`, default 1000.0) parses
+    // them and nothing in the binary or the shipped corpus consumes them —
+    // dead options, like `DoNotShareUnitCap`.
+    //
+    // Stateless rather than a pending list: the only ACUs a match ever has are
+    // the ones it starts with (sACUs are a different blueprint and grant
+    // nothing), so "the fifth beat" is a fixed tick index. A commander that
+    // died before the grant ticks no thread, so it grants nothing — the alive
+    // check is the contract, not a guard. The deposit clamps to capacity like
+    // every other income; `tickEconomy` would clamp it anyway, but a caller
+    // without a `building` span never reaches that pass.
+    if (tickIndex == kInitialResourceGrantTick) {
+        const std::span<const MoveState> grantMotion = store.motion();
+        const std::span<const Health> grantHealth = store.health();
+        for (UnitIndex slot = 0; slot < grantMotion.size(); ++slot) {
+            const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+            if (def == nullptr || !isCommanderId(def->name)) {
+                continue;
+            }
+            const int owner = grantMotion[slot].armyIndex;
+            if (owner < 0 || static_cast<std::size_t>(owner) >= match.economies.size()) {
+                continue;
+            }
+            if (slot >= grantHealth.size() || !grantHealth[slot].alive()) {
+                continue;
+            }
+            Economy& economy = match.economies[static_cast<std::size_t>(owner)];
+            economy.stored.mass =
+                std::min(economy.stored.mass + def->storageMass, economy.storage.mass);
+            economy.stored.energy =
+                std::min(economy.stored.energy + def->storageEnergy, economy.storage.energy);
+        }
+    }
     if (match.features != nullptr) {
         (void)harvestReclaim(store, catalog, *match.features, match.economies);
         (void)applyGuardReclaim(store, catalog, *match.features, match.economies, guardWork);
