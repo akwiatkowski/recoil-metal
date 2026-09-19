@@ -2825,6 +2825,28 @@ All 1,909 tests pass. Next exact action: the `CUnitCommand+0xa2` cancel-flag
 readers near `0x006f4730`/`0x006f4800`, or `IssueScript` command-data
 marshalling at `0x006fd240`.
 
+### 2026-09-19 / Wave-4 implementation update
+
+Two `WP-22` gaps closed against the analyzed contract (`a56966e`):
+
+- `FA-AIR` bomb-drop prediction (`C-224`): `NeedToComputeBombDrop`/
+  `BombDropThreshold`/`PredictAheadForBombDrop` parsed from the corpus (12
+  bombers; thresholds 1.5–4 ogrids, lead 2–3 s). State 1 steers at the release
+  point `target + velocity × PredictAheadForBombDrop` and the weapon releases
+  inside `BombDropThreshold` of it, replacing the range/arc gate. The corpus
+  harness drives the bomber to the release point — it has no orders to fly the
+  approach — and dumb bombs are excluded from mover convergence.
+- `FA-AIR` cargo mass ratio (`C-244`): `unitMass` parses
+  `SizeX × SizeY × SizeZ × AverageDensity` (default 0.49 t/m³, authored on 18
+  transports); `carriedMass` accumulates in `UnitStore::attach`/`detach`, the
+  one path every attachment takes. `KLift`/`KTurn`/`KRoll` divide by
+  `(own + Σ cargo) / own`; `KMove` does not, matching the disassembly.
+
+All 1,931 tests pass. Retail-analyzed remains >=85% on every subsystem row; the
+>80% analysis goal stands met. Next exact action: the `CUnitCommand+0xa2`
+cancel-flag readers near `0x006f4730`/`0x006f4800`, or `IssueScript`
+command-data marshalling at `0x006fd240`.
+
 ## Confirmation gate
 
 A work package may move to **Confirmed with EXE analysis** only when all are true:
