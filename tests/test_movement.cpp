@@ -13,6 +13,7 @@
 #include "core/sim/Army.hpp"
 #include "core/sim/Combat.hpp"  // headingError, for the angle assertions
 #include "core/sim/Command.hpp"
+#include "core/sim/Events.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/RandomStream.hpp"
 #include "core/sim/Pathfinding.hpp"
@@ -1795,4 +1796,282 @@ TEST_CASE("fuel drains in flight, clamps at zero, and means nothing natively") {
     CHECK(motion[0].fuelRatio == rm::sim::Fx{});
     run(units, motion, field, 10);
     CHECK(motion[0].fuelRatio == rm::sim::Fx{});
+}
+
+TEST_CASE("C-125/C-328: motion events carry retail's codes and fire only on change",
+          "[fa-air]") {
+    // The four `CUnitMotion` tables (`enum_registrations.tsv`, `0xfb8224`/
+    // `0xfb8234`): horz Cruise 0 / Stopped 3, vert Top 0 / Bottom 1 / Up 2 /
+    // Down 3, turn Straight 0 / Turn 1 / SharpTurn 2, state None 0 / Attached 1.
+    // The dispatcher is an edge callback — a settled state announces nothing —
+    // and the first sweep after spawn primes silently rather than reporting.
+    rm::sim::UnitStore store;
+    const rm::sim::UnitId tank = store.spawn(rm::sim::UnitStore::Spawn{
+        .transform = unitAt(100.0f, 100.0f),
+        .motion = ordinary(),
+        .health = rm::sim::Health{.current = rm::sim::Mag::fromInt(100),
+                                  .maximum = rm::sim::Mag::fromInt(100)}});
+    MoveState planeMotion = flyer();
+    planeMotion.airState = MoveState::AirState::Bottom;
+    planeMotion.airborne = false;
+    planeMotion.altitudeRef = rm::sim::Fx::fromInt(80);
+    planeMotion.airLiftFactor = rm::sim::Fx::fromInt(70);
+    const rm::sim::UnitId plane = store.spawn(rm::sim::UnitStore::Spawn{
+        .transform = unitAt(200.0f, 200.0f),
+        .motion = planeMotion,
+        .health = rm::sim::Health{.current = rm::sim::Mag::fromInt(100),
+                                  .maximum = rm::sim::Mag::fromInt(100)}});
+
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto sweep = [&] {
+        rm::sim::EventQueue events;
+        rm::sim::emitMotionEvents(store, &events);
+        return events;
+    };
+    const auto forUnit = [](const rm::sim::EventQueue& events, rm::sim::UnitId unit) {
+        std::vector<rm::sim::Event> out;
+        for (const rm::sim::Event& event : events.all()) {
+            if (event.unit == unit) {
+                out.push_back(event);
+            }
+        }
+        return out;
+    };
+
+    // Priming: a spawned-idle world announces nothing — retail's
+    // `OnMotion*EventChange` fires on transitions, not on attach.
+    CHECK(sweep().empty());
+    CHECK(sweep().empty());  // and a settled state stays silent
+
+    // The tank turns a full quarter to reach its order: SharpTurn while the
+    // error is a quarter-turn or more — which is why the first sweep runs
+    // BEFORE the first tick, while the whole 90 degrees is still owed — then
+    // Turn below it, Straight once aligned, Stopped on arrival. A ground unit
+    // never emits a vert event: its vertical state has no transition to
+    // announce.
+    rm::sim::orderTo(store.motion()[tank.index], terrain,
+                     rm::test::fx(400.0f), rm::test::fx(100.0f));
+    std::vector<int> tankHorz;
+    std::vector<int> tankTurn;
+    const auto collect = [&] {
+        for (const rm::sim::Event& event : forUnit(sweep(), tank)) {
+            if (event.kind == rm::sim::EventKind::MotionHorz) {
+                tankHorz.push_back(event.motionHorz);
+            } else if (event.kind == rm::sim::EventKind::MotionTurn) {
+                tankTurn.push_back(event.motionTurn);
+            } else {
+                CHECK(false);  // a ground unit emits no vert/state events here
+            }
+        }
+    };
+    collect();  // the order itself: Cruise + SharpTurn, before any motion
+    for (int i = 0; i < 400 && store.motion()[tank.index].moving; ++i) {
+        rm::sim::tick(store.transforms(), store.motion(), terrain);
+        collect();
+    }
+    std::vector<int> planeVert;
+    for (int i = 0; i < 1000; ++i) {
+        rm::sim::tick(store.transforms(), store.motion(), terrain);
+        for (const rm::sim::Event& event : forUnit(sweep(), plane)) {
+            if (event.kind == rm::sim::EventKind::MotionVert) {
+                planeVert.push_back(event.motionVert);
+            }
+        }
+        if (store.motion()[plane.index].airState == MoveState::AirState::Bottom
+            && i > 0) {
+            break;
+        }
+    }
+    CHECK(planeVert == std::vector<int>{2, 0, 3, 1});
+
+    // The state table: attach is Attached 1, detach back to None 0.
+    REQUIRE(store.attach(plane, tank));
+    {
+        const auto events = forUnit(sweep(), tank);
+        REQUIRE(events.size() == 1);
+        CHECK(events.front().kind == rm::sim::EventKind::MotionState);
+        CHECK(events.front().motionState == 1);
+    }
+    REQUIRE(store.detach(tank));
+    {
+        const auto events = forUnit(sweep(), tank);
+        REQUIRE(events.size() == 1);
+        CHECK(events.front().kind == rm::sim::EventKind::MotionState);
+        CHECK(events.front().motionState == 0);
+    }
+}
+
+TEST_CASE("C-224: the attack cone is 30 degrees, widened to 90 in a hard turn",
+          "[air-combat]") {
+    // `dot(headingToTarget, heading) > 0.866` — a 30-degree cone — decides
+    // whether the next run is an attack or a turn; state 3 (HardTurn) widens
+    // it to 90 degrees (`ahead > 0`). Heading 0 faces +Z, so a target at
+    // (sin a, cos a) sits `a` radians off the nose.
+    using rm::sim::Fx;
+    using State = MoveState::AirCombatState;
+    const rm::sim::Transform aircraft{.x = Fx::fromInt(400), .z = Fx::fromInt(400)};
+    const auto targetAt = [&](float radians) {
+        return rm::sim::Transform{
+            .x = Fx::fromInt(400) + Fx::fromInt(static_cast<std::int32_t>(
+                                        200.0f * std::sin(radians))),
+            .z = Fx::fromInt(400) + Fx::fromInt(static_cast<std::int32_t>(
+                                        200.0f * std::cos(radians)))};
+    };
+    rm::sim::RandomStream random{std::uint32_t{1}};
+    const auto step = [&](MoveState& state, const rm::sim::Transform& target,
+                          rm::TickIndex tick) {
+        rm::sim::updateWingedAttack(state, aircraft, target, false,
+                                    Fx::fromInt(1024), Fx::fromInt(1024), tick, random);
+    };
+
+    // Inside the cone (25 degrees): the run is head-on.
+    MoveState inCone;
+    step(inCone, targetAt(25.0f * kPi / 180.0f), 10);
+    CHECK(inCone.airCombatState == State::HeadOn);
+
+    // Outside it (35 degrees): the aircraft turns instead.
+    MoveState outCone;
+    step(outCone, targetAt(35.0f * kPi / 180.0f), 10);
+    CHECK(outCone.airCombatState >= State::HardTurn);
+    CHECK(outCone.airCombatState <= State::FastTurn);
+
+    // The same 60-degree geometry a Turn cannot engage is inside HardTurn's
+    // widened cone — the widened threshold is what lets a hard turn convert
+    // straight into the next attack run.
+    const rm::sim::Transform sixty = targetAt(60.0f * kPi / 180.0f);
+    MoveState hard;
+    hard.airCombatState = State::HardTurn;
+    step(hard, sixty, 10);
+    CHECK(hard.airCombatState == State::HeadOn);
+    MoveState normal;
+    normal.airCombatState = State::Turn;
+    normal.airCombatDeadline = 1000;
+    step(normal, sixty, 10);
+    CHECK(normal.airCombatState == State::Turn);
+
+    // A bomb run aims at the release point — the target led by
+    // `PredictAheadForBombDrop` — not at the target itself.
+    MoveState bomb;
+    rm::sim::updateWingedAttack(bomb, aircraft, targetAt(0.0f), false,
+                                Fx::fromInt(1024), Fx::fromInt(1024), 10, random,
+                                /*targetStepX=*/Fx::fromInt(2),
+                                /*targetStepZ=*/Fx::fromInt(1),
+                                /*bombLeadTicks=*/20);
+    CHECK(bomb.destinationX == Fx::fromInt(440));
+    CHECK(bomb.destinationZ == Fx::fromInt(620));
+
+    // All eight states are reachable: HeadOn inside the cone, TailChase when
+    // the target is airborne and flying the same way, the three sustained
+    // turns as the draw(3,6) the out-of-cone path takes, BreakOff the
+    // sustained-threshold exit, Recovery the off-map chase.
+    std::vector<bool> seen(8, false);
+    seen[static_cast<std::size_t>(State::None)] = true;
+    seen[static_cast<std::size_t>(inCone.airCombatState)] = true;
+    {
+        // TailChase: an airborne target inside the cone whose heading agrees
+        // with ours — `cos(heading - target.heading) > 0`.
+        MoveState chase;
+        rm::sim::Transform airTarget = targetAt(0.0f);
+        airTarget.heading = 0;
+        rm::sim::updateWingedAttack(chase, aircraft, airTarget, true,
+                                    Fx::fromInt(1024), Fx::fromInt(1024), 10, random);
+        CHECK(chase.airCombatState == State::TailChase);
+        seen[static_cast<std::size_t>(chase.airCombatState)] = true;
+    }
+    for (std::uint32_t seed = 0; seed < 64; ++seed) {
+        rm::sim::RandomStream draws{seed};
+        MoveState turning;
+        rm::sim::updateWingedAttack(turning, aircraft, targetAt(kPi), false,
+                                    Fx::fromInt(1024), Fx::fromInt(1024), 10, draws);
+        seen[static_cast<std::size_t>(turning.airCombatState)] = true;
+    }
+    MoveState breaking;
+    breaking.airCombatState = State::Turn;
+    breaking.airCombatDeadline = 1000;
+    breaking.airSustainedTicks = breaking.airSustainedThreshold + 1;
+    step(breaking, targetAt(kPi), 10);
+    seen[static_cast<std::size_t>(breaking.airCombatState)] = true;
+    MoveState recovering;
+    const rm::sim::Transform offMap{.x = Fx::fromInt(-1), .z = Fx::fromInt(400)};
+    rm::sim::updateWingedAttack(recovering, offMap, targetAt(0.0f), true,
+                                Fx::fromInt(1024), Fx::fromInt(1024), 10, random);
+    seen[static_cast<std::size_t>(recovering.airCombatState)] = true;
+    for (std::size_t i = 0; i < seen.size(); ++i) {
+        CHECK(seen[i]);
+    }
+}
+
+TEST_CASE("C-244: carried mass halves the lift and turn gains, never KMove",
+          "[air-combat]") {
+    // `IUnit::slot9()` is `(own + Σ cargo) / own`: a transport carrying its own
+    // mass again flies with `KLift`/`KTurn`/`KRoll` halved while `KMove` — the
+    // horizontal gain — is untouched. `UnitStore::attach` maintains the sum.
+    rm::sim::UnitStore store;
+    const auto spawnFlyer = [&](float x) {
+        MoveState motion = flyer();
+        motion.unitMass = rm::sim::Fx::fromInt(10);
+        return store.spawn(rm::sim::UnitStore::Spawn{
+            .transform = unitAt(x, 100.0f),
+            .motion = motion,
+            .health = rm::sim::Health{.current = rm::sim::Mag::fromInt(100),
+                                      .maximum = rm::sim::Mag::fromInt(100)}});
+    };
+    const rm::sim::UnitId carrier = spawnFlyer(100.0f);
+    MoveState cargoMotion = ordinary();
+    cargoMotion.unitMass = rm::sim::Fx::fromInt(10);
+    const rm::sim::UnitId cargo = store.spawn(rm::sim::UnitStore::Spawn{
+        .transform = unitAt(100.0f, 100.0f),
+        .motion = cargoMotion,
+        .health = rm::sim::Health{.current = rm::sim::Mag::fromInt(100),
+                                  .maximum = rm::sim::Mag::fromInt(100)}});
+
+    CHECK(store.motion()[carrier.index].carriedMass == rm::sim::Fx{});
+    REQUIRE(store.attach(carrier, cargo));
+    CHECK(store.motion()[carrier.index].carriedMass == rm::sim::Fx::fromInt(10));
+    REQUIRE(store.detach(cargo));
+    CHECK(store.motion()[carrier.index].carriedMass == rm::sim::Fx{});
+
+    // The controller itself: two identical flyers at half elevation, one
+    // carrying its own mass again. Both hold cruise speed forward so the
+    // takeoff gate stays open and the only difference is the divisor.
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto pair = [&](MoveState::AirCombatState combat) {
+        std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f),
+                                              unitAt(100.0f, 100.0f)};
+        std::vector<MoveState> motion{flyer(), flyer()};
+        for (std::size_t i = 0; i < 2; ++i) {
+            units[i].y = rm::sim::Fx::fromInt(40);
+            motion[i].altitudeRef = rm::sim::Fx::fromInt(40);
+            motion[i].unitMass = rm::sim::Fx::fromInt(10);
+            motion[i].airTurnSpeed = rm::sim::Fx::fromInt(20);
+            motion[i].airCombatState = combat;
+            motion[i].airMinSpeedElmosPerSec = rm::sim::Fx::fromInt(80);
+            motion[i].velocity = {rm::sim::Fx{}, rm::sim::Fx{},
+                                  rm::sim::Fx::fromInt(160)};
+            rm::sim::orderTo(motion[i], terrain, rm::test::fx(700.0f),
+                             rm::test::fx(100.0f));
+        }
+        motion[1].carriedMass = rm::sim::Fx::fromInt(10);
+        rm::sim::tick(units, motion, terrain);
+        return motion;
+    };
+
+    // KLift and KMove, side by side: outside combat the desired vector is the
+    // same for both, so the halved climb and the UNdivided forward
+    // acceleration are the divisor's signature — `KLift/M` but `KMove` whole.
+    const std::vector<MoveState> cruise = pair(MoveState::AirCombatState::None);
+    CHECK(rm::sim::fxToFloat(cruise[0].velocity[1])
+          == Approx(2.0 * rm::sim::fxToFloat(cruise[1].velocity[1])).margin(0.01));
+    CHECK(rm::sim::fxToFloat(cruise[0].velocity[0])
+          == Approx(rm::sim::fxToFloat(cruise[1].velocity[0])).margin(0.01));
+
+    // KTurn: the yaw velocity the PD controller integrates halves under load.
+    // (Forward speed is not compared here — the combat states steer along the
+    // heading, which the halved turn itself moves.)
+    const std::vector<MoveState> turning = pair(MoveState::AirCombatState::Turn);
+    CHECK(turning[0].airYawVelocity > rm::sim::Fx{});
+    CHECK(rm::sim::fxToFloat(turning[0].airYawVelocity)
+          == Approx(2.0 * rm::sim::fxToFloat(turning[1].airYawVelocity)).margin(0.01));
 }

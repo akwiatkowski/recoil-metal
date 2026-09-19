@@ -271,3 +271,61 @@ TEST_CASE("C-178: GrowthFormation widens its front row at the block thresholds",
     CHECK(frontRowSize(12) == 4);   // FourWide's ceiling
     CHECK(frontRowSize(13) == 5);   // FiveWide's floor
 }
+
+TEST_CASE("C-015: a grouped move assigns its formation at issue, on the command",
+          "[fa-land]") {
+    // The claim's script-visible half: the formation lives on the issued
+    // command object, not on a per-unit controller — every member's queued
+    // entry shares one payload that keeps the clicked anchor, while the
+    // member's own target is its slot, computed once at apply. Retail's
+    // `PickBestTravelFormationIndex` returns 0 for air and 1 otherwise; our
+    // native intake serves only the land block, so an airborne member keeps
+    // the raw click — the documented divergence.
+    Fixture fix;
+    const rm::UnitTypeIndex type = fix.roster.store.typeAt(fix.mine.index);
+    const UnitId second = fix.roster.add(type, 200.0f, 300.0f, 0, 500.0f);
+    const UnitId air = fix.roster.add(type, 200.0f, 400.0f, 0, 500.0f);
+    fix.roster.store.motion()[air.index].airborne = true;
+
+    const rm::sim::Fx clickX = rm::test::fx(900.0f);
+    const rm::sim::Fx clickZ = rm::test::fx(200.0f);
+    const CommandIssue issue{.tick = 0,
+                             .source = 0,
+                             .id = rm::commandId(0, 0),
+                             .player = 0,
+                             .kind = CommandKind::Move,
+                             .units = {fix.mine, second, air},
+                             .targetX = clickX,
+                             .targetZ = clickZ};
+    const rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
+        issue, fix.roster.store, fix.roster.catalog, fix.players, fix.armies,
+        fix.terrain, [&fix](UnitId) { return &fix.grid; }, fix.roster.rate,
+        &fix.building, nullptr, nullptr, &fix.paths);
+    REQUIRE(result.accepted.size() == 3);
+
+    const auto& mineEntry = fix.roster.store.orders()[fix.mine.index].entries().front();
+    const auto& secondEntry = fix.roster.store.orders()[second.index].entries().front();
+    const auto& airEntry = fix.roster.store.orders()[air.index].entries().front();
+
+    // One command object: all three entries share the payload, and the payload
+    // still names the click — the slots are per-member targets, not a
+    // rewritten anchor.
+    CHECK(&mineEntry.payload() == &secondEntry.payload());
+    CHECK(&mineEntry.payload() == &airEntry.payload());
+    CHECK(mineEntry.payload().targetX == clickX);
+    CHECK(mineEntry.payload().targetZ == clickZ);
+
+    // Slots at issue time: the first land rank sits on the anchor, the second
+    // is offset from it — assigned now, before any tick has run.
+    CHECK(mineEntry.targetX() == clickX);
+    CHECK(mineEntry.targetZ() == clickZ);
+    CHECK((secondEntry.targetX() != clickX || secondEntry.targetZ() != clickZ));
+
+    // The airborne member is not a formation member — retail's
+    // `PickBestTravelFormationIndex` would have given it an AirFormation slot;
+    // ours falls back to the degenerate line fan-out, so its target is offset
+    // from the click and from both land slots rather than sharing either.
+    CHECK((airEntry.targetX() != clickX || airEntry.targetZ() != clickZ));
+    CHECK((airEntry.targetX() != secondEntry.targetX()
+           || airEntry.targetZ() != secondEntry.targetZ()));
+}

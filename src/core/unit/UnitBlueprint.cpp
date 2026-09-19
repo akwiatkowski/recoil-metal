@@ -955,6 +955,12 @@ loadProjectileTraits(std::string_view source) {
         // in `Physics`; a tactical missile authors 5 / 0.2.
         .maxZigZagElmos = physics ? numberOr(*physics, "MaxZigZag", 0.0f) * scmap::kElmosPerOgrid : 0.0f,
         .zigZagPeriodSeconds = physics ? numberOr(*physics, "ZigZagFrequency", 0.0f) : 0.0f,
+        // `C-095`'s anti-overkill gate: `DesiredShooterCap` caps how many
+        // point-defence shooters may engage this projectile at once (nuke
+        // missiles carry 1-2; zero means uncapped). `C-172`'s `UseGravity`
+        // gives the shot the ballistic acceleration even with no arc.
+        .desiredShooterCap = physics ? static_cast<int>(numberOr(*physics, "DesiredShooterCap", 0.0f)) : 0,
+        .useGravity = physics && flagAt(*physics, "UseGravity"),
     };
 }
 

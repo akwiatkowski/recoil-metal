@@ -785,3 +785,84 @@ TEST_CASE("C-324: an experimental air unit spawns grounded and takes off on orde
     CHECK(roster.motion(id).airborne);
     CHECK(roster.transform(id).y > rm::sim::Fx{});
 }
+
+TEST_CASE("C-320: a stopped ship keeps its heading", "[fa-navy]") {
+    // The `speed²>1e-6` gate on retail's velocity-derived orientation write
+    // (`0xe4ea60`) exists so a hull at rest does not snap to a zero-velocity
+    // facing. Our mover never derives heading from velocity — heading is
+    // order-driven — so the observable contract is simply: arrival leaves the
+    // facing where the approach put it, and idle ticks never move it.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);
+
+    rm::test::Roster roster;
+    const UnitDef ship = shipDef();
+    const rm::UnitTypeIndex type = roster.addType(ship);
+    const UnitId boat = spawnDef(roster, type, ship, 300.0f, 300.0f, 0);
+
+    // Ordered due +X from a +Z facing: the approach turns the hull a quarter.
+    rm::sim::orderTo(roster.store.motion()[boat.index], terrain,
+                     rm::sim::fxFromFloat(500.0f), rm::sim::fxFromFloat(300.0f));
+    for (int i = 0; i < 2000 && roster.motion(boat).moving; ++i) {
+        rm::sim::tick(roster.store.transforms(), roster.store.motion(), terrain);
+    }
+    REQUIRE_FALSE(roster.motion(boat).moving);
+    const rm::Brad arrived = roster.transform(boat).heading;
+    CHECK(arrived != rm::Brad{0});
+
+    for (int i = 0; i < 50; ++i) {
+        rm::sim::tick(roster.store.transforms(), roster.store.motion(), terrain);
+    }
+    CHECK(roster.transform(boat).heading == arrived);
+}
+
+TEST_CASE("C-324: spawn layer derives from the motion class, never authored",
+          "[fa-navy]") {
+    // The remaining branches of `0x631800` beyond the EXPERIMENTAL pair pinned
+    // above: an ordinary air unit spawns on the Air layer, a water-motion hull
+    // on Water, a FERRYBEACON floats (the `|| FERRYBEACON` half of the Water
+    // branch), and a land unit placed under the waterline reads as Seabed.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);
+
+    rm::unitdef::UnitDef plane;
+    plane.name = "test_plane";
+    plane.categories = {"AIR", "MOBILE"};
+    plane.motion = rm::unitdef::MotionType::Air;
+    plane.speedElmosPerSecond = 20.0f;
+    plane.elevationElmos = 80.0f;
+    plane.health = rm::sim::Mag::fromInt(1000);
+
+    rm::unitdef::UnitDef beacon;
+    beacon.name = "test_beacon";
+    beacon.categories = {"FERRYBEACON", "UNTARGETABLE"};
+    beacon.health = rm::sim::Mag::fromInt(10);
+
+    rm::unitdef::UnitDef tank;
+    tank.name = "test_tank";
+    tank.categories = {"LAND", "MOBILE"};
+    tank.motion = rm::unitdef::MotionType::Land;
+    tank.speedElmosPerSecond = 6.0f;
+    tank.health = rm::sim::Mag::fromInt(1000);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex planeType = roster.addType(plane);
+    const rm::UnitTypeIndex shipType = roster.addType(shipDef());
+    const rm::UnitTypeIndex beaconType = roster.addType(beacon);
+    const rm::UnitTypeIndex tankType = roster.addType(tank);
+    const UnitId flyer = spawnDef(roster, planeType, plane, 100.0f, 100.0f, 0);
+    const UnitId ship = spawnDef(roster, shipType, shipDef(), 200.0f, 200.0f, 0);
+    const UnitId marker = spawnDef(roster, beaconType, beacon, 300.0f, 300.0f, 0);
+    const UnitId drowned = spawnDef(roster, tankType, tank, 400.0f, 400.0f, 0);
+
+    CHECK(roster.motion(flyer).canFly);
+    CHECK(roster.motion(flyer).airborne);          // Air-cap, not EXPERIMENTAL → Air
+    CHECK(roster.motion(flyer).airState == rm::sim::MoveState::AirState::Top);
+    CHECK(roster.motion(ship).surfaceWater);       // caps&Water → Water
+    CHECK(roster.motion(marker).surfaceWater);     // FERRYBEACON → Water
+    CHECK_FALSE(roster.motion(drowned).surfaceWater);
+
+    rm::sim::tick(roster.store.transforms(), roster.store.motion(), terrain);
+    CHECK(roster.motion(drowned).seabed);          // else-branch: under the waterline
+    CHECK(rm::sim::fxToFloat(roster.transform(marker).y) == Approx(80.0f));
+}

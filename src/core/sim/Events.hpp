@@ -125,9 +125,10 @@ enum class EventKind : std::uint8_t {
     /// model, so TopSpeed/Stopping have no transition to hang on.
     MotionHorz,
     /// `C-125`: a unit's vertical motion state changed. `motionVert` carries
-    /// retail's `MotionVertEvent` value (Up 0, Top 1, Hover 2, Down 3, Bottom 4);
-    /// Hover is unmodelled — the air layer has no hover state, so a flyer is
-    /// climbing, cruising at altitude, descending, or on the ground.
+    /// retail's `MotionVertEvent` value (Top 0, Bottom 1, Up 2, Down 3,
+    /// Hover 4 — `C-328`'s table at `0xfb8234`); Hover is unmodelled — the air
+    /// layer has no hover state, so a flyer is climbing, cruising at altitude,
+    /// descending, or on the ground.
     MotionVert,
     /// `C-125`: a unit's turn state changed. `motionTurn` carries retail's
     /// `MotionTurnEvent` value (Straight 0, Turn 1, SharpTurn 2); a quarter-turn

@@ -1281,11 +1281,17 @@ void emitMotionEvents(UnitStore& store, EventQueue* events) {
         // horz: Cruise while moving, Stopped otherwise. TopSpeed/Stopping are
         // unreachable — the movers have no acceleration model.
         const std::uint8_t horz = state.moving ? 0 : 3;
-        // vert: the air layer's own state, for flyers only. A ground unit keeps
-        // whatever it last reported — Bottom is its spawn state and there is no
-        // transition to announce. Hover is unmodelled.
-        const std::uint8_t vert = state.canFly ? static_cast<std::uint8_t>(state.airState)
-                                             : state.lastMotionVert;
+        // vert: the air layer's own state, for flyers only, translated to
+        // retail's `EUnitMotionVertEvent` codes — Top 0, Bottom 1, Up 2,
+        // Down 3, Hover 4 (`C-125`/`C-328`, table `0xfb8234`). Our `AirState`
+        // enum orders the same four states differently (Bottom/Up/Top/Down),
+        // so the wire value goes through this table rather than a cast.
+        // A ground unit keeps whatever it last reported — Bottom is its spawn
+        // state and there is no transition to announce. Hover is unmodelled.
+        static constexpr std::array<std::uint8_t, 4> kVertCode{1, 2, 0, 3};
+        const std::uint8_t vert = state.canFly
+            ? kVertCode[static_cast<std::uint8_t>(state.airState)]
+            : state.lastMotionVert;
         // turn: heading error against the destination while moving — a quarter
         // turn or more is SharpTurn, anything less a Turn, aligned Straight.
         std::uint8_t turn = 0;

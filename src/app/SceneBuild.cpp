@@ -26,7 +26,10 @@
 namespace rm::app {
 
 [[nodiscard]] bool floatsOnWater(const rm::unitdef::UnitDef& def) noexcept {
-    return rm::data::moveDefFor(def).usesSurfaceWaterGrid;
+    // `C-324` (`0x631800`): the spawn layer's Water branch is
+    // `caps&Water || FERRYBEACON` — the beacon marker rides the waterline even
+    // though its motion type is None and it owns no water grid.
+    return rm::data::moveDefFor(def).usesSurfaceWaterGrid || def.isFerryBeacon();
 }
 
 /// The primary turret's aim spec from the first turreted weapon, or nothing when the
