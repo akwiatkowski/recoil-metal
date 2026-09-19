@@ -191,3 +191,47 @@ Scenario = { MasterChain = { ['_MASTERCHAIN_'] = { Markers = {
     REQUIRE_FALSE(markers.has_value());
     CHECK(markers.error().message.find("ARMY_2") != std::string::npos);
 }
+
+TEST_CASE("scenario options come back verbatim, whatever the leaf type") {
+    // Shaped like a lobby-written Options block: strings, numbers, a boolean,
+    // and a nested table no consumer reads. The table is open-ended — a key the
+    // engine never named still belongs in the map.
+    const auto options = rm::scenario::loadScenarioOptions(R"(
+version = 3
+ScenarioInfo = {
+    name = "Seton's Clutch",
+    type = 'skirmish',
+    Options = {
+        Victory = 'domination',
+        FogOfWar = 'none',
+        UnitCap = '500',
+        NoRushRadius = 70.5,
+        CheatsEnabled = true,
+        TeamSpawn = 'fixed',
+        SomeModTable = { nested = 1 },
+    },
+})");
+
+    REQUIRE(options.has_value());
+    CHECK(options->get("Victory") == "domination");
+    CHECK(options->get("UnitCap") == "500");
+    CHECK(options->get("NoRushRadius") == "70.5");
+    CHECK(options->get("CheatsEnabled") == "true");
+    CHECK(options->is("FogOfWar", "NONE"));   // case-insensitive, like the lobby's
+    CHECK_FALSE(options->is("FogOfWar", "explored"));
+    CHECK_FALSE(options->get("SomeModTable").has_value());  // tables are skipped
+    CHECK_FALSE(options->get("Missing").has_value());
+}
+
+TEST_CASE("a scenario file with no Options table is empty, not an error") {
+    // Every stock skirmish map: the lobby writes Options at session create, so
+    // the file itself has nothing to say.
+    const auto options = rm::scenario::loadScenarioOptions(R"(
+version = 3
+ScenarioInfo = { name = "Finn's Revenge", type = 'skirmish' }
+)");
+
+    REQUIRE(options.has_value());
+    CHECK(options->values.empty());
+    CHECK_FALSE(options->get("Victory").has_value());
+}

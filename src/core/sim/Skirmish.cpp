@@ -324,27 +324,48 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
 
 
 } // namespace
+namespace {
+
+/// Case-insensitive compare, like faction names: the lobby writes lowercase and
+/// a scenario author has no reason to agree about case.
+[[nodiscard]] bool equalsNoCase(std::string_view a, std::string_view b) noexcept {
+    return std::ranges::equal(a, b, [](char x, char y) {
+        const auto lower = [](char c) {
+            return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + ('a' - 'A')) : c;
+        };
+        return lower(x) == lower(y);
+    });
+}
+
+} // namespace
+
 VictoryMode victoryModeFromName(std::string_view name) noexcept {
-    // Case-insensitive, like faction names: the lobby writes lowercase and a
-    // scenario author has no reason to agree about case.
-    const auto equalsNoCase = [](std::string_view a, std::string_view b) {
-        return std::ranges::equal(a, b, [](char x, char y) {
-            const auto lower = [](char c) {
-                return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + ('a' - 'A')) : c;
-            };
-            return lower(x) == lower(y);
-        });
-    };
-    if (equalsNoCase(name, "supremacy")) {
+    if (equalsNoCase(name, "supremacy") || equalsNoCase(name, "domination")) {
         return VictoryMode::Supremacy;
     }
-    if (equalsNoCase(name, "annihilation")) {
+    if (equalsNoCase(name, "annihilation") || equalsNoCase(name, "eradication")) {
         return VictoryMode::Annihilation;
     }
     if (equalsNoCase(name, "sandbox")) {
         return VictoryMode::Sandbox;
     }
+    // 'demoralization' lands here too — it IS Assassination, the default.
     return VictoryMode::Assassination;
+}
+
+VictoryMode victoryModeFromScenarioKey(std::string_view key) noexcept {
+    // victory.lua's own chain, verbatim: three named keys and an else that
+    // returns before checking anything — which is exactly what Sandbox does.
+    if (equalsNoCase(key, "demoralization")) {
+        return VictoryMode::Assassination;
+    }
+    if (equalsNoCase(key, "domination")) {
+        return VictoryMode::Supremacy;
+    }
+    if (equalsNoCase(key, "eradication")) {
+        return VictoryMode::Annihilation;
+    }
+    return VictoryMode::Sandbox;
 }
 
 /// C-210's Annihilation predicate: everything counts but walls.

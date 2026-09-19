@@ -274,7 +274,7 @@ TEST_CASE("march supplies the map rectangle to automatic target acquisition") {
     rm::app::march(scene, field, passability,
                    rm::app::MarchOptions{.orderAll = false,
                                          .seconds = rm::app::gAppTickRate.secondsPerTick()},
-                   {}, dust, content, {}, {});
+                   {}, dust, content, {}, {}, {});
 
     REQUIRE(scene.store.health()[attacker.index].automaticTargets.size() == 1);
     CHECK(scene.store.health()[attacker.index].automaticTargets[0] == inside);

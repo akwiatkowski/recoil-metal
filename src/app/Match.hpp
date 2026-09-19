@@ -403,7 +403,9 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                                             std::span<const rm::mapinfo::StartPosition> starts,
                                             std::span<const rm::scenario::Marker> markers,
                                             std::optional<rm::sim::PlayableRect> playableRect =
-                                                std::nullopt);
+                                                std::nullopt,
+                                            const rm::scenario::ScenarioOptions& scenarioOptions =
+                                                {});
 
 void printEvents(const rm::sim::EventQueue& events, float now);
 
@@ -413,6 +415,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
            const MarchOptions& options, std::span<const rm::AmbientEmitter> ambient,
            std::vector<rm::Particle>& dust, const rm::vfs::Vfs& content,
            std::span<const rm::mapinfo::StartPosition> starts,
-           std::span<const rm::scenario::Marker> markers);
+           std::span<const rm::scenario::Marker> markers,
+           const rm::scenario::ScenarioOptions& scenarioOptions);
 
 } // namespace rm::app

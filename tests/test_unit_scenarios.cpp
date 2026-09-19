@@ -3180,3 +3180,29 @@ TEST_CASE("idle selection finds only the player's idle units of the asked kind",
     CHECK(rm::app::idleFieldEngineers(job.scene)
           == std::vector<rm::sim::UnitId>{idleEngineer, busyEngineer});
 }
+
+TEST_CASE("the match runner takes its victory mode from the map's scenario options",
+          "[victory][scenario]") {
+    // The app-level path the dashboard asked for: `ScenarioInfo.Options.Victory`
+    // reaches `Match::victoryMode` through `makeMatchRunner`, mapped by
+    // `victory.lua`'s own keys — 'domination' is Supremacy, and a file that
+    // declares nothing keeps the lobby default rather than retail's never-ends
+    // else (which is what an absent key means only when a lobby wrote the table).
+    Scenario job;
+
+    rm::scenario::ScenarioOptions supremacy;
+    supremacy.values.emplace("Victory", "domination");
+    const auto runner = rm::app::makeMatchRunner(job.scene, job.field, job.passability,
+                                                 job.content, {}, {}, std::nullopt, supremacy);
+    CHECK(runner.match.victoryMode == rm::sim::VictoryMode::Supremacy);
+
+    rm::scenario::ScenarioOptions eradication;
+    eradication.values.emplace("Victory", "eradication");
+    const auto runner2 = rm::app::makeMatchRunner(job.scene, job.field, job.passability,
+                                                  job.content, {}, {}, std::nullopt, eradication);
+    CHECK(runner2.match.victoryMode == rm::sim::VictoryMode::Annihilation);
+
+    const auto runner3 = rm::app::makeMatchRunner(job.scene, job.field, job.passability,
+                                                  job.content, {}, {}, std::nullopt, {});
+    CHECK(runner3.match.victoryMode == rm::sim::VictoryMode::Assassination);
+}

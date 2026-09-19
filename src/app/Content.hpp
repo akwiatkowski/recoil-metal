@@ -103,6 +103,13 @@ struct LoadedMap {
     /// nearly free once the table is being walked at all.
     std::vector<rm::scenario::Marker> markers;
 
+    /// The map's `ScenarioInfo.Options` table, verbatim — empty on every stock
+    /// skirmish map, where the lobby would have written it. `Victory` selects
+    /// the match's `VictoryMode`; `FogOfWar='none'` leaves intel unconfigured.
+    /// The rest is parsed and kept but has no proven consumer yet (`UnitCap`,
+    /// `InitialMass`/`InitialEnergy` among them — see `ScenarioOptions`).
+    rm::scenario::ScenarioOptions scenarioOptions;
+
     // .scmap: the props the map places — trees, rocks, wrecks. Kept as the map
     // stated them; resolving each blueprint to a mesh is a separate step, because
     // it reads files the map only names.

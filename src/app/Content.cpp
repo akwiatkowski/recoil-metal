@@ -414,6 +414,29 @@ namespace rm::app {
         }
     }
 
+    // The map's own match options, from the _scenario.lua beside it. Stock
+    // skirmish maps declare none — the lobby writes `ScenarioInfo.Options` at
+    // session create — so an absent or unreadable file is ordinary and leaves
+    // `scenarioOptions` empty rather than warning: there is nothing to fix.
+    if (const auto scenarioPath = rm::scenario::findScenarioBesideMap(path)) {
+        std::ifstream scenarioFile{*scenarioPath, std::ios::binary};
+        const std::string lua{std::istreambuf_iterator<char>(scenarioFile),
+                              std::istreambuf_iterator<char>()};
+        if (auto options = rm::scenario::loadScenarioOptions(lua)) {
+            loaded.scenarioOptions = std::move(*options);
+            if (!loaded.scenarioOptions.values.empty()) {
+                std::printf("  scenario options: %zu keys from %s\n",
+                            loaded.scenarioOptions.values.size(),
+                            scenarioPath->filename().string().c_str());
+            }
+        } else {
+            rm::log::writef(rm::log::Level::Warn, "map",
+                            "could not read scenario options from %s: %s",
+                            scenarioPath->filename().string().c_str(),
+                            options.error().message.c_str());
+        }
+    }
+
     loaded.props = std::move(map->props);
     if (!loaded.props.empty()) {
         std::printf("  props: %zu placed\n", loaded.props.size());

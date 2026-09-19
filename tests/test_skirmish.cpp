@@ -314,6 +314,27 @@ TEST_CASE("the victory selector names all four retail modes", "[victory]") {
     CHECK(rm::sim::victoryModeFromName("demoralization") == VictoryMode::Assassination);
 }
 
+TEST_CASE("the scenario victory key maps like victory.lua's own chain", "[victory]") {
+    // `victory.lua` names three keys and lets EVERYTHING else — 'sandbox'
+    // included — fall into the else that returns before checking, so the game
+    // never ends. That else is Sandbox here, not Assassination: an unrecognized
+    // scenario key means "no victory condition" in retail.
+    using rm::sim::VictoryMode;
+    CHECK(rm::sim::victoryModeFromScenarioKey("demoralization")
+          == VictoryMode::Assassination);
+    CHECK(rm::sim::victoryModeFromScenarioKey("domination") == VictoryMode::Supremacy);
+    CHECK(rm::sim::victoryModeFromScenarioKey("eradication") == VictoryMode::Annihilation);
+    CHECK(rm::sim::victoryModeFromScenarioKey("sandbox") == VictoryMode::Sandbox);
+    CHECK(rm::sim::victoryModeFromScenarioKey("Domination") == VictoryMode::Supremacy);
+    CHECK(rm::sim::victoryModeFromScenarioKey("anything-else") == VictoryMode::Sandbox);
+    CHECK(rm::sim::victoryModeFromScenarioKey("") == VictoryMode::Sandbox);
+
+    // The friendly-name mapping accepts the retail keys too — 'domination' and
+    // 'eradication' are recognized there now, not silently Assassination.
+    CHECK(rm::sim::victoryModeFromName("domination") == VictoryMode::Supremacy);
+    CHECK(rm::sim::victoryModeFromName("eradication") == VictoryMode::Annihilation);
+}
+
 TEST_CASE("annihilation counts everything but walls", "[victory]") {
     const rm::HeightField field = flatField();
 

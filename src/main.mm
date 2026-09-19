@@ -233,8 +233,12 @@ int main(int argc, const char* argv[]) {
                             alliances);
             }
             // AFTER the alliances are grouped: the grids are per alliance, and one sized
-            // for the wrong count would leave a side with nowhere to see.
-            configureIntel(units, map->field, parseVisionStyle(argc, argv));
+            // for the wrong count would leave a side with nowhere to see. A map whose
+            // scenario options say `FogOfWar='none'` gets no grids at all — retail's
+            // `reconDB+0xA8` flag off, which is what an unconfigured Intel already means.
+            if (!map->scenarioOptions.is("FogOfWar", "none")) {
+                configureIntel(units, map->field, parseVisionStyle(argc, argv));
+            }
             // Structures snap to the build grid unless `--placement free` asks otherwise.
             units.placementMode = parsePlacementMode(argc, argv);
 
@@ -398,7 +402,7 @@ int main(int argc, const char* argv[]) {
         const MarchOptions marchOptions = parseMarch(argc, argv);
         if (marchOptions.enabled) {
             march(units, map->field, passability, marchOptions, props.ambient, marchDust,
-                  content, starts, map->markers);
+                  content, starts, map->markers, map->scenarioOptions);
         }
 
         // Full detail up to the vertex budget, halved per doubling beyond it —

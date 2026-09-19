@@ -40,6 +40,16 @@ enum class VictoryMode : std::uint8_t {
 /// Assassination, which is the lobby default. Case-insensitive, like faction names.
 [[nodiscard]] VictoryMode victoryModeFromName(std::string_view name) noexcept;
 
+/// The `ScenarioInfo.Options.Victory` key, mapped the way `victory.lua`'s own
+/// chain reads it: `'demoralization'` -> Assassination, `'domination'` ->
+/// Supremacy, `'eradication'` -> Annihilation, and **anything else** — including
+/// `'sandbox'` and every unrecognized value — falls into the `else` that
+/// returns before checking, so the game never ends. That is Sandbox, and it is
+/// deliberately NOT `victoryModeFromName`'s default: an unrecognized lobby name
+/// stays Assassination there because the lobby only ever writes the four, while
+/// a scenario file's garbage key means "no victory condition" in retail.
+[[nodiscard]] VictoryMode victoryModeFromScenarioKey(std::string_view key) noexcept;
+
 // One tick of a whole match, in one place.
 //
 // WHY THIS FILE EXISTS. Every rule a match is made of was already here and already

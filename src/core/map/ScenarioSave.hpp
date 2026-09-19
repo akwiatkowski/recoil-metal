@@ -5,9 +5,10 @@
 
 #include <array>
 #include <expected>
-#include <string>
 #include <filesystem>
+#include <map>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -83,6 +84,51 @@ loadStartPositionsFile(const std::filesystem::path& path);
 /// single `*_save.lua` in the same directory is taken, since a map directory
 /// holds exactly one map.
 [[nodiscard]] std::optional<std::filesystem::path> findSaveBesideMap(
+    const std::filesystem::path& scmapPath);
+
+/// The `ScenarioInfo.Options` table of a `<map>_scenario.lua`, verbatim.
+///
+/// WHY A MAP AND NOT A STRUCT. The table is open-ended: the engine itself reads
+/// `InitialEnergy`/`InitialMass`/`InitialResearch`/`Difficulty`/`UnitCap`/
+/// `PreBuiltUnits`/`NoRushOption`/`NoRushRadius`/`FogOfWar`/`TeamLock` with
+/// defaults at session create (`0x8e7fef`-`0x8e809b`), `victory.lua` reads
+/// `Victory`, `SimUtils.lua` reads `DoNotShareUnitCap`, `aibrain.lua` reads
+/// `TeamSpawn`, and a mod can add its own. A struct would silently drop every
+/// key it did not name; the map keeps the file's own spelling for all of them.
+///
+/// Every value is stored as TEXT — numbers and booleans flattened to their
+/// source spelling — because the consumers compare strings (`'explored'`,
+/// `'demoralization'`) or `tonumber()` them, and both directions survive a
+/// string. Nested tables are skipped: no known consumer reads one.
+///
+/// EMPTY IS ORDINARY: no stock `_scenario.lua` declares `Options` at all — the
+/// lobby writes it into `ScenarioInfo` at session create, so a map loaded
+/// without a lobby has none. Callers treat absent keys as "the lobby default",
+/// which is what the engine's own defaults encode.
+struct ScenarioOptions {
+    std::map<std::string, std::string, std::less<>> values;
+
+    /// The option's stored spelling, or nullopt when the table does not name it.
+    [[nodiscard]] std::optional<std::string_view> get(std::string_view key) const noexcept;
+
+    /// Whether `key` is stored and its value equals `expected`, ignoring case —
+    /// the lobby writes lowercase and a scenario author has no reason to agree.
+    [[nodiscard]] bool is(std::string_view key, std::string_view expected) const noexcept;
+};
+
+/// Reads `ScenarioInfo.Options` out of a `<map>_scenario.lua` source.
+///
+/// The first table literal in the file is `ScenarioInfo`'s value — the same
+/// convention `loadMarkers` relies on for `Scenario` — so this is a lookup, not
+/// a walk. A file with no `Options` table is NOT an error: it is every stock
+/// skirmish map, and the answer is an empty `ScenarioOptions`.
+[[nodiscard]] std::expected<ScenarioOptions, lua::ParseError> loadScenarioOptions(
+    std::string_view lua);
+
+/// Locates the `_scenario.lua` belonging to a `.scmap`, the same convention as
+/// `findSaveBesideMap`: `SCMP_009.scmap` -> `SCMP_009_scenario.lua`, else any
+/// single `*_scenario.lua` in the directory.
+[[nodiscard]] std::optional<std::filesystem::path> findScenarioBesideMap(
     const std::filesystem::path& scmapPath);
 
 } // namespace rm::scenario

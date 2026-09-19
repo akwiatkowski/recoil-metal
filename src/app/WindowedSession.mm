@@ -715,7 +715,8 @@ int runWindowed(const Session& session) {
                                 .maxX = rm::sim::fxFromFloat(map->field.widthElmos()),
                                 .minZ = {},
                                 .maxZ = rm::sim::fxFromFloat(map->field.depthElmos()),
-                            });
+                            },
+                            map->scenarioOptions);
         runnerForKeys = &runner;
         // Acceptance fixtures keep normal economy, construction, movement and roll-off ticks;
         // opponents are silent so an unrelated attack cannot destroy the controls under test.

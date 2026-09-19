@@ -1271,7 +1271,8 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                                            const rm::vfs::Vfs& content,
                                            std::span<const rm::mapinfo::StartPosition> starts,
                                             std::span<const rm::scenario::Marker> markers,
-                                            std::optional<rm::sim::PlayableRect> playableRect) {
+                                            std::optional<rm::sim::PlayableRect> playableRect,
+                                            const rm::scenario::ScenarioOptions& scenarioOptions) {
     if (!scene.enhancementTasks) {
         scene.enhancementTasks = std::make_unique<rm::sim::EnhancementTasks>(
             scene.store, scene.catalog, scene.enhancementWork);
@@ -1299,6 +1300,16 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 .events = &scene.events,
                 .scriptTasks = scene.enhancementTasks.get(),
                 .commandersEver = scene.commandersEver,
+                // The map's own victory selector, when it declares one. Retail
+                // reads `ScenarioInfo.Options.Victory` in `victory.lua`'s chain:
+                // 'demoralization'/'domination'/'eradication' name modes and
+                // everything else — 'sandbox' included — never ends. Absent is
+                // NOT that else: it is every stock skirmish map, where the lobby
+                // would have written 'demoralization', so Assassination stays.
+                .victoryMode = scenarioOptions.get("Victory").has_value()
+                    ? rm::sim::victoryModeFromScenarioKey(
+                          *scenarioOptions.get("Victory"))
+                    : rm::sim::VictoryMode::Assassination,
                 .baseStorage = kStartingStorage,
                 .resourceFlows = &scene.resourceFlows,
                 .assistLinks = &scene.assistLinks,
@@ -1929,7 +1940,8 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
            const MarchOptions& options, std::span<const rm::AmbientEmitter> ambient,
            std::vector<rm::Particle>& dust, const rm::vfs::Vfs& content,
            std::span<const rm::mapinfo::StartPosition> starts,
-           std::span<const rm::scenario::Marker> markers) {
+           std::span<const rm::scenario::Marker> markers,
+           const rm::scenario::ScenarioOptions& scenarioOptions) {
     std::size_t routed = 0;
     std::size_t total = 0;
     std::vector<bool> announced(scene.armies.size(), false);
@@ -1955,6 +1967,7 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
     // 520-second `--play` for 5200 ticks whatever `--tick-rate` said — at 20 Hz that is 260
     // seconds of match, which is why nothing was built and nobody fired. Exactly the bug
     // §5.1 exists to prevent, found by running the four rates rather than by reading.
+
     const auto ticks =
         static_cast<int>(gAppTickRate.ticks(rm::sim::seconds(options.seconds)));
 
@@ -1966,7 +1979,8 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
                             .maxX = rm::sim::fxFromFloat(field.widthElmos()),
                             .minZ = {},
                             .maxZ = rm::sim::fxFromFloat(field.depthElmos()),
-                        });
+                        },
+                        scenarioOptions);
 
     // Per-tick state hashes, kept when this run has been asked to record or check them.
     // Reserved up front so the recording cannot itself perturb what it measures by

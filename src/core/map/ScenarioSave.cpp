@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdio>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -199,6 +200,97 @@ std::optional<std::filesystem::path> findSaveBesideMap(const std::filesystem::pa
     }
     for (const auto& entry : std::filesystem::directory_iterator{directory, ec}) {
         if (entry.is_regular_file(ec) && entry.path().filename().string().ends_with("_save.lua")) {
+            return entry.path();
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string_view> ScenarioOptions::get(std::string_view key) const noexcept {
+    const auto it = values.find(key);
+    return it == values.end() ? std::nullopt
+                              : std::optional<std::string_view>{it->second};
+}
+
+bool ScenarioOptions::is(std::string_view key, std::string_view expected) const noexcept {
+    const std::optional<std::string_view> stored = get(key);
+    if (!stored.has_value()) {
+        return false;
+    }
+    return std::ranges::equal(*stored, expected, [](char a, char b) {
+        const auto lower = [](char c) {
+            return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + ('a' - 'A')) : c;
+        };
+        return lower(a) == lower(b);
+    });
+}
+
+std::expected<ScenarioOptions, lua::ParseError> loadScenarioOptions(std::string_view lua) {
+    const auto root = rm::lua::parseTable(lua);
+    if (!root) {
+        return std::unexpected(root.error());
+    }
+
+    // The first table literal is ScenarioInfo's value — `version = 3` precedes it
+    // but is not a table. A file that wraps it (`ScenarioInfo = { ... }` parsed
+    // from the top) is tolerated either way: look for the field first, then the
+    // root itself.
+    const Value* info = root->find("ScenarioInfo");
+    if (info == nullptr || !info->isTable()) {
+        info = &*root;
+    }
+
+    ScenarioOptions options;
+    const Value* table = info->find("Options");
+    if (table == nullptr || !table->isTable()) {
+        // Every stock skirmish map: no Options table at all, which is the lobby's
+        // job to write — not a malformed file.
+        return options;
+    }
+
+    for (const lua::Field& field : table->fields) {
+        switch (field.value.type) {
+        case Value::Type::Text:
+            options.values.emplace(field.key, field.value.text);
+            break;
+        case Value::Type::Number: {
+            // `%g` keeps the source's own precision (`500`, `70.5`) rather than
+            // `to_string`'s fixed six decimals — the consumers `tonumber()` it
+            // back anyway.
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%g", field.value.number);
+            options.values.emplace(field.key, buf);
+            break;
+        }
+        case Value::Type::Bool:
+            options.values.emplace(field.key, field.value.boolean ? "true" : "false");
+            break;
+        default:
+            // nil and nested tables: no known consumer reads one, and flattening
+            // a table to a string would invent a format nothing agreed on.
+            break;
+        }
+    }
+    return options;
+}
+
+std::optional<std::filesystem::path> findScenarioBesideMap(
+    const std::filesystem::path& scmapPath) {
+    std::error_code ec;
+
+    const std::filesystem::path directory = scmapPath.parent_path();
+    const std::filesystem::path named =
+        directory / (scmapPath.stem().string() + "_scenario.lua");
+    if (std::filesystem::is_regular_file(named, ec)) {
+        return named;
+    }
+
+    if (!std::filesystem::is_directory(directory, ec)) {
+        return std::nullopt;
+    }
+    for (const auto& entry : std::filesystem::directory_iterator{directory, ec}) {
+        if (entry.is_regular_file(ec)
+            && entry.path().filename().string().ends_with("_scenario.lua")) {
             return entry.path();
         }
     }
