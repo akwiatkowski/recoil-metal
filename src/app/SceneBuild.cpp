@@ -272,7 +272,13 @@ void publishTurretMount(UnitScene& scene, rm::UnitTypeIndex type, float meshToEl
 rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
     rm::sim::MoveState motion;
     motion.armyIndex = armyIndex;
-    motion.airborne = def.motion == rm::unitdef::MotionType::Air;
+    // `C-324` (`0x631800`): the spawn layer is derived, never authored — an
+    // air-capable unit spawns Air UNLESS it is EXPERIMENTAL, which spawns Land
+    // (the CZAR/Ahwassa roll off the pad grounded and take off on their first
+    // order). `airborne` is the current layer, not the capability — `canFly`
+    // below carries that — so a grounded experimental reads as a land target.
+    motion.airborne = def.motion == rm::unitdef::MotionType::Air
+                      && !def.hasCategory("EXPERIMENTAL");
     motion.surfaceWater = floatsOnWater(def);
     motion.submersible = def.motion == rm::unitdef::MotionType::SurfacingSub;
     if (motion.submersible) {
@@ -300,12 +306,13 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
                 ? gAppTickRate.bradPerTick(def.turnRateRadiansPerSecond)
                 : gAppTickRate.bradPerTick(rm::sim::kDefaultTurnRateRadiansPerSecond);
     }
-    if (motion.airborne) {
+    if (def.motion == rm::unitdef::MotionType::Air) {
         // Flyers spawn cruising (the status quo ante — spawn changes nothing observable);
         // the winged mover (`C-221`) takes them from there. Gains stay per second as
         // authored; the integrator applies the retail 0.1 step itself.
         motion.canFly = true;
-        motion.airState = rm::sim::MoveState::AirState::Top;
+        motion.airState = motion.airborne ? rm::sim::MoveState::AirState::Top
+                                          : rm::sim::MoveState::AirState::Bottom;
         motion.airMaxSpeedElmosPerSec = rm::sim::fxFromFloat(def.speedElmosPerSecond);
         motion.airMinSpeedElmosPerSec = rm::sim::fxFromFloat(def.airMinSpeedElmosPerSecond);
         motion.airAttackElevation = rm::sim::fxFromFloat(def.airAttackElevationElmos);

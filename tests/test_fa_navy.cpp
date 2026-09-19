@@ -746,3 +746,42 @@ TEST_CASE("C-204: StayUnderwater clamps a shot under the waterline; DestroyOnWat
     CHECK(rm::sim::fxToFloat(flying.front().position[0])
           == Approx(303.0).margin(0.5));
 }
+
+TEST_CASE("C-324: an experimental air unit spawns grounded and takes off on order",
+          "[fa-navy]") {
+    // Retail's spawn-layer rule (`0x631800`): Air-cap → EXPERIMENTAL ? Land : Air.
+    // The CZAR and Ahwassa roll off the pad on the ground and lift on their first
+    // order — `airborne` is the current layer, `canFly` the capability, so a
+    // grounded experimental reads as a land target until it lifts.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::unitdef::UnitDef czar;
+    czar.name = "test_experimental_air";
+    czar.categories = {"EXPERIMENTAL", "MOBILE", "AIR"};
+    czar.motion = rm::unitdef::MotionType::Air;
+    czar.speedElmosPerSecond = 20.0f;
+    czar.airKLift = 3.0f;
+    czar.airLiftFactor = 70.0f;
+    czar.elevationElmos = 80.0f;
+    czar.health = rm::sim::Mag::fromInt(1000);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(czar);
+    const UnitId id = spawnDef(roster, type, czar, 100.0f, 100.0f, 0);
+
+    const rm::sim::MoveState& spawned = roster.motion(id);
+    CHECK(spawned.canFly);                       // air-capable
+    CHECK_FALSE(spawned.airborne);               // but on the Land layer
+    CHECK(spawned.airState == rm::sim::MoveState::AirState::Bottom);
+    CHECK(spawned.fuelRatio == rm::sim::Fx::fromInt(1));
+
+    // A move order commits the takeoff the same beat (`C-245`): the lift law
+    // raises the hull and `airborne` flips on the first tick.
+    rm::sim::orderTo(roster.store.motion()[id.index], terrain,
+                     rm::test::fx(100.0f), rm::test::fx(700.0f));
+    rm::sim::tick(roster.store.transforms(), roster.store.motion(), terrain);
+    CHECK(roster.motion(id).airState == rm::sim::MoveState::AirState::Up);
+    CHECK(roster.motion(id).airborne);
+    CHECK(roster.transform(id).y > rm::sim::Fx{});
+}
