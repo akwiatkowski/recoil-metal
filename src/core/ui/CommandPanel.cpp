@@ -123,6 +123,7 @@ commandAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept
         case sim::CommandKind::SelfDestruct:  // the ctrl-K kill switch; no rack cell
         case sim::CommandKind::ToggleScriptBit:  // issued through the toggle cells, not a descriptor
         case sim::CommandKind::OfferDraw:  // a match-level offer, not a unit order
+        case sim::CommandKind::Sacrifice:  // no rack cell; issued through its own order path
             break;  // None has a command-rack descriptor.
         }
     }

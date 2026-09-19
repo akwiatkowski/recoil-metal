@@ -175,6 +175,33 @@ namespace {
 [[nodiscard]] bool instantaneous(CommandKind kind) noexcept {
     return kind == CommandKind::Stop;
 }
+
+/// The one-shot progress a Sacrifice grants, in build units (`C-192`,
+/// `0x00601c50` state 2). Retail computes `sacMass = sacrificerBp.BuildCostMass
+/// × SacrificeMassMult` and `sacEnergy = sacrificerBp.BuildCostEnergy ×
+/// SacrificeEnergyMult`, then calls `target->Materialize(min(m, e))` ONCE —
+/// `m`/`e` being each sacrifice amount as a share of the TARGET's cost, and
+/// each falling back to `0.5f` when that cost is zero ("real, and not
+/// something a reimplementation would invent"). `Materialize` takes a
+/// fraction of the total build, so the grant is `min(m, e) × totalBuildTime`.
+[[nodiscard]] Mag sacrificeGrant(const UnitStore& store, const UnitCatalog& catalog,
+                                 UnitIndex slot, const SacrificeWork& work) noexcept {
+    const unitdef::UnitDef* builder = catalog.def(store.typeAt(slot));
+    if (builder == nullptr) {
+        return Mag{};
+    }
+    const Mag sacMass = builder->buildCostMass * fxFromFloat(builder->sacrificeMassMult);
+    const Mag sacEnergy = builder->buildCostEnergy * fxFromFloat(builder->sacrificeEnergyMult);
+    const Fx m = work.cost.mass > Mag{}
+                     ? Fx::fromRaw(saturate((FxWide{sacMass.raw()} << kFxFractionalBits)
+                                            / work.cost.mass.raw()))
+                     : fxFromFloat(0.5f);
+    const Fx e = work.cost.energy > Mag{}
+                     ? Fx::fromRaw(saturate((FxWide{sacEnergy.raw()} << kFxFractionalBits)
+                                            / work.cost.energy.raw()))
+                     : fxFromFloat(0.5f);
+    return work.totalBuildTime * std::min(m, e);
+}
 enum class ScriptDispatch : std::uint8_t {
     Waiting,
     Finished,
@@ -281,7 +308,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                              const Intel* intel, const PlayableRect* playableRect,
                              ScriptTaskHost* scriptTasks, std::vector<GuardWork>* guardWork,
                              RandomStream* random, TickIndex tick,
-                             std::span<const PassabilityGrid* const> gridForTypeSubmerged) {
+                             std::span<const PassabilityGrid* const> gridForTypeSubmerged,
+                             std::vector<EnhancementWork>* enhancements) {
     std::size_t started = 0;
     std::vector<UnitIndex> delayedScripts;
     if (guardWork != nullptr) {
@@ -391,7 +419,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 }
                 const bool wasInstant = instantaneous(pending->kind());
                 if (startCommand(pending->asCommand(), store, catalog, terrain, *pendingGrid,
-                                 rate, building, events, features, armies, approachGrid)) {
+                                 rate, building, events, features, armies, approachGrid,
+                                 enhancements)) {
                     orders[slot].markCurrentActive();
                     ++started;
                     if (!wasInstant) {
@@ -626,7 +655,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     continue;  // at the cap: the factory waits, its order stays
                 }
                 if (!startCommand(current->asCommand(), store, catalog, terrain, *buildGrid,
-                                  rate, building, events, features, armies, approachGrid)) {
+                                  rate, building, events, features, armies, approachGrid,
+                                  enhancements)) {
                     // Refused on the way in: the site changed under the order. Three cases.
                     //
                     // A COLLEAGUE got there first — an allied builder's construction of the
@@ -772,7 +802,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                         continue;  // this product waits on the cap; try the next
                     }
                     if (startCommand(candidate.asCommand(), store, catalog, terrain, *productGrid,
-                                     rate, building, events, features, armies)) {
+                                     rate, building, events, features, armies, nullptr,
+                                     enhancements)) {
                         if (auto* work = activeConstruction(*building, store.idAt(slot))) {
                             work->retainedCommandId = candidate.payload().id;
                         }
@@ -838,7 +869,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                         (void)guarded.removeExact(selected.get());
                     }
                     (void)startCommand(mirrored, store, catalog, terrain, *productGrid, rate,
-                                       building, events, features, armies);
+                                       building, events, features, armies, nullptr,
+                                       enhancements);
                     continue;
                 }
             }
@@ -1495,6 +1527,70 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             // Gone, inadmissible, or unreachable: the order is done. Fall through.
         }
 
+        // THE SACRIFICE HOLD (`C-192`, `0x00601c50`). Not a chase like capture
+        // or a drain like reclaim: the order walks into reach, grants
+        // `min(m, e)` of the work's total build time ONCE — retail's single
+        // `Materialize` call, not a stream — and the sacrificer is consumed.
+        // Retail's `OnStopSacrifice` runs `SetDeathWeaponEnabled(false)` then
+        // `Destroy()`, so `store.kill` is the faithful end: no wreck, no death
+        // weapon, the queue cleared with the unit. A work that finished or was
+        // cancelled under the order retires it like a gone reclaim target.
+        if (const QueuedCommand* head = orders[slot].active();
+            head != nullptr && head->kind() == CommandKind::Sacrifice) {
+            const std::optional<SacrificeWork> work = sacrificeWork(
+                head->asCommand(), store,
+                building != nullptr ? std::span<const Construction>{*building}
+                                    : std::span<const Construction>{},
+                enhancements != nullptr ? std::span<const EnhancementWork>{*enhancements}
+                                        : std::span<const EnhancementWork>{});
+            // The work must still belong to an ally — the same re-check repair
+            // runs every beat, asked of the row's army for a scaffold and of
+            // the target unit's for an upgrade or enhancement.
+            const bool stillAllied =
+                work.has_value()
+                && (work->unitTarget
+                        ? repairStillAllied(slot, head->target(), store, armies)
+                        : constructionArmyAllied((*building)[work->index], slot, store,
+                                                 armies));
+            if (stillAllied) {
+                MoveState& mine = store.motion()[slot];
+                const Fx gap = groundDistanceElmos(positionOf(store.transforms()[slot]),
+                                                   work->at);
+                const Fx reach =
+                    work->unitTarget
+                        ? repairReach(catalog, store.typeAt(slot), mine,
+                                      store.motion()[head->target().index])
+                        : constructionReach(catalog, store.typeAt(slot),
+                                            work->productType);
+                if (gap <= reach) {
+                    // THE ONE-SHOT: `Materialize(min(m, e))` once, then the
+                    // sacrificer dies. No build helper, no rate law, no bill —
+                    // the grant is free progress, which is the whole point of
+                    // the order.
+                    const Mag grant = sacrificeGrant(store, catalog, slot, *work);
+                    if (work->enhancement) {
+                        EnhancementWork& target = (*enhancements)[work->index];
+                        target.buildTimeRemaining =
+                            std::max(Mag{}, target.buildTimeRemaining - grant);
+                    } else {
+                        Construction& target = (*building)[work->index];
+                        target.buildTimeRemaining =
+                            std::max(Mag{}, target.buildTimeRemaining - grant);
+                    }
+                    store.kill(store.idAt(slot));
+                    continue;
+                }
+                if (mine.moving) {
+                    continue;
+                }
+                if (routeUnit(slot, work->at[0], work->at[2], store, terrain, *grid)) {
+                    continue;
+                }
+            }
+            // The work is gone, changed sides, or unreachable: the order is
+            // done. Fall through.
+        }
+
         // THE HARVEST HOLD, the reclaim twin of the chase above: a reclaim naming a wreck
         // that still holds value never completes by arrival — it completes when the wreck
         // is GONE, drained by this unit or any other. In reach it holds still and lets
@@ -1791,7 +1887,8 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
                   const Terrain& terrain, const PassabilityGrid& grid, TickRate,
                   std::vector<Construction>* building, EventQueue* events,
                   FeatureStore* features, std::span<const Army> armies,
-                  const PassabilityGrid* approachGrid) {
+                  const PassabilityGrid* approachGrid,
+                  std::vector<EnhancementWork>* enhancements) {
     // to be live, and a `Build` started for a unit that died this tick would charge a dead
     // army. The handle check belongs to `applyCommand`, where a stale handle is the ordinary
     // case; here it would be a second answer to a question already asked.
@@ -2254,6 +2351,45 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
             return true;
         }
         return routeUnit(command.unit.index, theirs.x, theirs.z, store, terrain, grid);
+    }
+    case CommandKind::Sacrifice: {
+        // `C-192` (`0x00601c50`): the sacrifice task is a ONE-SHOT transfer, not
+        // a rate-based build helper — retail's state 2 calls
+        // `target->Materialize(min(m, e))` once and returns -1. What is checked
+        // here is what makes the order MEAN anything: a sacrificer whose
+        // blueprint carries a mult, and an unfinished allied work to feed. The
+        // grant itself lands in the dispatch hold below, in the same stage
+        // retail's task tick runs in.
+        const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));
+        if (builder == nullptr
+            || (builder->sacrificeMassMult <= 0.0f
+                && builder->sacrificeEnergyMult <= 0.0f)) {
+            return false;
+        }
+        const std::optional<SacrificeWork> work = sacrificeWork(
+            command, store,
+            building != nullptr ? std::span<const Construction>{*building}
+                                : std::span<const Construction>{},
+            enhancements != nullptr ? std::span<const EnhancementWork>{*enhancements}
+                                    : std::span<const EnhancementWork>{});
+        if (!work.has_value()) {
+            return false;
+        }
+        const Transform& at = store.transforms()[command.unit.index];
+        // A unit target holds at the build reach like a repair; a scaffold site
+        // at the construction reach like a build — the same two ranges the
+        // sibling unit-work commands use.
+        const Fx reach =
+            work->unitTarget
+                ? repairReach(catalog, store.typeAt(command.unit.index), motion,
+                              store.motion()[command.target.index])
+                : constructionReach(catalog, store.typeAt(command.unit.index),
+                                    work->productType);
+        if (groundDistanceElmos(positionOf(at), work->at) <= reach) {
+            teardownMovement(motion);
+            return true;
+        }
+        return routeUnit(command.unit.index, work->at[0], work->at[2], store, terrain, grid);
     }
     case CommandKind::LoadTransport:
     case CommandKind::UnloadTransport:

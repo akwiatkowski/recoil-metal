@@ -77,6 +77,13 @@ template <typename Order>
     case CommandKind::Repair:
     case CommandKind::LoadTransport:
         return a.target == b.target;
+    case CommandKind::Sacrifice:
+        // A unit target compares handles like capture; a scaffold site compares
+        // the clicked position like a move — the two addressing modes of C-192.
+        if (a.target.generation != 0 || b.target.generation != 0) {
+            return a.target == b.target;
+        }
+        return withinCancelDistance(a, b);
     case CommandKind::UnloadTransport:
     case CommandKind::Ferry:
         return withinCancelDistance(a, b);

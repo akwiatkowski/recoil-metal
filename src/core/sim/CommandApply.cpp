@@ -217,6 +217,38 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     });
     return mine != armies.end() && theirs != armies.end() && !allied(*mine, *theirs);
 }
+/// Issue-time gate for Sacrifice (`C-192`, `0x00601c50`): a sacrificer whose
+/// blueprint carries a nonzero `SacrificeMassMult`/`SacrificeEnergyMult`, and
+/// an ALLIED work in progress to feed — a scaffold at the clicked site, or a
+/// unit being upgraded or enhanced. Reach is deliberately NOT checked: like
+/// repair and capture, the order walks there first.
+[[nodiscard]] bool validSacrifice(const Command& command, const UnitStore& store,
+                                  const UnitCatalog& catalog,
+                                  std::span<const Army> armies,
+                                  std::span<const Construction> building,
+                                  std::span<const EnhancementWork> enhancements) noexcept {
+    const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));
+    if (builder == nullptr
+        || (builder->sacrificeMassMult <= 0.0f && builder->sacrificeEnergyMult <= 0.0f)) {
+        return false;
+    }
+    const std::optional<SacrificeWork> work =
+        sacrificeWork(command, store, building, enhancements);
+    if (!work.has_value()) {
+        return false;
+    }
+    if (armies.empty()) {
+        return true;  // the direct-dispatch compatibility seam has no alliance state to judge
+    }
+    const int owner = store.motion()[command.unit.index].armyIndex;
+    const auto mine = std::ranges::find_if(armies, [owner](const Army& army) {
+        return army.index == owner;
+    });
+    const auto theirs = std::ranges::find_if(armies, [work](const Army& army) {
+        return army.index == work->armyIndex;
+    });
+    return mine != armies.end() && theirs != armies.end() && allied(*mine, *theirs);
+}
 /// Issue-time gate for MissileLaunch: a unit carrying a counted manual weapon — the silo's
 /// round — and, when a unit is named, one that is alive enough to aim at. Ammunition is
 /// deliberately NOT checked: the stockpile may fill while the order sits, so an empty silo
@@ -338,7 +370,8 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     std::vector<Construction>* building, EventQueue* events, FeatureStore* features,
     PathService* pathService, std::string_view scriptTask,
     std::span<const std::uint8_t> scriptData, ScriptTaskHost* scriptTasks,
-    const PassabilityGrid* approachGrid) {
+    const PassabilityGrid* approachGrid,
+    std::vector<EnhancementWork>* enhancements) {
     // A stale handle first, before anything else looks at the slot. A player may click a unit
     // that died on the tick their order was issued, and a replay of an old log may name a unit
     // that no longer exists — in both cases the generation has moved on, so this must not
@@ -368,6 +401,15 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     }
     if (command.kind == CommandKind::Capture
         && !validCapture(command, store, catalog, armies)) {
+        return false;
+    }
+    if (command.kind == CommandKind::Sacrifice
+        && !validSacrifice(command, store, catalog, armies,
+                           building != nullptr ? std::span<const Construction>{*building}
+                                               : std::span<const Construction>{},
+                           enhancements != nullptr
+                               ? std::span<const EnhancementWork>{*enhancements}
+                               : std::span<const EnhancementWork>{})) {
         return false;
     }
     if (command.kind == CommandKind::MissileLaunch
@@ -438,7 +480,7 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
         MoveState& motion = store.motion()[command.unit.index];
         const MoveState previous = motion;
         if (!startCommand(command, store, catalog, terrain, movementGrid, rate, building, events,
-                          features, armies)) {
+                          features, armies, approachGrid, enhancements)) {
             motion = previous;
             return false;
         }
@@ -510,8 +552,8 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
                     motion.pathIndex = 0;
                     if (const QueuedCommand* next = orders.current()) {
                         if (startCommand(next->asCommand(), store, catalog, terrain, movementGrid, rate,
-                                         building, events, features, armies, approachGrid)) {
-                            orders.markCurrentActive();
+                                         building, events, features, armies, approachGrid,
+                                         enhancements)) {
                         }
                     }
                     return true;
@@ -531,8 +573,7 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
             cancelConstructionFor(building, command, store, catalog);
             if (const QueuedCommand* next = orders.current()) {
                 if (startCommand(next->asCommand(), store, catalog, terrain, movementGrid, rate, building,
-                                 events, features, armies, approachGrid)) {
-                    orders.markCurrentActive();
+                                 events, features, armies, approachGrid, enhancements)) {
                 }
             }
             return true;
@@ -592,8 +633,7 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
         teardownMovement(motion);
     }
     if (!startCommand(command, store, catalog, terrain, movementGrid, rate, building, events,
-                      features, armies, approachGrid)) {
-        motion = previous;
+                      features, armies, approachGrid, enhancements)) {
         // A refused move may still be served — by air (#15800). The offer
         // rewrites both queues itself, so a true return skips the staging
         // path entirely; the click is carried inside the rewrite.
@@ -680,7 +720,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                                  const CommandGridForUnit& approachGridForUnit,
                                  std::vector<SiloAmmo>* siloAmmo,
                                  std::vector<SiloBuild>* siloQueue,
-                                 std::vector<SelfDestructWork>* selfDestructs) {
+                                 std::vector<SelfDestructWork>* selfDestructs,
+                                 std::vector<EnhancementWork>* enhancements) {
     const CommandIssue issue = onBuildGrid(issued, catalog, terrain);
     ApplyCommandResult result;
     if (!validCancellation(issue) || issue.source == kInvalidCommandSource || issue.id == kInvalidCommandId
@@ -1191,7 +1232,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                                issue.targetZ, shared, store, catalog, players, armies, terrain,
                                grid, rate, building, events, features, pathService,
                                issue.scriptTask, issue.scriptData, scriptTasks,
-                               approachGridForUnit ? approachGridForUnit(unit) : grid)) {
+                               approachGridForUnit ? approachGridForUnit(unit) : grid,
+                               enhancements)) {
             result.accepted.push_back(unit);
         }
     }
@@ -1208,7 +1250,8 @@ bool applyCommand(const Command& ordered, UnitStore& store, const UnitCatalog& c
                    ScriptTaskHost* scriptTasks,
                    std::vector<SiloAmmo>* siloAmmo,
                    std::vector<SiloBuild>* siloQueue,
-                   std::vector<SelfDestructWork>* selfDestructs) {
+                   std::vector<SelfDestructWork>* selfDestructs,
+                   std::vector<EnhancementWork>* enhancements) {
     const Command command = onBuildGrid(ordered, catalog, terrain);
     if (command.player >= static_cast<PlayerIndex>(kInvalidCommandSource)
         || command.kind == CommandKind::Script) {
@@ -1235,7 +1278,7 @@ bool applyCommand(const Command& ordered, UnitStore& store, const UnitCatalog& c
     const ApplyCommandResult result = applyCommand(
         issue, store, catalog, players, armies, terrain,
         [&grid](UnitId) { return &grid; }, rate, building, events, features, pathService,
-        scriptTasks, {}, siloAmmo, siloQueue, selfDestructs);
+        scriptTasks, {}, siloAmmo, siloQueue, selfDestructs, enhancements);
     return result.acceptedUnit(command.unit);
 }
 

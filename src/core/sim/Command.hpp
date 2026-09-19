@@ -215,6 +215,17 @@ enum class CommandKind : std::uint8_t {
     /// ends in a draw immediately — no stability window. Army-level, not a
     /// unit order: `units` stays empty and `scriptBit` carries the flag.
     OfferDraw = 31,
+    /// Give this unit's build cost to an allied work in progress — retail's
+    /// `CUnitSacrificeTask` (`0x00601c50`, `C-192`), a ONE-SHOT transfer rather
+    /// than a rate-based build helper. `target` names a unit being upgraded or
+    /// enhanced; `targetX`/`targetZ` name a scaffold's site, because a
+    /// structure under construction is a `Construction` row here, not an
+    /// entity retail could point a handle at. In reach the order grants
+    /// `min(m, e)` of the work's total build time ONCE — `m`/`e` the
+    /// sacrificer's `BuildCost × SacrificeMult` as a share of the work's cost,
+    /// each falling back to `0.5` when that cost is zero — and the sacrificer
+    /// is consumed (retail's `OnStopSacrifice` calls `Destroy()`, no wreck).
+    Sacrifice = 32,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {
@@ -448,7 +459,8 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
                                    ScriptTaskHost* scriptTasks = nullptr,
                                    std::vector<SiloAmmo>* siloAmmo = nullptr,
                                    std::vector<SiloBuild>* siloQueue = nullptr,
-                                   std::vector<SelfDestructWork>* selfDestructs = nullptr);
+                                   std::vector<SelfDestructWork>* selfDestructs = nullptr,
+                                   std::vector<EnhancementWork>* enhancements = nullptr);
 
 /// Applies one semantic issue to a canonicalized unit set.
 ///
@@ -472,7 +484,8 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
     const CommandGridForUnit& approachGridForUnit = {},
     std::vector<SiloAmmo>* siloAmmo = nullptr,
     std::vector<SiloBuild>* siloQueue = nullptr,
-    std::vector<SelfDestructWork>* selfDestructs = nullptr);
+    std::vector<SelfDestructWork>* selfDestructs = nullptr,
+    std::vector<EnhancementWork>* enhancements = nullptr);
 
 /// Publishes a finished asynchronous plain-move route through the command authority.
 ///
@@ -565,7 +578,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                               ScriptTaskHost* scriptTasks = nullptr,
                               std::vector<GuardWork>* guardWork = nullptr,
                               RandomStream* random = nullptr, TickIndex tick = 0,
-                              std::span<const PassabilityGrid* const> gridForTypeSubmerged = {});
+                              std::span<const PassabilityGrid* const> gridForTypeSubmerged = {},
+                              std::vector<EnhancementWork>* enhancements = nullptr);
 
 /// Updates attack-move and patrol combat after movement and intel. These orders retain their
 /// waypoint while `target` temporarily names the visible hostile that interrupted the route.

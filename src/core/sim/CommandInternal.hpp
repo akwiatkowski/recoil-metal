@@ -78,7 +78,37 @@ void teardownMovement(MoveState& motion);
                                 std::vector<Construction>* building, EventQueue* events,
                                 FeatureStore* features,
                                 std::span<const Army> armies,
-                                const PassabilityGrid* approachGrid = nullptr);
+                                const PassabilityGrid* approachGrid = nullptr,
+                                std::vector<EnhancementWork>* enhancements = nullptr);
+
+/// The work a Sacrifice order's target resolves to (`C-192`). Retail points the
+/// task at a unit entity; here a scaffold is a `Construction` row rather than
+/// an entity, so the command carries two addressing modes — `target` names a
+/// unit being upgraded or enhanced, `targetX`/`targetZ` a scaffold's site —
+/// and this is what either resolves to. `enhancement` selects which list
+/// `index` counts into; `at` is where the sacrificer must stand in reach of,
+/// `armyIndex` whose side the work belongs to, and `cost`/`totalBuildTime`
+/// what the one-shot grant is measured against.
+struct SacrificeWork {
+    std::size_t index = 0;
+    bool enhancement = false;
+    bool unitTarget = false;
+    std::array<Fx, 3> at{};
+    int armyIndex = kNoArmy;
+    UnitTypeIndex productType = 0;
+    Resources cost{};
+    Mag totalBuildTime{};
+};
+
+/// Resolves a Sacrifice command's target to the unfinished allied work it
+/// would feed, or nullopt. Asked at issue time (`validSacrifice`), when a
+/// queued order reaches the head (`startCommand`), and every beat the order
+/// holds (`advanceOrders`) — the same predicate in all three places because a
+/// work that finished or was cancelled between them must retire the order.
+[[nodiscard]] std::optional<SacrificeWork> sacrificeWork(
+    const Command& command, const UnitStore& store,
+    std::span<const Construction> building,
+    std::span<const EnhancementWork> enhancements) noexcept;
 
 /// Whether a factory's build order must WAIT on the unit cap rather than start.
 ///

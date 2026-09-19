@@ -97,6 +97,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "toggle-script-bit";
     case CommandKind::OfferDraw:
         return "offer-draw";
+    case CommandKind::Sacrifice:
+        return "sacrifice";
     }
     return "stop";
 }
@@ -318,6 +320,66 @@ bool buildSitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos,
         return army.index == targetOwner;
     });
     return mine != armies.end() && theirs != armies.end() && allied(*mine, *theirs);
+}
+
+std::optional<SacrificeWork> sacrificeWork(
+    const Command& command, const UnitStore& store,
+    std::span<const Construction> building,
+    std::span<const EnhancementWork> enhancements) noexcept {
+    // `C-192`, `0x00601c50`: retail's task points at the unit being built —
+    // `IsBeingBuilt` or state `38 Enhancing`. Here a rising structure is a
+    // `Construction` row, not an entity, so the command addresses the work two
+    // ways: `target` names a unit being UPGRADED (the row's `upgradeOf`) or
+    // ENHANCED (the row's `owner`), and `targetX`/`targetZ` name a scaffold's
+    // site. Alliance is the caller's check — this only finds the work.
+    if (command.target.generation != 0) {
+        if (!store.alive(command.target) || command.target == command.unit) {
+            return std::nullopt;
+        }
+        for (std::size_t i = 0; i < building.size(); ++i) {
+            const Construction& work = building[i];
+            if (!work.finished() && work.upgradeOf == command.target) {
+                return SacrificeWork{.index = i,
+                                     .unitTarget = true,
+                                     .at = positionOf(
+                                         store.transforms()[command.target.index]),
+                                     .armyIndex = work.armyIndex,
+                                     .productType =
+                                         static_cast<UnitTypeIndex>(work.blueprintIndex),
+                                     .cost = work.cost,
+                                     .totalBuildTime = work.totalBuildTime};
+            }
+        }
+        for (std::size_t i = 0; i < enhancements.size(); ++i) {
+            const EnhancementWork& work = enhancements[i];
+            if (!work.finished() && work.owner == command.target) {
+                return SacrificeWork{.index = i,
+                                     .enhancement = true,
+                                     .unitTarget = true,
+                                     .at = positionOf(
+                                         store.transforms()[command.target.index]),
+                                     .armyIndex =
+                                         store.motion()[command.target.index].armyIndex,
+                                     .cost = work.cost,
+                                     .totalBuildTime = work.totalBuildTime};
+            }
+        }
+        return std::nullopt;
+    }
+    for (std::size_t i = 0; i < building.size(); ++i) {
+        const Construction& work = building[i];
+        if (!work.finished() && work.position[0] == command.targetX
+            && work.position[2] == command.targetZ) {
+            return SacrificeWork{.index = i,
+                                 .at = work.position,
+                                 .armyIndex = work.armyIndex,
+                                 .productType =
+                                     static_cast<UnitTypeIndex>(work.blueprintIndex),
+                                 .cost = work.cost,
+                                 .totalBuildTime = work.totalBuildTime};
+        }
+    }
+    return std::nullopt;
 }
 
 [[nodiscard]] std::optional<std::array<Fx, 3>> guardReturnPosition(

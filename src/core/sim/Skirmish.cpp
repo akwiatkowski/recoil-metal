@@ -659,7 +659,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                           match.playableRect ? &*match.playableRect
                                                              : nullptr,
                                           match.scriptTasks, &guardWork, &match.random,
-                                          tickIndex, match.passabilitySubmerged);
+                                          tickIndex, match.passabilitySubmerged,
+                                          match.enhancements);
 
     // 0b. TRANSPORTS. Between dispatch and movement so a route issued here —
     //     a carrier coming to its cargo, a ferry turning for the drop — moves
@@ -698,6 +699,37 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    before the match-only early return so a crowd un-jams itself too.
     resolveCongestion(store, terrain, match.passability, match.armies,
                       match.passabilitySubmerged);
+
+    // `C-265`'s blueprint `Lifetime`, retail's `seraphimunits.lua` Othuy timer:
+    // a spawned unit with `UnitDef::lifetimeSeconds` counts down and
+    // `Destroy()`s itself — no wreck, no report, no kill credit. Armed LAZILY
+    // from the definition on first sight (`kLifetimeUnset`), so every spawn path
+    // — scene placement, finished construction, the Ythotha's death-spawn —
+    // starts the clock without the caller knowing it exists. Before the
+    // no-armies early return: a lifetime is a fact about the unit, not about
+    // the match, and a `--units` crowd's Othuy expires the same way.
+    {
+        const std::span<TickCount> lifetimes = store.lifetimeRemainingTicks();
+        for (UnitIndex slot = 0; slot < lifetimes.size(); ++slot) {
+            if (!store.slotAlive(slot)) {
+                continue;
+            }
+            if (lifetimes[slot] == kLifetimeUnset) {
+                const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+                lifetimes[slot] = def != nullptr && def->lifetimeSeconds > 0.0f
+                    ? rate.ticks(seconds(def->lifetimeSeconds))
+                    : TickCount{0};
+            }
+            if (lifetimes[slot] == 0) {
+                continue;
+            }
+            if (--lifetimes[slot] == 0) {
+                // `Destroy()`, not `Kill()`: retail's expiry removes the unit
+                // outright — the Othuy leaves no wreck and scores nobody a kill.
+                store.destroy(store.idAt(slot));
+            }
+        }
+    }
 
     // Everything below is a MATCH, and a scene with no armies is not one — a `--units`
     // crowd scattered for a screenshot has nothing to shoot at and nobody to pay.

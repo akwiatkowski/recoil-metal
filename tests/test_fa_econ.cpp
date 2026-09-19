@@ -157,6 +157,132 @@ struct CaptureFixture {
     }
 };
 
+/// Two allied armies, an Aeon-class sacrificer, and the work it can feed —
+/// the C-192 shape: `sacrificeMassMult`/`sacrificeEnergyMult` = 0.6 like the
+/// four retail units (UAL0105/0208/0301/0309), and a `Construction` or
+/// `EnhancementWork` row standing in for retail's `IsBeingBuilt`/`Enhancing`
+/// entity states.
+struct SacrificeFixture {
+    rm::HeightField field = flatField();
+    rm::sim::Terrain terrain{field};
+    rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    rm::test::Roster roster;
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<Player> players = rm::sim::onePlayerPerArmy(2, /*humanArmy=*/0);
+    std::vector<rm::sim::Economy> economies{2};
+    std::vector<rm::sim::Projectile> shots;
+    std::vector<rm::sim::Construction> building;
+    std::vector<rm::sim::EnhancementWork> enhancements;
+    std::vector<int> commandersEver{0, 0};
+    rm::sim::EventQueue events;
+
+    rm::UnitTypeIndex sacrificerType{};
+    rm::UnitTypeIndex engineerType{};
+    rm::UnitTypeIndex structureType{};
+    rm::UnitTypeIndex freebieType{};
+
+    SacrificeFixture() {
+        // The two armies must be ALLIED — `freeForAll` gives each its own
+        // alliance, and sacrifice only feeds a friendly work.
+        armies[1].alliance = armies[0].alliance;
+
+        rm::unitdef::UnitDef sacrificer;
+        sacrificer.name = "test_sacrificer";
+        sacrificer.buildRate = 10.0f;
+        sacrificer.buildCostMass = rm::sim::magFromFloat(100.0f);
+        sacrificer.buildCostEnergy = rm::sim::magFromFloat(1000.0f);
+        // `C-192`: `Economy.SacrificeMassMult`/`SacrificeEnergyMult`, 0.6 on
+        // the four Aeon units that carry it — the sacrificer's own build cost
+        // is what it donates.
+        sacrificer.sacrificeMassMult = 0.6f;
+        sacrificer.sacrificeEnergyMult = 0.6f;
+        sacrificerType = roster.addType(sacrificer);
+
+        rm::unitdef::UnitDef engineer;
+        engineer.name = "test_engineer";
+        engineer.buildRate = 10.0f;
+        engineer.buildCostMass = rm::sim::magFromFloat(100.0f);
+        engineer.buildCostEnergy = rm::sim::magFromFloat(1000.0f);
+        // No sacrifice mults: a builder that cannot sacrifice at all.
+        engineerType = roster.addType(engineer);
+
+        rm::unitdef::UnitDef structure;
+        structure.name = "test_structure";
+        structure.categories = {"STRUCTURE"};
+        structure.buildCostMass = rm::sim::magFromFloat(200.0f);
+        structure.buildCostEnergy = rm::sim::magFromFloat(2000.0f);
+        structure.buildTime = rm::sim::magFromFloat(100.0f);
+        structureType = roster.addType(structure);
+
+        // A target with NO mass cost — the `0.5` fallback's stage (`C-192`:
+        // each share falls back to 0.5 when the corresponding target cost is
+        // zero).
+        rm::unitdef::UnitDef freebie;
+        freebie.name = "test_freebie";
+        freebie.categories = {"STRUCTURE"};
+        freebie.buildCostMass = rm::sim::Mag{};
+        freebie.buildCostEnergy = rm::sim::magFromFloat(2000.0f);
+        freebie.buildTime = rm::sim::magFromFloat(100.0f);
+        freebieType = roster.addType(freebie);
+
+        for (auto& economy : economies) {
+            economy.storage = {.mass = rm::sim::magFromFloat(1000.0f),
+                               .energy = rm::sim::magFromFloat(1000.0f)};
+            economy.stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                              .energy = rm::sim::magFromFloat(1000.0f)};
+        }
+    }
+
+    /// An unfinished allied scaffold at (x, z) — the `Construction` row this
+    /// sim keeps where retail would have an `IsBeingBuilt` entity.
+    void scaffold(rm::UnitTypeIndex type, float x, float z, float remaining) {
+        const rm::unitdef::UnitDef* def = roster.catalog.def(type);
+        building.push_back(rm::sim::Construction{
+            .armyIndex = 1,
+            .position = {rm::sim::fxFromFloat(x), rm::sim::Fx{},
+                         rm::sim::fxFromFloat(z)},
+            .cost = {.mass = def->buildCostMass, .energy = def->buildCostEnergy},
+            .buildTimeRemaining = rm::sim::magFromFloat(remaining),
+            .totalBuildTime = def->buildTime,
+            .blueprintIndex = type,
+        });
+    }
+
+    /// A unit-target sacrifice (upgrade or enhancement), or a site-target one
+    /// when `target` is left unset and (x, z) names the scaffold.
+    [[nodiscard]] bool sacrifice(UnitId who, UnitId target = {},
+                                 float x = 0.0f, float z = 0.0f) {
+        return rm::sim::applyCommand(
+            Command{.kind = CommandKind::Sacrifice,
+                    .unit = who,
+                    .targetX = rm::sim::fxFromFloat(x),
+                    .targetZ = rm::sim::fxFromFloat(z),
+                    .target = target},
+            roster.store, roster.catalog, players, armies, terrain, grid,
+            roster.rate, &building, &events, nullptr, nullptr, nullptr, nullptr,
+            nullptr, nullptr, &enhancements);
+    }
+
+    void tick(int times = 1) {
+        const std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(),
+                                                                 &grid);
+        rm::sim::Match match{.armies = armies,
+                             .economies = economies,
+                             .projectiles = &shots,
+                             .building = &building,
+                             .enhancements = &enhancements,
+                             .events = &events,
+                             .passability = grids,
+                             .commandersEver = commandersEver,
+                             .baseStorage = {.mass = rm::sim::magFromFloat(1000.0f),
+                                             .energy = rm::sim::magFromFloat(1000.0f)}};
+        for (int i = 0; i < times; ++i) {
+            (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                        roster.rate);
+        }
+    }
+};
+
 } // namespace
 
 TEST_CASE("C-051: the T2 power build bonus keeps retail's dropped digit", "[fa-econ]") {
@@ -375,4 +501,107 @@ TEST_CASE("C-240: a captured unit's silo stockpile and shield ride the replaceme
     // And the shield charge survived the swap.
     CHECK(f.roster.store.health()[replacement.index].shield.current
           == rm::sim::Mag::fromInt(500));
+}
+
+TEST_CASE("C-192: sacrifice grants min(mass, energy) of build time once and consumes the unit",
+          "[fa-econ]") {
+    // `CUnitSacrificeTask` (`0x00601c50`) state 2: `sacMass = 100 × 0.6 = 60`,
+    // `sacEnergy = 1000 × 0.6 = 600`; against the target's 200/2000 costs the
+    // shares are `m = 0.3`, `e = 0.3`, and `Materialize(min(m, e))` fires ONCE —
+    // 30 of the scaffold's 100 build units, granted free, in a single beat.
+    SacrificeFixture f;
+    const UnitId sacrificer = f.roster.add(f.sacrificerType, 200.0f, 200.0f, 0, 100.0f);
+    f.scaffold(f.structureType, 210.0f, 200.0f, 80.0f);
+    REQUIRE(f.sacrifice(sacrificer, {}, 210.0f, 200.0f));
+
+    f.tick();
+    REQUIRE(f.building.size() == 1);
+    CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining)
+          == Catch::Approx(50.0f).margin(0.01f));
+    // Retail's `OnStopSacrifice` calls `Destroy()` — the unit is consumed, not
+    // wrecked: the handle is dead and the order queue went with it.
+    CHECK_FALSE(f.roster.store.alive(sacrificer));
+
+    // And it was ONE-SHOT: nothing more arrives on the next beat — the grant
+    // is a transfer, not a rate.
+    SacrificeFixture g;
+    const UnitId second = g.roster.add(g.sacrificerType, 200.0f, 200.0f, 0, 100.0f);
+    g.scaffold(g.structureType, 210.0f, 200.0f, 80.0f);
+    REQUIRE(g.sacrifice(second, {}, 210.0f, 200.0f));
+    g.tick(2);
+    CHECK(rm::test::asFloat(g.building[0].buildTimeRemaining)
+          == Catch::Approx(50.0f).margin(0.01f));
+}
+
+TEST_CASE("C-192: a builder with no sacrifice mult cannot sacrifice", "[fa-econ]") {
+    SacrificeFixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    f.scaffold(f.structureType, 210.0f, 200.0f, 80.0f);
+    CHECK_FALSE(f.sacrifice(engineer, {}, 210.0f, 200.0f));
+    f.tick();
+    CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining)
+          == Catch::Approx(80.0f).margin(0.01f));
+    CHECK(f.roster.store.alive(engineer));
+}
+
+TEST_CASE("C-192: the 0.5 fallback applies when the target's cost is zero", "[fa-econ]") {
+    // The freebie has no mass cost: `m` falls back to `0.5f` while
+    // `e = 600/2000 = 0.3`, so `min(m, e)` is still the energy share — 30
+    // build units, not the 50 a naive `min` of the raw amounts would give.
+    SacrificeFixture f;
+    const UnitId sacrificer = f.roster.add(f.sacrificerType, 200.0f, 200.0f, 0, 100.0f);
+    f.scaffold(f.freebieType, 210.0f, 200.0f, 80.0f);
+    REQUIRE(f.sacrifice(sacrificer, {}, 210.0f, 200.0f));
+    f.tick();
+    CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining)
+          == Catch::Approx(50.0f).margin(0.01f));
+    CHECK_FALSE(f.roster.store.alive(sacrificer));
+}
+
+TEST_CASE("C-192: a unit being upgraded is a sacrifice target", "[fa-econ]") {
+    // Retail points the task at the unit entity; here an upgrade is a
+    // `Construction` row whose `upgradeOf` names the factory, so the command's
+    // `target` names the unit and the row is found through it.
+    SacrificeFixture f;
+    const UnitId sacrificer = f.roster.add(f.sacrificerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId factory = f.roster.add(f.structureType, 210.0f, 200.0f, 1, 100.0f);
+    const rm::unitdef::UnitDef* def = f.roster.catalog.def(f.structureType);
+    f.building.push_back(rm::sim::Construction{
+        .armyIndex = 1,
+        .position = rm::sim::positionOf(f.roster.store.transforms()[factory.index]),
+        .cost = {.mass = def->buildCostMass, .energy = def->buildCostEnergy},
+        .buildTimeRemaining = rm::sim::magFromFloat(80.0f),
+        .totalBuildTime = def->buildTime,
+        .blueprintIndex = f.structureType,
+        .upgradeOf = factory,
+        .builder = factory,
+    });
+    REQUIRE(f.sacrifice(sacrificer, factory));
+    f.tick();
+    CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining)
+          == Catch::Approx(50.0f).margin(0.01f));
+    CHECK_FALSE(f.roster.store.alive(sacrificer));
+}
+
+TEST_CASE("C-192: a unit being enhanced is a sacrifice target", "[fa-econ]") {
+    // Retail's state `38 Enhancing` branch adds `min(m, e)` to the Lua
+    // `WorkProgress` field — the same one-shot grant, onto the enhancement's
+    // own cost and build time rather than a construction's.
+    SacrificeFixture f;
+    const UnitId sacrificer = f.roster.add(f.sacrificerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId commander = f.roster.add(f.structureType, 210.0f, 200.0f, 1, 100.0f);
+    f.enhancements.push_back(rm::sim::EnhancementWork{
+        .owner = commander,
+        .name = "test_slot",
+        .cost = {.mass = rm::sim::magFromFloat(200.0f),
+                 .energy = rm::sim::magFromFloat(2000.0f)},
+        .totalBuildTime = rm::sim::magFromFloat(100.0f),
+        .buildTimeRemaining = rm::sim::magFromFloat(80.0f),
+    });
+    REQUIRE(f.sacrifice(sacrificer, commander));
+    f.tick();
+    REQUIRE(f.enhancements.size() == 1);
+    CHECK(rm::test::asFloat(f.enhancements[0].buildTimeRemaining)
+          == Catch::Approx(50.0f).margin(0.01f));
+    CHECK_FALSE(f.roster.store.alive(sacrificer));
 }
