@@ -1,6 +1,27 @@
 #include "core/sim/Adjacency.hpp"
+#include "core/sim/Economy.hpp"
 
 namespace rm::sim {
+
+namespace {
+
+/// `C-052`'s `IsBeingBuilt`: retail reads the flag off the entity; here a unit
+/// under construction is a `Construction` record, so the only live unit the
+/// question can be asked of is an unfinished row's `upgradeOf` target — the
+/// factory becoming its next tier. A scaffold is not a unit and answers for
+/// nobody; a finished row's target stands complete.
+[[nodiscard]] bool beingBuilt(UnitIndex slot, const UnitStore& store,
+                              std::span<const Construction> building) noexcept {
+    const UnitId id = store.idAt(slot);
+    for (const Construction& work : building) {
+        if (!work.finished() && work.upgradeOf == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
 
 bool skirtsShareEdge(Fx ax, Fx az, Fx aHalfX, Fx aHalfZ, Fx bx, Fx bz, Fx bHalfX,
                      Fx bHalfZ, Fx tolerance) noexcept {
@@ -21,7 +42,8 @@ bool skirtsShareEdge(Fx ax, Fx az, Fx aHalfX, Fx aHalfZ, Fx bx, Fx bz, Fx bHalfX
 }
 
 void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
-                      std::vector<AdjacencyEffects>& out, Fx tolerance) {
+                      std::vector<AdjacencyEffects>& out, Fx tolerance,
+                      std::span<const Construction> building) {
     out.assign(store.slotCount(), AdjacencyEffects{});
 
     // The participants, gathered once: alive, skirted. A few dozen in a real match.
@@ -40,6 +62,11 @@ void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
         }
         const UnitCatalog::AdjacencyInfo& info = catalog.adjacency(store.typeAt(slot));
         if (!info.participates()) {
+            continue;
+        }
+        // `OnAdjacentTo`'s early-out (`C-052`): a participant still rising —
+        // an upgrade's `upgradeOf` — grants nothing and receives nothing.
+        if (beingBuilt(slot, store, building)) {
             continue;
         }
         standing.push_back(Participant{
@@ -96,7 +123,8 @@ void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
 
 AdjacencyPreview adjacencyPreview(const UnitStore& store, const UnitCatalog& catalog,
                                   int army, const UnitCatalog::AdjacencyInfo& ghost, Fx x,
-                                  Fx z, Fx tolerance) {
+                                  Fx z, Fx tolerance,
+                                  std::span<const Construction> building) {
     AdjacencyPreview preview;
     if (!ghost.participates() || army < 0) {
         return preview;
@@ -111,6 +139,11 @@ AdjacencyPreview adjacencyPreview(const UnitStore& store, const UnitCatalog& cat
         }
         const UnitCatalog::AdjacencyInfo& theirs = catalog.adjacency(store.typeAt(slot));
         if (!theirs.participates()) {
+            continue;
+        }
+        // `C-052` here too: a neighbour still rising grants nothing, so the
+        // ghost previews no link to it.
+        if (beingBuilt(slot, store, building)) {
             continue;
         }
         if (!skirtsShareEdge(gx, gz, ghost.skirtHalfXElmos, ghost.skirtHalfZElmos,

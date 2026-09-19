@@ -214,7 +214,9 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
     // scan.
     // Grid placement meets exactly; free placement keeps the half-ogrid slack (C-074).
     adjacencyEffects(store, catalog, adjacency,
-                     terrain.placement() == PlacementMode::Grid ? Fx{} : kAdjacencyGapElmos);
+                     terrain.placement() == PlacementMode::Grid ? Fx{} : kAdjacencyGapElmos,
+                     match.building != nullptr ? std::span<const Construction>{*match.building}
+                                               : std::span<const Construction>{});
     if (match.resourceFlows) match.resourceFlows->assign(store.slotCount(), {});
     if (match.productionOverrides != nullptr
         && match.productionOverrides->size() < store.slotCount()) {
@@ -823,7 +825,9 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // sharing this earlier scan would let a corpse discount one more beat.
     std::vector<AdjacencyEffects> fireAdjacency;
     adjacencyEffects(store, catalog, fireAdjacency,
-                     terrain.placement() == PlacementMode::Grid ? Fx{} : kAdjacencyGapElmos);
+                     terrain.placement() == PlacementMode::Grid ? Fx{} : kAdjacencyGapElmos,
+                     match.building != nullptr ? std::span<const Construction>{*match.building}
+                                               : std::span<const Construction>{});
 
     // 3. FIRE, fly, land.
     if (match.projectiles != nullptr) {

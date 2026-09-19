@@ -486,3 +486,88 @@ TEST_CASE("a tank parked between the buildings changes nothing") {
     f.tick();
     CHECK(rm::test::asFloat(f.economies[0].incomePerTick.mass) == Approx(0.2f).margin(0.0001));
 }
+
+TEST_CASE("C-052: no adjacency while either party is under construction", "[fa-econ]") {
+    // `OnAdjacentTo` returns early when `self:IsBeingBuilt()` or
+    // `adjacentUnit:IsBeingBuilt()` (`defaultunits.lua:357-359`) — a factory
+    // rising to its next tier neither grants nor receives until it stands.
+    // Here "being built" is a live unit named by an unfinished upgrade row:
+    // a scaffold is a `Construction` record, not a unit, so the only entity
+    // the sim can point `IsBeingBuilt` at is an `upgradeOf` target.
+    Fixture f;
+
+    rm::unitdef::UnitDef factory = smallStructure("test_factory");
+    factory.upkeepEnergyPerSecond = 2.0f;
+    const rm::UnitTypeIndex factoryType = f.roster.addType(factory);
+    rm::unitdef::UnitDef pgen = smallStructure("test_pgen");
+    pgen.producesEnergyPerSecond = 20.0f;
+    pgen.adjacencyBuffs = "T1PowerGeneratorAdjacencyBuffs";
+    const rm::UnitTypeIndex pgenType = f.roster.addType(pgen);
+
+    const UnitId rising = f.roster.add(factoryType, 200.0f, 200.0f, 0, 500.0f);
+    const UnitId gen = f.roster.add(pgenType, 216.0f, 200.0f, 0, 500.0f);
+
+    // Control: both standing, the discount flows — 2 e/s × (1 − 0.0625).
+    std::vector<rm::sim::AdjacencyEffects> effects;
+    rm::sim::adjacencyEffects(f.roster.store, f.roster.catalog, effects);
+    CHECK(effects[rising.index].energyUpkeep
+          == rm::sim::kFxOne - rm::sim::fxFromFloat(0.0625f));
+
+    // The factory starts upgrading: an unfinished row names it `upgradeOf`.
+    std::vector<rm::sim::Construction> building{
+        rm::sim::Construction{.armyIndex = 0,
+                              .buildTimeRemaining = rm::sim::magFromFloat(50.0f),
+                              .totalBuildTime = rm::sim::magFromFloat(100.0f),
+                              .upgradeOf = rising,
+                              .builder = rising}};
+    rm::sim::adjacencyEffects(f.roster.store, f.roster.catalog, effects,
+                              rm::sim::kAdjacencyGapElmos, building);
+    CHECK(effects[rising.index].energyUpkeep == rm::sim::kFxOne);
+    CHECK(effects[gen.index].energyUpkeep == rm::sim::kFxOne);
+    CHECK(effects[rising.index].energyBuild == rm::sim::kFxOne);
+    CHECK(effects[gen.index].energyBuild == rm::sim::kFxOne);
+
+    // A FINISHED row is no longer "being built": the bonus returns.
+    building.front().buildTimeRemaining = rm::sim::Mag{};
+    rm::sim::adjacencyEffects(f.roster.store, f.roster.catalog, effects,
+                              rm::sim::kAdjacencyGapElmos, building);
+    CHECK(effects[rising.index].energyUpkeep
+          == rm::sim::kFxOne - rm::sim::fxFromFloat(0.0625f));
+}
+
+TEST_CASE("C-052: capture clears the unit's adjacency links", "[fa-econ]") {
+    // `TransferUnitsOwnership` destroys and recreates the entity, so the
+    // replacement's buff list starts empty (`Unit.lua:555-620`); the army
+    // change alone already gates the old link out, because grants only flow
+    // inside one army. The capture transfer in `applyCaptureWork` is the same
+    // kill-and-respawn — verify the derived scan agrees.
+    Fixture f;
+
+    rm::unitdef::UnitDef mex = smallStructure("test_mex");
+    mex.producesMassPerSecond = 2.0f;
+    const rm::UnitTypeIndex mexType = f.roster.addType(mex);
+    rm::unitdef::UnitDef storage = smallStructure("test_mass_storage");
+    storage.adjacencyBuffs = "T1MassStorageAdjacencyBuffs";
+    const rm::UnitTypeIndex storageType = f.roster.addType(storage);
+
+    const UnitId victim = f.roster.add(mexType, 200.0f, 200.0f, 1, 500.0f);
+    (void)f.roster.add(storageType, 216.0f, 200.0f, 1, 500.0f);
+
+    std::vector<rm::sim::AdjacencyEffects> effects;
+    rm::sim::adjacencyEffects(f.roster.store, f.roster.catalog, effects);
+    CHECK(effects[victim.index].massProduction
+          == rm::sim::kFxOne + rm::sim::fxFromFloat(0.125f));
+
+    // The capture transfer's own shape: the old handle dies and a same-type,
+    // same-spot replacement stands under the captor's army.
+    const rm::sim::Transform at = f.roster.store.transforms()[victim.index];
+    const rm::sim::Health health = f.roster.store.health()[victim.index];
+    rm::sim::MoveState motion = f.roster.store.motion()[victim.index];
+    motion.armyIndex = 0;
+    f.roster.store.kill(victim);
+    const UnitId replacement = f.roster.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = mexType, .transform = at, .motion = motion, .health = health});
+
+    rm::sim::adjacencyEffects(f.roster.store, f.roster.catalog, effects);
+    CHECK(effects[replacement.index].massProduction == rm::sim::kFxOne);
+}

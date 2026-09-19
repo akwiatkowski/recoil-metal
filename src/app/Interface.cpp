@@ -1293,7 +1293,8 @@ rm::sim::AdjacencyPreview appendAdjacencyPreview(
         scene.catalog.adjacency(ghostType),
         rm::sim::fxFromFloat(site[0]), rm::sim::fxFromFloat(site[1]),
         scene.placementMode == rm::sim::PlacementMode::Grid
-            ? rm::sim::Fx{} : rm::sim::kAdjacencyGapElmos);
+            ? rm::sim::Fx{} : rm::sim::kAdjacencyGapElmos,
+        scene.building);
     const auto extent = viewport.hudExtent();
     if (preview.links.empty() || !font.usable() || extent.width <= 0
         || extent.height <= 0) {

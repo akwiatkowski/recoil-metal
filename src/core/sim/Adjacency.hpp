@@ -6,7 +6,12 @@
 
 #include <vector>
 
+
 namespace rm::sim {
+
+// `core/sim/Economy.hpp` for `Construction` — forward-declared like `AdjacencyEffects`
+// is for `Economy.hpp`: the signature names the span, the .cpp sees the fields.
+struct Construction;
 
 // Who is standing beside whom, and what it is worth (`core/unit/Adjacency.hpp` for the
 // tables and their citations).
@@ -59,10 +64,22 @@ inline constexpr Fx kAdjacencyGapElmos = Fx::fromInt(4);
 /// receiver's size row, the sum lands on 1, and nothing caps it but geometry
 /// (`Buff.lua:140-190`, `Stacks = 'ALWAYS'`). Same-army pairs only, both alive.
 ///
+/// NO BONUS FLOWS WHILE EITHER PARTY IS UNDER CONSTRUCTION (`C-052`): retail's
+/// `OnAdjacentTo` returns early on `self:IsBeingBuilt()` or
+/// `adjacentUnit:IsBeingBuilt()` (`defaultunits.lua:357-359`), so a factory rising
+/// to its next tier neither grants nor receives until it stands. Here a unit under
+/// construction is a `Construction` RECORD, not an entity — the only live unit the
+/// sim can point `IsBeingBuilt` at is an unfinished row's `upgradeOf` target, which
+/// is what `building` is scanned for. Removal needs no such gate: the scan is
+/// derived state, so a link that stops qualifying simply stops appearing —
+/// `OnNotAdjacentTo`'s unconditional removal is the same answer recomputed.
+///
 /// `tolerance` is the edge-contact slack: `kAdjacencyGapElmos` under free placement, zero
 /// under grid placement where skirts meet exactly (`Terrain::placement`).
 void adjacencyEffects(const UnitStore& store, const UnitCatalog& catalog,
-                      std::vector<AdjacencyEffects>& out, Fx tolerance = kAdjacencyGapElmos);
+                      std::vector<AdjacencyEffects>& out,
+                      Fx tolerance = kAdjacencyGapElmos,
+                      std::span<const Construction> building = {});
 
 // --- The ghost's preview -----------------------------------------------------
 //
@@ -110,9 +127,11 @@ struct AdjacencyPreview {
 /// Evaluates `ghost` — a catalogue adjacency row — as if placed at `x`,`z` (the unit's
 /// position; the skirt offset is applied inside, matching `adjacencyEffects`). An empty
 /// `links` and all-ones `received` for a non-participant or an army of `kNoArmy`.
+/// `building` carries the same `C-052` gate: a neighbour under construction would
+/// grant nothing, so it previews no link.
 [[nodiscard]] AdjacencyPreview adjacencyPreview(
     const UnitStore& store, const UnitCatalog& catalog, int army,
     const UnitCatalog::AdjacencyInfo& ghost, Fx x, Fx z,
-    Fx tolerance = kAdjacencyGapElmos);
+    Fx tolerance = kAdjacencyGapElmos, std::span<const Construction> building = {});
 
 } // namespace rm::sim
