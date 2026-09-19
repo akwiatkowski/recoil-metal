@@ -2301,6 +2301,12 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         // retail's gate does to a creation with no retrying task behind it.
         if (unitCapBlocks(armies, store.motion()[command.unit.index].armyIndex, catalog,
                           *building, *def)) {
+            // `C-361`: the refused creation is the `OnUnitCapLimitReached`
+            // trigger — the brain hears it once per refused build, which is
+            // what retail's cap callback reports.
+            emit(events, Event{.kind = EventKind::UnitCapLimitReached,
+                               .unit = command.unit,
+                               .army = store.motion()[command.unit.index].armyIndex});
             return false;
         }
 

@@ -1471,6 +1471,12 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 for (std::string& name : evaluateArmyStats((*match.armyStats)[army])) {
                     report.armyStatsFired.push_back(ArmyStatFired{
                         .army = static_cast<int>(army), .name = std::move(name)});
+                    // `C-361`: the same firing is the `OnStatsTrigger` trigger —
+                    // the event carries the registered name so the callback
+                    // surface can hand it to the brain.
+                    emit(match.events, Event{.kind = EventKind::ArmyStatTriggered,
+                                             .army = static_cast<int>(army),
+                                             .statName = report.armyStatsFired.back().name});
                 }
             }
         }

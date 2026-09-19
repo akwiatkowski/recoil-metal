@@ -18,6 +18,7 @@ extern "C" {
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -200,8 +201,27 @@ __rm_faf.unitMeta = {
             if __rm_faf_is_intel_enabled then return __rm_faf_is_intel_enabled(u.h, intel) end
             return true
         end,
+        -- `C-361`: a recon blip's `GetSource` — retail's `CIntel` blip object
+        -- resolves to the unit it reports. Our blip IS the unit table, so the
+        -- source is itself.
+        GetSource = function(u) return u end,
     },
 }
+
+-- `C-361`: resolve a packed unit handle to the table the callback surface
+-- hands Lua. The snapshot's own units are the real thing — they carry the
+-- pass's fields and the shared metatable. A unit the snapshot does not list
+-- (an enemy blip, a dead capture target) gets a minimal table with the same
+-- metatable and the fields the callback bodies read: `h`, `bp`, position,
+-- and `__brain` — the OWNER's army view, which is what `GetAIBrain` answers.
+function __rm_faf_unit_for(brain, h, bp, x, z, owner)
+    for _, u in ipairs((brain.snap and brain.snap.units) or {}) do
+        if u.h == h then return u end
+    end
+    local u = { h = h, bp = bp, x = x, z = z }
+    if owner then u.__brain = __rm_faf.armyViews[owner] end
+    return setmetatable(u, __rm_faf.unitMeta)
+end
 
 -- Moho's economy family, in BOTH spellings the corpus uses: free globals, and entries in
 -- `moho.aibrain_methods` — the condition files do `local GetEconomyIncome =
@@ -2997,25 +3017,201 @@ void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> ev
     world_.emplace(world);
     if (!booted_ || !sandbox_.ready()) return;
     lua_State* lua = sandbox_.state();
-    for (const auto& event : events) {
-        if (event.kind != rm::sim::EventKind::UnitFinished || event.army != army_) continue;
-        // EngineerManager.UnitConstructionFinished / FactoryFinishBuilding inherit
-        // the founder's current manager, including upgrade replacement handles.
-        const int top = lua_gettop(lua);
-        lua_getglobal(lua,"__rm_faf");
-        lua_getfield(lua,-1,"brains");
-        lua_rawgeti(lua,-1,army_);
-        lua_getfield(lua,-1,"unitLocations");
-        lua_rawgeti(lua,-1,packHandle(event.builder));
-        if (lua_isnil(lua,-1)) {
-            lua_pop(lua,1);
-            lua_pushliteral(lua,"MAIN"); // initial army-pool units register at MAIN
+    const rm::app::UnitScene& scene = world.scene;
+
+    // `C-361`: the native->Lua callback surface. The sim's events are the
+    // triggers; the brain and the unit tables are the receivers. Only the
+    // callbacks with a real sim trigger dispatch — `OnCreateArmyBrain` is the
+    // boot path's own, `OnFailedUnitTransfer`/`OnTransportFull`/the staging-VO
+    // pair have no sim condition yet, `OnDestroy` is the death path's, and
+    // `OnUnitKilled` is Lua->Lua in retail, not ours to send.
+    const auto unitFor = [&](rm::sim::UnitId id) {
+        // __rm_faf_unit_for(brain, h, bp, x, z, owner) -> the snapshot's own
+        // table when it lists the unit, else a minimal one with unitMeta.
+        lua_getglobal(lua, "__rm_faf_unit_for");
+        lua_getglobal(lua, "__rm_faf");
+        lua_getfield(lua, -1, "brains");
+        lua_rawgeti(lua, -1, army_);
+        lua_remove(lua, -3);  // __rm_faf
+        lua_remove(lua, -2);  // brains — leaves [fn, brain]
+        lua_pushinteger(lua, packHandle(id));
+        const bool live = id.index < scene.store.slotCount()
+            && scene.store.slotAlive(id.index)
+            && scene.store.idAt(id.index) == id;
+        if (live) {
+            const rm::unitdef::UnitDef* def =
+                scene.catalog.def(scene.store.typeAt(id.index));
+            if (def != nullptr) {
+                lua_pushstring(lua, def->name.c_str());
+            } else {
+                lua_pushnil(lua);
+            }
+            const rm::sim::Transform& at = scene.store.transforms()[id.index];
+            lua_pushnumber(lua, rm::sim::fxToFloat(at.x));
+            lua_pushnumber(lua, rm::sim::fxToFloat(at.z));
+            lua_pushinteger(lua, scene.store.motion()[id.index].armyIndex);
+        } else {
+            lua_pushnil(lua);
+            lua_pushnil(lua);
+            lua_pushnil(lua);
+            lua_pushnil(lua);
         }
-        lua_rawseti(lua,-2,packHandle(event.unit));
-        lua_settop(lua,top);
+        if (lua_pcall(lua, 6, 1, 0) != LUA_OK) {
+            lua_pop(lua, 1);  // error: no unit table, the callback is skipped
+            lua_pushnil(lua);
+        }
+        // leaves the unit table (or nil) on top
+    };
+    const auto callUnit = [&](rm::sim::UnitId id, const char* method,
+                              rm::sim::UnitId arg) {
+        const int top = lua_gettop(lua);
+        unitFor(id);
+        if (lua_isnil(lua, -1)) {
+            lua_settop(lua, top);
+            return;
+        }
+        lua_getfield(lua, -1, method);
+        if (!lua_isfunction(lua, -1)) {
+            lua_settop(lua, top);
+            return;  // no callback installed: a no-op, like retail's absent body
+        }
+        lua_pushvalue(lua, -2);  // self
+        unitFor(arg);
+        if (lua_pcall(lua, 2, 0, 0) != LUA_OK) {
+            std::printf("faf-opponent: %s failed: %s\n", method,
+                        lua_tostring(lua, -1));
+        }
+        lua_settop(lua, top);
+    };
+    const auto callBrain = [&](const char* method, int nargs,
+                               const std::function<void()>& pushArgs) {
+        const int top = lua_gettop(lua);
+        lua_getglobal(lua, "__rm_faf");
+        lua_getfield(lua, -1, "brains");
+        lua_rawgeti(lua, -1, army_);
+        lua_getfield(lua, -1, method);
+        if (!lua_isfunction(lua, -1)) {
+            lua_settop(lua, top);
+            return;
+        }
+        lua_pushvalue(lua, -2);  // self
+        pushArgs();
+        if (lua_pcall(lua, nargs + 1, 0, 0) != LUA_OK) {
+            std::printf("faf-opponent: %s failed: %s\n", method,
+                        lua_tostring(lua, -1));
+        }
+        lua_settop(lua, top);
+    };
+    // `C-282`'s LOSNow bit reports as IntelType::Vision; the Lua callback's
+    // `type` argument is retail's recon-bit name, so map it back.
+    const auto intelTypeName = [](std::uint8_t type) -> const char* {
+        switch (static_cast<rm::sim::IntelType>(type)) {
+        case rm::sim::IntelType::Radar: return "Radar";
+        case rm::sim::IntelType::Sonar: return "Sonar";
+        case rm::sim::IntelType::Omni: return "Omni";
+        case rm::sim::IntelType::Vision: return "LOSNow";
+        default: return "Radar";
+        }
+    };
+
+    for (const auto& event : events) {
+        switch (event.kind) {
+        case rm::sim::EventKind::UnitFinished: {
+            if (event.army != army_) break;
+            // EngineerManager.UnitConstructionFinished / FactoryFinishBuilding
+            // inherit the founder's current manager, including upgrade
+            // replacement handles.
+            const int top = lua_gettop(lua);
+            lua_getglobal(lua,"__rm_faf");
+            lua_getfield(lua,-1,"brains");
+            lua_rawgeti(lua,-1,army_);
+            lua_getfield(lua,-1,"unitLocations");
+            lua_rawgeti(lua,-1,packHandle(event.builder));
+            if (lua_isnil(lua,-1)) {
+                lua_pop(lua,1);
+                lua_pushliteral(lua,"MAIN"); // initial army-pool units register at MAIN
+            }
+            lua_rawseti(lua,-2,packHandle(event.unit));
+            lua_settop(lua,top);
+            break;
+        }
+        case rm::sim::EventKind::IntelChanged: {
+            // `C-282` -> `brain:OnIntelChange(blip, type, val)`: the blip is the
+            // unit table, `type` the recon-bit name, `val` the new state.
+            if (event.army != army_) break;
+            callBrain("OnIntelChange", 3, [&] {
+                unitFor(event.unit);
+                lua_pushstring(lua, intelTypeName(event.intelType));
+                lua_pushboolean(lua, event.intelValue ? 1 : 0);
+            });
+            break;
+        }
+        case rm::sim::EventKind::DetectedBy: {
+            // `C-282` -> `unit:OnDetectedBy(army)` on the DETECTED unit's script
+            // — the receiver is its owner, so only our own units dispatch here.
+            if (event.unit.index >= scene.store.slotCount()
+                || !scene.store.slotAlive(event.unit.index)
+                || scene.store.idAt(event.unit.index) != event.unit
+                || scene.store.motion()[event.unit.index].armyIndex != army_) {
+                break;
+            }
+            const int top = lua_gettop(lua);
+            unitFor(event.unit);
+            if (lua_isnil(lua, -1)) {
+                lua_settop(lua, top);
+                break;
+            }
+            lua_getfield(lua, -1, "OnDetectedBy");
+            if (!lua_isfunction(lua, -1)) {
+                lua_settop(lua, top);
+                break;
+            }
+            lua_pushvalue(lua, -2);
+            lua_pushinteger(lua, event.army + 1);  // Lua armies are 1-based
+            if (lua_pcall(lua, 2, 0, 0) != LUA_OK) {
+                std::printf("faf-opponent: OnDetectedBy failed: %s\n",
+                            lua_tostring(lua, -1));
+            }
+            lua_settop(lua, top);
+            break;
+        }
+        case rm::sim::EventKind::StartBeingCaptured:
+            if (event.army == army_) callUnit(event.unit, "OnStartBeingCaptured", event.instigator);
+            break;
+        case rm::sim::EventKind::StartCapture:
+            if (event.army == army_) callUnit(event.unit, "OnStartCapture", event.instigator);
+            break;
+        case rm::sim::EventKind::StopCapture:
+            if (event.army == army_) callUnit(event.unit, "OnStopCapture", event.instigator);
+            break;
+        case rm::sim::EventKind::StopBeingCaptured:
+            if (event.army == army_) callUnit(event.unit, "OnStopBeingCaptured", event.instigator);
+            break;
+        case rm::sim::EventKind::Captured:
+            if (event.army == army_) callUnit(event.unit, "OnCaptured", event.instigator);
+            break;
+        case rm::sim::EventKind::FailedCapture:
+            if (event.army == army_) callUnit(event.unit, "OnFailedCapture", event.instigator);
+            break;
+        case rm::sim::EventKind::FailedBeingCaptured:
+            if (event.army == army_) callUnit(event.unit, "OnFailedBeingCaptured", event.instigator);
+            break;
+        case rm::sim::EventKind::ArmyStatTriggered:
+            // `C-361` -> `brain:OnStatsTrigger(name)`: the name Lua registered.
+            if (event.army != army_) break;
+            callBrain("OnStatsTrigger", 1, [&] {
+                lua_pushstring(lua, event.statName.c_str());
+            });
+            break;
+        case rm::sim::EventKind::UnitCapLimitReached:
+            if (event.army != army_) break;
+            callBrain("OnUnitCapLimitReached", 0, [] {});
+            break;
+        default:
+            break;
+        }
     }
 }
-
 void FafOpponent::advance(rm::TickIndex tick) {
     decisions_.clear();
     // Intel toggles queued by `__rm_faf_set_intel` since the last pass —

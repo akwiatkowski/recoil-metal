@@ -3051,3 +3051,114 @@ TEST_CASE("FAF unit intel toggles queue SetIntel decisions the port applies",
     rm::app::applyDecisions(*scene, content, scene->armies[0], restore, 0.0f, 1);
     CHECK(scene->store.intelEnabled(unit, rm::sim::IntelType::Radar));
 }
+
+TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
+          "[faf][ai][intel]") {
+    // `C-361` (`0x614a56`, `0x5d6029`): the native->Lua callback surface.
+    // `OnIntelChange(blip, type, val)` fires on the brain per recon-bit edge,
+    // `OnDetectedBy(army)` on the detected unit's script, the capture family on
+    // the units in retail's order, `OnStatsTrigger`/`OnUnitCapLimitReached` on
+    // the brain. Only callbacks with a real sim trigger dispatch — the rest of
+    // C-361's list (OnFailedUnitTransfer, OnTransportFull, the staging-VO pair,
+    // OnDestroy, OnUnitKilled) has no sim condition yet and is documented in
+    // observe().
+    const auto root = corpusRoot();
+    const char* home = std::getenv("HOME");
+    const auto contentRoot = home ? std::filesystem::path{home} / "projects/llm/input/faf"
+                                  : std::filesystem::path{};
+    if (root.empty() || !std::filesystem::exists(contentRoot / "units/UEL0001/UEL0001_unit.bp")) {
+        SKIP("requires the vendored FAF corpus and extracted retail unit blueprints");
+    }
+    rm::vfs::Vfs content;
+    content.mountDirectory(contentRoot);
+    auto scene = std::make_unique<rm::app::UnitScene>();
+    scene->armies = {{.index = 0, .alliance = 0}, {.index = 1, .alliance = 1}};
+    scene->economies.resize(scene->armies.size());
+    auto commander = rm::unitbp::loadFile(contentRoot / "units/UEL0001/UEL0001_unit.bp");
+    REQUIRE(commander);
+    scene->definitions.push_back(*commander);
+    const auto type = scene->catalog.add(&scene->definitions.back(), rm::sim::TickRate{});
+    const rm::sim::UnitId own = scene->store.spawn({
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(10), .z = rm::sim::fxFromFloat(100)},
+        .motion = {.armyIndex = 0},
+        .health = {.current = rm::sim::magFromFloat(100),
+                   .maximum = rm::sim::magFromFloat(100)},
+    });
+    const rm::sim::UnitId enemy = scene->store.spawn({
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(50), .z = rm::sim::fxFromFloat(100)},
+        .motion = {.armyIndex = 1},
+        .health = {.current = rm::sim::magFromFloat(100),
+                   .maximum = rm::sim::magFromFloat(100)},
+    });
+    rm::HeightField field{.squaresX = 64, .squaresZ = 64};
+    field.raw.resize(field.sampleCount());
+    const std::array<rm::mapinfo::StartPosition, 2> starts{{
+        {.x = 0, .z = 100}, {.x = 50, .z = 100},
+    }};
+    const rm::ai::World world{.scene = *scene, .content = content, .field = field,
+                              .starts = starts, .markers = {}};
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    rm::ai::FafOpponent opponent(ai, 0);
+    opponent.observe(world, {});
+    opponent.advance(0);
+
+    // Install the callbacks the corpus's own scripts would: the brain's
+    // OnIntelChange/OnStatsTrigger/OnUnitCapLimitReached, and the unit-script
+    // family on the shared metatable — where Unit.lua's methods would sit.
+    REQUIRE(ai.eval(R"(
+        __rm_faf.calls = {}
+        local brain = __rm_faf.brains[0]
+        function brain:OnIntelChange(blip, type, val)
+            __rm_faf.calls[#__rm_faf.calls + 1] = 'intel:' .. type .. ':' .. tostring(val)
+            __rm_faf.lastBlip = blip
+        end
+        function brain:OnStatsTrigger(name)
+            __rm_faf.calls[#__rm_faf.calls + 1] = 'stats:' .. name
+        end
+        function brain:OnUnitCapLimitReached()
+            __rm_faf.calls[#__rm_faf.calls + 1] = 'cap'
+        end
+        local meta = __rm_faf.unitMeta.__index
+        function meta:OnDetectedBy(army)
+            __rm_faf.calls[#__rm_faf.calls + 1] = 'detected:' .. tostring(army)
+        end
+        function meta:OnStartBeingCaptured(captor)
+            __rm_faf.calls[#__rm_faf.calls + 1] = 'startBeing'
+        end
+        function meta:OnCaptured(captor)
+            __rm_faf.calls[#__rm_faf.calls + 1] = 'captured'
+        end
+    )"));
+
+    const std::array<rm::sim::Event, 6> events{{
+        {.kind = rm::sim::EventKind::IntelChanged, .unit = enemy, .army = 0,
+         .intelType = static_cast<std::uint8_t>(rm::sim::IntelType::Radar),
+         .intelValue = true},
+        {.kind = rm::sim::EventKind::DetectedBy, .unit = own, .army = 1},
+        {.kind = rm::sim::EventKind::StartBeingCaptured, .unit = own,
+         .instigator = enemy, .army = 0},
+        {.kind = rm::sim::EventKind::Captured, .unit = own,
+         .instigator = enemy, .army = 0},
+        {.kind = rm::sim::EventKind::ArmyStatTriggered, .army = 0,
+         .statName = "Economy_Ratio"},
+        {.kind = rm::sim::EventKind::UnitCapLimitReached, .army = 0},
+    }};
+    opponent.observe(world, events);
+
+    INFO(ai.lastError());
+    REQUIRE(ai.eval(R"(
+        local c = __rm_faf.calls
+        assert(c[1] == 'intel:Radar:true', 'OnIntelChange first, blip type and val')
+        assert(c[2] == 'detected:2', 'OnDetectedBy with the 1-based army index')
+        assert(c[3] == 'startBeing', 'OnStartBeingCaptured on the target')
+        assert(c[4] == 'captured', 'OnCaptured on the target')
+        assert(c[5] == 'stats:Economy_Ratio', 'OnStatsTrigger with the registered name')
+        assert(c[6] == 'cap', 'OnUnitCapLimitReached')
+        assert(__rm_faf.lastBlip ~= nil, 'the blip reached Lua')
+        assert(__rm_faf.lastBlip:GetSource() == __rm_faf.lastBlip, 'blip:GetSource()')
+    )"));
+}
