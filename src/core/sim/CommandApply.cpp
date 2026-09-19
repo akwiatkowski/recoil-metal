@@ -283,11 +283,15 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
            && carrier->isTransport() && canEverCarry(*carrier, *cargo);
 }
 /// Issue-time gate for the transport's own orders (UnloadTransport, Ferry):
-/// the unit on the order is a live carrier.
+/// the unit on the order is a live carrier. `isCarrier()` counts too —
+/// retail's carriers (UES0401, UAA0310, URS0303) declare `RULEUCC_Transport`
+/// and `TransportClass` but NOT the `TRANSPORTATION` category, so
+/// `isTransport()` alone would refuse the launch order that empties a
+/// carrier's storage pool (`C-225`'s deploy half, `C-264`'s release).
 [[nodiscard]] bool validTransportCarrier(const Command& command, const UnitStore& store,
                                          const UnitCatalog& catalog) noexcept {
     const unitdef::UnitDef* def = catalog.def(store.typeAt(command.unit.index));
-    return def != nullptr && def->isTransport()
+    return def != nullptr && (def->isTransport() || def->isCarrier())
            && !store.motion()[command.unit.index].attached;
 }
 /// ART-S007 `GrowthFormation` selects these repeating land-block widths by total unit count.

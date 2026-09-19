@@ -7,13 +7,19 @@
 // with it (C-197), and a ferry holding at the beacon for a straggler (C-199).
 //
 // Deliberately absent: the 99% cargo-survival roll (C-197 — the kill cascade
-// is unconditional here, a recorded divergence) and the carrier/mobile-factory
-// attach-store pattern (C-264, not implemented).
+// is unconditional here, a recorded divergence). The carrier/mobile-factory
+// attach-store pattern (C-264) is covered below: the pad-anchor case is
+// sim-level, the store-vs-roll-off seam is app-level.
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "app/Match.hpp"
+
+#include "core/data/MoveDef.hpp"
 #include "core/map/HeightField.hpp"
 #include "core/sim/Command.hpp"
+#include "core/sim/Economy.hpp"
+#include "core/sim/Pathfinding.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/Transport.hpp"
 #include "core/unit/UnitDef.hpp"
@@ -849,4 +855,254 @@ TEST_CASE("C-225: a carrier stores aircraft in its pool and launches them airbor
     CHECK(roster.transform(first).x == roster.transform(carrierId).x);
     CHECK(roster.transform(first).y == roster.transform(carrierId).y);
     (void)third;
+}
+
+TEST_CASE("C-264: a displaced mobile factory keeps its build attached to the pad",
+          "[fa-transport]") {
+    // Retail's carrier/mobile-factory scripts (`UES0401`, `UAA0310`,
+    // `UAS0401`, `UEL0401` — the C-264 claim) run the same state machine:
+    // `BuildingState` does `unitBuilding:AttachBoneTo(-2, self, BuildAttachBone)`,
+    // so the product-in-progress rides the builder wherever it goes. The sim's
+    // product does not exist until completion, but the CONSTRUCTION row is its
+    // stand-in — and it must anchor to the builder, not to the map spot the
+    // order happened to name. A factory shoved mid-build (collision push —
+    // orders can't move it, `releaseInterruptedConstruction` erases pad rows
+    // on any new order) used to orphan the row: every site lookup compares
+    // `work.position` against the builder's CURRENT transform, the miss read
+    // as "cancelled", and the build order retired with no product.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    // A UEL0401-shaped mobile factory: FACTORY + MOBILE, no storage pool —
+    // its product always takes the `IssueMoveOffFactory` half of the claim.
+    UnitDef mobileFactory;
+    mobileFactory.name = "test_mobile_factory";
+    mobileFactory.categories = {"FACTORY", "MOBILE"};
+    mobileFactory.motion = rm::unitdef::MotionType::Land;
+    mobileFactory.speedElmosPerSecond = 4.0f;
+    mobileFactory.buildRate = 10.0f;
+    mobileFactory.buildableCategory = {{"PRODUCT"}};
+    const rm::UnitTypeIndex factoryType = roster.addType(mobileFactory);
+
+    UnitDef product;
+    product.name = "test_product";
+    product.categories = {"PRODUCT"};
+    product.motion = rm::unitdef::MotionType::Land;
+    product.speedElmosPerSecond = 8.0f;
+    product.buildTime = rm::sim::magFromFloat(100.0f);
+    const rm::UnitTypeIndex productType = roster.addType(product);
+
+    const UnitId factory = roster.add(factoryType, 40.0f, 40.0f, 0, 500.0f);
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Construction> building;
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+
+    REQUIRE(rm::sim::applyCommand(
+        CommandIssue{.source = 0,
+                     .id = rm::commandId(0, 1),
+                     .player = 0,
+                     .kind = CommandKind::Build,
+                     .units = {factory},
+                     .buildType = productType},
+        roster.store, roster.catalog, players, armies, terrain,
+        [&grid](UnitId) { return &grid; }, roster.rate, &building)
+                .accepted.size() == 1);
+
+    rm::sim::Economy economy;
+    economy.storage = {rm::sim::Mag::fromInt(100000), rm::sim::Mag::fromInt(100000)};
+    economy.stored = {rm::sim::Mag::fromInt(50000), rm::sim::Mag::fromInt(50000)};
+    const auto beat = [&] {
+        (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids,
+                                     roster.rate, &building);
+        rm::sim::tickEconomy(economy, building);
+    };
+
+    beat();
+    REQUIRE(building.size() == 1);
+    const rm::sim::Mag started = building.front().buildTimeRemaining;
+    REQUIRE(started < building.front().totalBuildTime);
+
+    // The shove: the hull is displaced mid-build, the way collision resolution
+    // moves a unit without touching its queue.
+    roster.transform(factory).x = rm::sim::fxFromFloat(60.0f);
+    roster.transform(factory).z = rm::sim::fxFromFloat(60.0f);
+
+    beat();
+    // The pad is the builder: the row followed it, the order is still the
+    // head, and the work kept advancing instead of freezing orphaned.
+    REQUIRE(building.size() == 1);
+    CHECK(building.front().position[0] == roster.transform(factory).x);
+    CHECK(building.front().position[2] == roster.transform(factory).z);
+    CHECK(building.front().buildTimeRemaining < started);
+    CHECK(roster.store.orders()[factory.index].active() != nullptr);
+}
+
+// --- App-level: the build→attach→store/roll-off seam (C-264) -----------------
+//
+// The sim never spawns units — a finished construction becomes a model out of
+// the VFS in `app/Match.cpp`, which is also where `AddUnitToStorage` vs
+// `IssueMoveOffFactory` is decided. These cases drive `advanceMatch` like
+// test_match.cpp does, with a pre-registered product type standing in for the
+// blueprint the VFS would hand back.
+
+namespace {
+
+/// A UES0401-shaped carrier-factory: FACTORY + CARRIER + NAVALCARRIER with a
+/// two-slot pool, building only aircraft.
+[[nodiscard]] UnitDef carrierFactoryDef() {
+    UnitDef def;
+    def.name = "test_carrier_factory";
+    def.categories = {"CARRIER", "FACTORY", "MOBILE", "NAVALCARRIER"};
+    def.motion = rm::unitdef::MotionType::Water;
+    def.speedElmosPerSecond = 4.0f;
+    def.buildRate = 60.0f;
+    def.buildableCategory = {{"AIR_PRODUCT"}};
+    def.commandCaps = {"RULEUCC_Transport"};
+    def.commandCapsDeclared = true;
+    def.transport.storageSlots = 2;
+    return def;
+}
+
+[[nodiscard]] UnitDef airProductDef() {
+    UnitDef def;
+    def.name = "test_air_product";
+    def.categories = {"AIR_PRODUCT"};
+    def.motion = rm::unitdef::MotionType::Air;
+    def.canFly = true;
+    def.speedElmosPerSecond = 12.0f;
+    def.buildTime = rm::sim::magFromFloat(1.0f);
+    return def;
+}
+
+struct CarrierScene {
+    rm::app::UnitScene scene;
+    rm::app::PassabilitySet passability;
+    rm::vfs::Vfs content;
+    /// Emplaced only after the scene is populated — the runner captures
+    /// pointers into it (economies, store), so it cannot be built first.
+    std::optional<rm::app::MatchRunner> runner;
+    rm::sim::UnitId carrier;
+    rm::UnitTypeIndex productType = 0;
+
+    /// A one-army match with a carrier-factory standing at (200, 200) and an
+    /// air product it can build. `productType` is registered with a blueprint
+    /// path so `spawnUnit` resolves it without touching the VFS.
+    explicit CarrierScene(const rm::HeightField& field)
+        : passability(field, false, 0.0f) {
+        scene.armies = rm::sim::freeForAll(1);
+        scene.players = rm::sim::onePlayerPerArmy(1, 0);
+        scene.economies.assign(1, rm::sim::Economy{});
+        scene.economies[0].stored = {rm::sim::Mag::fromInt(50000),
+                                    rm::sim::Mag::fromInt(50000)};
+        scene.commandersEver.assign(1, 0);
+
+        UnitDef carrierDef = carrierFactoryDef();
+        scene.definitions.push_back(carrierDef);
+        const rm::UnitTypeIndex carrierType =
+            scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+        scene.setTypeTraits(carrierType, rm::data::moveDefFor(carrierDef), 1.0f);
+
+        UnitDef product = airProductDef();
+        scene.definitions.push_back(product);
+        productType =
+            scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+        scene.setTypeTraits(productType, rm::data::moveDefFor(product), 1.0f);
+        constexpr std::string_view kProductPath{"/test_air_product"};
+        scene.setPathForType(productType, kProductPath);
+        scene.typeForBlueprint.emplace(kProductPath, productType);
+
+        carrier = scene.store.spawn(rm::sim::UnitStore::Spawn{
+            .type = carrierType,
+            .transform = {.x = rm::sim::fxFromFloat(200.0f),
+                          .z = rm::sim::fxFromFloat(200.0f)},
+            .motion = rm::app::motionFor(carrierDef, 0),
+            .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(500)),
+        });
+
+        runner.emplace(rm::app::makeMatchRunner(scene, field, passability,
+                                                content, {}, {}));
+        runner->scripts.clear();
+    }
+};
+/// Build `count` products on the carrier, ticking until each finishes.
+/// Returns the spawned unit ids in completion order.
+[[nodiscard]] std::vector<UnitId> buildProducts(CarrierScene& f, int count) {
+    std::vector<UnitId> spawned;
+    for (int i = 0; i < count; ++i) {
+        REQUIRE(rm::app::issueBuild(f.scene, f.carrier, 0, 0, f.productType,
+                                    rm::sim::fxFromFloat(200.0f),
+                                    rm::sim::fxFromFloat(200.0f)));
+        const std::size_t before = f.scene.store.slotCount();
+        for (int tick = 0; tick < 40 && f.scene.store.slotCount() == before; ++tick) {
+            (void)rm::app::advanceMatch(*f.runner, tick, 0.0f);
+        }
+        REQUIRE(f.scene.store.slotCount() == before + 1);
+        spawned.push_back(f.scene.store.idAt(static_cast<rm::UnitIndex>(before)));
+    }
+    return spawned;
+}
+
+} // namespace
+
+TEST_CASE("C-264: a carrier's product is stored attached, not rolled off",
+          "[fa-transport]") {
+    // The claim's `FinishedBuildingState`: `DetachFrom` then
+    // `AddUnitToStorage` when `TransportHasAvailableStorage` — the product
+    // ends the build INSIDE the carrier's pool, attached, with no roll-off
+    // move issued. `UnloadTransport` is the deploy: the stored aircraft
+    // launches airborne at the carrier's position.
+    const rm::HeightField field = flatField();
+    CarrierScene f{field};
+
+    const std::vector<UnitId> built = buildProducts(f, 1);
+    const UnitId product = built.front();
+
+    // Stored, not rolled off: attached to the carrier at its origin, and the
+    // product's queue holds no roll-off move.
+    CHECK(f.scene.store.parentOf(product).has_value());
+    CHECK(f.scene.store.motion()[product.index].attached);
+    CHECK(f.scene.store.transforms()[product.index].x
+          == f.scene.store.transforms()[f.carrier.index].x);
+    CHECK(f.scene.store.orders()[product.index].current() == nullptr);
+
+    // The deploy: UnloadTransport launches the hold airborne where the
+    // carrier stands (C-225's launch semantics, the claim's release half).
+    REQUIRE(rm::app::submitCommand(f.scene, CommandIssue{
+        .source = 0,
+        .player = 0,
+        .kind = CommandKind::UnloadTransport,
+        .units = {f.carrier},
+        .count = 1,
+    }).has_value());
+    for (int tick = 0; tick < 40 && f.scene.store.motion()[product.index].attached;
+         ++tick) {
+        (void)rm::app::advanceMatch(*f.runner, tick, 0.0f);
+    }
+    CHECK_FALSE(f.scene.store.motion()[product.index].attached);
+    CHECK(f.scene.store.motion()[product.index].airborne);
+}
+
+TEST_CASE("C-264: a full carrier pool sends the product off the pad instead",
+          "[fa-transport]") {
+    // The claim's other branch: `TransportHasAvailableStorage` false →
+    // `IssueMoveOffFactory`. With both pool slots taken, the third product
+    // materialises DETACHED and gets the ordinary roll-off move.
+    const rm::HeightField field = flatField();
+    CarrierScene f{field};
+
+    const std::vector<UnitId> built = buildProducts(f, 3);
+    CHECK(f.scene.store.motion()[built[0].index].attached);
+    CHECK(f.scene.store.motion()[built[1].index].attached);
+
+    const UnitId third = built[2];
+    CHECK_FALSE(f.scene.store.motion()[third.index].attached);
+    const rm::sim::QueuedCommand* rollOff =
+        f.scene.store.orders()[third.index].current();
+    REQUIRE(rollOff != nullptr);
+    CHECK(rollOff->kind() == CommandKind::Move);
 }

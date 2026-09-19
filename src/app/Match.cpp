@@ -1926,12 +1926,18 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 continue;
             }
         }
-        // `C-225`: a CARRIER stores its air product in internal storage
-        // instead of rolling it off — retail's `AddUnitToStorage` gated by
-        // `TransportHasAvailableStorage`, i.e. `(stored + reserved) <
-        // StorageSlots`. "Reserved" is the carrier's other air products
-        // still rising on the pad. This is state, not a command, so it runs
-        // identically under replay.
+        // `C-225` + `C-264`: a CARRIER stores its air product in internal
+        // storage instead of rolling it off — retail's `AddUnitToStorage`
+        // gated by `TransportHasAvailableStorage`, i.e. `(stored + reserved)
+        // < StorageSlots`. "Reserved" is the carrier's other air products
+        // still rising on the pad. This is the `FinishedBuildingState` half
+        // of C-264's shared carrier/mobile-factory pattern: the product was
+        // attached to `BuildAttachBone` for the whole build (the sim's
+        // stand-in is the pad-anchored `Construction` row — see the C-264
+        // re-anchor in `advanceOrders`), so on completion it detaches and
+        // either stores here or takes the `IssueMoveOffFactory` roll-off
+        // below. This is state, not a command, so it runs identically under
+        // replay.
         bool storedOnCarrier = false;
         if (spawned && scene.store.alive(work.builder)) {
             const rm::unitdef::UnitDef* builderDef =

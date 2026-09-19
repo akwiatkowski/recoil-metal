@@ -339,6 +339,44 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
     const std::span<CommandQueue> orders = store.orders();
     const std::span<const MoveState> motion = store.motion();
 
+    // `C-264`'s attach-build anchor, the sim's half of retail's
+    // `unitBuilding:AttachBoneTo(-2, self, BuildAttachBone)` (`UES0401`,
+    // `UAA0310`, `UAS0401`, `UEL0401` scripts): a pad-bound construction —
+    // an upgrade or a factory's mobile product — is built ATTACHED to the
+    // builder, so its site is the builder's current transform, not the map
+    // spot the order named. The product doesn't exist until completion here,
+    // but the row is its stand-in: if the builder is displaced mid-build
+    // (collision push — orders can't move it, `releaseInterruptedConstruction`
+    // erases pad rows on any new order), a frozen `position` orphans the row.
+    // `buildSiteFor` resolves the same order to the builder's CURRENT spot, so
+    // `activeConstructionFor` misses, `padBusy` misses, and a second row is
+    // founded — one zombie that never finishes and one duplicate. Re-anchor
+    // pad-bound rows once per dispatch, the same predicate `buildSiteFor`
+    // uses; placed structures anchor to the world and are untouched.
+    if (building != nullptr) {
+        for (Construction& work : *building) {
+            if (work.finished() || !store.alive(work.builder)) {
+                continue;
+            }
+            const unitdef::UnitDef* builderDef =
+                catalog.def(store.typeAt(work.builder.index));
+            const unitdef::UnitDef* productDef =
+                catalog.def(static_cast<UnitTypeIndex>(work.blueprintIndex));
+            if (builderDef == nullptr || productDef == nullptr) {
+                continue;
+            }
+            const bool padBound =
+                work.isUpgrade()
+                || (builderDef->hasCategory("FACTORY") && productDef->isMobile());
+            if (!padBound) {
+                continue;
+            }
+            const Transform& at = store.transforms()[work.builder.index];
+            work.position[0] = at.x;
+            work.position[2] = at.z;
+        }
+    }
+
     for (UnitIndex slot = 0; slot < orders.size(); ++slot) {
         if (!store.slotAlive(slot)) {
             continue;
@@ -2173,6 +2211,9 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         if (upgrade || factoryProduction) {
             // One pad, one job — an unfinished row on this pad still belongs to whatever
             // order owns it, and a second product or upgrade cannot materialise beside it.
+            // The pad is the builder (`C-264`): `advanceOrders` re-anchors pad-bound rows
+            // to the builder's transform each beat, so the position compare still holds
+            // even when a mobile factory was displaced mid-build.
             const bool padBusy = std::ranges::any_of(*building, [&](const Construction& work) {
                 return !work.finished() && work.builder == command.unit
                     && work.position[0] == siteX && work.position[2] == siteZ;
