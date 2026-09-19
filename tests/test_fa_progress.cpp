@@ -233,10 +233,11 @@ TEST_CASE("C-378/C-376: stopping an enhancement mid-work keeps the spent resourc
     (void)rm::app::advanceMatch(runner, tick++, 0);
     REQUIRE(job.scene.enhancementWork.size() == 1);
 
-    // One funded tick: 1 mass and 10 energy of the 8/80 cost are gone (the drain is
-    // cost spread over buildTime at the unit's build rate, C-376's funded-drain
-    // formula). Progress consumes the PREVIOUS tick's grant, so the bar moves on
-    // the tick after the money does.
+    // One funded tick: the demand is 10 mass and 10 energy — C-253's retail bug
+    // prices the mass line at the ENERGY cost (80 over 8 s at 10/s build rate),
+    // not the blueprint's 8. Stored 8 mass binds at ratio 0.8, so 8 mass and 8
+    // energy are gone. Progress consumes the PREVIOUS tick's grant, so the bar
+    // moves on the tick after the money does.
     job.scene.economies[0].stored = {rm::test::mag(8.0f), rm::test::mag(80.0f)};
     (void)rm::app::advanceMatch(runner, tick++, 0);
     (void)rm::app::advanceMatch(runner, tick++, 0);

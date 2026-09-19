@@ -333,18 +333,56 @@ TEST_CASE("the thread model runs: fork, wait, resume on the right tick, die alon
     CHECK(ai.threadsAlive() == 1);
     REQUIRE(ai.threadErrors().size() == 1);
 
-    // Ticks 1..9: asleep. Tick 10: one second has passed at the adapter's 10 Hz.
-    for (long long tick = 1; tick < 10; ++tick) {
+    // Ticks 1..8: asleep. Tick 9: one second has passed at the adapter's 10 Hz —
+    // `WaitSeconds(1)` is `WaitTicks(10)`, and retail's `CTaskStage` runner stores
+    // `counter = status − 1` (`0x40932f`, `C-305`), so the resume lands on the
+    // ninth beat after the yield, not the tenth.
+    for (long long tick = 1; tick < 9; ++tick) {
         CHECK(ai.pump(tick) == 0);
     }
-    CHECK(ai.pump(10) == 1);
-    REQUIRE(ai.eval("assert(beats == 2)"));
+    CHECK(ai.pump(9) == 1);
 
     // KillThread by handle: the worker never beats again.
     REQUIRE(ai.eval("KillThread(worker)"));
     CHECK(ai.pump(20) == 0);
     REQUIRE(ai.eval("assert(beats == 2)"));
     CHECK(ai.threadsAlive() == 0);
+}
+
+TEST_CASE("WaitTicks resumes on the n-1th beat, retail's counter quirk",
+          "[faf][ai][threads]") {
+    // `C-305`: `CLuaTask::TaskTick` returns the yield's number verbatim as the task
+    // status, and the `CTaskStage` runner (`0x40932f`) stores `counter = status − 1`
+    // with a decrement-first test. `WaitTicks(1)` and `WaitTicks(2)` therefore both
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+    REQUIRE(ai.eval(R"(
+        woke1 = 0
+        woke2 = 0
+        woke5 = 0
+        ForkThread(function() WaitTicks(1) woke1 = 1 end)
+        ForkThread(function() WaitTicks(2) woke2 = 1 end)
+        ForkThread(function() WaitTicks(5) woke5 = 1 end)
+    )"));
+
+    // Beat 0: all three fork and yield. Beat 1: the 1- and 2-tick waits both resume
+    // (identical in retail); the 5-tick wait is still asleep.
+    (void)ai.pump(0);
+    (void)ai.pump(1);
+    REQUIRE(ai.eval("assert(woke1 == 1)"));
+    REQUIRE(ai.eval("assert(woke2 == 1)"));
+    REQUIRE(ai.eval("assert(woke5 == 0)"));
+
+    // Beats 2-3: still asleep. Beat 4: the (5−1)-th beat after the yield.
+    (void)ai.pump(2);
+    (void)ai.pump(3);
+    REQUIRE(ai.eval("assert(woke5 == 0)"));
+    (void)ai.pump(4);
+    REQUIRE(ai.eval("assert(woke5 == 1)"));
 }
 
 TEST_CASE("forking from inside a resume does not corrupt the scheduler",

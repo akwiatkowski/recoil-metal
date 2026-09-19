@@ -98,8 +98,11 @@ namespace {
     const auto* spec = catalog.def(store.typeAt(unit.index))->enhancement(name);
     const auto pace = effectiveBuildPerTick(store, catalog, unit.index);
     if (pace <= Mag{}) return false;
+    // C-253: retail's `OnWorkBegin` copies `BuildCostEnergy` into
+    // `WorkItemBuildCostMass` (`Unit.lua:2006`), so the mass drain equals the
+    // ENERGY cost, not the blueprint's mass cost. Replicated verbatim.
     work.push_back({.owner=unit, .name=name,
-        .cost={spec->buildCostMass,spec->buildCostEnergy},
+        .cost={spec->buildCostEnergy,spec->buildCostEnergy},
         .totalBuildTime=Mag::fromFx(spec->buildTime), .buildTimeRemaining=Mag::fromFx(spec->buildTime),
         .buildPerTick=pace});
     return true;

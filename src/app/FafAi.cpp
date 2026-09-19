@@ -382,7 +382,14 @@ int waitTicksCount(lua_State* lua, long long ticks) {
     if (lua_isyieldable(lua) == 0) {
         return 0;
     }
-    lua_pushinteger(lua, static_cast<lua_Integer>(std::max(1ll, ticks)));
+    // Retail's `CTaskStage` runner (`0x40932f`): the yielded count becomes the
+    // task status, and the runner stores `counter = status − 1` with a
+    // decrement-first test — so `WaitTicks(1)` and `WaitTicks(2)` both resume
+    // on the NEXT beat, and `WaitTicks(n ≥ 3)` resumes on the (n−1)-th beat
+    // after the yield (`C-305`). The pump adds the carried value to the current
+    // tick, so the value pushed here is the retail counter, not the argument.
+    const long long counter = ticks >= 2 ? ticks - 1 : 1;
+    lua_pushinteger(lua, static_cast<lua_Integer>(counter));
     return lua_yield(lua, 1);
 }
 
