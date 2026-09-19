@@ -25,7 +25,7 @@ TEST_CASE("enhancement work competes for funding and consumes the previous tick 
     Economy economy;
     economy.storage = {Mag::fromInt(10000), Mag::fromInt(10000)};
     economy.incomePerTick = {Mag::fromInt(5), Mag::fromInt(50)};
-    std::vector<EnhancementWork> upgrades{{
+    std::vector<rm::sim::EnhancementWork> upgrades{{
         .owner = {.index=0,.generation=1},
         .cost = {Mag::fromInt(160), Mag::fromInt(1600)},
         .totalBuildTime = Mag::fromInt(16), .buildTimeRemaining = Mag::fromInt(16),
@@ -55,7 +55,7 @@ TEST_CASE("completed enhancement work stops billing and never advances unfunded"
     using namespace rm::sim;
     Economy economy;
     economy.storage = {Mag::fromInt(10000), Mag::fromInt(10000)};
-    std::vector<EnhancementWork> upgrades{{
+    std::vector<rm::sim::EnhancementWork> upgrades{{
         .cost = {Mag::fromInt(8), Mag::fromInt(80)},
         .totalBuildTime=Mag::fromInt(8), .buildTimeRemaining=Mag::fromInt(8),
         .buildPerTick=Mag::fromInt(1),
@@ -127,6 +127,44 @@ const rm::sim::TickRate kRate{10};
 }
 
 } // namespace
+
+TEST_CASE("C-070a: pausing a consumer refunds its unspent allocation", "[economy][fa-econ]") {
+    // `SetConsumptionActive(false)` adds the request's unspent `allocated[]`
+    // back into the army income pool and zeroes it (`0x6b1466`–`0x6b14b5`):
+    // the carry-forward residue a stall left is returned to the store, not
+    // lost with the pause.
+    Economy economy = rich();
+    economy.stored = res(100.0f, 100.0f);
+    std::vector<Construction> building{massExtractor()};
+    building.front().allocated = res(7.0f, 3.0f);  // C-162's carry-forward residue
+    building.front().paused = true;
+    rm::sim::tickEconomy(economy, building);
+    CHECK(amount(economy.stored.mass) == Approx(107.0f).margin(0.01));
+    CHECK(amount(economy.stored.energy) == Approx(103.0f).margin(0.01));
+    CHECK(building.front().allocated.mass == rm::sim::Mag{});
+    CHECK(building.front().allocated.energy == rm::sim::Mag{});
+    // The refund is once: a second paused beat returns nothing more.
+    rm::sim::tickEconomy(economy, building);
+    CHECK(amount(economy.stored.mass) == Approx(107.0f).margin(0.01));
+    CHECK(amount(economy.stored.energy) == Approx(103.0f).margin(0.01));
+
+    // The same refund on the enhancement request — retail's one CEconRequest
+    // per consumer, so the residue rule is the request's, not the work kind's.
+    Economy second = rich();
+    second.stored = res(50.0f, 50.0f);
+    std::vector<rm::sim::EnhancementWork> upgrades{{
+        .cost = res(8.0f, 80.0f),
+        .totalBuildTime = rm::test::mag(8.0f),
+        .buildTimeRemaining = rm::test::mag(8.0f),
+        .buildPerTick = rm::test::mag(1.0f),
+        .allocated = res(2.0f, 5.0f),
+        .paused = true,
+    }};
+    rm::sim::tickEconomy(second, {}, {}, {}, false, {}, rm::sim::kNoArmy, upgrades);
+    CHECK(amount(second.stored.mass) == Approx(52.0f).margin(0.01));
+    CHECK(amount(second.stored.energy) == Approx(55.0f).margin(0.01));
+    CHECK(upgrades.front().allocated.mass == rm::sim::Mag{});
+}
 
 TEST_CASE("a build's drain is its cost spread over how long it will take") {
     // 60 build units at a rate of 10 is six seconds; 36 mass over six seconds is 6 a

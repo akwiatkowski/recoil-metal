@@ -302,6 +302,9 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     // the allocator before tiers existed — including the zero-demand corners, because a
     // pass runs even for an empty tier so a still-billed work still gets its ratio stamp.
     Resources granted;
+    // `C-070`(a)'s refund pool: what paused consumers handed back this tick,
+    // returned to the store after the grants are paid (below).
+    Resources refunded;
     Resources supply = economy.stored;
     const auto recordCharge = [flows, armyIndex](UnitId unit, Resources charge) {
         if (unit.index < flows.size() && flows[unit.index].unit == unit
@@ -413,10 +416,17 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
 
         for (Construction& work : building) {
             if (work.paused) {
-                // Held, not cancelled: the queue and the residue survive, but the stale funding
-                // ratio must not — an unpause would otherwise spend a full beat's grant the
-                // pause never earned.
+                // Held, not cancelled: the queue survives, but the stale funding
+                // ratio must not — an unpause would otherwise spend a full beat's
+                // grant the pause never earned.
                 work.fundedLastTick = Fx{};
+                // `C-070`(a): `SetConsumptionActive(false)` refunds the request's
+                // unspent `allocated[]` into the army income pool and zeroes it
+                // (`0x6b1466`–`0x6b14b5`). The residue a stall left behind comes
+                // back rather than dying with the pause; a second paused beat
+                // refunds nothing, because the first already emptied it.
+                refunded += work.allocated;
+                work.allocated = {};
                 continue;
             }
             if (!stillBilled(work) || tierAt(work.builder.index) != tier) {
@@ -437,6 +447,11 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         for (EnhancementWork& work : enhancements) {
             if (work.paused || work.finished()) {
                 work.fundedLastTick = Fx{};
+                // `C-070`(a) again — the refund is the REQUEST's, not the work
+                // kind's: retail's one CEconRequest per consumer means an
+                // enhancement's residue returns on pause exactly like a build's.
+                refunded += work.allocated;
+                work.allocated = {};
                 continue;
             }
             if (tierAt(work.owner.index) != tier) {
@@ -510,9 +525,13 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         supply.energy = std::max(Mag{}, supply.energy - (granted.energy - passStart.energy));
     }
 
-    // The spent heads leave only now that every tier pass is done — next beat's demand
-    // pass is the first to see the promoted head. Each spent entry is still its owner's
-    // head: nothing else shortened the queue since the grant that spent it.
+    economy.usageLastTick = granted;
+    economy.stored.mass = std::max(Mag{}, economy.stored.mass - granted.mass);
+    economy.stored.energy = std::max(Mag{}, economy.stored.energy - granted.energy);
+    // `C-070`(a): the refunds paused consumers handed back land in the store now —
+    // spendable next tick, shareable like any other excess, and capped by the same
+    // final clamp. Not counted in `usageLastTick`: a refund is not consumption.
+    economy.stored += refunded;
     for (const SiloBuild& spent : siloSpent) {
         const auto head = std::ranges::find_if(
             *siloQueue, [&](const SiloBuild& entry) { return entry.owner == spent.owner; });
@@ -525,9 +544,6 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     economy.massIsBinding = lowestBinds;
     economy.fundedFraction = std::min(lowestR1, lowestR2);
 
-    economy.usageLastTick = granted;
-    economy.stored.mass = std::max(Mag{}, economy.stored.mass - granted.mass);
-    economy.stored.energy = std::max(Mag{}, economy.stored.energy - granted.energy);
     // A whole match offers this beat's excess to allies before applying capacity (`C-163`).
     // Standalone economy callers retain the final clamp here.
     if (deferOverflow) return;
