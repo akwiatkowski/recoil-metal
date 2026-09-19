@@ -19,6 +19,9 @@ struct CaptureWork;
 /// One unit's adjacency multipliers (`core/sim/Adjacency.hpp`). Forward-declared like
 /// `CaptureWork`: the signature names the span, the .cpp sees the fields.
 struct AdjacencyEffects;
+/// One assistant's silo-build contribution (`core/sim/Assist.hpp`). Forward-declared like
+/// `AdjacencyEffects`: the signature names the span, the .cpp sees the fields.
+struct SiloAssistWork;
 
 // What an army can spend, and what it is spending it on.
 //
@@ -587,7 +590,8 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<CaptureWork> captures = {},
                   std::span<const BuildPriority> priorities = {},
                   std::vector<SiloBuild>* siloQueue = nullptr,
-                  std::span<const AdjacencyEffects> adjacency = {});
+                  std::span<const AdjacencyEffects> adjacency = {},
+                  std::span<const SiloAssistWork> siloAssists = {});
 ///
 /// Run AFTER every army has ticked, because an army's spare capacity is only known once it
 /// has spent. Not a flat `1/n`: retail walks the recipients dividing the *remaining* excess

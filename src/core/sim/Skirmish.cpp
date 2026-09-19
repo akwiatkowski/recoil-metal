@@ -739,10 +739,22 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //     output (`C-187`, `C-142`). Recomputed every tick from orders and positions, so a
     //     helper that walked away, died or was re-tasked stops contributing at once
     //     (`core/sim/Assist.hpp`).
-    if (match.building != nullptr) {
-        (void)applyAssistance(store, catalog, *match.building, match.armies, match.intel,
+    // `C-083`'s silo assists are computed in the same pass — the assistant's
+    // guard chain resolves to a founder whose silo queue head is helped — and
+    // billed below with the silo's own demand.
+    std::vector<SiloAssistWork> siloAssists;
+    if (match.building != nullptr || match.siloAmmo != nullptr) {
+        std::vector<Construction> noBuilding;  // silo-only matches still assist
+        (void)applyAssistance(store, catalog,
+            match.building != nullptr ? *match.building : noBuilding, match.armies,
+            match.intel,
             match.playableRect ? &*match.playableRect : nullptr, tickIndex, rate,
-            match.assistLinks);
+            match.assistLinks,
+            match.siloAmmo != nullptr ? std::span<const SiloAmmo>{*match.siloAmmo}
+                                      : std::span<const SiloAmmo>{},
+            match.siloQueue != nullptr ? std::span<const SiloBuild>{*match.siloQueue}
+                                       : std::span<const SiloBuild>{},
+            &siloAssists);
     }
 
     // 0. THE ORDER QUEUES, before anything moves (§7 P4.1). A unit that finished its order last
@@ -1268,6 +1280,17 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 }
             }
 
+            // `C-083`'s assist requests ride the SILO's army — the assistant
+            // lends build power, the work's owner pays, exactly like
+            // `assistPerTick` on a construction.
+            std::vector<SiloAssistWork> siloAssistMine;
+            for (const SiloAssistWork& assist : siloAssists) {
+                if (store.alive(assist.silo)
+                    && store.motion()[assist.silo.index].armyIndex == static_cast<int>(army)) {
+                    siloAssistMine.push_back(assist);
+                }
+            }
+
             std::vector<EnhancementWork> enhancementMine;
             if (match.enhancements != nullptr) {
                 for (const EnhancementWork& work : *match.enhancements) {
@@ -1283,7 +1306,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                     : std::span<UnitResourceFlow>{}, static_cast<int>(army), enhancementMine,
                 match.captures != nullptr ? std::span<CaptureWork>{captureMine}
                                           : std::span<CaptureWork>{},
-                store.buildPriorities(), match.siloQueue, adjacency);
+                store.buildPriorities(), match.siloQueue, adjacency, siloAssistMine);
 
             // Written back over this army's entries, in order — the two lists were built
             // by the same filter in the same pass, so the nth of `mine` is the nth of

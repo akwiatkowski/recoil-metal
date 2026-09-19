@@ -83,6 +83,22 @@ struct AssistLink {
     Fx fraction{};
 };
 
+/// One assistant's silo-build contribution this tick — `C-083`'s
+/// `SiloAssistWithResource` (`0x005d5b00`), driven from the *assistant's*
+/// `CEconRequest` rather than the silo's `CEconomyEvent`. The demand is the
+/// silo tick's cost scaled by `assistantRate / siloRate`, so a faster helper
+/// asks for — and a funded grant advances — SEVERAL production ticks in one
+/// call. Recomputed every tick like `assistPerTick`; never serialized.
+struct SiloAssistWork {
+    /// The silo being helped — `SiloAmmo::owner`.
+    UnitId silo{};
+    /// Who is helping — the unit the charge is recorded against.
+    UnitId assistant{};
+    /// This tick's request: `costPerTick × assistantRate / siloRate`.
+    Resources demand;
+};
+
+
 /// Recomputes every construction's `assistPerTick` from who is currently helping: every
 /// standing Assist/Guard order in reach of its builder, then every idle engineering station
 /// with a project in reach. Returns how many helpers contributed this tick — the outward
@@ -93,7 +109,10 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
                             std::span<const Army> armies = {}, const Intel* intel = nullptr,
                             const PlayableRect* playableRect = nullptr,
                             TickIndex tick = 0, TickRate rate = TickRate{},
-                            std::vector<AssistLink>* links = nullptr);
+                            std::vector<AssistLink>* links = nullptr,
+                            std::span<const SiloAmmo> siloAmmo = {},
+                            std::span<const SiloBuild> siloQueue = {},
+                            std::vector<SiloAssistWork>* siloAssists = nullptr);
 
 /// The unit at the end of `start`'s guard chain — `C-183`'s transitive walk
 /// through `Unit+0x4e0`, the same field retail's roll-off follows (`C-189`).

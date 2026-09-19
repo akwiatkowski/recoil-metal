@@ -51,6 +51,8 @@ struct Fixture {
     std::vector<rm::sim::Projectile> shots;
     std::vector<rm::sim::Construction> building;
     std::vector<rm::sim::AssistLink> assistLinks;
+    std::vector<rm::sim::SiloAmmo> siloAmmo;
+    std::vector<rm::sim::SiloBuild> siloQueue;
     std::vector<int> commandersEver{0, 0};
 
     rm::UnitTypeIndex engineerType{};
@@ -215,6 +217,8 @@ struct Fixture {
                              .economies = economies,
                              .projectiles = &shots,
                              .building = &building,
+                             .siloAmmo = &siloAmmo,
+                             .siloQueue = &siloQueue,
                              .passability = grids,
                              .commandersEver = commandersEver,
                              .baseStorage = {.mass = rm::sim::magFromFloat(10000.0f),
@@ -257,6 +261,41 @@ TEST_CASE("an assisted build advances at the combined rate, and drains for it") 
     // And the whole hut lands in ~50 ticks instead of 100.
     f.tick(41);
     CHECK(f.building[0].finished());
+}
+
+TEST_CASE("C-083: an assistant's silo help advances several production ticks per call") {
+    // `SiloAssistWithResource` (`0x005d5b00`) is driven from the ASSISTANT's
+    // `CEconRequest`, not the silo's `CEconomyEvent`, and it loops — the
+    // request is `costPerTick × assistantRate / siloRate`, so a helper twice
+    // the silo's rate advances two production ticks in one funded call.
+    Fixture f;
+    rm::unitdef::UnitDef silo;
+    silo.name = "test_silo";
+    silo.categories = {"STRUCTURE"};
+    silo.buildRate = 10.0f;  // the silo's own GetEconomyBuildRate
+    const rm::UnitTypeIndex siloType = f.roster.addType(silo);
+
+    const UnitId founder = f.roster.add(siloType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId helper = f.roster.add(f.stationType, 210.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(10000.0f),
+                             .energy = rm::sim::magFromFloat(10000.0f)};
+
+    // A 20-tick round at 10 mass/100 energy a tick; the queue head is active.
+    f.siloAmmo.push_back(rm::sim::makeSiloAmmo(
+        founder, 0, false, 2,
+        {.mass = rm::sim::magFromFloat(200.0f), .energy = rm::sim::magFromFloat(2000.0f)},
+        rm::sim::magFromFloat(200.0f), rm::sim::magFromFloat(10.0f)));
+    REQUIRE(rm::sim::queueSiloBuild(f.siloQueue, f.siloAmmo, founder, 0));
+
+    // The station's 20/tick against the silo's 10/tick: one assist call asks
+    // for two production ticks' worth. An explicit Assist order, in reach.
+    REQUIRE(f.assist(helper, founder));
+    f.tick();
+
+    REQUIRE(f.siloAmmo.size() == 1);
+    // Two ticks banked in one beat — the silo's own tick plus the helper's
+    // doubled contribution, not the one tick an unassisted beat advances.
+    CHECK(f.siloAmmo[0].elapsedTicks >= 2);
 }
 
 TEST_CASE("Guard attack priority suppresses construction assistance in the same tick",

@@ -74,15 +74,20 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
                             std::vector<Construction>& building, std::span<const Army> armies,
                             const Intel* intel, const PlayableRect* playableRect,
                             TickIndex tick, TickRate rate,
-                            std::vector<AssistLink>* links) {
+                            std::vector<AssistLink>* links,
+                            std::span<const SiloAmmo> siloAmmo,
+                            std::span<const SiloBuild> siloQueue,
+                            std::vector<SiloAssistWork>* siloAssists) {
     // Cleared first, unconditionally: last tick's help is not this tick's fact. In the same
     // sweep, a row nobody is working is marked `paused` — an interrupted scaffold keeps its
     // place and its progress but draws nothing, which is the same "held, not cancelled"
     // answer the economy pass already gives a player-paused build. `constructionWorkedOn`
     // asks the same question the dispatch stage's ownership check does, so a row flips to
-    // abandoned the same beat its builder's order changes.
     if (links != nullptr) {
         links->clear();
+    }
+    if (siloAssists != nullptr) {
+        siloAssists->clear();
     }
     for (Construction& work : building) {
         work.assistPerTick = Mag{};
@@ -90,7 +95,7 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             work.paused = true;
         }
     }
-    if (building.empty()) {
+    if (building.empty() && siloAssists == nullptr) {
         return 0;
     }
 
@@ -158,6 +163,7 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
         // The construction this target is WORKING — the row its active head owns. A founder
         // who also left an abandoned scaffold elsewhere has both kinds on record; help goes
         // to the work being done, not the one waiting to be resumed.
+        bool assisted = false;
         for (std::size_t i = 0; i < building.size(); ++i) {
             Construction& work = building[i];
             if (work.finished() || !(work.builder == founder)
@@ -166,12 +172,40 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             }
             work.assistPerTick += buildRate;
             ++helping;
+            assisted = true;
             if (links != nullptr) {
                 links->push_back(AssistLink{.helper = store.idAt(slot), .work = i,
                                             .position = work.position,
                                             .fraction = work.fraction()});
             }
             break;
+        }
+        if (assisted || siloAssists == nullptr) {
+            continue;
+        }
+        // `C-083`'s `SiloAssistWithResource` (`0x005d5b00`): the founder's silo
+        // queue head is helped through the ASSISTANT's request, not the silo's
+        // economy event. The demand is the tick's cost scaled by
+        // `assistantRate / siloRate` — retail's loop, so a faster helper asks
+        // for enough to advance several production ticks in one call.
+        for (const SiloAmmo& ammo : siloAmmo) {
+            if (!(ammo.owner == founder) || ammo.paused
+                || !siloHeadActive(ammo, siloQueue)) {
+                continue;
+            }
+            const Mag siloRate = effectiveBuildPerTick(store, catalog, founder.index);
+            if (siloRate <= Mag{}) {
+                break;
+            }
+            const Fx ratio = std::min(buildRate.toFx() / siloRate.toFx(),
+                                      Fx::fromInt(64));  // sanity bound on the loop
+            siloAssists->push_back(SiloAssistWork{
+                .silo = founder,
+                .assistant = store.idAt(slot),
+                .demand = ammo.costPerTick * ratio,
+            });
+            ++helping;
+            break;  // one queue head per silo, one founder per helper
         }
     }
 

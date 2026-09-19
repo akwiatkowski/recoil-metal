@@ -1,6 +1,7 @@
 #include "core/sim/Economy.hpp"
 #include "core/sim/Adjacency.hpp"
 #include "core/sim/Capture.hpp"
+#include "core/sim/Assist.hpp"
 #include <algorithm>
 
 namespace rm::sim {
@@ -173,7 +174,8 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
                   std::span<EnhancementWork> enhancements, std::span<CaptureWork> captures,
                   std::span<const BuildPriority> priorities,
                   std::vector<SiloBuild>* siloQueue,
-                  std::span<const AdjacencyEffects> adjacency) {
+                  std::span<const AdjacencyEffects> adjacency,
+                  std::span<const SiloAssistWork> siloAssists) {
     // Clamp only what CARRIED IN. Reclaim currently credits `stored` directly before this
     // pass, so its over-cap excess is still lost rather than becoming a hidden reserve.
     economy.stored.mass = std::max(Mag{}, std::min(economy.stored.mass, economy.storage.mass));
@@ -279,11 +281,23 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
     const auto headActive = [&siloQueue](const SiloAmmo& ammo) {
         return siloQueue != nullptr && siloHeadActive(ammo, *siloQueue);
     };
+    // `C-083`'s assist demand, summed per silo before the loop: each helper's
+    // `SiloAssistWithResource` request is `costPerTick × assistantRate /
+    // siloRate`, so a fast assistant asks for — and a funded grant advances —
+    // several production ticks in one call. Billed to the SILO's army like
+    // `assistPerTick` bills a construction's army: the assistant lends build
+    // power, the work's owner pays.
     for (const SiloAmmo& ammo : siloAmmo) {
         // Only the owner's queue HEAD builds — one economy event per unit (`C-081`).
         if (!ammo.paused && headActive(ammo)) {
-            wanted += ammo.costPerTick;
-            bucket(outstanding(ammo.costPerTick, ammo.delivered),
+            Resources demand = ammo.costPerTick;
+            for (const SiloAssistWork& assist : siloAssists) {
+                if (assist.silo == ammo.owner) {
+                    demand += assist.demand;
+                }
+            }
+            wanted += demand;
+            bucket(outstanding(demand, ammo.delivered),
                    tierAt(ammo.owner.index));
         }
     }
@@ -497,15 +511,30 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
             }
             // C-084: this is an event delivery accumulator, not Construction's lagged ratio.
             // A partial award remains here until an entire production beat is affordable.
-            const Resources out = outstanding(ammo.costPerTick, ammo.delivered);
+            // `C-083`'s assist demand is folded into the same request: the silo's own tick
+            // plus every helper's scaled contribution is one outstanding amount, and the
+            // grant lands in the one accumulator — which is what lets a single funded
+            // assist call advance several production ticks (the `while` below).
+            Resources demand = ammo.costPerTick;
+            for (const SiloAssistWork& assist : siloAssists) {
+                if (assist.silo == ammo.owner) {
+                    demand += assist.demand;
+                }
+            }
+            const Resources out = outstanding(demand, ammo.delivered);
             const Fx ratio = grantFor(out);
             const Resources share = out * ratio;
             ammo.delivered += share;
             recordCharge(ammo.owner, share);
             granted += share;
-            if (ammo.delivered.mass >= ammo.costPerTick.mass
-                && ammo.delivered.energy >= ammo.costPerTick.energy) {
-                ammo.delivered = {};
+            // The LOOP retail's `SiloAssistWithResource` runs: every whole tick the
+            // accumulator can pay for is a production tick, not just the first. One
+            // completion per beat still holds — the spent head stays head until the
+            // pass ends (`C-081`), and leftover delivery carries into the next build.
+            while (ammo.delivered.mass >= ammo.costPerTick.mass
+                   && ammo.delivered.energy >= ammo.costPerTick.energy) {
+                ammo.delivered.mass -= ammo.costPerTick.mass;
+                ammo.delivered.energy -= ammo.costPerTick.energy;
                 ++ammo.elapsedTicks;
                 if (ammo.elapsedTicks >= ammo.totalTicks) {
                     ++ammo.stored;
@@ -517,6 +546,7 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
                     // counted in `wanted`. The spent entry stays head until the pass
                     // ends — one economy event per unit per beat (`C-081`).
                     siloSpent.push_back(SiloBuild{.owner = ammo.owner, .slot = ammo.slot});
+                    break;  // one build lands per beat; the rest waits for the new head
                 }
             }
         }
