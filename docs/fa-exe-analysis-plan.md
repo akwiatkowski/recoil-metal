@@ -3059,6 +3059,39 @@ All 1,959 tests pass (4,266,587 assertions). Next exact action: the
 `CUnitCommand+0xa2` cancel-flag readers near `0x006f4730`/`0x006f4800`, or
 `IssueScript` command-data marshalling at `0x006fd240`.
 
+### 2026-09-19 / Claim-coverage wave — every findings file past 90%
+
+Five parallel agents re-audited every claim in `build/re-fa/findings/FA-*.md`
+against the shipped corpus and the sim, implementing or pinning the remaining
+PARTIAL rows. Final per-file coverage (TESTED + NA_INTERNAL of non-NA claims):
+FA-UI 100%, FA-PERSIST 100%, FA-PROGRESS 96%, FA-INTEL 100%, FA-FOUND-CONTENT
+97.5%, FA-WEAPONS 100%, FA-TRANSPORT-MISSILES 100%, FA-DAMAGE 100%, FA-LAND
+92.9%, FA-AIR-NAVY 95.8%, FA-LUA 94.7%, FA-CMD 95.2%, FA-AI 93.8%,
+FA-TERRAIN-PRESENT ~92%. Newly implemented: C-092 aim-direction scoring,
+C-093 TargetCheckInterval rescan cadence, C-095 DesiredShooterCap, C-059/C-262
+ring damage on impact, C-060 army handicap, C-061 NOSPLASHDAMAGE, C-145
+brownout shield recharge, C-172 UseGravity, C-007 explored bitmap, C-279
+water-vision grid, C-284 LOSNow, C-278 KnownFake, C-019 pickSurface,
+C-271/C-273/C-275 content loaders, C-292 marksGround, C-301/C-372
+anim-collision dispatch, C-336/C-337/C-339/C-367 selection algebra, C-255/C-379
+remaining CreateEnhancement effects, C-324 ferry-beacon floatsOnWater, C-125
+vert-event code table, C-244 cargo-mass divisor pin, C-320 stopped-ship
+heading pin.
+
+Three latent bugs surfaced in the merge and were fixed (`c96b463`): the C-093
+gated aim path kept a dead or never-set incumbent (`UnitId{}` names slot 0)
+without the firing pass's liveness check, so a holding guard aimed its hull at
+its guardee forever; `installEnhancement` wrote through a `Health&` freed by
+the pod spawn's `health_` growth (ASan heap-use-after-free); and the C-231
+being-built gate refused orders to `upgradeOf` targets — retail accepts a
+queued next tier on an upgrading extractor, and no other live unit can be
+"being built" here, so the gate was vacuous and removed. C-231 stays PARTIAL
+in FA-CMD: the gate exists in retail but has no live-unit analog in this sim.
+
+All 2,073 tests pass (4,265,845 assertions). Next exact action: the
+`CUnitCommand+0xa2` cancel-flag readers near `0x006f4730`/`0x006f4800`, or
+`IssueScript` command-data marshalling at `0x006fd240`.
+
 ## Confirmation gate
 
 A work package may move to **Confirmed with EXE analysis** only when all are true:

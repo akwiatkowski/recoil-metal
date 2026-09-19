@@ -9,16 +9,20 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-19, main through `ae31a1a`. The 2026-09-18 analysis wave
+**Snapshot:** 2026-09-19, main through `c69b662`. The 2026-09-18 analysis wave
 closed the retail-analyzed goal — every gameplay subsystem reads ≥85%
-(`C-251`–`C-381` across ten subsystem passes). The 2026-09-19 fix wave landed
-three more: `WaitTicks(n)` resumes on the (n−1)th beat per `C-305`'s
-`CTaskStage` counter quirk, the enhancement mass drain uses the energy
-cost per `C-253`'s `WorkItemBuildCostMass` bug, and the Paragon's
-`ResourceOn` is deficit-covering per `C-263` — `SetProductionPerSecond*`
-writes `base + max(0, requested − income)` clamped to `Economy.MaxMass/
-MaxEnergy` every 0.5 s, riding SaveState v42 and the state hash. CTest
-passes 1,938 cases (two pre-existing `test_fa_lua.cpp` failures).
+(`C-251`–`C-381` across ten subsystem passes). The 2026-09-19 claim-coverage
+wave then pushed every findings file past 90% TESTED-or-NA_INTERNAL
+(`build/re-fa/findings/FA-*.md`): FA-UI and FA-PERSIST at 100%, FA-PROGRESS 96%,
+FA-INTEL 100%, FA-FOUND-CONTENT 97.5%, FA-WEAPONS/TRANSPORT-MISSILES/DAMAGE at
+100%, FA-LAND 92.9%, FA-AIR-NAVY 95.8%, FA-LUA 94.7%, FA-CMD 95.2%, FA-AI 93.8%,
+FA-TERRAIN-PRESENT ~92%. Three latent bugs surfaced and were fixed in the merge:
+a stale `UnitId{}` incumbent aimed a holding guard's hull at slot 0 forever
+(`c96b463`), `installEnhancement` wrote through a `Health&` freed by the pod
+spawn's `health_` growth (ASan heap-use-after-free, `c96b463`), and the C-231
+being-built gate refused orders to upgrading units retail accepts (`c96b463`).
+C-292 ground-scorch gating and C-301/C-372 anim-collision dispatch landed with
+SaveState v51 (`c69b662`). CTest passes all 2,073 cases.
 
 **Update:** same day, later wave — the five backed `RULEUTC_*` toggles now drive
 the sim (`C-350`): shield, jamming, intel, stealth and cloak issue as
