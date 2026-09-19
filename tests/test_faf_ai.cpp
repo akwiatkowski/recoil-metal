@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -562,6 +563,76 @@ TEST_CASE("bare table iteration works, as LuaPlus meant it", "[faf][ai]") {
         for k in __rm_iter(pairs({ a = 1, b = 2 })) do keys = keys + 1 end
         assert(keys == 2)
     )"));
+}
+
+TEST_CASE("__active_mods is built from the match's mod list, ordered by uid constraints",
+          "[faf][ai][mods]") {
+    // `C-313`: `__active_mods` is real machinery — a table the C++ side builds
+    // from `gameInfo.GameMods` with `before`/`after` uid ordering — not the
+    // `or {}` shim it replaced. A synthetic corpus is enough: the machinery is
+    // the claim, not any shipped mod.
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "rm_faf_mods_test";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root / "lua");
+    {
+        std::ofstream out{root / "lua/base.lua"};
+        out << "base_loaded = true\n";
+    }
+    std::filesystem::create_directories(root / "schook/lua");
+    {
+        std::ofstream out{root / "schook/lua/base.lua"};
+        out << "schook_loaded = true\n";
+    }
+
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+
+    // Boot publishes the empty table — the same observable result the shim
+    // produced, now through the real path.
+    REQUIRE(ai.eval("assert(type(__active_mods) == 'table' and next(__active_mods) == nil)"));
+
+    // A mod on disk, hooked and ordered after a second mod that sorts earlier
+    // alphabetically — the `after` constraint must win (`C-313`).
+    const std::filesystem::path modDir = root.parent_path() / "rm_faf_mods_test_mod";
+    std::filesystem::create_directories(modDir / "hook/lua", ec);
+    {
+        std::ofstream out{modDir / "hook/lua/base.lua"};
+        out << "mod_hook_loaded = true\n";
+    }
+
+    ai.setActiveMods({
+        rm::vfs::ActiveMod{.uid = "uid-a", .name = "AfterMod",
+                           .location = modDir.string(), .after = {"uid-z"}},
+        rm::vfs::ActiveMod{.uid = "uid-z", .name = "FirstMod",
+                           .location = (root.parent_path() / "rm_faf_mods_test_other").string()},
+    });
+
+    // `__active_mods` carries the ordered entries with the fields mods.lua's
+    // `LoadModInfo` produces — and `gameInfo.GameMods` is the same table.
+    REQUIRE(ai.eval(R"(
+        assert(#__active_mods == 2)
+        assert(__active_mods[1].uid == 'uid-z')
+        assert(__active_mods[2].uid == 'uid-a')
+        assert(__active_mods[2].name == 'AfterMod')
+        assert(__active_mods[2].hookdir == '/hook')
+        assert(gameInfo.GameMods == __active_mods)
+    )"));
+
+    // `C-311`: the import concat — base + /schook + the mod's hookdir, one
+    // chunk, one environment. All three globals land together.
+    REQUIRE(ai.import("/lua/base.lua"));
+    REQUIRE(ai.eval(R"(
+        local m = import('/lua/base.lua')
+        assert(m.base_loaded and m.schook_loaded and m.mod_hook_loaded)
+    )"));
+
+    CHECK(ai.content().contains("/mods/rm_faf_mods_test_mod/hook/lua/base.lua"));
+    CHECK_FALSE(ai.content().contains("/units/x_unit.bp"));
+
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::remove_all(modDir, ec);
 }
 
 TEST_CASE("the call profiler counts the corpus's own functions, by definition site",

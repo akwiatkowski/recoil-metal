@@ -55,7 +55,11 @@ struct Thread {
 
 struct Sandbox {
     std::vector<Slot> slots;
-    std::filesystem::path root;
+    /// The sandbox's content view (`C-268`): the corpus root at `/`, each
+    /// active mod under `/mods/<name>`, and the hookdir registry (`C-312`)
+    /// the import concat (`C-311`) reads. `import`/`doscript`/`DiskFindFiles`
+    /// all resolve through this rather than the raw filesystem.
+    rm::vfs::Vfs content;
     /// Cheap re-entrancy guard: `import` runs Lua that may import again, and a cycle in the
     /// corpus would otherwise recurse until the C stack gave out.
     int importDepth = 0;
@@ -97,6 +101,10 @@ struct Sandbox {
     /// On the sandbox rather than a global so two VMs in one process keep
     /// their own channels.
     std::vector<FafAi::SimMessage> simMessages;
+
+    /// The match's active mods in `__active_mods` order (`C-313`) — what
+    /// `setActiveMods` last published. Empty for an unmodded match.
+    std::vector<rm::vfs::ActiveMod> activeMods;
 };
 
 /// The adapter's tick rate assumption, matching the app's default. WaitSeconds converts
@@ -244,21 +252,12 @@ int gameTimeSeconds(lua_State* lua) {
     return 1;
 }
 
-/// Resolves a FAF-relative path (`/lua/AI/aiutilities.lua`) under the vendored corpus.
-[[nodiscard]] std::filesystem::path resolve(const std::filesystem::path& root,
-                                            std::string_view path) {
-    std::string relative{path};
-    while (!relative.empty() && (relative.front() == '/' || relative.front() == '\\')) {
-        relative.erase(relative.begin());
-    }
-    return root / relative;
-}
-
 /// `DiskFindFiles(directory, pattern)` — the engine's file enumeration, real rather than
 /// stubbed because the corpus uses it to discover plugin files (custom factions, builder
-/// packs) and a nil return walks straight into a for-loop. Answers from the VENDORED corpus,
-/// which is the honest disk this sandbox has: a directory we did not fetch enumerates as
-/// empty, exactly as an absent directory would in Moho.
+/// packs) and a nil return walks straight into a for-loop. Answers from the sandbox's VFS,
+/// which is what makes a mounted mod's files enumerable the same way the base corpus's are
+/// (`C-268`): a directory nothing mounted enumerates as empty, exactly as an absent
+/// directory would in Moho.
 int diskFindFiles(lua_State* lua) {
     Sandbox* sandbox = sandboxOf(lua);
     const char* directory = luaL_optstring(lua, 1, "/");
@@ -270,40 +269,67 @@ int diskFindFiles(lua_State* lua) {
     }
 
     // The one glob form the corpus uses: a `*` prefix on a suffix — `*.lua`, `*_unit.bp`.
+    // Anything else is an exact filename.
     std::string want{pattern};
     const bool anyPrefix = !want.empty() && want.front() == '*';
     if (anyPrefix) {
         want.erase(want.begin());
     }
 
-    const std::filesystem::path base = resolve(sandbox->root, directory);
-    std::error_code ec;
-    if (!std::filesystem::is_directory(base, ec)) {
-        return 1;  // absent is empty, not an error — most of the game is deliberately unfetched
-    }
-
     int index = 0;
-    for (auto it = std::filesystem::recursive_directory_iterator(base, ec);
-         it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
-        if (ec || !it->is_regular_file(ec)) {
-            continue;
-        }
-        const std::string name = it->path().filename().string();
-        const bool matches = anyPrefix ? name.size() >= want.size()
-                                             && name.compare(name.size() - want.size(),
-                                                             want.size(), want)
-                                                    == 0
-                                       : name == want;
+    for (const std::string& path : sandbox->content.list(directory, "")) {
+        const std::string name = std::filesystem::path{path}.filename().string();
+        const bool matches =
+            anyPrefix ? name.size() >= want.size()
+                            && name.compare(name.size() - want.size(), want.size(), want) == 0
+                      : name == want;
         if (!matches) {
             continue;
         }
-        // Back to the corpus's own spelling: absolute-from-root, forward slashes.
-        std::string relative =
-            std::filesystem::relative(it->path(), sandbox->root, ec).generic_string();
-        lua_pushstring(lua, ("/" + relative).c_str());
+        lua_pushlstring(lua, path.data(), path.size());
         lua_rawseti(lua, -2, ++index);
     }
     return 1;
+}
+
+/// Publishes `__active_mods` (and `gameInfo.GameMods`) into the VM — `C-313`:
+/// built natively from `gameInfo.GameMods` in retail, so here the C++ side
+/// owns the table and Lua reads it. Each entry carries the fields
+/// `mods.lua`'s `LoadModInfo` produces — uid, name, location, ui_only,
+/// hookdir — with `location` spelled as the mod's VFS mount point, which is
+/// what the hook concat and the blueprint pass join paths against.
+void publishActiveMods(lua_State* lua, const std::vector<rm::vfs::ActiveMod>& mods) {
+    lua_newtable(lua);
+    int index = 0;
+    for (const rm::vfs::ActiveMod& mod : mods) {
+        lua_newtable(lua);
+        lua_pushlstring(lua, mod.uid.data(), mod.uid.size());
+        lua_setfield(lua, -2, "uid");
+        lua_pushlstring(lua, mod.name.data(), mod.name.size());
+        lua_setfield(lua, -2, "name");
+        const std::string location = rm::vfs::modMountPoint(mod);
+        lua_pushlstring(lua, location.data(), location.size());
+        lua_setfield(lua, -2, "location");
+        const std::string hookdir = mod.hookdir.empty() ? "/hook" : mod.hookdir;
+        lua_pushlstring(lua, hookdir.data(), hookdir.size());
+        lua_setfield(lua, -2, "hookdir");
+        lua_pushboolean(lua, mod.uiOnly);
+        lua_setfield(lua, -2, "ui_only");
+        lua_rawseti(lua, -2, ++index);
+    }
+    // `gameInfo.GameMods` is the same table — retail builds `__active_mods`
+    // FROM it, so both names must see the one list.
+    lua_pushvalue(lua, -1);
+    lua_setglobal(lua, "__active_mods");
+    lua_getglobal(lua, "gameInfo");
+    if (!lua_istable(lua, -1)) {
+        lua_pop(lua, 1);
+        lua_newtable(lua);
+    }
+    lua_pushvalue(lua, -2);
+    lua_setfield(lua, -2, "GameMods");
+    lua_setglobal(lua, "gameInfo");
+    lua_pop(lua, 1);
 }
 
 
@@ -844,30 +870,14 @@ int importModule(lua_State* lua) {
         return 1;
     }
 
-    // Case-insensitive resolution: try the path as written, then walk the directory for a
-    // case-folded match, because the corpus is inconsistent and the filesystem here is not.
-    std::filesystem::path file = resolve(sandbox->root, raw);
-    std::error_code ec;
-    if (!std::filesystem::exists(file, ec)) {
-        const std::filesystem::path dir = file.parent_path();
-        std::string want = file.filename().string();
-        std::transform(want.begin(), want.end(), want.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (std::filesystem::is_directory(dir, ec)) {
-            for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
-                std::string have = entry.path().filename().string();
-                std::transform(have.begin(), have.end(), have.begin(),
-                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                if (have == want) {
-                    file = entry.path();
-                    break;
-                }
-            }
-        }
-    }
-
-    std::ifstream in(file, std::ios::binary);
-    if (!in) {
+    // `C-311`: every load is hook-aware — `SCR_LuaDoFileConcat` (`0x004d4de0`)
+    // collects the base file plus every registered hookdir's copy of the same
+    // path and `lua_load`s them as ONE chunk, so a hook shares the original's
+    // locals and environment. Order: original → native hookdirs (`/schook`)
+    // → `__active_mods` order — which is the hookdir registration order the
+    // VFS keeps, so `hooksFor` answers it directly.
+    const std::optional<std::vector<std::byte>> baseBytes = sandbox->content.read(raw);
+    if (!baseBytes) {
         // A missing module is NOT an error here. The corpus imports across the whole game —
         // UI, sim, campaign — and this vendors only the AI subset, so most misses are files we
         // deliberately did not fetch. An empty table lets the importer carry on to whatever it
@@ -877,16 +887,23 @@ int importModule(lua_State* lua) {
         lua_newtable(lua);
         return 1;
     }
-    std::ostringstream buffer;
-    buffer << in.rdbuf();
-    const std::string source = rewriteMohoSource(buffer.str());
+
+    std::string source{reinterpret_cast<const char*>(baseBytes->data()), baseBytes->size()};
+    for (const std::string& hookPath : sandbox->content.hooksFor(raw)) {
+        if (const std::optional<std::vector<std::byte>> hookBytes =
+                sandbox->content.read(hookPath)) {
+            source.push_back('\n');
+            source.append(reinterpret_cast<const char*>(hookBytes->data()), hookBytes->size());
+        }
+    }
+    source = rewriteMohoSource(source);
 
     if (sandbox->verbose) {
         std::printf("  [ai] import %*s%s ... ", sandbox->importDepth * 2, "", raw);
         std::fflush(stdout);
     }
     ++sandbox->importDepth;
-    const std::string chunk = "@" + file.string();
+    const std::string chunk = "@" + rm::vfs::normalisedVfsPath(raw);
     // Refuelled per chunk rather than per VM: a module that legitimately does a lot of work at
     // load time should not starve the next one.
     // Refuelled per chunk. The hook itself is armed once at VM creation and never cleared:
@@ -968,6 +985,57 @@ int importModule(lua_State* lua) {
     lua_setfield(lua, -3, key.c_str());
     lua_remove(lua, -2);
     return 1;
+}
+
+/// `doscript(path, env?)` — the same hook-aware concat as `import` (`C-311`:
+/// `SCR_LuaDoFileConcat` serves both), run in the caller's environment rather
+/// than a fresh module one. `env` defaults to `_G`, which is the observable
+/// effect the bootstrap's declare-global files rely on: their globals land on
+/// the shared table. Errors raise — `safecall`/`pcall` is the corpus's own
+/// boundary around doscript, so a missing file is a Lua error, not an empty
+/// table like import's forgiving miss.
+int doscriptBinding(lua_State* lua) {
+    Sandbox* sandbox = sandboxOf(lua);
+    const char* raw = luaL_checkstring(lua, 1);
+    if (sandbox == nullptr) {
+        return 0;
+    }
+
+    const std::optional<std::vector<std::byte>> baseBytes = sandbox->content.read(raw);
+    if (!baseBytes) {
+        return luaL_error(lua, "doscript: cannot open %s", raw);
+    }
+    std::string source{reinterpret_cast<const char*>(baseBytes->data()), baseBytes->size()};
+    for (const std::string& hookPath : sandbox->content.hooksFor(raw)) {
+        if (const std::optional<std::vector<std::byte>> hookBytes =
+                sandbox->content.read(hookPath)) {
+            source.push_back('\n');
+            source.append(reinterpret_cast<const char*>(hookBytes->data()), hookBytes->size());
+        }
+    }
+    source = rewriteMohoSource(source);
+
+    const std::string chunk = "@" + rm::vfs::normalisedVfsPath(raw);
+    if (luaL_loadbuffer(lua, source.data(), source.size(), chunk.c_str()) != 0) {
+        return lua_error(lua);
+    }
+
+    // The environment: the caller's second argument, or _G. `lua_setupvalue`
+    // rebinds the chunk's `_ENV` the way import's module env does.
+    if (lua_istable(lua, 2)) {
+        lua_pushvalue(lua, 2);
+    } else {
+        lua_pushglobaltable(lua);
+    }
+    if (lua_setupvalue(lua, -2, 1) == nullptr) {
+        lua_pop(lua, 1);
+    }
+
+    refill(*sandbox);
+    if (lua_pcall(lua, 0, 0, 0) != 0) {
+        return lua_error(lua);
+    }
+    return 0;
 }
 
 /// The three dialect shims the measurement called for: `table.getn` (115 sites) and `math.mod`
@@ -1160,9 +1228,10 @@ string.gfind = string.gfind or string.gmatch
 
 -- FAF's own import.lua (which the C import replaces) declares the module-cache global that
 -- factions.lua and friends probe to ask "is the UI loaded". Empty is the honest answer for
--- a headless skirmish: no UI modules, no active mods.
+-- a headless skirmish: no UI modules.
 __modules     = __modules     or {}
-__active_mods = __active_mods or {}
+-- `__active_mods` is NOT a shim here: the C++ side builds it from the match's
+-- mod list (`C-313`) at VM boot and again on `setActiveMods`.
 
 -- Bare table iteration, the rewriter's other half. `for k, v in t do` is legal LuaPlus and
 -- the corpus does it 1,134 times; the rewrite wraps every generic for's in-list in this.
@@ -1403,7 +1472,6 @@ int sessionSendChatMessageBinding(lua_State* lua) {
             serializeLuaValue(lua, -1, message.args.text, 8);
             lua_pop(lua, 1);
         }
-        lua_getfield(lua, messageArg, "text");
         if (const char* text = lua_tostring(lua, -1)) {
             message.args.text = text;
         }
@@ -1447,8 +1515,18 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
     luaL_openlibs(state_);
 
     auto* sandbox = new Sandbox{};
-    sandbox->root = root_;
     sandbox->verbose = verbose_;
+
+    // The sandbox's content view (`C-268`): the corpus mounts at `/`, and
+    // `setActiveMods` layers each mod under `/mods/<name>` — never at `/`, so
+    // a mod cannot shadow a base file. `import`/`doscript` read through this
+    // rather than the raw filesystem, which is what makes the hook concat
+    // (`C-311`) a lookup rule instead of a second resolver.
+    sandbox->content.mountDirectory(root_);
+    // `C-312`: the stock mount spec's `hook={'/schook'}` — the one native
+    // hookdir, registered before any mod's so the concat order is
+    // original → schook → mods (`C-311`).
+    sandbox->content.addHookDirectory("/schook");
 
     // Names that get a real implementation rather than a counted stub. Everything else in
     // FafApi.inc lands on `countedStub`, which is the honest default: not implemented, counted.
@@ -1556,6 +1634,11 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
     // implementations register by hand. They are the thread model's other half.
     lua_pushcfunction(state_, waitSeconds);
     lua_setglobal(state_, "WaitSeconds");
+    // `doscript` — absent from FafApi.inc for the same reason the wait family
+    // is (the corpus captures it inside import.lua rather than calling it as
+    // a global), and the other half of `C-311`'s concat contract.
+    lua_pushcfunction(state_, doscriptBinding);
+    lua_setglobal(state_, "doscript");
     lua_pushcfunction(state_, waitTicks);
     lua_setglobal(state_, "WaitTicks");
     lua_pushcfunction(state_, currentThread);
@@ -1602,6 +1685,12 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
         lua_pop(state_, 1);
     }
 
+    // `C-313`: `__active_mods` exists from boot, built by the real machinery —
+    // an empty table for an unmodded match, which is the same observable
+    // result the `or {}` shim produced, only now it is the same code path a
+    // modded match takes.
+    publishActiveMods(state_, {});
+
     // THE BOOTSTRAP. `Class` and `ClassSimple` are not engine functions and are not in the
     // annotations — they are the corpus's own OO helper, declared global by
     // `lua/system/class.lua` (its first line is `---@declare-global`). Moho ran that during
@@ -1634,6 +1723,7 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
              "/lua/system/GlobalPlatoonTemplate.lua",
          }) {
         (void)import(module);
+
         const std::string merge = std::string{"local m = import('"} + module
                                   + "'); for k, v in pairs(m) do rawset(_G, k, v) end";
         if (luaL_dostring(state_, merge.c_str()) != 0) {
@@ -1677,6 +1767,34 @@ bool FafAi::import(std::string_view path) {
         }
     }
     return true;  // already cached from an earlier call, which only happens after a success
+}
+
+void FafAi::setActiveMods(std::vector<rm::vfs::ActiveMod> mods) {
+    if (state_ == nullptr) {
+        return;
+    }
+    Sandbox* sandbox = sandboxOf(state_);
+    if (sandbox == nullptr) {
+        return;
+    }
+
+    // `C-313`: the order `gameInfo.GameMods` carries — `before`/`after` uid
+    // constraints, uid-alphabetical otherwise.
+    sandbox->activeMods = rm::vfs::orderActiveMods(std::move(mods));
+
+    // `C-268`/`C-312`: each mod mounts under `/mods/<name>` — never at `/` —
+    // and its hookdir registers for the import concat, in `__active_mods`
+    // order so the concat walks them the way retail does.
+    for (const rm::vfs::ActiveMod& mod : sandbox->activeMods) {
+        (void)sandbox->content.mountMod(mod);
+    }
+    publishActiveMods(state_, sandbox->activeMods);
+}
+
+const rm::vfs::Vfs& FafAi::content() const noexcept {
+    static const rm::vfs::Vfs empty;
+    const Sandbox* sandbox = state_ != nullptr ? sandboxOf(state_) : nullptr;
+    return sandbox != nullptr ? sandbox->content : empty;
 }
 
 std::size_t FafAi::pump(long long tick) {

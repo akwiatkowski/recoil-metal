@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "core/sim/SimCallbacks.hpp"
+#include "core/vfs/Vfs.hpp"
 
 struct lua_State;
 
@@ -112,6 +113,20 @@ public:
     /// Returns whether it loaded. The error, if any, is in `lastError`.
     [[nodiscard]] bool import(std::string_view path);
 
+
+    /// The match's mod list — `gameInfo.GameMods` (`C-313`). Rebuilds the
+    /// sandbox's `__active_mods` table from it, ordered by the mods' own
+    /// `before`/`after` uid constraints (uid-alphabetical otherwise), mounts
+    /// each under `/mods/<name>` (`C-268`), and registers its hookdir for the
+    /// import concat (`C-312`). An empty list is the ordinary unmodded match:
+    /// `__active_mods` becomes an empty table built by the real machinery
+    /// rather than the `or {}` shim it replaces.
+    void setActiveMods(std::vector<rm::vfs::ActiveMod> mods);
+
+    /// The sandbox's content view: the corpus root mounted at `/`, plus every
+    /// active mod under `/mods/<name>`. Exposed for the blueprint pass
+    /// (`C-314`) and for tests that want to see what the VM sees.
+    [[nodiscard]] const rm::vfs::Vfs& content() const noexcept;
     [[nodiscard]] const std::string& lastError() const noexcept { return lastError_; }
 
     /// Resumes every forked thread that is due at `tick` — Moho's scheduler beat, one call
