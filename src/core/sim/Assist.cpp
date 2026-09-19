@@ -198,4 +198,27 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
     return helping;
 }
 
+UnitId terminalGuardTarget(UnitId start, const UnitStore& store) noexcept {
+    // `C-189`: the roll-off follows `Unit+0x4e0` — the active guard target —
+    // transitively, the same walk `C-183`'s build assist makes. A cycle
+    // resolves to the entry point: the chain is malformed, and its own unit is
+    // the least wrong answer.
+    const std::span<const CommandQueue> orders = store.orders();
+    UnitId at = start;
+    std::vector<UnitId> visited;
+    while (store.alive(at)) {
+        if (std::ranges::find(visited, at) != visited.end()) {
+            return start;
+        }
+        visited.push_back(at);
+        const QueuedCommand* head = orders[at.index].active();
+        if (head == nullptr || !isGuardCommand(head->kind())
+            || !store.alive(head->target())) {
+            return at;
+        }
+        at = head->target();
+    }
+    return start;
+}
+
 } // namespace rm::sim

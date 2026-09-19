@@ -95,4 +95,12 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
                             TickIndex tick = 0, TickRate rate = TickRate{},
                             std::vector<AssistLink>* links = nullptr);
 
+/// The unit at the end of `start`'s guard chain — `C-183`'s transitive walk
+/// through `Unit+0x4e0`, the same field retail's roll-off follows (`C-189`).
+/// Returns `start` when it guards nothing, and `start` again on a cycle: a
+/// malformed chain resolves to its own entry point rather than an arbitrary
+/// member, which is the honest answer for a rally lookup (the unit's own
+/// list) and for assistance (no founder).
+[[nodiscard]] UnitId terminalGuardTarget(UnitId start, const UnitStore& store) noexcept;
+
 } // namespace rm::sim

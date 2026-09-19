@@ -657,6 +657,39 @@ TEST_CASE("assist walks a transitive guard chain to the builder at its end") {
     CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining) == Approx(97.0f).margin(0.01));
 }
 
+TEST_CASE("C-189: the roll-off rally lookup walks the guard chain to its end",
+          "[assist]") {
+    // Retail's roll-off follows `Unit+0x4e0` — the active guard target —
+    // transitively, so an assisting factory's product rolls to the rally of
+    // the unit at the chain's end, not its own. The resolver is the same walk
+    // `C-183`'s build assist makes.
+    Fixture f;
+    const UnitId founder = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId relay = f.roster.add(f.engineerType, 210.0f, 200.0f, 0, 100.0f);
+    const UnitId helper = f.roster.add(f.engineerType, 220.0f, 200.0f, 0, 100.0f);
+
+    // No chain: a unit guarding nothing resolves to itself — its own rally.
+    CHECK(rm::sim::terminalGuardTarget(founder, f.roster.store) == founder);
+
+    REQUIRE(f.assist(relay, founder));
+    REQUIRE(f.assist(helper, relay));
+    f.tick(1);
+
+    // helper → relay → founder: the chain's end is the founder, whose rally
+    // list is what the roll-off reads.
+    CHECK(rm::sim::terminalGuardTarget(helper, f.roster.store) == founder);
+    CHECK(rm::sim::terminalGuardTarget(relay, f.roster.store) == founder);
+
+    // A cycle resolves to its entry point rather than an arbitrary member.
+    Fixture g;
+    const UnitId first = g.roster.add(g.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId second = g.roster.add(g.engineerType, 210.0f, 200.0f, 0, 100.0f);
+    REQUIRE(g.assist(first, second));
+    REQUIRE(g.assist(second, first));
+    g.tick(1);
+    CHECK(rm::sim::terminalGuardTarget(first, g.roster.store) == first);
+}
+
 TEST_CASE("a cyclic assist chain contributes no work") {
     Fixture f;
     const UnitId first = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);

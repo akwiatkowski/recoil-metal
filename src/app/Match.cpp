@@ -7,6 +7,7 @@
 #include "app/Interface.hpp"  // shotClassOf — a WeaponFired's fallback-flash class
 
 #include "core/sim/BuildOrder.hpp"
+#include "core/sim/Assist.hpp"
 #include "core/sim/Replay.hpp"
 #include "core/sim/SlowUpdate.hpp"
 #include "core/sim/StateHash.hpp"
@@ -1945,7 +1946,12 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             // The player's rally point outranks the default roll-off and the
             // attack wave alike: an explicit order beats both. Stored in world
             // elmos as floats; fixed point only where the sim computes.
-            const auto rally = scene.rallyPoints.find(work.builder.index);
+            // `C-189`: the lookup walks the guard chain transitively
+            // (`Unit+0x4e0`) — an assisting factory's product rolls to the
+            // rally of the unit at the chain's end, not its own.
+            const rm::sim::UnitId rallyOwner =
+                rm::sim::terminalGuardTarget(work.builder, scene.store);
+            const auto rally = scene.rallyPoints.find(rallyOwner.index);
             std::array<rm::sim::Fx, 2> to =
                 rally != scene.rallyPoints.end()
                     ? std::array<rm::sim::Fx, 2>{rm::sim::fxFromFloat(rally->second[0]),
