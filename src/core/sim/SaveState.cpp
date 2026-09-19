@@ -142,6 +142,10 @@ constexpr std::uint32_t kVersion43 = 43;
 // the installed enhancements: a unit with no manipulators and every bone shown
 // writes nothing, so older saves decode to the pre-manipulator defaults.
 constexpr std::uint32_t kVersion44 = 44;
+// 45: the sim-owned emitter pool (`C-296`'s `CEffectManagerImpl` records,
+// `C-298`'s bone attach, `C-374`'s viewer mask) — nullable like `features`:
+// a match with no effect manager saves the absent byte.
+constexpr std::uint32_t kVersion45 = 45;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1460,6 +1464,49 @@ void writeUnitPose(PayloadWriter& w, const UnitStore::Snapshot& s) {
     return true;
 }
 
+// V45 trails the payload after the unit pose: the emitter pool, nullable like
+// `features` — a match with no effect manager saves the absent byte, and an
+// older reader keeps no effects.
+void writeEffects(PayloadWriter& w, const std::optional<std::vector<SimEmitter>>& state) {
+    w.u8(state.has_value());
+    if (!state) {
+        return;
+    }
+    w.count(state->size());
+    for (const SimEmitter& emitter : *state) {
+        writeId(w, emitter.unit);
+        w.i32(emitter.bone);
+        w.text(emitter.effect);
+        w.u8(emitter.alive);
+        w.u8(emitter.hidden);
+        w.u64(emitter.viewerMask);
+    }
+}
+
+[[nodiscard]] bool readEffects(PayloadReader& r,
+                               std::optional<std::vector<SimEmitter>>& state) {
+    bool present{};
+    if (!readFlag(r, present)) return false;
+    if (!present) {
+        state.reset();
+        return true;
+    }
+    std::size_t count{};
+    if (!r.count(count, 8)) return false;
+    state.emplace();
+    state->resize(count);
+    for (SimEmitter& emitter : *state) {
+        std::uint8_t alive{}, hidden{};
+        if (!readId(r, emitter.unit) || !r.i32(emitter.bone)
+            || !r.text(emitter.effect) || emitter.effect.empty()
+            || !r.u8(alive) || alive > 1 || !r.u8(hidden) || hidden > 1
+            || !r.u64(emitter.viewerMask)) return false;
+        emitter.alive = alive != 0;
+        emitter.hidden = hidden != 0;
+    }
+    return true;
+}
+
 void writeRedirects(PayloadWriter& w, std::span<const MissileRedirect> redirects) {
     w.count(redirects.size());
     for (const MissileRedirect& value : redirects) {
@@ -2148,6 +2195,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion37) writeIntel(payloadWriter, state.intel);
     if (version >= kVersion42) writeProductionOverrides(payloadWriter, state.productionOverrides);
     if (version >= kVersion44) writeUnitPose(payloadWriter, state.units);
+    if (version >= kVersion45) writeEffects(payloadWriter, state.effects);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -2193,7 +2241,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion36 && version != kVersion37 && version != kVersion38
                && version != kVersion39 && version != kVersion40 && version != kVersion41
                && version != kVersion42 && version != kVersion43
-               && version != kVersion44)
+               && version != kVersion44 && version != kVersion45)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2275,7 +2323,9 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion42 && !readProductionOverrides(reader, productionOverrides)) {
         return std::nullopt;
     }
+    std::optional<std::vector<SimEmitter>> effects;
     if (version >= kVersion44 && !readUnitPose(reader, units)) return std::nullopt;
+    if (version >= kVersion45 && !readEffects(reader, effects)) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
@@ -2289,7 +2339,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        .projectiles = std::move(projectiles),
                        .pathService = std::move(pathService),
                        .intel = std::move(intel),
-                       .productionOverrides = std::move(productionOverrides)};
+                       .productionOverrides = std::move(productionOverrides),
+                       .effects = std::move(effects)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -2314,7 +2365,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion44);
+    return rm::sim::encode(state, kVersion45);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

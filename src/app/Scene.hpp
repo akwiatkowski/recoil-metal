@@ -361,6 +361,12 @@ struct UnitScene {
     /// Missile-redirector components, likewise distinct from units (`C-088`).
     std::vector<rm::sim::MissileRedirect> redirects;
 
+    /// The sim-owned emitter pool — retail's `CEffectManagerImpl` at
+    /// `Sim+0x8C0` (`C-296`): records the sim authors on weapon fire
+    /// (`C-298`), serialized as SaveState v45. The scene keeps the storage;
+    /// `Match::effects` points here.
+    std::vector<rm::sim::SimEmitter> effects;
+
     // What each unit TYPE is. A batch is exactly one unit type, so a type index and a batch
     // index are THE SAME NUMBER and deliberately so: it keeps the render batching and the
     // sim's type numbering in step without a mapping table, and `batches[type]` is how a

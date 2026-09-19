@@ -1087,6 +1087,24 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         }
     }
 
+    // `C-296`'s effect pool: an emitter's unit, bone and viewer mask decide
+    // what the next beat emits and for whom, so two matches differing only in
+    // live effects must hash apart. Present-only like `pathService` — a scene
+    // with no pool feeds nothing, keeping the pre-effects stream.
+    if (match.effects != nullptr) {
+        feed(h, true);
+        feed(h, match.effects->size());
+        for (const SimEmitter& emitter : *match.effects) {
+            feed(h, static_cast<std::size_t>(emitter.unit.index));
+            feed(h, static_cast<std::size_t>(emitter.unit.generation));
+            feed(h, emitter.bone);
+            feedText(h, emitter.effect);
+            feed(h, emitter.alive);
+            feed(h, emitter.hidden);
+            feed(h, emitter.viewerMask);
+        }
+    }
+
     return h;
 }
 

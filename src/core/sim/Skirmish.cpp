@@ -1257,6 +1257,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         // headroom that the recipient's own tick was about to change.
         shareOverflow(match.economies, match.armies);
     }
+
     // Funded captures advance after the award above, like repair work: progress, and
     // replacement-entity transfer on completion. The transfer spawns, so this runs
     // after every span-holding pass has finished with the store.
@@ -1269,6 +1270,13 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                    : std::span<EnhancementWork>{});
     }
     (void)applyRepairWork(store, catalog, repairs);
+
+    // THE EFFECT-MANAGER BEAT — retail's `Sim+0x8C0` tick inside `AdvanceBeat`
+    // (`C-296`, `0x65fda0`). After `retireDead` so an emitter whose unit fell
+    // this tick is swept with it (`C-298`'s attach cannot outlive its bone),
+    // and after the guns so this tick's `WeaponFired` events spawn their
+    // records on the same beat (`CreateEmitterAtBone`, `0x677800`).
+    tickEffects(store, match.effects, match.armies, match.intel, match.events);
 
     // `CArmyStats` (`C-227`): the engine-owned stats are fed from this tick's economy
     // — the ratios `aibrain.lua`'s hysteresis ladder triggers on, the income and

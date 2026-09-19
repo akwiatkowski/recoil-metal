@@ -260,6 +260,13 @@ struct Match {
     /// `SelfDestruct` command toggles an entry on and off; the tick counts each down
     /// and kills the unit on zero through the ordinary death path.
     std::vector<SelfDestructWork>* selfDestructs = nullptr;
+
+    /// The sim-owned effect pool — retail's `CEffectManagerImpl` at `Sim+0x8C0`
+    /// (`C-296`), ticked in `AdvanceBeat` and serialized through `SerEffects`.
+    /// Caller-owned like `projectiles`: the sim authors the records
+    /// (`CreateEmitterAtBone`, `C-298`), the scene keeps the storage, and a
+    /// scene with no effects passes null so the whole beat is a branch.
+    std::vector<SimEmitter>* effects = nullptr;
 };
 
 /// The position and radius are CARRIED rather than looked up, because retiring a unit is

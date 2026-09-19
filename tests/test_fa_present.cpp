@@ -238,3 +238,93 @@ TEST_CASE("C-304: the storage manipulator slides a bone by the stored fraction",
     CHECK(restored.manipulators()[unit.index][0].slideOffset
           == rm::sim::Fx::fromInt(2));
 }
+
+TEST_CASE("C-296/C-298: emitters are sim objects that spawn on fire and die with their unit",
+          "[fa-present][effects]") {
+    // `CEffectManagerImpl` is a `Sim` member (`+0x8C0`) ticked in `AdvanceBeat`
+    // (C-296, `0x65fda0`), and `CreateEmitterAtBone` (`0x677800`) attaches
+    // emitters to bones sim-side (C-298). The bounded slice: a shot spawns a
+    // record at the muzzle bone, the record lives in the match's pool, and it
+    // dies with its unit — the state retail serializes through `SerEffects`.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef gunDef;
+    gunDef.name = "test_gunner";
+    rm::unitdef::Weapon gun;
+    gun.label = "test gun";
+    gun.role = rm::unitdef::WeaponRole::DirectFire;
+    gun.targetPriorities = {{"LAND"}};
+    gun.turreted = true;
+    gun.damage = rm::test::mag(10.0f);
+    gun.maxRange = rm::test::fx(400.0f);
+    gun.rateOfFire = 1.0f;
+    gun.muzzleVelocityElmosPerSecond = 200.0f;
+    gunDef.weapons.push_back(gun);
+    rm::unitdef::UnitDef targetDef;
+    targetDef.name = "test_target";
+    targetDef.categories = {"LAND"};
+
+    const auto gunner = roster.add(roster.addType(gunDef), 0.0f, 0.0f, 0, 500.0f);
+    (void)roster.add(roster.addType(targetDef), 200.0f, 0.0f, 1, 500.0f);
+
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<rm::sim::Projectile> projectiles;
+    std::vector<rm::sim::SimEmitter> effects;
+    rm::sim::EventQueue events;
+    const std::vector<int> commandersEver(2, 0);
+    rm::sim::Match match{.armies = armies,
+                         .economies = economies,
+                         .projectiles = &projectiles,
+                         .events = &events,
+                         .commandersEver = commandersEver,
+                         .effects = &effects};
+
+    events.beginFrame(0);
+    const rm::sim::TickReport report =
+        rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                              roster.rate, 0);
+    REQUIRE(report.shotsFired == 1);
+    // One emitter per shot, attached at the muzzle bone, named by the effect id.
+    REQUIRE(effects.size() == 1);
+    CHECK(effects[0].unit == gunner);
+    CHECK(effects[0].bone == rm::sim::kMuzzleBone);
+    CHECK(effects[0].effect == "test_gunner:test gun");
+    CHECK(effects[0].alive);
+    CHECK_FALSE(effects[0].hidden);
+    // The emission is reported with its viewer mask (C-374's wire).
+    REQUIRE(events.count(rm::sim::EventKind::EffectEmitted) == 1);
+
+    // `C-303`'s gate: hiding the bone the emitter rides suppresses it — the
+    // record stays alive, the attachment point reports hidden.
+    REQUIRE(roster.store.setBoneHidden(gunner, rm::sim::kMuzzleBone, true));
+    events.beginFrame(1);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                roster.rate, 1);
+    REQUIRE_FALSE(effects.empty());
+    CHECK(effects[0].hidden);
+
+    // The pool is serialized sim state (C-296's `SerEffects`): a save carries
+    // the live records, bone and effect id included.
+    rm::sim::RandomStream random{std::uint32_t{1}};
+    const std::vector<std::byte> bytes = rm::sim::SaveState::encode(
+        {.tick = 7, .random = random.snapshot(), .units = roster.store.snapshot(),
+         .effects = effects});
+    const auto saved = rm::sim::SaveState::decode(bytes);
+    REQUIRE(saved.has_value());
+    REQUIRE(saved->effects.has_value());
+    REQUIRE(saved->effects->size() == effects.size());
+    CHECK((*saved->effects)[0].unit == effects[0].unit);
+    CHECK((*saved->effects)[0].bone == effects[0].bone);
+    CHECK((*saved->effects)[0].effect == effects[0].effect);
+    CHECK((*saved->effects)[0].hidden == effects[0].hidden);
+
+    // And it dies with its unit: the sweep retires the record the same tick
+    // the corpse is reported, so a recycled slot never inherits the flash.
+    roster.store.health()[gunner.index].current = rm::sim::Mag{};
+    events.beginFrame(2);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                roster.rate, 2);
+    CHECK(effects.empty());
+}

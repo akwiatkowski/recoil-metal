@@ -1346,6 +1346,9 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 //   declare a DRAW on tick one of every decorative scene.
                 .over = scene.armies.empty()
                         || rm::sim::survivorCount(scene.armies) <= 1,
+                // The sim-owned emitter pool (`C-296`): the scene keeps the
+                // storage, the effect beat authors the records.
+                .effects = &scene.effects,
             },
     };
 

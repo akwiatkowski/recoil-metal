@@ -80,6 +80,10 @@ struct SaveState {
     /// unit's first tick, so older saves decode to the same income stream
     /// after at most one recompute beat.
     std::optional<std::vector<Resources>> productionOverrides;
+    /// The sim-owned emitter pool (`C-296`'s `CEffectManagerImpl` records),
+    /// from v45 — null when the match keeps no effects, like `projectiles`.
+    /// Restored straight into `Match::effects`'s storage by the caller.
+    std::optional<std::vector<SimEmitter>> effects;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);
