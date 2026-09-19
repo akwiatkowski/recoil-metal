@@ -203,6 +203,17 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     if (const std::optional<double> priority = parsed->numberAt("BuildIconSortPriority")) {
         def.buildIconSortPriority = static_cast<int>(*priority);
     }
+
+    // `C-265`: script-only unit behaviors retail keys by script class, not by
+    // blueprint key — the Ythotha's `DeathThread` spawns an Othuy, and the
+    // Othuy's script makes it invulnerable. With no unit scripts running, the
+    // catalog keys the same two rules on the blueprint id the script binds to.
+    if (def.name == "XSL0401") {
+        def.deathSpawn = "XSL0402";
+    }
+    if (def.name == "XSL0402") {
+        def.invulnerable = true;
+    }
     if (const std::optional<double> priority = parsed->numberAt("StrategicIconSortPriority")) {
         def.strategicIconSortPriority = static_cast<int>(*priority);
     }
@@ -506,6 +517,9 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // The vertical axis the radius above throws away. Kept for sight: an eye is on top of the
     // unit and the sight model was reading the ground under it. See `UnitDef::sizeYElmos`.
     def.sizeYElmos = numberOr(*parsed, "SizeY", 0.0f) * scmap::kElmosPerOgrid;
+
+    // `C-265`: a spawned unit's self-destruct timer — the Othuy's 30 s.
+    def.lifetimeSeconds = numberOr(*parsed, "Lifetime", 0.0f);
     // The mesh's height falls back to the collision box when `Physics.MeshExtentsY` is absent,
     // and never below it: a unit whose stated extents are smaller than its own collision box is
     // content contradicting itself, and the larger figure is the safer one for a reveal that
@@ -583,6 +597,26 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
                     def.buildableCategory.push_back(std::move(term));
                 }
             }
+        }
+
+        // `C-192`: the sacrifice multiplier — what a sacrificing builder pays
+        // the target, as a fraction of the BUILDER's own cost. Only the four
+        // Aeon sacrifice units state it (0.6); zero means no sacrifice.
+        def.sacrificeMassMult = numberOr(*economy, "SacrificeMassMult", 0.0f);
+        def.sacrificeEnergyMult = numberOr(*economy, "SacrificeEnergyMult", 0.0f);
+
+        // `C-148`: blueprint ids whose wrecks grant a rebuild head start.
+        if (const lua::Value* rebuild = economy->find("RebuildBonusIds")) {
+            for (const lua::Value& entry : rebuild->items) {
+                if (const auto id = entry.asString(); id && !id->empty()) {
+                    def.rebuildBonusIds.emplace_back(*id);
+                }
+            }
+        }
+
+        // `C-261`: the unit a construction egg produces on completion.
+        if (const auto buildUnit = economy->stringAt("BuildUnit")) {
+            def.economyBuildUnit = *buildUnit;
         }
     }
 

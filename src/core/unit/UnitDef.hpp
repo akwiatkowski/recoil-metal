@@ -520,6 +520,39 @@ struct UnitDef {
     /// to FA's formula rather than to our clock.
     sim::Fx reclaimPerBuildRate{};
 
+    /// `Economy.SacrificeMassMult`/`SacrificeEnergyMult` (`C-192`): what a
+    /// sacrificing builder pays the target, as a fraction of the BUILDER's own
+    /// `BuildCost*`. Only the four Aeon sacrifice-capable units state it (0.6);
+    /// zero means the unit cannot sacrifice at all — retail's `0.5` is a
+    /// fallback for a zero TARGET cost, not a default multiplier.
+    float sacrificeMassMult = 0.0f;
+    float sacrificeEnergyMult = 0.0f;
+
+    /// `Economy.RebuildBonusIds` (`C-148`): blueprint ids whose wrecks grant a
+    /// head start when this unit is built over them. ~110 structures state a
+    /// list (usually their own id); empty means no rebuild bonus.
+    std::vector<std::string> rebuildBonusIds;
+
+    /// `Economy.BuildUnit` (`C-261`): the unit a construction egg produces when
+    /// it finishes — the Megalith's `xrl0002-5` eggs each name a Cybran
+    /// experimental. Empty on everything else.
+    std::string economyBuildUnit;
+
+    /// Root `Lifetime` (`C-265`): seconds until a spawned unit destroys itself —
+    /// the Othuy's 30. Zero means no lifetime.
+    float lifetimeSeconds = 0.0f;
+
+    /// Script-only invulnerability (`C-265`): retail's Othuy calls
+    /// `SetCanTakeDamage(false)`/`SetCanBeKilled(false)` in its script — no
+    /// blueprint key exists, so `UnitCatalog` sets this on XSL0402 by id, the
+    /// same way the script does by class.
+    bool invulnerable = false;
+
+    /// Script-only death spawn (`C-265`): retail's Ythotha `DeathThread`
+    /// `CreateUnitHPR`s XSL0402 — no blueprint key exists, so `UnitCatalog`
+    /// sets this on XSL0401 by id. Empty means nothing spawns on death.
+    std::string deathSpawn;
+
     /// How far this unit can build, repair and reclaim, in elmos.
     /// `Economy.MaxBuildDistance` × 8 — only 10 of 568 blueprints state one (the ACUs say
     /// 10, the UEF T1 engineer 5); everything else inherits the engine's default of 5
