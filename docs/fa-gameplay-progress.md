@@ -41,6 +41,29 @@ spawn-layer fix landed with it: an EXPERIMENTAL air unit now spawns on the
 Land layer per `C-324`'s `0x631800` rule (`214dc84`) — `airborne` is the
 current layer, `canFly` the capability. CTest passes all 1,941 cases.
 
+**Update:** 2026-09-19 gap-fill wave 2 — the deferred FA-ECON and FA-PRESENT
+items landed, all headless-tested and committed: `C-360` AIx cheats as
+permanent x2 income/build-rate + commander intel buffs (`1e43861`), `C-052`
+under-construction adjacency gate (`f90027c`), `C-070a` deactivation refund
+(`311224e`), `C-161` production throttled by consumption ratio (`e8ccaba`),
+`C-071` `Economy_Trend_*` stats (`758168c`), `C-017`/`C-098` builder-side
+progress mirror (`a7658fb`), `C-102` quarter-crossing progress events
+(`5a0398e`), `C-197` 99% cargo kill roll (`d651a2e`), `C-189` guard-chain
+rally lookup (`3f34db3`), `C-190` 10-retry cap + auto-upgrade (`9ac5cd5`),
+`C-238` gifting via `ChangeUnitArmy` (`379c573`), `C-146` fraction-scaled
+wreck + overkill vaporise (`f3c71ce`), `C-249` all-three-BuildBones
+precondition (`020da5b`), `C-083` silo assist (`28f2e0c`), `C-051`
+`EnergyWeapon` per-shot energy cost (`9772c15`), and the FA-PRESENT
+manipulator slice: `C-294`/`C-303` manipulator list + bone visibility
+(`36af041`), `C-304` storage-fraction bone slide (`df45a89`), `C-296`/`C-298`
+sim-owned emitters (`e46a23c`), `C-301`/`C-372` anim-collision events
+(`cabba4c`), `C-374` per-army emitter visibility (`b27760d`). `C-099`
+documented as no-analog (construction is a record, not a damageable unit).
+Still deferred: `C-264` attach-build, `C-381` tractor claw, platoons
+(`C-358`/`C-359`/`C-361`), mod machinery (`C-268`–`C-270`, `C-311`–`C-314`,
+`C-220`), and the native→Lua callback surface (`C-237`, `C-282`, `C-125`,
+`C-309`, `C-283`). CTest passes all 1,982 cases.
+
 **Update:** 2026-09-19 gap-fill wave — seven analysis-found gaps implemented
 against the claim contract, all headless-tested and committed: `C-192`
 sacrifice one-shot `min(mass,energy)` transfer (`d2c0405`), `C-148`/`C-191`
