@@ -12,8 +12,9 @@
 #include "core/lua/LuaTable.hpp"
 #include "core/unit/UnitCatalog.hpp"
 
+#include <filesystem>
+#include <fstream>
 #include <string>
-#include <string_view>
 
 namespace {
 
@@ -241,4 +242,50 @@ TEST_CASE("C-270: registration walks the fixed group order, alphabetical within"
     CHECK(order[3].id == "/env/a/a_prop.bp");
     CHECK(order[4].group == rm::unit::BlueprintGroup::Prop);
     CHECK(order[4].id == "/env/b/b_prop.bp");
+}
+
+TEST_CASE("C-314: the mod pass scans /mods/<name> after the fixed dirs",
+          "[blueprint][merge]") {
+    // `LoadBlueprints`'s order: fixed dirs first, then each active mod's `.bp`
+    // files under its mount in `__active_mods` order — so a mod's `Merge=true`
+    // overlay lands on the base blueprint the fixed scan already stored.
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "rm_bp_mods_test";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+
+    const auto write = [&](const std::filesystem::path& path, std::string_view text) {
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream out{path};
+        out << text;
+    };
+    write(root / "stock/units/UEL0201/UEL0201_unit.bp",
+          "UnitBlueprint { Economy = { BuildCostMass = 100, BuildTime = 50 } }");
+    write(root / "mods/Balance/units/uel0201_balance.bp",
+          "UnitBlueprint { BlueprintId = 'uel0201', Merge = true,\n"
+          "  Economy = { BuildCostMass = 40 } }");
+    write(root / "mods/Balance/units/uel9999/uel9999_unit.bp",
+          "UnitBlueprint { Economy = { BuildCostMass = 5 } }");
+
+    rm::vfs::Vfs vfs;
+    vfs.mountDirectory(root / "stock");
+    REQUIRE(vfs.mountMod(rm::vfs::ActiveMod{.uid = "uid-1", .name = "Balance",
+                                          .location = (root / "mods/Balance").string()}));
+
+    rm::unit::UnitCatalog catalog;
+    const std::size_t stored = catalog.loadBlueprints(
+        vfs, {rm::vfs::ActiveMod{.uid = "uid-1", .name = "Balance",
+                                 .location = (root / "mods/Balance").string()}});
+    CHECK(stored == 3);
+
+    // The merge landed on the base unit: overlaid field wins, sibling survives.
+    const rm::lua::Value* bp = catalog.find(rm::unit::BlueprintGroup::Unit, "uel0201");
+    REQUIRE(bp != nullptr);
+    CHECK(bp->path("Economy", "BuildCostMass")->number == 40.0);
+    CHECK(bp->path("Economy", "BuildTime")->number == 50.0);
+
+    // The mod's new unit registered too — under its own id.
+    CHECK(catalog.find(rm::unit::BlueprintGroup::Unit, "uel9999") != nullptr);
+
+    std::filesystem::remove_all(root, ec);
 }

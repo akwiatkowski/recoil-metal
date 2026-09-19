@@ -43,6 +43,7 @@
 // the claim agree, so the authored id wins here.
 
 #include "core/lua/LuaValue.hpp"
+#include "core/vfs/Vfs.hpp"
 
 #include <cstddef>
 #include <map>
@@ -108,6 +109,16 @@ public:
     /// `safecall`/`pcall` boundary (`C-220`: "a broken `.bp` is pcall'd and
     /// skipped"). Returns how many blueprints were stored.
     std::size_t storeSource(std::string_view source, std::string_view path);
+
+    /// `LoadBlueprints` (`C-270`/`C-314`): scans the fixed directories in
+    /// retail's order — `{effects, env.meshes, projectiles, props, units}` —
+    /// then every active mod's `.bp` files under its `/mods/<name>` mount in
+    /// `__active_mods` order, feeding each file to `storeSource`. This is the
+    /// pass that makes a mod's blueprints real: a mod `.bp` with an existing
+    /// `BlueprintId` replaces the original, `Merge = true` deep-merges onto it
+    /// (`C-220`). Returns how many blueprints were stored.
+    std::size_t loadBlueprints(const vfs::Vfs& content,
+                               const std::vector<vfs::ActiveMod>& mods = {});
 
     /// One stored blueprint, or nullptr. `id` is case-folded before lookup.
     [[nodiscard]] const lua::Value* find(BlueprintGroup group,

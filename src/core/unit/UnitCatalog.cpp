@@ -370,6 +370,35 @@ std::size_t UnitCatalog::storeSource(std::string_view source, std::string_view p
     return stored;
 }
 
+std::size_t UnitCatalog::loadBlueprints(const vfs::Vfs& content,
+                                        const std::vector<vfs::ActiveMod>& mods) {
+    std::size_t stored = 0;
+    const auto scan = [&](std::string_view directory) {
+        for (const std::string& path : content.list(directory, ".bp")) {
+            if (const auto bytes = content.read(path)) {
+                stored += storeSource(
+                    {reinterpret_cast<const char*>(bytes->data()), bytes->size()}, path);
+            }
+        }
+    };
+
+    // `C-270`: the fixed directory scan, in retail's order — effects, env.meshes,
+    // projectiles, props, units. `list` answers alphabetically within each, which
+    // is the deterministic order the category bits rely on.
+    for (const char* directory :
+         {"/effects", "/env/meshes", "/projectiles", "/props", "/units"}) {
+        scan(directory);
+    }
+
+    // `C-314`: then every active mod's `.bp` files under its `/mods/<name>`
+    // mount, in `__active_mods` order — before `ModBlueprints` would run, which
+    // is the hook this store's `store` already models.
+    for (const vfs::ActiveMod& mod : mods) {
+        scan(vfs::modMountPoint(mod));
+    }
+    return stored;
+}
+
 const lua::Value* UnitCatalog::find(BlueprintGroup group, std::string_view id) const {
     const auto table = blueprints_.find(group);
     if (table == blueprints_.end()) {
