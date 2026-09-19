@@ -614,6 +614,17 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, army.offeringDraw);
         }
     }
+    // `UnitCap` joins the stream only once some army's ceiling differs from the
+    // engine's own 500 (`0x008e8035`), so a match on the default hashes exactly
+    // as before. `unitCostTotal` is derived — the units it sums are already fed.
+    if (std::ranges::any_of(match.armies, [](const Army& army) {
+            return army.unitCap != Fx::fromInt(500);
+        })) {
+        for (const Army& army : match.armies) {
+            feed(h, army.unitCap.raw());
+        }
+    }
+
 
     if (match.pathService != nullptr) {
         // Preserve the pre-service byte stream for compatibility seams that do not own one.

@@ -259,6 +259,11 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
                 }
             }
         }
+        // `General.CapCost`, retail's unit-cap weight (`RUnitBlueprintGeneral+0x7c`).
+        // The engine's unauthored default is 1 — the corpus only ever overrides it
+        // down (drones and walls at 0, T1 sonar at 0.1), so an absent key means an
+        // ordinary one-unit charge, not a free one.
+        def.capCost = sim::fxFromFloat(numberOr(*general, "CapCost", 1.0f));
     }
 
     // --- physics -----------------------------------------------------------

@@ -111,6 +111,63 @@ namespace {
     const auto b = std::ranges::find_if(armies, [theirs](const Army& army) { return army.index == theirs; });
     return a != armies.end() && b != armies.end() && allied(*a, *b);
 }
+/// The `CapCost` an army's unfinished constructions already reserve. Retail's
+/// rising unit is a live entity from the moment the scaffold exists, so it
+/// counts toward the cap the whole time it is being built — matching the gate
+/// at `0x0074fda0`, which adds only the NEW unit's `CapCost` to a total that
+/// already includes it.
+[[nodiscard]] Fx reservedCapCost(std::span<const Construction> building,
+                                 const UnitCatalog& catalog, int armyIndex) noexcept {
+    Fx reserved{};
+    for (const Construction& work : building) {
+        if (work.armyIndex != armyIndex || work.finished()) {
+            continue;
+        }
+        if (const unitdef::UnitDef* def =
+                catalog.def(static_cast<UnitTypeIndex>(work.blueprintIndex))) {
+            reserved = reserved + def->capCost;
+        }
+    }
+    return reserved;
+}
+
+/// Retail's creation gate (`0x0074fda0`): `costTotal + reserved + new CapCost`
+/// over `unitCap` refuses the unit. `armies` empty means a bare test store with
+/// no army records — nothing is capped.
+[[nodiscard]] bool unitCapBlocks(std::span<const Army> armies, int armyIndex,
+                                 const UnitCatalog& catalog,
+                                 std::span<const Construction> building,
+                                 const unitdef::UnitDef& product) noexcept {
+    if (armies.empty() || armyIndex < 0
+        || static_cast<std::size_t>(armyIndex) >= armies.size()) {
+        return false;
+    }
+    const Army& army = armies[static_cast<std::size_t>(armyIndex)];
+    return army.unitCostTotal + reservedCapCost(building, catalog, armyIndex)
+               + product.capCost
+           > army.unitCap;
+}
+
+} // namespace
+
+bool factoryProductionCapped(const Command& command, const UnitStore& store,
+                             const UnitCatalog& catalog, std::span<const Army> armies,
+                             std::span<const Construction> building) noexcept {
+    if (command.kind != CommandKind::Build || !store.slotAlive(command.unit.index)) {
+        return false;
+    }
+    const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));
+    const unitdef::UnitDef* product = catalog.def(command.buildType);
+    if (builder == nullptr || product == nullptr || !builder->hasCategory("FACTORY")
+        || !product->isMobile()) {
+        return false;  // only factory production holds; anything else refuses
+    }
+    return unitCapBlocks(armies, store.motion()[command.unit.index].armyIndex, catalog,
+                         building, *product);
+}
+
+namespace {
+
 /// Whether an order is finished the moment it is started.
 ///
 /// A stop is instantaneous by definition. A build occupies its founder until completion;
@@ -327,9 +384,14 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     ++started;
                     return;
                 }
+                if (building != nullptr
+                    && factoryProductionCapped(pending->asCommand(), store, catalog, armies,
+                                               *building)) {
+                    return;  // at the cap: production waits, the order keeps its slot
+                }
                 const bool wasInstant = instantaneous(pending->kind());
                 if (startCommand(pending->asCommand(), store, catalog, terrain, *pendingGrid,
-                                 rate, building, events, features, approachGrid)) {
+                                 rate, building, events, features, armies, approachGrid)) {
                     orders[slot].markCurrentActive();
                     ++started;
                     if (!wasInstant) {
@@ -559,8 +621,12 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 if (buildGrid == nullptr) {
                     continue;
                 }
+                if (factoryProductionCapped(current->asCommand(), store, catalog, armies,
+                                            *building)) {
+                    continue;  // at the cap: the factory waits, its order stays
+                }
                 if (!startCommand(current->asCommand(), store, catalog, terrain, *buildGrid,
-                                  rate, building, events, features, approachGrid)) {
+                                  rate, building, events, features, armies, approachGrid)) {
                     // Refused on the way in: the site changed under the order. Three cases.
                     //
                     // A COLLEAGUE got there first — an allied builder's construction of the
@@ -644,7 +710,6 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     // This is the guarding factory's OWN queued build, which block A starts
                     // with its command retained. Complete it through the ordinary factory
                     // count/repeat ladder, but operate behind the active guard order (`C-211`).
-                    // Identity matters: later input can append another request for this type.
                     const auto own = std::ranges::find_if(
                         orders[slot].entries(), [work](const QueuedCommand& candidate) {
                             return candidate.kind() == CommandKind::Build
@@ -702,8 +767,12 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                                               fxFromFloat(product->collisionRadiusElmos)))) {
                         continue;
                     }
+                    if (factoryProductionCapped(candidate.asCommand(), store, catalog, armies,
+                                                *building)) {
+                        continue;  // this product waits on the cap; try the next
+                    }
                     if (startCommand(candidate.asCommand(), store, catalog, terrain, *productGrid,
-                                     rate, building, events, features)) {
+                                     rate, building, events, features, armies)) {
                         if (auto* work = activeConstruction(*building, store.idAt(slot))) {
                             work->retainedCommandId = candidate.payload().id;
                         }
@@ -749,6 +818,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                                               fxFromFloat(product->collisionRadiusElmos)))) {
                         continue;
                     }
+                    if (factoryProductionCapped(candidate.asCommand(), store, catalog, armies,
+                                                *building)) {
+                        continue;  // capped product waits; the queue is left alone
+                    }
                     selected = payload;
                     mirrored = candidate.asCommand();
                     mirrored.unit = store.idAt(slot);
@@ -765,7 +838,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                         (void)guarded.removeExact(selected.get());
                     }
                     (void)startCommand(mirrored, store, catalog, terrain, *productGrid, rate,
-                                       building, events, features);
+                                       building, events, features, armies);
                     continue;
                 }
             }
@@ -1618,7 +1691,7 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
             motion.path.clear();
             motion.pathIndex = 0;
             return startCommand(order->asCommand(), store, catalog, terrain, *grid, rate, nullptr,
-                                nullptr, nullptr);
+                                nullptr, nullptr, armies);
         };
         const int owner = store.motion()[slot].armyIndex;
         const Army* mine = armyFor(owner);
@@ -1717,8 +1790,8 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
 bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& catalog,
                   const Terrain& terrain, const PassabilityGrid& grid, TickRate,
                   std::vector<Construction>* building, EventQueue* events,
-                  const FeatureStore* features, const PassabilityGrid* approachGrid) {
-    // By SLOT, not by handle: `advanceOrders` starts an order for a slot it has already found
+                  const FeatureStore* features, std::span<const Army> armies,
+                  const PassabilityGrid* approachGrid) {
     // to be live, and a `Build` started for a unit that died this tick would charge a dead
     // army. The handle check belongs to `applyCommand`, where a stale handle is the ordinary
     // case; here it would be a second answer to a question already asked.
@@ -1995,6 +2068,18 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
                 || routeUnit(command.unit.index, siteX, siteZ, store, terrain,
                              approachGrid != nullptr ? *approachGrid : grid);
         }
+
+        // THE UNIT CAP, retail's creation gate (`0x0074fda0`): the entity that
+        // is about to exist would take `costTotal + reserved + CapCost` over
+        // `UnitCap`, so the create is refused. A factory's product never gets
+        // here — `factoryProductionCapped` holds its order upstream — leaving
+        // this to refuse mobile scaffolds and upgrades outright, which is what
+        // retail's gate does to a creation with no retrying task behind it.
+        if (unitCapBlocks(armies, store.motion()[command.unit.index].armyIndex, catalog,
+                          *building, *def)) {
+            return false;
+        }
+
 
         // The cost and the time come from the DEFINITION, and the rate from the clock — the
         // same derivation `UnitCatalog::Rates` does for income, at the one place a construction

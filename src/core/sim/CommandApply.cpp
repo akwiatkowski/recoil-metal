@@ -438,7 +438,7 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
         MoveState& motion = store.motion()[command.unit.index];
         const MoveState previous = motion;
         if (!startCommand(command, store, catalog, terrain, movementGrid, rate, building, events,
-                          features)) {
+                          features, armies)) {
             motion = previous;
             return false;
         }
@@ -510,7 +510,7 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
                     motion.pathIndex = 0;
                     if (const QueuedCommand* next = orders.current()) {
                         if (startCommand(next->asCommand(), store, catalog, terrain, movementGrid, rate,
-                                         building, events, features, approachGrid)) {
+                                         building, events, features, armies, approachGrid)) {
                             orders.markCurrentActive();
                         }
                     }
@@ -531,7 +531,7 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
             cancelConstructionFor(building, command, store, catalog);
             if (const QueuedCommand* next = orders.current()) {
                 if (startCommand(next->asCommand(), store, catalog, terrain, movementGrid, rate, building,
-                                 events, features, approachGrid)) {
+                                 events, features, armies, approachGrid)) {
                     orders.markCurrentActive();
                 }
             }
@@ -592,7 +592,7 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
         teardownMovement(motion);
     }
     if (!startCommand(command, store, catalog, terrain, movementGrid, rate, building, events,
-                      features, approachGrid)) {
+                      features, armies, approachGrid)) {
         motion = previous;
         // A refused move may still be served — by air (#15800). The offer
         // rewrites both queues itself, so a true return skips the staging
@@ -607,8 +607,12 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
         // A build refused because its site is OCCUPIED still means "build there": an
         // allied colleague's scaffold or an abandoned one is joined, not routed around.
         // Admission is all intake owes it — head dispatch decides lend vs takeover.
+        // A factory build refused by the UNIT CAP is admitted the same way: retail's
+        // `CFactoryBuildTask` retries the create every beat, so the order waits at
+        // the head rather than being dropped (`0x0074fda0`).
         if (command.kind != CommandKind::Build || building == nullptr
-            || !joinableConstructionAt(*building, command, store, catalog, armies)) {
+            || !(joinableConstructionAt(*building, command, store, catalog, armies)
+                 || factoryProductionCapped(command, store, catalog, armies, *building))) {
             return false;
         }
     }

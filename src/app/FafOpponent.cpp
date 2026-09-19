@@ -193,13 +193,18 @@ moho.aibrain_methods.GetEconomyStored = GetEconomyStored
 moho.aibrain_methods.GetEconomyTrend = GetEconomyTrend
 moho.aibrain_methods.GetEconomyStoredRatio = GetEconomyStoredRatio
 
--- The army-wide cap family, free globals in Moho. The cap is FAF's default lobby cap; the
--- cost total is a headcount until unit cap-costs are parsed.
+-- The army-wide cap family, free globals in Moho. Both read the snapshot's own
+-- fields: `unitCap` is the army's configured ceiling (`Options.UnitCap`, engine
+-- default 500) and `unitCostTotal` its live `CapCost` sum — the same pair the
+-- sim's creation gate compares (`0x0074fda0`).
 function GetArmyUnitCostTotal(armyIndex)
     local brain = __rm_faf.brains[armyIndex - 1]
-    return brain and #brain.snap.units or 0
+    return brain and brain.snap.unitCostTotal or 0
 end
-function GetArmyUnitCap() return 1000 end
+function GetArmyUnitCap(armyIndex)
+    local brain = __rm_faf.brains[armyIndex - 1]
+    return brain and brain.snap.unitCap or 500
+end
 
 -- FAF seconds for this snapshot: the sim tick re-scaled to FAF's fixed 10 Hz.
 -- LastScouted stamps need a clock that also advances in the bare test sandbox,
@@ -2587,6 +2592,15 @@ void FafOpponent::advance(rm::TickIndex tick) {
     lua_newtable(lua);  // snap
     lua_pushinteger(lua, static_cast<lua_Integer>(tick));
     lua_setfield(lua, -2, "tick");
+    // `GetArmyUnitCap`/`GetArmyUnitCostTotal` read these: the army's configured
+    // ceiling and its live `CapCost` sum, both maintained by the sim (`C-…`,
+    // retail gate `0x0074fda0`).
+    lua_pushnumber(lua, static_cast<lua_Number>(
+                            rm::sim::fxToFloat(scene.armies[armyIndex].unitCap)));
+    lua_setfield(lua, -2, "unitCap");
+    lua_pushnumber(lua, static_cast<lua_Number>(
+                            rm::sim::fxToFloat(scene.armies[armyIndex].unitCostTotal)));
+    lua_setfield(lua, -2, "unitCostTotal");
 
     for (std::size_t i = 0; i < scene.armies.size() && i < world_->starts.size(); ++i) {
         lua_getglobal(lua, "__rm_faf_army");

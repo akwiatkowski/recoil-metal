@@ -1512,6 +1512,7 @@ claim changes: mark it superseded and add the replacement.
 | `C-380` | `WP-35` | **Veterancy is fully Lua:** promotion calls `GetAIBrain():OnBrainUnitVeterancyLevel(unit, level)` + `DoUnitCallbacks('OnVeteran')`; brain side iterates `VeterancyTriggerList` (scenario triggers only). `Regen` buffs write `SetRegenRate(bp.Defense.RegenRate + Σbuffs)` — direct `SetRegenRate`/`RevertRegenRate` writes are overwritten by the next Regen-buff event. Veterancy regen = `Add 2/level` REPLACE-stacked; health = `Mult 1+0.1/level`. `bp.Veteran` is a free-form Lua table with `Game.VeteranDefault` fallback (25/100/250/500/1000); zero 'veteran' in any exports TSV. | [LUA-R] `lua.scd` `lua/sim/Unit.lua:3190-3191`, `lua/aibrain.lua:713-725`, `lua/sim/Buff.lua:227-245`, `lua/sim/BuffDefinitions.lua:14-160`, `lua/lua/game.lua:11`; EXE negative | High | Confirmed | Veterancy has zero native surface; buff interaction specified. |
 | `C-381` | `WP-36` | **Galactic Colossus tractor claw is fully shipped Lua — the native-drag hypothesis is refuted:** `TractorThread` sliders the target to the muzzle, `AttachBoneTo(-1, unit, muzzle)` (the only engine primitive, native `0x00692b20`), `SetDoNotTarget`, then `Kill(unit,'Damage',100)`; `TractorWatchThread` detaches on target death. `ADFTractorClawStructure` is defined but unused by any shipped unit. | [LUA-R] `lua.scd` `lua/lua/aeonweapons.lua:121-170,186`; [EXE] `ART-E001` `0x00692b20` | High | Confirmed | Claw drag is Lua slider+attach, not a native beam mechanic. |
 | `C-382` | `WP-11` | **Draw offers are a per-brain flag, not a negotiation protocol:** `SimUtils.SetOfferDraw` flips `brain.OfferingDraw` (`SimUtils.lua:180`), and `victory.lua`'s poll ends the match `CallEndGame(true, false)` the instant every surviving brain offers — **immediate, no 15-second stability window**, unlike a win. Zero survivors is also an immediate draw. A sole surviving alliance still wins through the ordinary window even with its own offer standing (win checked before draw). **`RequestingAlliedVictory` is inert under fixed alliances:** `simInit.lua:200` sets it for teamed armies at setup, `RequestAlliedVictory` refuses in team games, and FFA never reads it — it only matters when alliances can change mid-match. | [LUA-R] `lua.scd` `lua/victory.lua:50-56`, `lua/SimUtils.lua:180`, `mohodata.scd` `lua/simInit.lua:200` | High | Confirmed | `OfferingDraw` implemented as `Army::offeringDraw` + `CommandKind::OfferDraw`; `RequestingAlliedVictory` deliberately not modelled. |
+| `C-383` | `WP-11` | **The unit cap is a per-army creation gate, not a queue gate.** `CArmyImpl` exposes `GetArmyUnitCap` (vfunc `0xa4`), `SetArmyUnitCap` (`0xa8`), `GetArmyUnitCostTotal` (`0x4c`) and `SetIgnoreArmyUnitCap` (`0xac`); the gate at `0x0074fda0` refuses a unit's creation when `costTotal + new CapCost > unitCap`, firing `OnUnitCapLimitReached` (vfunc `0x1c`) when the caller asks for the callback. Nine call sites include `CFactoryBuildTask::TaskTick` — production retries the create every beat, so a capped factory holds rather than dropping its order. `CapCost` is `RUnitBlueprintGeneral+0x7c` (read as `unit+0x1f8`), engine default 1; the corpus only overrides down (drones/walls 0, T1 sonar 0.1). `Options.UnitCap` defaults to **500** at session create (`0x008e8035`). `SimUtils.UpdateUnitCap` is a literal no-op (`floor(alive × initial / alive)` = `initial`), so `DoNotShareUnitCap` has no live consumer. | [EXE] `ART-E001` `0x0074fda0`, `0x0070f7e0`–`0x0070fb20`, `0x008e8035`; [LUA-R] `lua.scd` `lua/SimUtils.lua:187-201`, `lua/sim/Unit.lua:586-593`; [BP] `General.CapCost` in `units.scd` | High | Confirmed | Implemented: `Army::unitCap`/`unitCostTotal`, `UnitDef::capCost`, `unitCapBlocks` in `startCommand`, `factoryProductionCapped` hold, `UnitCap_*` army stats, SaveState v41. |
 
 `C-091` is now implemented in `WP-27`: `Health` carries one generation-safe automatic target per
 weapon. Automatic acquisition seeds its comparison with that incumbent, retaining it through any
@@ -2886,6 +2887,38 @@ veterancy, fuel ratio and reload clocks; silo ammo and in-flight
 enhancement work already re-keyed. Attachments remain excluded per the
 spec's boundary (`0x0074DD15` recursive re-attachment is later work).
 New `[capture]` case covers both restores; all 14 capture cases pass.
+
+### 2026-09-19 / Unit cap implementation update
+
+`C-383` implemented — the retail creation gate (`0x0074fda0`) now bounds unit
+creation end to end:
+
+- `FA-MATCH`: `General.CapCost` parses (`RUnitBlueprintGeneral+0x7c`, engine
+  default 1; the corpus only overrides down — drones/walls 0, T1 sonar 0.1) and
+  `Options.UnitCap` sets `Army::unitCap` (engine default 500, `0x008e8035`).
+  `Army::unitCostTotal` is the live `CapCost` sum, recomputed at the head of
+  `tickSkirmish` before the order queues run.
+- `FA-CMD`: `unitCapBlocks` refuses scaffold/upgrade creation in `startCommand`
+  when `costTotal + reserved + CapCost > unitCap` — rising works reserve their
+  `CapCost` at the gate, matching retail where the rising entity counts from
+  the moment it exists. `factoryProductionCapped` holds factory production
+  instead: `CFactoryBuildTask` retries the create every beat, so a capped
+  factory waits with its order intact rather than dropping it (`startPending`,
+  the Build dispatch branch, both guard-factory scans, and `applyCommandMember`
+  admission all honour the hold).
+- `FA-AI`: `UnitCap_Current`/`UnitCap_MaxCap` feed `CArmyStats` for
+  `aibrain.lua`'s score row and `AIBehaviors.lua`'s experimental gate; the FAF
+  `GetArmyUnitCap`/`GetArmyUnitCostTotal` bindings now read the real pair
+  instead of a headcount and a hardcoded 1000.
+- `FA-PERSIST`: SaveState v41 carries `unitCap` on each army record;
+  `unitCostTotal` stays derived. The state hash feeds `unitCap` only when an
+  army's ceiling differs from 500, so default-cap matches hash exactly as
+  before.
+
+`SimUtils.UpdateUnitCap` is a literal no-op in retail (`floor(alive × initial /
+alive)` = `initial`), so `DoNotShareUnitCap` needs no consumer — recorded in
+`C-383`. Regression: `the unit cap holds factory production and refuses a
+mobile scaffold` in `test_command.cpp`.
 
 ## Confirmation gate
 

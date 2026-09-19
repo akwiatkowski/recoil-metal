@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -1332,6 +1333,20 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                         || rm::sim::survivorCount(scene.armies) <= 1,
             },
     };
+
+    // `ScenarioInfo.Options.UnitCap`, the lobby's per-army ceiling. Retail's
+    // session-create writes 500 when the option is absent (`0x008e8035`), which
+    // is `Army::unitCap`'s own default — so only a stated value is applied, and
+    // a non-numeric one falls back to the same default rather than refusing.
+    if (const std::optional<std::string_view> cap = scenarioOptions.get("UnitCap")) {
+        const float stated = std::strtof(std::string{*cap}.c_str(), nullptr);
+        const rm::sim::Fx ceiling =
+            stated > 0.0f ? rm::sim::fxFromFloat(stated) : rm::sim::Fx::fromInt(500);
+        for (rm::sim::Army& army : runner.match.armies) {
+            army.unitCap = ceiling;
+        }
+    }
+
     scene.grewThisTick = false;
 
     // `--ai-faf`: FAF opponents for every army, sharing one sandbox the runner owns. The

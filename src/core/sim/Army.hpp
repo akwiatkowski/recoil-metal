@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Types.hpp"
+#include "core/sim/Fx.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -124,6 +125,18 @@ struct Army {
     /// alliances are fixed at setup, where a sole surviving alliance already
     /// wins unconditionally.
     bool offeringDraw = false;
+
+    /// `ScenarioInfo.Options.UnitCap`, retail's per-army ceiling on live units
+    /// (`CArmyImpl` vfuncs `0xa4`/`0xa8`; the engine writes 500 at session
+    /// create when the option is absent — `0x008e8035`). The creation gate at
+    /// `0x0074fda0` refuses `costTotal + CapCost > unitCap`, so this is a
+    /// fixed-point count: blueprint `CapCost` is fractional (0.1 sonars).
+    Fx unitCap = Fx::fromInt(500);
+
+    /// `GetArmyUnitCostTotal` (`CArmyImpl` vfunc `0x4c`): the army's live
+    /// `CapCost` sum, recomputed each tick from the store. Derived state —
+    /// never saved, never hashed; the units it sums already are.
+    Fx unitCostTotal{};
 };
 
 /// Whether a blueprint id names a commander.

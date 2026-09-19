@@ -459,6 +459,13 @@ struct UnitDef {
     sim::Mag buildCostEnergy{};
     sim::Mag buildTime{};
 
+    /// `General.CapCost` — what one of these counts toward the army's unit cap
+    /// (`RUnitBlueprintGeneral+0x7c`, read by the retail creation gate at
+    /// `0x0074fda0` as `unit+0x1f8`). Retail's unauthored default is 1: the
+    /// corpus only ever overrides it down — engineering drones and wall
+    /// sections at 0, the T1 sonar platforms at 0.1 — never up.
+    sim::Fx capCost = sim::kFxOne;
+
     /// How fast this unit builds, in build units per second. 143 units state one — the
     /// commanders, engineers and factories. Zero means it cannot build.
     float buildRate = 0.0f;

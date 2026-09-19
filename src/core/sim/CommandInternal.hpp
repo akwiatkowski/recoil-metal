@@ -77,6 +77,20 @@ void teardownMovement(MoveState& motion);
                                 const PassabilityGrid& grid, TickRate rate,
                                 std::vector<Construction>* building, EventQueue* events,
                                 const FeatureStore* features,
+                                std::span<const Army> armies,
                                 const PassabilityGrid* approachGrid = nullptr);
+
+/// Whether a factory's build order must WAIT on the unit cap rather than start.
+///
+/// Retail's creation gate (`0x0074fda0`) refuses `costTotal + CapCost > unitCap`
+/// at the moment the entity would exist, and `CFactoryBuildTask` answers a
+/// refusal by retrying the create every beat — production holds, the order is
+/// never dropped. Callers check this BEFORE `startCommand` so a held order
+/// keeps its queue slot; a mobile build's scaffold has no retry task and is
+/// refused by `startCommand` itself.
+[[nodiscard]] bool factoryProductionCapped(const Command& command, const UnitStore& store,
+                                           const UnitCatalog& catalog,
+                                           std::span<const Army> armies,
+                                           std::span<const Construction> building) noexcept;
 
 } // namespace rm::sim

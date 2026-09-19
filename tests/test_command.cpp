@@ -940,6 +940,81 @@ TEST_CASE("a factory ignores an unplaceable plan for a land product") {
     CHECK(fix.building[0].position[0] == rm::test::fx(300.0f));
     CHECK(fix.building[0].position[2] == rm::test::fx(300.0f));
 }
+TEST_CASE("the unit cap holds factory production and refuses a mobile scaffold") {
+    // Retail's creation gate (`0x0074fda0`): `costTotal + CapCost > UnitCap`
+    // refuses the entity. `CFactoryBuildTask` answers by retrying the create
+    // every beat — the order waits — while a mobile build's scaffold has no
+    // retrying task and is refused outright.
+    Fixture fix;
+
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "land_factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"LANDPRODUCT"}};
+    const rm::UnitTypeIndex factoryType = fix.roster.addType(factoryDef);
+
+    rm::unitdef::UnitDef tankDef;
+    tankDef.name = "tank";
+    tankDef.categories = {"LANDPRODUCT"};
+    tankDef.speedElmosPerSecond = 10.0f;
+    const rm::UnitTypeIndex tankType = fix.roster.addType(tankDef);
+
+    const UnitId factory = fix.roster.add(factoryType, 300.0f, 300.0f, 0, 500.0f);
+
+    // Army 0 at its cap: `mine` and the factory are both its units, one
+    // `CapCost` each. `unitCostTotal` is set by hand because it is only
+    // recomputed inside `tickSkirmish`, and the intake check runs first.
+    fix.armies[0].unitCap = rm::sim::Fx::fromInt(2);
+    fix.armies[0].unitCostTotal = rm::sim::Fx::fromInt(2);
+
+    const Command build{.tick = 0,
+                        .player = 0,
+                        .kind = CommandKind::Build,
+                        .unit = factory,
+                        .targetX = rm::test::fx(600.0f),
+                        .targetZ = rm::test::fx(600.0f),
+                        .buildType = tankType};
+
+    // Admitted — production waits rather than dropping the order — but nothing
+    // materialises while the cap holds.
+    REQUIRE(fix.apply(build));
+    CHECK(fix.building.empty());
+    fix.run(CommandLog{}, 5);
+    CHECK(fix.building.empty());
+
+    // Room again: the same order starts on the next beat.
+    fix.armies[0].unitCap = rm::sim::Fx::fromInt(500);
+    fix.run(CommandLog{}, 1);
+    REQUIRE(fix.building.size() == 1);
+
+    // A mobile builder's scaffold is refused outright at the cap. Army 0 now
+    // counts three live units plus the rising tank's reservation.
+    rm::unitdef::UnitDef engineerDef;
+    engineerDef.name = "engineer";
+    engineerDef.buildRate = 10.0f;
+    engineerDef.buildableCategory = {{"TESTSTRUCTURE"}};
+    const rm::UnitTypeIndex engineerType = fix.roster.addType(engineerDef);
+    rm::unitdef::UnitDef structureDef;
+    structureDef.name = "structure";
+    structureDef.categories = {"TESTSTRUCTURE"};
+    const rm::UnitTypeIndex structureType = fix.roster.addType(structureDef);
+    const UnitId engineer = fix.roster.add(engineerType, 100.0f, 100.0f, 0, 500.0f);
+
+    fix.armies[0].unitCap = rm::sim::Fx::fromInt(3);
+    fix.armies[0].unitCostTotal = rm::sim::Fx::fromInt(3);
+    const Command place{.tick = 0,
+                        .player = 0,
+                        .kind = CommandKind::Build,
+                        .unit = engineer,
+                        // In build reach, so the refusal is the cap gate itself
+                        // and not the approach route an out-of-reach site takes.
+                        .targetX = rm::test::fx(110.0f),
+                        .targetZ = rm::test::fx(110.0f),
+                        .buildType = structureType};
+    CHECK_FALSE(fix.apply(place));
+}
+
 
 TEST_CASE("a build command refuses a blocked target footprint") {
     Fixture fix;

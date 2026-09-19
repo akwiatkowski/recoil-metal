@@ -123,6 +123,11 @@ constexpr std::uint32_t kVersion39 = 39;
 // mid-negotiation match must keep who has offered or a restored match can
 // outlive the draw everyone agreed to. Older saves decode with no offers.
 constexpr std::uint32_t kVersion40 = 40;
+// 41: `ScenarioInfo.Options.UnitCap` on each army record — the per-army ceiling
+// the creation gate (`0x0074fda0`) enforces. `unitCostTotal` stays out: it is
+// derived from the live unit list and recomputed on the first tick back.
+// Older saves decode with the engine's own default of 500 (`0x008e8035`).
+constexpr std::uint32_t kVersion41 = 41;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -258,7 +263,7 @@ bool readMag(PayloadReader& r, Mag& value) {
 }
 
 void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>& state,
-                        bool includesOfferingDraw) {
+                        bool includesOfferingDraw, bool includesUnitCap) {
     w.u8(state.has_value());
     if (!state) return;
     const auto& s = *state;
@@ -267,6 +272,7 @@ void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>&
         w.i32(army.index); w.u8(static_cast<std::uint8_t>(army.faction));
         w.i32(army.alliance); w.u8(army.defeated);
         if (includesOfferingDraw) w.u8(army.offeringDraw);
+        if (includesUnitCap) w.i32(army.unitCap.raw());
     }
     w.count(s.economies.size());
     for (const auto& economy : s.economies) {
@@ -300,7 +306,7 @@ void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>&
     for (const auto ticks : s.defeatCleanupRemainingTicks) w.u32(ticks);
 }
 bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
-                       bool includesOfferingDraw) {
+                       bool includesOfferingDraw, bool includesUnitCap) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) return true;
@@ -314,6 +320,7 @@ bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
             || !r.i32(army.alliance) || !readFlag(r, army.defeated)
             || (includesOfferingDraw && !readFlag(r, army.offeringDraw))) return false;
         army.faction = static_cast<Faction>(faction);
+        if (includesUnitCap && !readFx(r, army.unitCap)) return false;
         if (army.index != &army - s.armies.data()) return false;
     }
     if (!r.count(count, 142) || count != s.armies.size()) return false;
@@ -1963,7 +1970,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        version >= kVersion14);
     }
     if (version >= kVersion15) writeEconomyArmies(payloadWriter, state.economyArmies,
-                                                  version >= kVersion40);
+                                                  version >= kVersion40, version >= kVersion41);
     if (version >= kVersion16)
         writeAirController(payloadWriter, state.units.motion, version >= kVersion21);
     if (version >= kVersion18) writeSubMotion(payloadWriter, state.units.motion);
@@ -2034,7 +2041,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion31 && version != kVersion32
                && version != kVersion33 && version != kVersion34 && version != kVersion35
                && version != kVersion36 && version != kVersion37 && version != kVersion38
-               && version != kVersion39 && version != kVersion40)
+               && version != kVersion39 && version != kVersion40 && version != kVersion41)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2080,7 +2087,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                           version >= kVersion14, version >= kVersion16)) return std::nullopt;
     std::optional<EconomyArmyState> economyArmies;
     if (version >= kVersion15 && !readEconomyArmies(reader, economyArmies,
-                                                    version >= kVersion40)) return std::nullopt;
+                                                    version >= kVersion40, version >= kVersion41)) return std::nullopt;
     if (version >= kVersion16
         && !readAirController(reader, units.motion, version >= kVersion21))
         return std::nullopt;
@@ -2148,7 +2155,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion40);
+    return rm::sim::encode(state, kVersion41);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

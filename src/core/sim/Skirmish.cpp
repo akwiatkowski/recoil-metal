@@ -505,6 +505,28 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         }
     }
 
+    // `GetArmyUnitCostTotal` (`CArmyImpl` vfunc `0x4c`): each army's live `CapCost`
+    // sum, refreshed before the order queues run so this tick's creation gate
+    // (`0x0074fda0`, `unitCapBlocks`) reads this tick's headcount. Rising works
+    // are NOT here — they reserve their `CapCost` at the gate itself.
+    for (Army& army : match.armies) {
+        army.unitCostTotal = {};
+    }
+    for (UnitIndex slot = 0; slot < store.slotCount(); ++slot) {
+        if (!store.slotAlive(slot)) {
+            continue;
+        }
+        const int owner = store.motion()[slot].armyIndex;
+        if (owner < 0 || static_cast<std::size_t>(owner) >= match.armies.size()) {
+            continue;
+        }
+        if (const unitdef::UnitDef* def = catalog.def(store.typeAt(slot))) {
+            match.armies[static_cast<std::size_t>(owner)].unitCostTotal =
+                match.armies[static_cast<std::size_t>(owner)].unitCostTotal + def->capCost;
+        }
+    }
+
+
     // THE PRODUCTION PAUSE, mirrored once a tick. `UnitStore::productionPaused` is the one
     // authoritative flag; the work records carry a copy because the economy pass and the
     // script-task host never see the store. Enhancements and silo builds take theirs here;
@@ -1093,6 +1115,16 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             setArmyStat(stats, "Economy_TotalProduced_Energy", economy.generatedLifetime.energy);
             addArmyStat(stats, "Economy_TotalConsumed_Mass", economy.usageLastTick.mass);
             addArmyStat(stats, "Economy_TotalConsumed_Energy", economy.usageLastTick.energy);
+            // `UnitCap_Current`/`UnitCap_MaxCap` — `aibrain.lua`'s score row and
+            // `AIBehaviors.lua`'s experimental gate read both (`CArmyStats`,
+            // `C-227`). The cap is the army's configured ceiling; the count is
+            // the live `CapCost` sum recomputed at the head of this tick.
+            if (army < match.armies.size()) {
+                setArmyStat(stats, "UnitCap_Current",
+                            Mag::fromRaw(match.armies[army].unitCostTotal.raw()));
+                setArmyStat(stats, "UnitCap_MaxCap",
+                            Mag::fromRaw(match.armies[army].unitCap.raw()));
+            }
         }
         // The evaluator's own gate: it runs from the per-army beat after tick 10
         // (`C-227`), so the first ten beats feed stats without a trigger able to fire.

@@ -104,10 +104,10 @@ struct LoadedMap {
     std::vector<rm::scenario::Marker> markers;
 
     /// The map's `ScenarioInfo.Options` table, verbatim — empty on every stock
-    /// skirmish map, where the lobby would have written it. `Victory` selects
-    /// the match's `VictoryMode`; `FogOfWar='none'` leaves intel unconfigured.
-    /// The rest is parsed and kept but has no proven consumer yet (`UnitCap`,
-    /// `InitialMass`/`InitialEnergy` among them — see `ScenarioOptions`).
+    /// the match's `VictoryMode`; `FogOfWar='none'` leaves intel unconfigured;
+    /// `UnitCap` sets every army's `Army::unitCap` ceiling (engine default 500
+    /// when absent — `0x008e8035`). The rest is parsed and kept but has no
+    /// proven consumer yet (`InitialMass`/`InitialEnergy` — see `ScenarioOptions`).
     rm::scenario::ScenarioOptions scenarioOptions;
 
     // .scmap: the props the map places — trees, rocks, wrecks. Kept as the map
