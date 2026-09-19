@@ -44,6 +44,7 @@ template <typename Order>
     case CommandKind::SelfDestruct:
     case CommandKind::ToggleScriptBit:
     case CommandKind::OfferDraw:
+    case CommandKind::Gift:
         return false;
     case CommandKind::Move:
     case CommandKind::AttackMove:

@@ -99,6 +99,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "offer-draw";
     case CommandKind::Sacrifice:
         return "sacrifice";
+    case CommandKind::Gift:
+        return "gift";
     }
     return "stop";
 }

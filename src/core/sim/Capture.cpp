@@ -221,62 +221,75 @@ std::size_t applyCaptureWork(UnitStore& store, std::vector<CaptureWork>& capture
             ++i;
             continue;
         }
-        // Replacement-entity transfer, not an in-place rewrite: the old unit leaves
-        // silently (no wreck, no kill credit — nothing died) and a replacement of
-        // the same type, transform and health stands under the captor's army. The
-        // captor's order retires on its own next dispatch: its target handle is now
-        // stale, which is exactly what retires every other spent unit-target order.
-        const UnitIndex victim = work.target.index;
-        const UnitTypeIndex type = store.typeAt(victim);
-        const Transform transform = store.transforms()[victim];
-        const Health health = store.health()[victim];
-        MoveState motion = store.motion()[victim];
-        // `SimUtils.lua:68-132` restores more than the health record after
-        // `ChangeUnitArmy`: the installed enhancement names (re-run through
-        // `CreateEnhancement`) and the shield on/off toggle. The spawn clears
-        // both, so they are snapshotted here and restored on the replacement —
-        // the health record above already carries shield health, veterancy
-        // and fuel.
-        const auto installedEnhancements = store.enhancements()[victim];
-        const bool shieldToggledOff = store.scriptBitDisabledAt(victim, 0);
-        motion.armyIndex = work.armyIndex;
-        motion.moving = false;
-        motion.path.clear();
-        store.kill(work.target);
-        const UnitId replacement = store.spawn(UnitStore::Spawn{
-            .type = type,
-            .transform = transform,
-            .motion = motion,
-            // `C-240`/`SimUtils.lua:68-132`: the replacement keeps the WHOLE
-            // health record — shield state, reload/burst clocks, automatic
-            // targets, veterancy — not just current/maximum.
-            .health = health,
-        });
-        store.enhancements()[replacement.index] = installedEnhancements;
-        if (shieldToggledOff) {
-            (void)store.setScriptBitDisabled(replacement, 0, true);
-        }
-        // And the match-side records that keyed on the old handle follow it:
-        // Lua restores silo ammo and in-flight enhancement work onto the
-        // replacement, so a captured silo keeps its stockpile and a
-        // half-built enhancement keeps its progress.
-        for (SiloAmmo& ammo : siloAmmo) {
-            if (ammo.owner == work.target) {
-                ammo.owner = replacement;
-            }
-        }
-        for (EnhancementWork& work_ : enhancements) {
-            if (work_.owner == work.target) {
-                work_.owner = replacement;
-            }
-        }
-        emit(events, Event{.kind = EventKind::UnitCreated,
-                           .unit = replacement,
-                           .army = motion.armyIndex,
-                           .at = positionOf(transform)});
+        const UnitId replacement =
+            transferUnitArmy(store, work.target, work.armyIndex, events, siloAmmo,
+                             enhancements);
+        (void)replacement;
         captures.erase(captures.begin() + static_cast<std::ptrdiff_t>(i));
     }
     return capturing;
+}
+
+UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
+                        EventQueue* events, std::span<SiloAmmo> siloAmmo,
+                        std::span<EnhancementWork> enhancements) {
+    if (!store.alive(unit)) {
+        return UnitId{};
+    }
+    // Replacement-entity transfer, not an in-place rewrite: the old unit leaves
+    // silently (no wreck, no kill credit — nothing died) and a replacement of
+    // the same type, transform and health stands under the new army. The
+    // giver's orders die with the handle: every unit-target order pointing at
+    // it reads stale, which is exactly what retires spent orders everywhere.
+    const UnitIndex victim = unit.index;
+    const UnitTypeIndex type = store.typeAt(victim);
+    const Transform transform = store.transforms()[victim];
+    const Health health = store.health()[victim];
+    MoveState motion = store.motion()[victim];
+    // `SimUtils.lua:68-132` restores more than the health record after
+    // `ChangeUnitArmy`: the installed enhancement names (re-run through
+    // `CreateEnhancement`) and the shield on/off toggle. The spawn clears
+    // both, so they are snapshotted here and restored on the replacement —
+    // the health record above already carries shield health, veterancy
+    // and fuel.
+    const auto installedEnhancements = store.enhancements()[victim];
+    const bool shieldToggledOff = store.scriptBitDisabledAt(victim, 0);
+    motion.armyIndex = armyIndex;
+    motion.moving = false;
+    motion.path.clear();
+    store.kill(unit);
+    const UnitId replacement = store.spawn(UnitStore::Spawn{
+        .type = type,
+        .transform = transform,
+        .motion = motion,
+        // `C-240`/`SimUtils.lua:68-132`: the replacement keeps the WHOLE
+        // health record — shield state, reload/burst clocks, automatic
+        // targets, veterancy — not just current/maximum.
+        .health = health,
+    });
+    store.enhancements()[replacement.index] = installedEnhancements;
+    if (shieldToggledOff) {
+        (void)store.setScriptBitDisabled(replacement, 0, true);
+    }
+    // And the match-side records that keyed on the old handle follow it:
+    // Lua restores silo ammo and in-flight enhancement work onto the
+    // replacement, so a transferred silo keeps its stockpile and a
+    // half-built enhancement keeps its progress.
+    for (SiloAmmo& ammo : siloAmmo) {
+        if (ammo.owner == unit) {
+            ammo.owner = replacement;
+        }
+    }
+    for (EnhancementWork& work_ : enhancements) {
+        if (work_.owner == unit) {
+            work_.owner = replacement;
+        }
+    }
+    emit(events, Event{.kind = EventKind::UnitCreated,
+                       .unit = replacement,
+                       .army = motion.armyIndex,
+                       .at = positionOf(transform)});
+    return replacement;
 }
 
 std::vector<WorkClaim> collectCaptureClaims(const UnitStore& store) {

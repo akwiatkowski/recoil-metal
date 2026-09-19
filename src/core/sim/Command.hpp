@@ -226,6 +226,14 @@ enum class CommandKind : std::uint8_t {
     /// each falling back to `0.5` when that cost is zero — and the sacrificer
     /// is consumed (retail's `OnStopSacrifice` calls `Destroy()`, no wreck).
     Sacrifice = 32,
+    /// Hand this unit to an ALLIED army — retail's `SimUtils.TransferUnitsOwnership`
+    /// reaching `ChangeUnitArmy` directly (`C-238`), with NO capture callbacks and
+    /// no capture cost. Intake-immediate like `ToggleProduction`: the transfer is
+    /// a replacement-entity swap (`transferUnitArmy`), so the unit leaves and a
+    /// same-type replacement stands under the recipient with its kills, health,
+    /// fuel, silo ammo and shield state restored. `scriptBit` carries the
+    /// recipient army index; a non-allied or own-army recipient is refused.
+    Gift = 33,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {

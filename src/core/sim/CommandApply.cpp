@@ -992,6 +992,44 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         }
         return result;
     }
+    if (issue.kind == CommandKind::Gift) {
+        // `C-238`: gifting is `ChangeUnitArmy` reached directly — no capture
+        // task, no captor, no cost. `Sim::TransferUnit` (`0x0074dc40`) rejects
+        // dead/invalid units; the recipient must be a live ALLIED army other
+        // than the unit's own, and `scriptBit` names it. The transfer itself
+        // is the same replacement-entity swap capture uses, so kills, health,
+        // fuel, silo ammo and shield state all follow the unit.
+        const int recipient = issue.scriptBit;
+        const auto recipientArmy = std::ranges::find_if(
+            armies, [recipient](const Army& army) { return army.index == recipient; });
+        for (const UnitId unit : canonical) {
+            if (!store.alive(unit) || recipientArmy == armies.end()
+                || recipientArmy->defeated) {
+                continue;
+            }
+            const Player* player = playerFor(issue.player, players);
+            if (player == nullptr || !authorised(*player, store, unit, armies)) {
+                continue;
+            }
+            const int owner = store.motion()[unit.index].armyIndex;
+            const auto ownerArmy = std::ranges::find_if(
+                armies, [owner](const Army& army) { return army.index == owner; });
+            if (owner == recipient || ownerArmy == armies.end()
+                || !allied(*ownerArmy, *recipientArmy)) {
+                continue;
+            }
+            const UnitId replacement =
+                transferUnitArmy(store, unit, recipient, events,
+                                 siloAmmo != nullptr ? *siloAmmo
+                                                     : std::span<SiloAmmo>{},
+                                 enhancements != nullptr ? *enhancements
+                                                         : std::span<EnhancementWork>{});
+            if (replacement.generation != 0) {
+                result.accepted.push_back(unit);
+            }
+        }
+        return result;
+    }
     if (issue.kind == CommandKind::CycleBuildPriority) {
         for (const UnitId unit : canonical) {
             if (!store.alive(unit)) {

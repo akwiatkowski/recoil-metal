@@ -1096,6 +1096,51 @@ TEST_CASE("C-190: a blocked mobile build retries ten times before giving up") {
     CHECK(fix.roster.store.orders()[engineer.index].empty());
 }
 
+TEST_CASE("C-238: a gift hands the unit to an allied army with its state restored") {
+    // `SimUtils.TransferUnitsOwnership` → `ChangeUnitArmy` directly: no capture
+    // task, no captor, no cost. The transfer is a replacement-entity swap, so
+    // the unit leaves army 0 and a same-type replacement stands under army 1
+    // with its health, veterancy and fuel carried over.
+    Fixture fix;
+    fix.armies[1].alliance = fix.armies[0].alliance;  // allies, not enemies
+
+    // Wound the unit and give it a kill, so the restore has something to carry.
+    fix.roster.store.health()[fix.mine.index].current = rm::test::mag(250.0f);
+    fix.roster.store.health()[fix.mine.index].veterancy.kills = 3;
+
+    const CommandIssue gift{.tick = 0,
+                            .source = 0,
+                            .id = rm::commandId(0, 0),
+                            .player = 0,
+                            .kind = CommandKind::Gift,
+                            .units = {fix.mine},
+                            .scriptBit = 1};  // recipient army index
+    REQUIRE(fix.apply(gift));
+
+    // The old handle is dead; the replacement stands under army 1 with the
+    // health record — and the veterancy inside it — intact.
+    CHECK_FALSE(fix.roster.store.alive(fix.mine));
+    const UnitId replacement = fix.roster.store.idAt(fix.mine.index);
+    REQUIRE(replacement.generation != fix.mine.generation);
+    CHECK(fix.roster.store.motion()[replacement.index].armyIndex == 1);
+    CHECK(fix.roster.store.health()[replacement.index].current
+          == rm::test::mag(250.0f));
+    CHECK(fix.roster.store.health()[replacement.index].veterancy.kills == 3);
+
+    // A gift to a hostile army is refused outright.
+    Fixture hostile;
+    const CommandIssue refused{.tick = 0,
+                               .source = 0,
+                               .id = rm::commandId(0, 0),
+                               .player = 0,
+                               .kind = CommandKind::Gift,
+                               .units = {hostile.mine},
+                               .scriptBit = 1};
+    CHECK_FALSE(hostile.apply(refused));
+    CHECK(hostile.roster.store.alive(hostile.mine));
+    CHECK(hostile.roster.store.motion()[hostile.mine.index].armyIndex == 0);
+}
+
 TEST_CASE("only a builder builds") {
     // A tank founding a factory is a caller bug, and refusing it deterministically beats
     // letting it through.
