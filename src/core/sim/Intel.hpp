@@ -51,10 +51,11 @@ enum class IntelType : std::uint8_t;
 
 /// The senses this engine models, and the order they are stored in.
 ///
-/// FOUR. `UnitDef` also carries a water vision radius, which Forged Alliance treats as its
-/// own sense — but nothing in this sim is submerged yet, so a fifth grid would have no
-/// target to answer about and no test that could tell it from an empty one. It joins these
-/// when there is something under the water to see.
+/// FIVE. `UnitDef` carries a water vision radius, which Forged Alliance treats
+/// as its own sense (`C-279`): the underwater LOS grid a submerged or seabed
+/// unit's sight moves onto (`Unit.lua`'s `OnLayerChange` toggles `Vision` to
+/// `WaterVision`), and the grid a submerged or seabed TARGET is identified
+/// through. Seventy retail units declare `WaterVisionRadius`.
 ///
 /// Recoil's other four types — air LOS, seismic, and the two jammers — are absent for
 /// related reasons: air LOS needs a distinction between flying and grounded units that the
@@ -64,6 +65,15 @@ enum class IntelType : std::uint8_t;
 /// than "who can see here" — and every grid in this file answers the second question.
 enum class IntelKind : std::uint8_t {
     Vision,
+
+    /// The underwater counterpart of Vision (`C-279`): retail's water-vision
+    /// grid (`+0x48`), which `Unit.lua`'s `OnLayerChange` swaps in for Vision
+    /// when a unit goes under (`Unit.lua:1812`, `2108-2111`). A submerged or
+    /// seabed emitter stamps THIS grid at its `WaterVisionRadius` instead of
+    /// the vision grid, and a submerged or seabed TARGET is identified through
+    /// it — sonar still detects without identifying.
+    WaterVision,
+
     Radar,
     Sonar,
 
@@ -76,7 +86,8 @@ enum class IntelKind : std::uint8_t {
     Omni,
 };
 
-inline constexpr std::size_t kIntelKindCount = 4;
+inline constexpr std::size_t kIntelKindCount = 5;
+
 
 /// The second kind of grid ADR-037's second pass named: "who is HIDDEN here", not "who can
 /// see here". A stealth field acts on OTHER units — everything of its own alliance standing
@@ -132,6 +143,7 @@ public:
 
     [[nodiscard]] int squaresX() const noexcept { return squaresX_; }
     [[nodiscard]] int squaresZ() const noexcept { return squaresZ_; }
+    /// World elmos per square — `kElmosPerSquare << mipLevel`.
     [[nodiscard]] Fx squareElmos() const noexcept { return Fx::fromInt(squareElmos_); }
 
     /// The square under a world position, or `kNoSquare` off the map.
@@ -338,6 +350,24 @@ public:
     [[nodiscard]] std::span<const RetainedRadarContact> retainedRadarContacts(
         int alliance) const noexcept;
 
+    /// Whether `alliance` has EVER seen this position — retail's explored map
+    /// (`C-007`'s `CIntelXGrid`/`IsExplored`): a cell once lit by vision (or
+    /// water vision) stays explored for the rest of the match, which is what
+    /// lets fog-of-war render "seen before" terrain under the dark. Tracked at
+    /// the vision grid's resolution.
+    [[nodiscard]] bool explored(int alliance, Fx x, Fx z) const noexcept;
+
+    /// The explored bitmap itself, row-major at the vision grid's square size —
+    /// for the fog renderer and the save.
+    [[nodiscard]] std::span<const std::uint8_t> exploredCells(int alliance) const noexcept;
+
+    /// Retail's per-recon-DB fog-of-war flag (`C-284`, `reconDB+0xA8`,
+    /// `ReconSetFogOfWar`/`ReconGetFogOfWar`): when OFF, `LOSNow` is granted
+    /// unconditionally — the 'FogOfWar = none' lobby option's whole effect.
+    /// On by default; per alliance, like the recon DB it gates.
+    [[nodiscard]] bool fogOfWar(int alliance) const noexcept;
+    void setFogOfWar(int alliance, bool enabled) noexcept;
+
     /// Whether this alliance has visually identified this exact unit generation. Retail's
     /// `RECON_LOSEver` lets a radar return participate in acquisition but withholds authored
     /// category priorities until this latch is set.
@@ -363,29 +393,37 @@ public:
     /// is the literal one — whether this slot stamped that grid this pass; for
     /// the self counter-intel types (Jammer, Cloak, the stealths) it is the
     /// flag state, since their contribution is a flag read at contact time.
-    /// Types the sim does not model (WaterVision, CloakField, Spoof) are never
-    /// active.
+    /// Types the sim does not model (CloakField, Spoof) are never active.
     [[nodiscard]] bool intelActive(const UnitStore& store, UnitIndex slot,
                                    IntelType type) const noexcept;
 
-    /// The authoritative recon history in serializable form (SaveState v37):
-    /// retained contacts, the seen-ever latches and the brownout recovery
-    /// counts. Grids, placements and emitters are deliberately absent — the
-    /// next `update` re-stamps them from unit positions, and the script-bit
-    /// mask in the placement key makes even a toggled unit re-stamp correctly.
+    /// The authoritative recon history in serializable form (SaveState v37;
+    /// the explored bitmap and fog flags join at v51): retained contacts, the
+    /// seen-ever latches, the brownout recovery counts, the per-alliance
+    /// explored bitmaps and fog-of-war flags. Grids, placements and emitters
+    /// are deliberately absent — the next `update` re-stamps them from unit
+    /// positions, and the script-bit mask in the placement key makes even a
+    /// toggled unit re-stamp correctly.
     struct Snapshot {
         std::vector<std::vector<RetainedRadarContact>> retained;
         std::vector<std::vector<UnitId>> seenEver;
         std::vector<TickCount> intelRecovery;
         std::vector<UnitId> intelRecoveryUnit;
+        /// Per-alliance explored bitmaps (`C-007`) — accumulated knowledge, so
+        /// it rides the save rather than re-deriving from positions.
+        std::vector<std::vector<std::uint8_t>> explored;
+        /// Per-alliance fog-of-war flags (`C-284`). Empty means all-on, which
+        /// is what a pre-v51 save decodes to.
+        std::vector<std::uint8_t> fogOfWar;
     };
-
     /// Captures the recon history a save must carry.
     [[nodiscard]] Snapshot snapshot() const {
         return {.retained = retainedRadarContacts_,
                 .seenEver = seenEver_,
                 .intelRecovery = intelRecovery_,
-                .intelRecoveryUnit = intelRecoveryUnit_};
+                .intelRecoveryUnit = intelRecoveryUnit_,
+                .explored = explored_,
+                .fogOfWar = fogOfWar_};
     }
 
     /// Restores the recon history. Grids and placements stay empty until the
@@ -405,6 +443,21 @@ public:
         }
         for (IntelGrid& grid : hiddenGrids_) {
             grid.clear();
+        }
+        // The explored bitmaps and fog flags are accumulated state, not
+        // derived: restore them when the save carried them (v51+), else reset
+        // to a fresh match's — nothing explored, fog on everywhere.
+        if (state.explored.size() == explored_.size()) {
+            explored_ = state.explored;
+        } else {
+            for (std::vector<std::uint8_t>& cells : explored_) {
+                std::ranges::fill(cells, std::uint8_t{0});
+            }
+        }
+        if (!state.fogOfWar.empty()) {
+            fogOfWar_ = state.fogOfWar;
+        } else {
+            std::ranges::fill(fogOfWar_, std::uint8_t{1});
         }
         placements_.clear();
         // `C-282`: the restored match's listeners already saw these transitions —
@@ -437,10 +490,20 @@ private:
         /// `cheatEnabled` plus the unit's COMMAND category). Part of the change key
         /// like `intelMask`: a flag flip re-stamps rather than keeping the old radius.
         bool intelCheat = false;
+        /// Whether the stamp ran underwater (`C-279`): a unit that dives or
+        /// surfaces without crossing a square boundary still changes which
+        /// grid its sight lands on, so the layer is part of the change key.
+        bool underwater = false;
     };
 
     void withdraw(UnitIndex slot);
 
+
+    /// Marks `squares` — indices into `grids_[alliance * kIntelKindCount +
+    /// kind]` — explored on that alliance's vision-resolution bitmap
+    /// (`C-007`). A coarser square covers a block of vision squares.
+    void markExplored(int alliance, IntelKind kind,
+                      std::span<const std::int32_t> squares) noexcept;
     /// `[alliance * kIntelKindCount + kind]`, so one vector holds them all and the index
     /// arithmetic is in one place.
     std::vector<IntelGrid> grids_;
@@ -450,6 +513,15 @@ private:
     /// one flat vector would invite exactly the off-by-a-kind bug the assertion in
     /// `configure` records.
     std::vector<IntelGrid> hiddenGrids_;
+
+    /// The explored map (`C-007`): `[alliance][vision-grid square]`, a byte
+    /// that goes 1 the first time vision or water vision covers the cell and
+    /// never goes back. Sized to the vision grid in `configure`.
+    std::vector<std::vector<std::uint8_t>> explored_;
+
+    /// Per-alliance fog-of-war flags (`C-284`, retail's `reconDB+0xA8`). 1 =
+    /// fog on, the default; 0 = `LOSNow` granted unconditionally.
+    std::vector<std::uint8_t> fogOfWar_;
 
     /// Last radar positions, per viewing alliance. These are authoritative recon knowledge:
     /// `contactsFor` emits an entry after its source is known dead as an uncertain blip.
@@ -532,6 +604,12 @@ struct Contact {
 
     /// A retained radar return whose source was destroyed after this alliance last confirmed it.
     bool maybeDead = false;
+
+    /// A jammer fake the alliance has already unmasked (`C-278`'s `KnownFake`,
+    /// `blip+0x20`): set when vision covers the fake's position — LOS sees
+    /// nothing there — or the blip sits off the map. The blip still projects;
+    /// the flag is what a UI or a target picker reads to distrust it.
+    bool knownFake = false;
 
     [[nodiscard]] bool isBlip() const noexcept { return kind != ContactKind::Seen; }
 };

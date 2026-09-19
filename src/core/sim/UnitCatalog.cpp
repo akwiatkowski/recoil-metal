@@ -1,4 +1,5 @@
 #include "core/sim/UnitCatalog.hpp"
+#include "core/sim/Enhancement.hpp"
 #include "core/unit/BuildTree.hpp"
 
 #include "core/map/Scmap.hpp"
@@ -81,10 +82,29 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
                 effects.healthAdd = magFromFloat(static_cast<float>(*value));
             }
             if (const auto value = spec.parameters.numberAt("NewRegenRate")) {
-                effects.regenPerTickAdd = rate.magPerTick(static_cast<float>(*value));
+                // `C-258`: the same field name is a `SetRegenRate` absolute on
+                // the three name-keyed enhancements and a `Regen` buff add on
+                // the rest — the scripts decide, so the split is by name.
+                if (enhancementRegenIsOverride(spec.name)) {
+                    effects.regenPerTickOverride =
+                        rate.magPerTick(static_cast<float>(*value));
+                } else {
+                    effects.regenPerTickAdd = rate.magPerTick(static_cast<float>(*value));
+                }
+            }
+            if (const auto value = spec.parameters.numberAt("ProductionPerSecondMass")) {
+                effects.producesMassPerTick = rate.magPerTick(static_cast<float>(*value));
+            }
+            if (const auto value = spec.parameters.numberAt("ProductionPerSecondEnergy")) {
+                effects.producesEnergyPerTick = rate.magPerTick(static_cast<float>(*value));
             }
             if (const auto adds = spec.parameters.stringAt("BuildableCategoryAdds")) {
                 effects.buildableAdds = unitdef::parseCategoryTerm(*adds);
+            }
+            if (const auto value =
+                    spec.parameters.numberAt("MaintenanceConsumptionPerSecondEnergy")) {
+                effects.maintenanceEnergyPerTick =
+                    rate.magPerTick(static_cast<float>(*value));
             }
             enhancements.emplace(spec.name, std::move(effects));
         }
@@ -145,6 +165,9 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
     IntelRadii intel{};
     if (def != nullptr) {
         intel.vision = fxFromFloat(def->visionRadiusElmos);
+        // `C-279`: the underwater counterpart — a submerged or seabed unit's
+        // sight radius, and the radius that identifies a submerged target.
+        intel.waterVision = fxFromFloat(def->waterVisionRadiusElmos);
         intel.radar = fxFromFloat(def->radarRadiusElmos);
         intel.sonar = fxFromFloat(def->sonarRadiusElmos);
         intel.omni = fxFromFloat(def->omniRadiusElmos);
@@ -206,6 +229,14 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
                     weapon.bursts() ? rate.ticks(weapon.burstDelay) : reload,
                 .burstSize = weapon.bursts() ? weapon.burstSize : 1,
                 .damage = damageFor(weapon),
+                // `C-093`: retail's reschedule is `max(1, ceil(interval x
+                // ticksPerSecond)) + 1`; `ticks()` rounds rather than ceilings,
+                // which is within a tick of the same answer and keeps the
+                // conversion at the load boundary like every other rate.
+                .targetCheckTicks = static_cast<TickCount>(std::max<TickCount>(
+                    1, rate.ticks(seconds(weapon.targetCheckIntervalSeconds))) + 1),
+                .innerRing = profileFor(weapon, weapon.innerRingDamage),
+                .outerRing = profileFor(weapon, weapon.outerRingDamage),
             });
         }
     }

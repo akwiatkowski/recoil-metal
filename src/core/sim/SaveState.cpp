@@ -160,6 +160,21 @@ constexpr std::uint32_t kVersion47 = 47;
 // are derived, so the save carries the writes and restore replays them.
 // Older saves decode with no journal: the map's base grid, unmutated.
 [[maybe_unused]] constexpr std::uint32_t kVersion48 = 48;
+// v49 is a sibling's field (Health::rechargeProgress); v50 adds the per-unit
+// `Health::regenWrite` byte — `C-258`'s last-writer-wins regen state, which a
+// save must carry or a loaded match regenerates at a different rate.
+constexpr std::uint32_t kVersion49 = 49;
+constexpr std::uint32_t kVersion50 = 50;
+// v51 adds `Feature::marksGround` — `C-292`'s `layer == 'Land'` death gate,
+// sampled at death because the corpse's slot no longer knows its layer.
+constexpr std::uint32_t kVersion51 = 51;
+// v52 adds the intel explored bitmaps and per-alliance fog-of-war flags
+// (`C-007`, `C-284`) — accumulated recon knowledge a save must carry.
+constexpr std::uint32_t kVersion52 = 52;
+// v53 adds `Health::targetCheckTick` (C-093's re-scan cadence), `Army::handicap`
+// (C-060's damage divide), and the projectile's serial/engagement pair,
+// `desiredShooterCap`, `useGravity`, and ring bands (C-095/C-172/C-262).
+constexpr std::uint32_t kVersion53 = 53;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -296,7 +311,7 @@ bool readMag(PayloadReader& r, Mag& value) {
 
 void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>& state,
                         bool includesOfferingDraw, bool includesUnitCap,
-                        bool includesCheat, bool includesDiplomacy) {
+                        bool includesCheat, bool includesDiplomacy, bool includesHandicap) {
     w.u8(state.has_value());
     if (!state) return;
     const auto& s = *state;
@@ -310,6 +325,7 @@ void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>&
         if (includesDiplomacy) {
             w.u8(army.requestingAlliedVictory); w.u8(army.resourceSharing);
         }
+        if (includesHandicap) w.i32(army.handicap);
     }
     w.count(s.economies.size());
     for (const auto& economy : s.economies) {
@@ -344,7 +360,7 @@ void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>&
 }
 bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
                        bool includesOfferingDraw, bool includesUnitCap,
-                       bool includesCheat, bool includesDiplomacy) {
+                       bool includesCheat, bool includesDiplomacy, bool includesHandicap) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) return true;
@@ -363,6 +379,7 @@ bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
         if (includesDiplomacy
             && (!readFlag(r, army.requestingAlliedVictory)
                 || !readFlag(r, army.resourceSharing))) return false;
+        if (includesHandicap && !r.i32(army.handicap)) return false;
         if (army.index != &army - s.armies.data()) return false;
     }
     if (!r.count(count, 142) || count != s.armies.size()) return false;
@@ -710,6 +727,29 @@ void writeFeatures(PayloadWriter& w, const std::optional<FeatureStore::Snapshot>
     w.u64(s->revision);
 }
 
+/// `C-292` (v51): the scorch gate travels with the feature — a save mid-match
+/// must not resurrect a mark for a wreck that died in the air.
+void writeFeatureFlags(PayloadWriter& w, const std::optional<FeatureStore::Snapshot>& s) {
+    if (!s) {
+        return;
+    }
+    for (const Feature& v : s->features) {
+        w.u8(v.marksGround ? 1 : 0);
+    }
+}
+
+bool readFeatureFlags(PayloadReader& r, std::optional<FeatureStore::Snapshot>& snapshot) {
+    if (!snapshot) {
+        return true;
+    }
+    for (Feature& v : snapshot->features) {
+        std::uint8_t flag{};
+        if (!r.u8(flag)) return false;
+        v.marksGround = flag != 0;
+    }
+    return true;
+}
+
 bool readFeatures(PayloadReader& r, std::optional<FeatureStore::Snapshot>& snapshot) {
     bool present{};
     if (!readFlag(r, present)) return false;
@@ -921,7 +961,7 @@ bool readSelfDestructs(PayloadReader& r, std::vector<SelfDestructWork>& work) {
 // absent — presentation identity, never hashed.
 void writeProjectiles(PayloadWriter& w,
                       const std::optional<std::vector<Projectile>>& state,
-                      bool waterFlags, bool weaveFlags) {
+                      bool waterFlags, bool weaveFlags, bool capFlags) {
     w.u8(state.has_value());
     if (!state) {
         return;
@@ -972,12 +1012,25 @@ void writeProjectiles(PayloadWriter& w,
             for (const Fx v : shot.aimPoint) w.i32(v.raw());
             w.u8(shot.friendlyFire ? 1 : 0);
         }
+        // V53 trails the record: `C-095`'s cap and engagement pair, `C-172`'s
+        // gravity flag, and `C-262`'s ring bands.
+        if (capFlags) {
+            w.u64(shot.serial);
+            w.u64(static_cast<std::uint64_t>(shot.interceptTargetIndex));
+            w.u64(shot.interceptTargetSerial);
+            w.i32(shot.desiredShooterCap);
+            w.u8(shot.useGravity ? 1 : 0);
+            w.i64(shot.innerRing.base.raw());
+            w.i64(shot.outerRing.base.raw());
+            w.i32(shot.innerRingRadiusElmos.raw());
+            w.i32(shot.outerRingRadiusElmos.raw());
+        }
     }
 }
 
 bool readProjectiles(PayloadReader& r,
                      std::optional<std::vector<Projectile>>& state,
-                     bool waterFlags, bool weaveFlags) {
+                     bool waterFlags, bool weaveFlags, bool capFlags) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) {
@@ -1081,6 +1134,27 @@ bool readProjectiles(PayloadReader& r,
             }
             if (!r.u8(friendly) || friendly > 1) return false;
             shot.friendlyFire = friendly != 0;
+        }
+        // V53's trailing cap/serial/ring fields; older saves leave the shot
+        // uncapped, unminted, and ring-free — what a pre-C-095 shot was anyway.
+        if (capFlags) {
+            std::int32_t cap{}, innerR{}, outerR{};
+            std::int64_t innerD{}, outerD{};
+            std::uint8_t gravity{};
+            std::uint64_t targetIndex{};
+            if (!r.u64(shot.serial) || !r.u64(targetIndex)
+                || !r.u64(shot.interceptTargetSerial) || !r.i32(cap)
+                || !r.u8(gravity) || gravity > 1 || !r.i64(innerD)
+                || !r.i64(outerD) || !r.i32(innerR) || !r.i32(outerR)) {
+                return false;
+            }
+            shot.interceptTargetIndex = static_cast<std::size_t>(targetIndex);
+            shot.desiredShooterCap = cap;
+            shot.useGravity = gravity != 0;
+            shot.innerRing.base = Mag::fromRaw(innerD);
+            shot.outerRing.base = Mag::fromRaw(outerD);
+            shot.innerRingRadiusElmos = Fx::fromRaw(innerR);
+            shot.outerRingRadiusElmos = Fx::fromRaw(outerR);
         }
     }
     return true;
@@ -1277,7 +1351,8 @@ void writePathService(PayloadWriter& w, const std::optional<PathService::Snapsho
     return r.u64(state->fieldClock);
 }
 
-void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state) {
+void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state,
+                bool withExplored) {
     w.u8(state.has_value());
     if (!state) {
         return;
@@ -1302,9 +1377,22 @@ void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state) {
     for (TickCount count : state->intelRecovery) w.u32(count);
     w.count(state->intelRecoveryUnit.size());
     for (UnitId unit : state->intelRecoveryUnit) writeId(w, unit);
+    if (withExplored) {
+        // `C-007`/`C-284` (v52): the explored bitmaps are accumulated
+        // knowledge — a cell once seen stays explored across a save — and the
+        // fog flags are per-alliance match state.
+        w.count(state->explored.size());
+        for (const auto& cells : state->explored) {
+            w.count(cells.size());
+            for (std::uint8_t cell : cells) w.u8(cell);
+        }
+        w.count(state->fogOfWar.size());
+        for (std::uint8_t flag : state->fogOfWar) w.u8(flag);
+    }
 }
 
-[[nodiscard]] bool readIntel(PayloadReader& r, std::optional<Intel::Snapshot>& state) {
+[[nodiscard]] bool readIntel(PayloadReader& r, std::optional<Intel::Snapshot>& state,
+                             bool withExplored) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) {
@@ -1351,6 +1439,27 @@ void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state) {
     state->intelRecoveryUnit.resize(slots);
     for (UnitId& unit : state->intelRecoveryUnit) {
         if (!readId(r, unit)) return false;
+    }
+    if (withExplored) {
+        // v52: explored bitmaps + fog flags. Absent in older saves — the
+        // restore treats empty as "fresh match" (nothing explored, fog on).
+        std::size_t exploredAlliances{};
+        if (!r.count(exploredAlliances, 4)) return false;
+        state->explored.resize(exploredAlliances);
+        for (auto& cells : state->explored) {
+            std::size_t count{};
+            if (!r.count(count, 24)) return false;
+            cells.resize(count);
+            for (std::uint8_t& cell : cells) {
+                if (!r.u8(cell)) return false;
+            }
+        }
+        std::size_t fogCount{};
+        if (!r.count(fogCount, 4)) return false;
+        state->fogOfWar.resize(fogCount);
+        for (std::uint8_t& flag : state->fogOfWar) {
+            if (!r.u8(flag) || flag > 1) return false;
+        }
     }
     return true;
 }
@@ -1970,20 +2079,22 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool co
 }
 
 void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPathPhase,
-                   bool includesFactoryRepeat, bool includesAttachmentOffsets, bool includesDoNotTarget,
-                   bool includesAutomaticTargets, bool includesAttachmentHeights,
-                   bool includesAttachedMotion, bool includesCommands,
-                   bool includesScriptTasks, bool includesProductionPaused,
+                   bool includesFactoryRepeat, bool includesAttachmentOffsets,
+                   bool includesDoNotTarget, bool includesAutomaticTargets,
+                   bool includesAttachmentHeights, bool includesAttachedMotion,
+                   bool includesCommands, bool includesScriptTasks,
+                   bool includesProductionPaused,
                    bool includesBuildPriority, bool includesRetreat,
                    bool includesTransport, bool includesFocus, bool includesScriptBits,
-                   bool includesIntelDisabled) {
+                   bool includesIntelDisabled, bool includesRegenWrite,
+                   bool includesRechargeProgress, bool includesTargetCheck) {
     w.count(s.ids.generations.size()); for (Generation v : s.ids.generations) w.u32(v);
     w.count(s.ids.free.size()); for (UnitIndex v : s.ids.free) w.u32(v);
     w.u64(s.ids.live);
     w.count(s.generations.size()); for (Generation v : s.generations) w.u32(v);
     w.count(s.transforms.size()); for (const Transform& v : s.transforms) { w.i32(v.x.raw()); w.i32(v.y.raw()); w.i32(v.z.raw()); w.u16(v.heading); w.u16(v.pitch); w.u16(v.roll); }
     w.count(s.motion.size()); for (const MoveState& v : s.motion) { w.i32(v.armyIndex); w.i32(v.destinationX.raw()); w.i32(v.destinationZ.raw()); w.u8(v.moving); if (includesAttachedMotion) w.u8(v.attached); w.u8(v.airborne); w.u8(v.surfaceWater); w.i32(v.speedPerTick.raw()); w.i32(v.turnPerTick); w.i32(v.radiusElmos.raw()); w.i32(v.distanceTravelledElmos.raw()); w.count(v.path.size()); for (const auto& p : v.path) { w.i32(p[0].raw()); w.i32(p[1].raw()); } w.u64(v.pathIndex); if (includesPathPhase) { w.i32(v.pathPhaseStartX); w.i32(v.pathPhaseStartZ); w.i32(v.pathPhaseCellsX); } }
-    w.count(s.health.size()); for (const Health& v : s.health) { w.i64(v.current.raw()); w.i64(v.maximum.raw()); w.i64(v.shield.current.raw()); w.i64(v.shield.maximum.raw()); w.u32(v.shield.regenDelayRemaining); w.u32(v.shield.rechargeRemaining); if (includesScriptBits) w.u8(v.shield.rechargeRestoresFull); w.count(v.reloadRemaining.size()); for (int x : v.reloadRemaining) w.i32(x); w.count(v.burstRemaining.size()); for (int x : v.burstRemaining) w.i32(x); if (includesAutomaticTargets) { w.count(v.automaticTargets.size()); for (UnitId target : v.automaticTargets) writeId(w, target); } writeId(w, v.lastHitBy); w.i32(v.veterancy.kills); w.i32(v.veterancy.level); }
+    w.count(s.health.size()); for (const Health& v : s.health) { w.i64(v.current.raw()); w.i64(v.maximum.raw()); w.i64(v.shield.current.raw()); w.i64(v.shield.maximum.raw()); w.u32(v.shield.regenDelayRemaining); w.u32(v.shield.rechargeRemaining); if (includesScriptBits) w.u8(v.shield.rechargeRestoresFull); w.count(v.reloadRemaining.size()); for (int x : v.reloadRemaining) w.i32(x); w.count(v.burstRemaining.size()); for (int x : v.burstRemaining) w.i32(x); if (includesAutomaticTargets) { w.count(v.automaticTargets.size()); for (UnitId target : v.automaticTargets) writeId(w, target); } writeId(w, v.lastHitBy); w.i32(v.veterancy.kills); w.i32(v.veterancy.level); if (includesRegenWrite) w.u8(static_cast<std::uint8_t>(v.regenWrite)); if (includesRechargeProgress) w.i32(v.shield.rechargeProgress.raw()); if (includesTargetCheck) { w.count(v.targetCheckTick.size()); for (TickIndex x : v.targetCheckTick) w.u64(x); } }
     if (includesScriptBits) { w.count(s.scriptBitsDisabled.size()); for (std::uint16_t v : s.scriptBitsDisabled) w.u16(v); w.count(s.maintenanceActive.size()); for (bool v : s.maintenanceActive) w.u8(v); }
     if (includesIntelDisabled) { w.count(s.intelDisabled.size()); for (std::uint16_t v : s.intelDisabled) w.u16(v); }
     w.count(s.types.size()); for (UnitTypeIndex v : s.types) w.u16(v);
@@ -2018,7 +2129,8 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
                                  bool includesProductionPaused, bool includesMissileLaunch,
                                  bool includesBuildPriority, bool includesRetreat,
                                  bool includesTransport, bool includesFocus, bool includesScriptBits,
-                                 bool includesIntelDisabled) {
+                                 bool includesIntelDisabled, bool includesRegenWrite,
+                                 bool includesRechargeProgress, bool includesTargetCheck) {
     std::size_t n{};
     if (!r.count(n, 4)) return false; s.ids.generations.resize(n); for (auto& v : s.ids.generations) if (!r.u32(v)) return false;
     if (!r.count(n, 4)) return false; s.ids.free.resize(n); for (auto& v : s.ids.free) if (!r.u32(v)) return false;
@@ -2028,7 +2140,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     s.generations.resize(n); for (auto& v : s.generations) if (!r.u32(v)) return false;
     if (!r.count(n, 18)) return false; s.transforms.resize(n); for (auto& v : s.transforms) { std::int32_t x{},y{},z{}; if (!r.i32(x)||!r.i32(y)||!r.i32(z)||!r.u16(v.heading)||!r.u16(v.pitch)||!r.u16(v.roll)) return false; v.x=Fx::fromRaw(x); v.y=Fx::fromRaw(y); v.z=Fx::fromRaw(z); }
     if (!r.count(n, (includesPathPhase ? 58 : 46) + (includesAttachedMotion ? 1 : 0))) return false; s.motion.resize(n); for (auto& v : s.motion) { std::int32_t x{},z{},speed{},radius{},distance{}; std::uint8_t moving{},attached{},airborne{},water{}; if (!r.i32(v.armyIndex)||!r.i32(x)||!r.i32(z)||!r.u8(moving)||(includesAttachedMotion && !r.u8(attached))||!r.u8(airborne)||!r.u8(water)||moving>1||attached>1||airborne>1||water>1||!r.i32(speed)||!r.i32(v.turnPerTick)||!r.i32(radius)||!r.i32(distance)||!r.count(n,8)) return false; v.destinationX=Fx::fromRaw(x); v.destinationZ=Fx::fromRaw(z); v.moving=moving; v.attached=attached; v.airborne=airborne; v.surfaceWater=water; v.speedPerTick=Fx::fromRaw(speed); v.radiusElmos=Fx::fromRaw(radius); v.distanceTravelledElmos=Fx::fromRaw(distance); v.path.resize(n); for(auto& p:v.path){if(!r.i32(x)||!r.i32(z))return false;p={Fx::fromRaw(x),Fx::fromRaw(z)};} std::uint64_t index{}; if(!r.u64(index)||index>std::numeric_limits<std::size_t>::max())return false; v.pathIndex=static_cast<std::size_t>(index); if (includesPathPhase && (!r.i32(v.pathPhaseStartX) || !r.i32(v.pathPhaseStartZ) || !r.i32(v.pathPhaseCellsX))) return false; }
-    if (!r.count(n, 52)) return false; s.health.resize(n); for (auto& v : s.health) { std::int64_t a{},b{},c{},d{}; if(!r.i64(a)||!r.i64(b)||!r.i64(c)||!r.i64(d)||!r.u32(v.shield.regenDelayRemaining)||!r.u32(v.shield.rechargeRemaining)||(includesScriptBits && !readShieldRestoreFlag(r, v))||!r.count(n,4))return false; v.current=Mag::fromRaw(a);v.maximum=Mag::fromRaw(b);v.shield.current=Mag::fromRaw(c);v.shield.maximum=Mag::fromRaw(d);v.reloadRemaining.resize(n);for(auto& x:v.reloadRemaining)if(!r.i32(x))return false;if(!r.count(n,4))return false;v.burstRemaining.resize(n);for(auto& x:v.burstRemaining)if(!r.i32(x))return false;if (includesAutomaticTargets) { if (!r.count(n, 8)) return false; v.automaticTargets.resize(n); for (auto& target : v.automaticTargets) if (!readId(r, target)) return false; } if(!readId(r,v.lastHitBy)||!r.i32(v.veterancy.kills)||!r.i32(v.veterancy.level))return false; }
+    if (!r.count(n, 52)) return false; s.health.resize(n); for (auto& v : s.health) { std::int64_t a{},b{},c{},d{}; if(!r.i64(a)||!r.i64(b)||!r.i64(c)||!r.i64(d)||!r.u32(v.shield.regenDelayRemaining)||!r.u32(v.shield.rechargeRemaining)||(includesScriptBits && !readShieldRestoreFlag(r, v))||!r.count(n,4))return false; v.current=Mag::fromRaw(a);v.maximum=Mag::fromRaw(b);v.shield.current=Mag::fromRaw(c);v.shield.maximum=Mag::fromRaw(d);v.reloadRemaining.resize(n);for(auto& x:v.reloadRemaining)if(!r.i32(x))return false;if(!r.count(n,4))return false;v.burstRemaining.resize(n);for(auto& x:v.burstRemaining)if(!r.i32(x))return false;if (includesAutomaticTargets) { if (!r.count(n, 8)) return false; v.automaticTargets.resize(n); for (auto& target : v.automaticTargets) if (!readId(r, target)) return false; } if(!readId(r,v.lastHitBy)||!r.i32(v.veterancy.kills)||!r.i32(v.veterancy.level))return false; if (includesRegenWrite) { std::uint8_t write{}; if (!r.u8(write) || write > 2) return false; v.regenWrite = static_cast<Health::RegenWrite>(write); } if (includesRechargeProgress) { std::int32_t rp{}; if (!r.i32(rp)) return false; v.shield.rechargeProgress = Fx::fromRaw(rp); } if (includesTargetCheck) { if (!r.count(n, 8)) return false; v.targetCheckTick.resize(n); for (auto& x : v.targetCheckTick) if (!r.u64(x)) return false; } }
     if (includesScriptBits) { if (!r.count(n, 2)) return false; s.scriptBitsDisabled.resize(n); for (auto& v : s.scriptBitsDisabled) if (!r.u16(v)) return false; if (!r.count(n, 1)) return false; s.maintenanceActive.resize(n); for (auto&& v : s.maintenanceActive) { std::uint8_t enabled{}; if (!r.u8(enabled) || enabled > 1) return false; v = enabled; } }
     if (includesIntelDisabled) { if (!r.count(n, 2)) return false; s.intelDisabled.resize(n); for (auto& v : s.intelDisabled) if (!r.u16(v)) return false; }
     if (!r.count(n,2)) return false; s.types.resize(n); for(auto& v:s.types)if(!r.u16(v))return false;
@@ -2223,7 +2335,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                    version >= kVersion7, version >= kVersion7, version >= kVersion8,
                    version >= kVersion12, version >= kVersion26, version >= kVersion27,
                    version >= kVersion28, version >= kVersion29, version >= kVersion30,
-                   version >= kVersion36, version >= kVersion46);
+                   version >= kVersion36, version >= kVersion46, version >= kVersion50,
+                   version >= kVersion49, version >= kVersion53);
     if (version >= kVersion9)
         writeSiloAmmo(payloadWriter, state.siloAmmo, version >= kVersion33);
     if (version >= kVersion10) writeRedirects(payloadWriter, state.redirects);
@@ -2233,7 +2346,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     }
     if (version >= kVersion15) writeEconomyArmies(payloadWriter, state.economyArmies,
                                                   version >= kVersion40, version >= kVersion41,
-                                                  version >= kVersion43, version >= kVersion47);
+                                                  version >= kVersion43, version >= kVersion47,
+                                                  version >= kVersion53);
     if (version >= kVersion16)
         writeAirController(payloadWriter, state.units.motion, version >= kVersion21);
     if (version >= kVersion18) writeSubMotion(payloadWriter, state.units.motion);
@@ -2258,13 +2372,16 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion34) writeArmyStats(payloadWriter, state.armyStats);
     if (version >= kVersion34) writeSelfDestructs(payloadWriter, state.selfDestructs);
     if (version >= kVersion35) writeProjectiles(payloadWriter, state.projectiles,
-                                               version >= kVersion38, version >= kVersion39);
+                                               version >= kVersion38, version >= kVersion39,
+                                               version >= kVersion53);
     if (version >= kVersion37) writePathService(payloadWriter, state.pathService);
-    if (version >= kVersion37) writeIntel(payloadWriter, state.intel);
+    if (version >= kVersion37)
+        writeIntel(payloadWriter, state.intel, version >= kVersion52);
     if (version >= kVersion42) writeProductionOverrides(payloadWriter, state.productionOverrides);
     if (version >= kVersion44) writeUnitPose(payloadWriter, state.units);
     if (version >= kVersion45) writeEffects(payloadWriter, state.effects);
     if (version >= kVersion48) writeTerrainStamps(payloadWriter, state.terrainStamps);
+    if (version >= kVersion51) writeFeatureFlags(payloadWriter, state.features);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -2312,7 +2429,9 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion42 && version != kVersion43
                && version != kVersion44 && version != kVersion45
                && version != kVersion46 && version != kVersion47
-               && version != kVersion48)
+               && version != kVersion48 && version != kVersion49
+               && version != kVersion50 && version != kVersion51
+               && version != kVersion52 && version != kVersion53)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2347,7 +2466,9 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        version >= kVersion26, version >= kVersion26,
                        version >= kVersion27, version >= kVersion28,
                        version >= kVersion29, version >= kVersion30,
-                       version >= kVersion36, version >= kVersion46)) return std::nullopt;
+                       version >= kVersion36, version >= kVersion46,
+                       version >= kVersion50, version >= kVersion49,
+                       version >= kVersion53)) return std::nullopt;
     std::vector<SiloAmmo> siloAmmo;
     if (version >= kVersion9
         && !readSiloAmmo(reader, siloAmmo, version >= kVersion33)) return std::nullopt;
@@ -2359,7 +2480,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::optional<EconomyArmyState> economyArmies;
     if (version >= kVersion15 && !readEconomyArmies(reader, economyArmies,
                                                     version >= kVersion40, version >= kVersion41,
-                                                    version >= kVersion43, version >= kVersion47)) return std::nullopt;
+                                                    version >= kVersion43, version >= kVersion47,
+                                                    version >= kVersion53)) return std::nullopt;
     if (version >= kVersion16
         && !readAirController(reader, units.motion, version >= kVersion21))
         return std::nullopt;
@@ -2385,11 +2507,13 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::optional<std::vector<Projectile>> projectiles;
     if (version >= kVersion35 && !readProjectiles(reader, projectiles,
                                                  version >= kVersion38,
-                                                 version >= kVersion39)) return std::nullopt;
+                                                 version >= kVersion39,
+                                                 version >= kVersion53)) return std::nullopt;
     std::optional<PathService::Snapshot> pathService;
     if (version >= kVersion37 && !readPathService(reader, pathService)) return std::nullopt;
     std::optional<Intel::Snapshot> intel;
-    if (version >= kVersion37 && !readIntel(reader, intel)) return std::nullopt;
+    if (version >= kVersion37 && !readIntel(reader, intel, version >= kVersion52))
+        return std::nullopt;
     std::optional<std::vector<Resources>> productionOverrides;
     if (version >= kVersion42 && !readProductionOverrides(reader, productionOverrides)) {
         return std::nullopt;
@@ -2400,6 +2524,17 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::optional<std::vector<TerrainStamp>> terrainStamps;
     if (version >= kVersion48 && !readTerrainStamps(reader, terrainStamps)) {
         return std::nullopt;
+    }
+    if (version >= kVersion51 && !readFeatureFlags(reader, features)) {
+        return std::nullopt;
+    }
+    // Pre-v51 saves predate the flag: every feature they hold is a wreck, and
+    // every wreck then marked the ground — restore that, or a loaded match
+    // loses its scorch.
+    if (version < kVersion51 && features) {
+        for (Feature& v : features->features) {
+            v.marksGround = true;
+        }
     }
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
@@ -2435,12 +2570,11 @@ std::optional<SaveState> SaveState::decodeV1(std::span<const std::byte> bytes) {
 std::vector<std::byte> SaveState::encodeV2(const SaveState& state) {
     return rm::sim::encode(state, kVersion2);
 }
-
 std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
     return rm::sim::decode(bytes, kVersion2);
 }
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion48);
+    return rm::sim::encode(state, kVersion53);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

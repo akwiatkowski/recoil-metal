@@ -84,6 +84,20 @@ public:
         std::optional<Mag> buildPerTick;
         Mag healthAdd{};
         Mag regenPerTickAdd{};
+        /// `C-258`/`C-255`: `NewRegenRate` on a `SetRegenRate` enhancement
+        /// (`DamageStablization`, `SelfRepairSystem`,
+        /// `SystemIntegrityCompensator`) — an absolute write, not an add, so it
+        /// lives apart from `regenPerTickAdd`. `tickRegeneration` honours it
+        /// only while the unit's `regenWrite` says the write still stands.
+        std::optional<Mag> regenPerTickOverride;
+        /// `C-255`: `ResourceAllocation`'s `ProductionPerSecond*` fields —
+        /// added to the unit's own production, per tick.
+        Mag producesMassPerTick{};
+        Mag producesEnergyPerTick{};
+        /// `C-255`: `MaintenanceConsumptionPerSecondEnergy` — the shield and
+        /// cloak generators' `SetEnergyMaintenanceConsumptionOverride`, per
+        /// tick. Drains while the enhancement is installed.
+        Mag maintenanceEnergyPerTick{};
         std::vector<std::string> buildableAdds;
     };
     [[nodiscard]] const EnhancementEffects* enhancementEffects(
@@ -100,10 +114,15 @@ public:
     /// putting a float in the middle of the tick — which `tools/check_no_sim_floats.sh`
     /// exists to forbid.
     ///
-    /// No water vision. It is parsed and it is not used: nothing in this sim is submerged
-    /// yet, so there is nothing for it to answer about. See `IntelKind`.
+    /// `C-279`'s water vision IS modelled: a submerged or seabed unit's sight
+    /// moves onto `IntelKind::WaterVision`, and a submerged target is
+    /// identified through it — see `IntelKind`.
     struct IntelRadii {
         Fx vision{};
+        /// The underwater counterpart of `vision` (`C-279`): the radius a
+        /// submerged or seabed unit sees with, and the radius that identifies
+        /// a submerged target.
+        Fx waterVision{};
         Fx radar{};
         Fx sonar{};
         Fx omni{};
@@ -153,6 +172,12 @@ public:
         Mag regenPerTick{};
         TickCount regenDelay = 0;
         TickCount recharge = 0;
+        /// `C-145`: `shield.lua`'s `ChargingUp` accumulates
+        /// `GetResourceConsumed()/10` per tick against the authored seconds —
+        /// a brownout stretches the recharge rather than the countdown simply
+        /// running. The sim keeps the same shape in ticks: `recharge` is the
+        /// full-power length and `ShieldState::rechargeProgress` accrues the
+        /// granted fraction of a tick per tick.
         bool personalBubble = false;
         bool transportShield = false;
 
@@ -261,6 +286,17 @@ public:
         /// `flatDamage(weapon.damage)`, which is exactly the scalar the sim used before P10.1.
         /// That equivalence is what lets the whole corpus of existing tests stay untouched.
         unitdef::DamageProfile damage{};
+
+        /// `C-093`: ticks between target scans after a FAILED acquire —
+        /// retail's `max(1, ceil(TargetCheckInterval x ticksPerSecond)) + 1`.
+        /// A successful acquire re-checks next tick regardless.
+        TickCount targetCheckTicks = 2;
+
+        /// `C-262`: the ring profiles, resolved beside `damage` for the same
+        /// reason — the armour matrix is a match fact. Empty (non-harmful)
+        /// for a weapon with no rings.
+        unitdef::DamageProfile innerRing{};
+        unitdef::DamageProfile outerRing{};
     };
 
     /// The primary turret's mount, in model-space elmos at rest: where the shots

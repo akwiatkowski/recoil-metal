@@ -794,3 +794,250 @@ TEST_CASE("C-284: an energy brownout blacks out intel until recovery holds",
     CHECK(rm::sim::contactKindForUnit(0, target.index, store, catalog, armies, intel)
           == rm::sim::ContactKind::Seen);
 }
+
+// --- C-007: the explored map -------------------------------------------------
+//
+// Retail's `CIntelXGrid`/`IsExplored`: a cell once lit by vision stays explored
+// for the rest of the match — the "seen before" layer under the fog.
+
+TEST_CASE("C-007: a square once seen stays explored after the seer leaves",
+          "[fa-intel]") {
+    UnitCatalog catalog;
+    static const rm::unitdef::UnitDef kSeer = seer(150.0f);
+    const rm::UnitTypeIndex watcher = catalog.add(&kSeer);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    const rm::sim::UnitId scout = place(store, watcher, 0, 200.0f, 200.0f);
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    // The scout's own ground is explored for its alliance — and not for the
+    // other one.
+    CHECK(intel.explored(0, Fx::fromInt(200), Fx::fromInt(200)));
+    CHECK_FALSE(intel.explored(1, Fx::fromInt(200), Fx::fromInt(200)));
+    CHECK_FALSE(intel.explored(0, Fx::fromInt(900), Fx::fromInt(900)));
+
+    // The scout dies. Coverage is gone — the explored mark is not.
+    store.kill(scout);
+    intel.update(store, catalog, armies, nullptr);
+    CHECK_FALSE(intel.sees(0, IntelKind::Vision, Fx::fromInt(200), Fx::fromInt(200)));
+    CHECK(intel.explored(0, Fx::fromInt(200), Fx::fromInt(200)));
+}
+
+TEST_CASE("C-007: the explored map survives a save", "[fa-intel]") {
+    UnitCatalog catalog;
+    static const rm::unitdef::UnitDef kSeer = seer(150.0f);
+    const rm::UnitTypeIndex watcher = catalog.add(&kSeer);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 200.0f, 200.0f);
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+    REQUIRE(intel.explored(0, Fx::fromInt(200), Fx::fromInt(200)));
+
+    // Round-trip through the snapshot the save carries (v52).
+    Intel restored;
+    restored.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                       rm::sim::VisionStyle::ForgedAlliance);
+    restored.restore(intel.snapshot());
+    CHECK(restored.explored(0, Fx::fromInt(200), Fx::fromInt(200)));
+    CHECK_FALSE(restored.explored(1, Fx::fromInt(200), Fx::fromInt(200)));
+}
+
+// --- C-077/C-113: the mip split ----------------------------------------------
+//
+// Vision runs at mip 1 (16-elmo squares); radar, sonar, omni and water vision
+// at mip 2 (32-elmo squares). The grids' own `squareElmos` is the pin.
+
+TEST_CASE("C-077/C-113: vision runs one mip finer than the blip senses",
+          "[fa-intel]") {
+    Intel intel;
+    intel.configure(1, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    const int visionElmos = intel.grid(0, IntelKind::Vision).squareElmos().floorToInt();
+    CHECK(visionElmos == 16);
+    CHECK(intel.grid(0, IntelKind::Radar).squareElmos().floorToInt() == 32);
+    CHECK(intel.grid(0, IntelKind::Sonar).squareElmos().floorToInt() == 32);
+    CHECK(intel.grid(0, IntelKind::Omni).squareElmos().floorToInt() == 32);
+    // `C-279`'s water-vision grid sits among the scale-4 senses, not with
+    // vision — retail's `+0x48` slot.
+    CHECK(intel.grid(0, IntelKind::WaterVision).squareElmos().floorToInt() == 32);
+}
+
+// --- C-078: recon cadence ----------------------------------------------------
+//
+// Retail re-stamps a blip on a cadence; this engine re-derives the whole
+// picture every tick. The pin: a unit's coverage updates within ONE update for
+// every alliance at once — no per-alliance stagger.
+
+TEST_CASE("C-078: a move re-stamps every alliance's grid on the same tick",
+          "[fa-intel]") {
+    UnitCatalog catalog;
+    static const rm::unitdef::UnitDef kSeer = seer(150.0f);
+    const rm::UnitTypeIndex watcher = catalog.add(&kSeer);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(2048), Fx::fromInt(2048),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    const rm::sim::UnitId scout = place(store, watcher, 0, 200.0f, 200.0f);
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+    REQUIRE(intel.sees(0, IntelKind::Vision, Fx::fromInt(200), Fx::fromInt(200)));
+
+    // Teleport the scout across the map. One update later BOTH alliances'
+    // grids reflect the new position — there is no cadence bucket to wait on.
+    store.transforms()[scout.index].x = Fx::fromInt(1800);
+    store.transforms()[scout.index].z = Fx::fromInt(1800);
+    intel.update(store, catalog, armies, nullptr);
+    CHECK(intel.sees(0, IntelKind::Vision, Fx::fromInt(1800), Fx::fromInt(1800)));
+    CHECK_FALSE(intel.sees(0, IntelKind::Vision, Fx::fromInt(200), Fx::fromInt(200)));
+}
+
+// --- C-279: the water-vision grid ---------------------------------------------
+//
+// A submerged or seabed unit's sight moves off Vision onto WaterVision, and a
+// submerged target is identified through the viewer's water-vision coverage.
+
+TEST_CASE("C-279: a submerged unit sees through water vision, not vision",
+          "[fa-intel]") {
+    UnitCatalog catalog;
+    static const rm::unitdef::UnitDef kSub = [] {
+        rm::unitdef::UnitDef def;
+        def.visionRadiusElmos = 0.0f;
+        def.waterVisionRadiusElmos = 200.0f;
+        return def;
+    }();
+    static const rm::unitdef::UnitDef kHull;
+    const rm::UnitTypeIndex sub = catalog.add(&kSub);
+    const rm::UnitTypeIndex hull = catalog.add(&kHull);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    const rm::sim::UnitId diver = place(store, sub, 0, 200.0f, 200.0f);
+    const rm::sim::UnitId target = place(store, hull, 1, 300.0f, 200.0f);
+    const std::vector<Army> armies = twoArmies(false);
+
+    // Surfaced: no vision radius, so nothing is seen.
+    intel.update(store, catalog, armies, nullptr);
+    CHECK_FALSE(intel.sees(0, IntelKind::Vision, Fx::fromInt(300), Fx::fromInt(200)));
+    CHECK_FALSE(intel.sees(0, IntelKind::WaterVision, Fx::fromInt(300), Fx::fromInt(200)));
+
+    // Submerged: the sight moves onto the water-vision grid.
+    store.motion()[diver.index].submersible = true;
+    store.motion()[diver.index].submerged = true;
+    intel.update(store, catalog, armies, nullptr);
+    CHECK(intel.sees(0, IntelKind::WaterVision, Fx::fromInt(300), Fx::fromInt(200)));
+    CHECK_FALSE(intel.sees(0, IntelKind::Vision, Fx::fromInt(300), Fx::fromInt(200)));
+
+    // And a submerged TARGET is identified through the viewer's water vision —
+    // the other half of retail's `+0x48` substitution.
+    store.motion()[target.index].submersible = true;
+    store.motion()[target.index].submerged = true;
+    intel.update(store, catalog, armies, nullptr);
+    CHECK(rm::sim::contactKindForUnit(0, target.index, store, catalog, armies, intel)
+          == rm::sim::ContactKind::Seen);
+}
+
+// --- C-284: the fog-of-war flag -----------------------------------------------
+//
+// `reconDB+0xA8`: with fog off, LOSNow is granted unconditionally — the
+// 'FogOfWar = none' lobby option's whole effect. The cloak filter still
+// applies.
+
+TEST_CASE("C-284: fog off grants LOSNow unconditionally", "[fa-intel]") {
+    UnitCatalog catalog;
+    static const rm::unitdef::UnitDef kBlind;  // no senses at all
+    static const rm::unitdef::UnitDef kHull;
+    const rm::UnitTypeIndex blind = catalog.add(&kBlind);
+    const rm::UnitTypeIndex hull = catalog.add(&kHull);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    const rm::sim::UnitId blindUnit = place(store, blind, 0, 200.0f, 200.0f);
+    const rm::sim::UnitId target = place(store, hull, 1, 900.0f, 900.0f);
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    // Fog on: a blind alliance sees nothing.
+    CHECK(intel.fogOfWar(0));
+    CHECK_FALSE(
+        rm::sim::contactKindForUnit(0, target.index, store, catalog, armies, intel)
+            .has_value());
+
+    // Fog off: LOSNow is granted outright — the target is Seen despite nobody
+    // covering it.
+    intel.setFogOfWar(0, false);
+    CHECK(rm::sim::contactKindForUnit(0, target.index, store, catalog, armies, intel)
+          == rm::sim::ContactKind::Seen);
+    // The other alliance's flag is untouched — and it owns no sensor either,
+    // so the blind unit is invisible to it.
+    CHECK(intel.fogOfWar(1));
+    CHECK_FALSE(
+        rm::sim::contactKindForUnit(1, blindUnit.index, store, catalog, armies, intel)
+            .has_value());
+}
+
+// --- C-278: KnownFake ---------------------------------------------------------
+//
+// A jammer fake the alliance has unmasked: vision covering the fake's position
+// sees nothing there, so the blip is flagged `knownFake`.
+
+TEST_CASE("C-278: vision over a fake's position flags it knownFake",
+          "[fa-intel]") {
+    UnitCatalog catalog;
+    static const rm::unitdef::UnitDef kJammer = [] {
+        rm::unitdef::UnitDef def;
+        def.jammerBlips = 4;
+        def.jamRadiusMinElmos = 20.0f;
+        def.jamRadiusElmos = 60.0f;
+        return def;
+    }();
+    // A seer whose vision covers the jammer's whole jam disc — every fake
+    // lands inside LOS, so every fake is unmasked.
+    static const rm::unitdef::UnitDef kSeer = seer(400.0f, 400.0f);
+    const rm::UnitTypeIndex jammer = catalog.add(&kJammer);
+    const rm::UnitTypeIndex watcher = catalog.add(&kSeer);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(2048), Fx::fromInt(2048),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 500.0f, 500.0f);
+    (void)place(store, jammer, 1, 600.0f, 500.0f);
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    const std::vector<rm::sim::Contact> contacts =
+        seenBy(0, store, catalog, armies, intel);
+    // The carrier itself is Seen (vision covers it); the fakes are blips.
+    std::size_t fakes = 0;
+    std::size_t knownFakes = 0;
+    for (const rm::sim::Contact& contact : contacts) {
+        if (contact.isBlip()) {
+            ++fakes;
+            if (contact.knownFake) {
+                ++knownFakes;
+            }
+        }
+    }
+    CHECK(fakes == 4);
+    CHECK(knownFakes == 4);
+}

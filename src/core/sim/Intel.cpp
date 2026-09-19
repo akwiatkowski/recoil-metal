@@ -409,6 +409,10 @@ void Intel::configure(std::size_t alliances, Fx widthElmos, Fx depthElmos,
     grids_.reserve(alliances * kIntelKindCount);
     for (std::size_t alliance = 0; alliance < alliances; ++alliance) {
         grids_.emplace_back(widthElmos, depthElmos, kVisionMipLevel);   // Vision
+        // WATER VISION AT RADAR'S MIP (`C-279`): retail keeps it among the
+        // scale-4 grids (`+0x48`), beside radar/sonar/omni — only fog and
+        // vision run at scale 2 (`C-077`).
+        grids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);    // WaterVision
         grids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);    // Radar
         grids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);    // Sonar
         // OMNI AT RADAR'S MIP. This used to be the vision mip, argued from precision: omni
@@ -432,6 +436,19 @@ void Intel::configure(std::size_t alliances, Fx widthElmos, Fx depthElmos,
     for (std::size_t alliance = 0; alliance < alliances; ++alliance) {
         hiddenGrids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);  // RadarField
         hiddenGrids_.emplace_back(widthElmos, depthElmos, kRadarMipLevel);  // SonarField
+    }
+
+    // The explored map (`C-007`): one byte per VISION-grid square per alliance.
+    // Sized off the vision grid rather than recomputed, so the two can never
+    // disagree about what a square index means.
+    explored_.assign(alliances, {});
+    fogOfWar_.assign(alliances, std::uint8_t{1});
+    for (std::size_t alliance = 0; alliance < alliances; ++alliance) {
+        const IntelGrid& vision = grids_[alliance * kIntelKindCount];
+        explored_[alliance].assign(
+            static_cast<std::size_t>(vision.squaresX())
+                * static_cast<std::size_t>(vision.squaresZ()),
+            std::uint8_t{0});
     }
     assert(hiddenGrids_.size() == alliances * kHiddenKindCount);
 }
@@ -470,6 +487,42 @@ bool Intel::sees(int alliance, IntelKind kind, Fx x, Fx z) const noexcept {
     return grid(alliance, kind).covered(x, z);
 }
 
+bool Intel::explored(int alliance, Fx x, Fx z) const noexcept {
+    if (!active() || alliance < 0
+        || static_cast<std::size_t>(alliance) >= explored_.size()) {
+        return false;
+    }
+    // The vision grid's square index IS the explored index — same resolution.
+    const std::int32_t square = grid(alliance, IntelKind::Vision).squareAt(x, z);
+    if (square == IntelGrid::kNoSquare) {
+        return false;
+    }
+    return explored_[static_cast<std::size_t>(alliance)]
+                    [static_cast<std::size_t>(square)]
+           != 0;
+}
+
+std::span<const std::uint8_t> Intel::exploredCells(int alliance) const noexcept {
+    if (alliance < 0 || static_cast<std::size_t>(alliance) >= explored_.size()) {
+        return {};
+    }
+    return explored_[static_cast<std::size_t>(alliance)];
+}
+
+bool Intel::fogOfWar(int alliance) const noexcept {
+    if (alliance < 0 || static_cast<std::size_t>(alliance) >= fogOfWar_.size()) {
+        return true;  // an alliance that does not exist gets the default
+    }
+    return fogOfWar_[static_cast<std::size_t>(alliance)] != 0;
+}
+
+void Intel::setFogOfWar(int alliance, bool enabled) noexcept {
+    if (alliance < 0 || static_cast<std::size_t>(alliance) >= fogOfWar_.size()) {
+        return;
+    }
+    fogOfWar_[static_cast<std::size_t>(alliance)] = enabled ? 1 : 0;
+}
+
 std::span<const RetainedRadarContact> Intel::retainedRadarContacts(int alliance) const noexcept {
     static const std::vector<RetainedRadarContact> kEmpty;
     if (alliance < 0 || static_cast<std::size_t>(alliance) >= retainedRadarContacts_.size()) {
@@ -502,15 +555,17 @@ bool Intel::intelActive(const UnitStore& store, UnitIndex slot,
     }
     switch (type) {
     case IntelType::Vision:
+    case IntelType::WaterVision:
     case IntelType::Radar:
     case IntelType::Sonar:
     case IntelType::Omni:
         // A grid sense is active exactly when this slot stamped it this pass.
         return !emitters_[slot][static_cast<std::size_t>(
-                                  type == IntelType::Vision ? IntelKind::Vision
-                              : type == IntelType::Radar  ? IntelKind::Radar
-                              : type == IntelType::Sonar  ? IntelKind::Sonar
-                                                          : IntelKind::Omni)]
+                                  type == IntelType::Vision      ? IntelKind::Vision
+                              : type == IntelType::WaterVision ? IntelKind::WaterVision
+                              : type == IntelType::Radar       ? IntelKind::Radar
+                              : type == IntelType::Sonar       ? IntelKind::Sonar
+                                                               : IntelKind::Omni)]
                     .squares.empty();
     case IntelType::RadarStealthField:
     case IntelType::SonarStealthField:
@@ -529,7 +584,6 @@ bool Intel::intelActive(const UnitStore& store, UnitIndex slot,
         return slot < intelRecovery_.size()
                && intelRecovery_[slot] >= intelReactivate_;
     case IntelType::None:
-    case IntelType::WaterVision:
     case IntelType::CloakField:
     case IntelType::Spoof:
         break;  // unmodelled types are never active
@@ -568,6 +622,37 @@ void Intel::withdraw(UnitIndex slot) {
     // needed by the grid-index math inside this function, which is why only
     // the square resets.
     placement.square = IntelGrid::kNoSquare;
+}
+
+void Intel::markExplored(int alliance, IntelKind kind,
+                         std::span<const std::int32_t> squares) noexcept {
+    if (alliance < 0 || static_cast<std::size_t>(alliance) >= explored_.size()) {
+        return;
+    }
+    const IntelGrid& source = grid(alliance, kind);
+    const IntelGrid& vision = grid(alliance, IntelKind::Vision);
+    std::vector<std::uint8_t>& cells = explored_[static_cast<std::size_t>(alliance)];
+    const int srcElmos = source.squareElmos().floorToInt();
+    const int visElmos = vision.squareElmos().floorToInt();
+    for (const std::int32_t square : squares) {
+        // The source square's world rect, mapped onto vision squares. For the
+        // common case — water vision at radar mip onto vision mip — this is a
+        // 2×2 block; written as a rect so a future kind at any mip still
+        // lands right.
+        const int sx = square % source.squaresX();
+        const int sz = square / source.squaresX();
+        const int x0 = (sx * srcElmos) / visElmos;
+        const int x1 = std::min(vision.squaresX() - 1,
+                                ((sx + 1) * srcElmos - 1) / visElmos);
+        const int z0 = (sz * srcElmos) / visElmos;
+        const int z1 = std::min(vision.squaresZ() - 1,
+                                ((sz + 1) * srcElmos - 1) / visElmos);
+        for (int z = z0; z <= z1; ++z) {
+            for (int x = x0; x <= x1; ++x) {
+                cells[static_cast<std::size_t>(z * vision.squaresX() + x)] = 1;
+            }
+        }
+    }
 }
 
 void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
@@ -664,12 +749,24 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
         const bool intelCheat =
             armies[static_cast<std::size_t>(army)].cheatEnabled
             && intelDef != nullptr && intelDef->hasCategory("COMMAND");
+        // `C-279`'s layer toggle (`Unit.lua:1812`, `OnLayerChange` 2108-2111):
+        // a submerged or seabed unit's sight moves off the vision grid onto
+        // the water-vision one — retail disables `Vision` and enables
+        // `WaterVision` on the layer change, which is the same thing said as
+        // a routing decision. Part of the change key: a dive or surfacing
+        // that crosses no square boundary still moves the stamp.
+        const MoveState& emitterMotion = motion[slot];
+        const bool underwater =
+            (emitterMotion.submersible && emitterMotion.submerged)
+            || emitterMotion.seabed;
         if (placement.square == square && placement.alliance == alliance
             && placement.intelMask == intelMask && placement.intelCheat == intelCheat
+            && placement.underwater == underwater
             && square != IntelGrid::kNoSquare) {
             continue;
         }
         placement.intelCheat = intelCheat;
+        placement.underwater = underwater;
 
         withdraw(slot);
         if (square == IntelGrid::kNoSquare) {
@@ -677,22 +774,22 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
         }
 
         const UnitCatalog::IntelRadii& radii = catalog.intel(store.typeAt(slot));
-        Fx byKind[kIntelKindCount] = {radii.vision, radii.radar, radii.sonar,
-                                      radii.omni};
+        // Underwater the vision radius is silent and `WaterVisionRadius`
+        // speaks; surfaced it is the other way around — the toggle above.
+        Fx byKind[kIntelKindCount] = {underwater ? Fx{} : radii.vision,
+                                      underwater ? radii.waterVision : Fx{},
+                                      radii.radar, radii.sonar, radii.omni};
         if (intelCheat) {
             // `CheatBuffs.lua`'s IntelCheat, verbatim: Add 10000 to vision and
             // omni, Mult 1.0 — the AIx commander's map-wide sight.
             byKind[0] += Fx::fromInt(10000);
-            byKind[3] += Fx::fromInt(10000);
+            byKind[4] += Fx::fromInt(10000);
         }
 
         // C-283's per-type enabled bytes (`0x00694B60`/`0x00694C56`): a type
-        // whose bit stands in the effective mask contributes nothing — the
-        // `EnableIntel`/`DisableIntel` writes plus the `RULEUTC_*` toggles'
-        // `scriptBitIntelMask` union. Vision is not in bit 3's group in retail
-        // either, so the mask gates it only through an explicit disable.
         static constexpr IntelType kSenseType[kIntelKindCount] = {
-            IntelType::Vision, IntelType::Radar, IntelType::Sonar, IntelType::Omni};
+            IntelType::Vision, IntelType::WaterVision, IntelType::Radar,
+            IntelType::Sonar, IntelType::Omni};
         static constexpr IntelType kFieldType[kHiddenKindCount] = {
             IntelType::RadarStealthField, IntelType::SonarStealthField};
 
@@ -714,6 +811,16 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
             std::vector<std::int32_t>& squares = emitters_[slot][kind].squares;
             squares.assign(scratch_.begin(), scratch_.end());
             grids_[index].add(squares);
+
+            // `C-007`'s explored map: a cell either vision kind lights stays
+            // lit forever. The explored bitmap is at the VISION grid's
+            // resolution, so a water-vision square (radar mip) maps back as a
+            // block of vision squares — the same world cell, coarser
+            // granularity.
+            if (kind == static_cast<std::size_t>(IntelKind::Vision)
+                || kind == static_cast<std::size_t>(IntelKind::WaterVision)) {
+                markExplored(alliance, static_cast<IntelKind>(kind), squares);
+            }
         }
 
         // The stealth FIELDS this unit projects, into the hidden family. Discs always: the
@@ -954,9 +1061,18 @@ std::array<Fx, 2> radarBlipPosition(UnitId unit, Fx x, Fx z, TickIndex tick,
                             || targetMotion.seabed;
 
     std::uint8_t bits = 0;
+    // `C-284`'s fog-of-war flag (`reconDB+0xA8`): with fog OFF, `LOSNow` is
+    // granted outright — the 'FogOfWar = none' lobby option's whole effect.
+    // Retail still applies the cloak filter afterward (`0x005D1F30` reads the
+    // flag only to skip the grid lookup), so a cloaked unit stays hidden even
+    // with fog off.
+    const bool fogOff = !intel.fogOfWar(alliance);
     if (hiding.freeIntel
-        || (!(hiding.cloak && !cloakOff) && !underwater
-            && intel.sees(alliance, IntelKind::Vision, at.x, at.z))) {
+        || (!(hiding.cloak && !cloakOff)
+            && (fogOff
+                || (underwater
+                        ? intel.sees(alliance, IntelKind::WaterVision, at.x, at.z)
+                        : intel.sees(alliance, IntelKind::Vision, at.x, at.z))))) {
         bits |= kReconLos;
     }
     // Omni bypasses every counter-intel flag but does NOT identify (`C-280`) —
@@ -1069,16 +1185,22 @@ std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,
     // surfaced or not — and radar answers for everything EXCEPT Seabed|Sub, so
     // a surfaced ship is a radar contact and a seabed walker is not. Vision
     // never sees under water at all; retail substitutes its water-vision grid
-    // (`+0x48`) for submerged targets, which this sim defers — so a seabed or
-    // submerged target is sonar-only here. Omni still sees all.
+    // (`+0x48`) for submerged targets (`C-279`), which this sim now models.
+    // Omni still sees all.
     const MoveState& targetMotion = store.motion()[target];
     const bool submerged = targetMotion.submersible && targetMotion.submerged;
     const bool underwater = submerged || targetMotion.seabed;
     const bool sonarLayer = targetMotion.surfaceWater || targetMotion.submersible
                             || targetMotion.seabed;
+    // `C-284`'s fog-of-war flag: with fog off, LOSNow is granted outright —
+    // the cloak filter still applies, as it does in retail.
+    const bool fogOff = !intel.fogOfWar(alliance);
     if (hiding.freeIntel
-        || (!(hiding.cloak && !cloakOff) && !underwater
-            && intel.sees(alliance, IntelKind::Vision, at.x, at.z))) {
+        || (!(hiding.cloak && !cloakOff)
+            && (fogOff
+                || (underwater
+                        ? intel.sees(alliance, IntelKind::WaterVision, at.x, at.z)
+                        : intel.sees(alliance, IntelKind::Vision, at.x, at.z))))) {
         return ContactKind::Seen;
     }
     // Omni bypasses every counter-intel flag — cloak, both stealths, both fields — but
@@ -1133,9 +1255,7 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
                                        .x = at.x,
                                        .z = at.z,
                                        .kind = ContactKind::Seen});
-            continue;
-        }
-        if (kind) {
+        } else if (kind) {
             const auto [x, z] = radarBlipPosition(store.idAt(slot), at.x, at.z, tick, rate);
             contacts.push_back(Contact{.unit = store.idAt(slot),
                                        .x = x,
@@ -1183,10 +1303,19 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
                 const Fx offsetZ = fxSin(spread) * magnitude;
                 const auto [x, z] =
                     radarBlipPosition(ghost, at.x + offsetX, at.z + offsetZ, tick, rate);
+                // `C-278`'s `KnownFake` (`blip+0x20`): a fake is unmasked when
+                // the viewer's VISION covers its position — LOS sees nothing
+                // there — or when it sits off the map. The blip still
+                // projects; the flag is what a UI reads to distrust it.
+                const bool knownFake =
+                    intel.sees(alliance, IntelKind::Vision, x, z)
+                    || intel.grid(alliance, IntelKind::Vision).squareAt(x, z)
+                           == IntelGrid::kNoSquare;
                 contacts.push_back(Contact{.unit = carrier,
                                            .x = x,
                                            .z = z,
-                                           .kind = ContactKind::Radar});
+                                           .kind = ContactKind::Radar,
+                                           .knownFake = knownFake});
             }
         }
     }
