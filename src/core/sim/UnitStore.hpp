@@ -8,6 +8,7 @@
 #include "core/sim/Movement.hpp"
 #include "core/sim/SpatialGrid.hpp"
 #include "core/sim/Transform.hpp"
+#include "core/sim/RandomStream.hpp"
 
 #include <cstddef>
 #include <array>
@@ -139,7 +140,13 @@ public:
 
     /// Marks a unit dead. Its slot stays put and its arrays keep their last values — see
     /// the note on tombstones above. Killing an already-dead unit does nothing.
-    void kill(UnitId id);
+    ///
+    /// `random`, when given, is the sim stream `C-197`'s transport rule draws
+    /// from: each attached cargo child rolls `r < 0.99` to die with the
+    /// carrier, and the survivors detach where it fell. Without a stream —
+    /// callers outside the match tick, which have no deterministic draw to
+    /// offer — cargo dies unconditionally, the pre-`C-197` behaviour.
+    void kill(UnitId id, RandomStream* random = nullptr);
 
     /// Retail's `unit:Destroy()` (`C-261`, `C-265`): the unit leaves WITHOUT the
     /// death path — no wreck, no `UnitDestroyed` event, no kill credit, no death

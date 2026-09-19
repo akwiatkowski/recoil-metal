@@ -25,7 +25,7 @@ namespace {
 /// forever, which is both a wrong answer and an unbounded one.
 void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report,
                 EventQueue* events, FeatureStore* features,
-                std::vector<ArmyStats>* armyStats) {
+                std::vector<ArmyStats>* armyStats, RandomStream* random) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
@@ -146,7 +146,9 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
     // handle should stop naming it: anything still holding one from an earlier tick now
     // fails cleanly instead of finding whoever inherits the slot.
     for (const Death& death : report.died) {
-        store.kill(death.ref);
+        // `C-197`: the cargo roll draws from the match's own stream, so a
+        // transport's death is replay-deterministic like everything else.
+        store.kill(death.ref, random);
     }
 }
 
@@ -950,7 +952,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         }
     }
 
-    retireDead(store, catalog, report, match.events, match.features, match.armyStats);
+    retireDead(store, catalog, report, match.events, match.features, match.armyStats,
+               &match.random);
 
     // 99 of the 494 shipped weapons are `WeaponCategory = 'Death'` — a blast with no
     // target and no rate of fire. This is where they finally go off.

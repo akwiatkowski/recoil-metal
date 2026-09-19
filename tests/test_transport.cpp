@@ -777,6 +777,57 @@ TEST_CASE("a transport's cargo dies with it", "[transport]") {
     CHECK(roster.store.childrenOf(transport).empty());
 }
 
+TEST_CASE("C-197: cargo rolls against the sim RNG — 99% die, the rest detach",
+          "[transport]") {
+    // `TransportDetachAllUnits(destroySome = true)` runs BEFORE `OnKilled`
+    // (`0x006aee5f`): each external cargo child draws from the sim MT19937 and
+    // dies iff `r < 0.99` (`0x005edeb0`, constant `0x00ea2c5c`). The survivors
+    // detach where the carrier fell — notified before the transport is marked
+    // dead, which is why the roll lives inside `kill` itself.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+
+    SECTION("a draw under 0.99 kills the cargo with the carrier") {
+        const UnitId transport = landedTransport(roster, transportType, 50.0f, 50.0f);
+        const UnitId cargo = roster.add(cargoType, 51.0f, 50.0f, 0, 500.0f);
+        REQUIRE(roster.store.attach(transport, cargo));
+
+        // Seed 1's first MT19937 draw is 1791095845 — under the 0.99 line.
+        rm::sim::RandomStream random{1};
+        roster.store.kill(transport, &random);
+
+        CHECK_FALSE(roster.store.alive(cargo));
+    }
+
+    SECTION("a draw over 0.99 detaches the cargo alive") {
+        const UnitId transport = landedTransport(roster, transportType, 50.0f, 50.0f);
+        const UnitId cargo = roster.add(cargoType, 51.0f, 50.0f, 0, 500.0f);
+        REQUIRE(roster.store.attach(transport, cargo));
+
+        // Seed 319's first draw is 4288286497 — the top 1% of the range.
+        rm::sim::RandomStream random{319};
+        roster.store.kill(transport, &random);
+
+        CHECK(roster.store.alive(cargo));
+        CHECK_FALSE(roster.motion(cargo).attached);
+        CHECK_FALSE(roster.store.parentOf(cargo).has_value());
+    }
+
+    SECTION("the roll is deterministic — same seed, same outcome") {
+        const UnitId transport = landedTransport(roster, transportType, 50.0f, 50.0f);
+        const UnitId cargo = roster.add(cargoType, 51.0f, 50.0f, 0, 500.0f);
+        REQUIRE(roster.store.attach(transport, cargo));
+
+        rm::sim::RandomStream random{319};
+        roster.store.kill(transport, &random);
+        CHECK(roster.store.alive(cargo));
+    }
+}
+
 // --- Retail validation ---------------------------------------------------------
 //
 // Everything above proves the mechanism on synthetic numbers; these prove the

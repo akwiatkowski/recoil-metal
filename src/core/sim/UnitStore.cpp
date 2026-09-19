@@ -401,7 +401,7 @@ void UnitStore::propagateAttachments() {
     }
 }
 
-void UnitStore::kill(UnitId id) {
+void UnitStore::kill(UnitId id, RandomStream* random) {
     if (!ids_.alive(id)) {
         return;
     }
@@ -429,14 +429,28 @@ void UnitStore::kill(UnitId id) {
     enhancements_[id.index].clear();
     lifetimeRemainingTicks_[id.index] = kLifetimeUnset;
     (void)detach(id);
-    // Cargo dies with its carrier: retail disperses veterancy for the attached
-    // units at their remaining health when a loaded transport is destroyed
-    // (`TransportUnitComponent.lua:127,138`, via `engine-analysis/11-fa-sim-layer.md`)
-    // — they never get to detach. The list is copied because each recursive kill
-    // detaches its child, which erases from `children_[id.index]` under iteration.
+    // `C-197`: `Moho::Unit::Kill` runs `TransportDetachAllUnits(destroySome =
+    // true)` BEFORE Lua's `OnKilled` (`0x006aee5f`), and inside it each
+    // external cargo child draws from the sim MT19937 (`Sim+0x904`) and dies
+    // iff `r < 0.99` (`0x005edeb0`) — the survivors detach where the carrier
+    // fell. The list is copied because each recursive kill detaches its child,
+    // which erases from `children_[id.index]` under iteration; the draw is
+    // taken per child in forward order, exactly as retail's Phase B walks it.
+    // Callers without a stream keep the old unconditional kill — there is no
+    // honest roll to make without the sim's own RNG.
     const std::vector<UnitId> cargo = children_[id.index];
     for (const UnitId child : cargo) {
-        kill(child);
+        if (random != nullptr) {
+            // `r < 0.99` on a uint32 draw — the constant `0x00ea2c5c = 0.99f`
+            // read from the image — so the top 1% of the range survives.
+            const bool dies =
+                random->next() < static_cast<std::uint32_t>(0.99 * 4294967296.0);
+            if (!dies) {
+                (void)detach(child);
+                continue;
+            }
+        }
+        kill(child, random);
     }
     children_[id.index].clear();
     ids_.release(id);
