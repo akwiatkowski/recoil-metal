@@ -41,6 +41,11 @@ TEST_CASE("C-305: threads due on the same tick resume in fork order",
     // workers fork in order and each sleeps a different number of ticks; every pass
     // must resume the due set oldest-first, or a manager that forks before another
     // would starve behind it.
+    // C-305's observable half: a stage consumes its ready ring in strict FIFO. Three
+    // workers fork in order and each sleeps a different number of beats — under
+    // C-307's n−1 quirk WaitTicks(2)/(3)/(4) wake every 1/2/3 beats — and every
+    // pass must resume the due set oldest-first, or a manager that forks before
+    // another would starve behind it.
     REQUIRE(ai.eval(R"(
         order = {}
         local function worker(name, sleep)
@@ -49,17 +54,18 @@ TEST_CASE("C-305: threads due on the same tick resume in fork order",
                 WaitTicks(sleep)
             end
         end
-        ForkThread(function() worker('a', 1) end)
-        ForkThread(function() worker('b', 2) end)
-        ForkThread(function() worker('c', 3) end)
+        ForkThread(function() worker('a', 2) end)
+        ForkThread(function() worker('b', 3) end)
+        ForkThread(function() worker('c', 4) end)
     )"));
 
     // Tick 0: all three are due, in fork order.
     CHECK(ai.pump(0) == 3);
     REQUIRE(ai.eval("assert(order[1] == 'a' and order[2] == 'b' and order[3] == 'c')"));
 
-    // Tick 1: only 'a' is due again. Tick 2: 'a' then 'b' — 'a' re-queued first
-    // because it woke first, which is the splice-preserves-order half of the claim.
+    // Tick 1: only 'a' is due again (WaitTicks(2) wakes next beat). Tick 2: 'a'
+    // then 'b' — 'a' re-queued first because it woke first, which is the
+    // splice-preserves-order half of the claim.
     CHECK(ai.pump(1) == 1);
     CHECK(ai.pump(2) == 2);
     REQUIRE(ai.eval(R"(
@@ -67,13 +73,13 @@ TEST_CASE("C-305: threads due on the same tick resume in fork order",
         assert(order[5] == 'a' and order[6] == 'b')
     )"));
 
-    // Tick 3: 'a' and 'c' are due ('c' slept 3), still oldest-first.
+    // Tick 3: 'a' and 'c' are due ('c' slept 4 → 3 beats), still oldest-first.
     CHECK(ai.pump(3) == 2);
     REQUIRE(ai.eval("assert(order[7] == 'a' and order[8] == 'c')"));
     CHECK(ai.threadErrors().empty());
 }
 
-TEST_CASE("C-307: WaitTicks sleeps the documented n ticks, floored at one",
+TEST_CASE("C-307: WaitTicks resumes after max(1, n-1) beats, one short of the docs",
           "[fa-lua][threads]") {
     const std::filesystem::path root = corpusRoot();
     if (root.empty()) {
@@ -82,12 +88,12 @@ TEST_CASE("C-307: WaitTicks sleeps the documented n ticks, floored at one",
     FafAi ai(root);
     REQUIRE(ai.ready());
 
-    // DOCUMENTED DIVERGENCE, pinned deliberately: retail's `WaitTicks(n)` yields the
-    // status `n` verbatim and resumes after `n−1` beats (C-307), one shorter than
-    // `ScriptTask.lua`'s own comment describes. This sandbox waits n FULL ticks —
-    // `wake = tick + max(1, n)` (src/app/FafAi.cpp) — matching the documented
-    // semantics rather than the measured off-by-one. The test asserts OUR contract;
-    // the claim id marks where the behaviours differ.
+    // Retail's `CTaskStage` runner (`0x40932f`): the yielded count becomes the
+    // task status, and the runner stores `counter = status − 1` with a
+    // decrement-first test — `WaitTicks(1)` and `WaitTicks(2)` both resume on
+    // the NEXT beat, `WaitTicks(n ≥ 3)` resumes on the (n−1)-th beat, one
+    // shorter than `ScriptTask.lua`'s own comment describes. The sandbox
+    // pushes the retail counter, not the argument (`src/app/FafAi.cpp`).
     REQUIRE(ai.eval(R"(
         woke = {}
         ForkThread(function()
@@ -99,17 +105,17 @@ TEST_CASE("C-307: WaitTicks sleeps the documented n ticks, floored at one",
             table.insert(woke, 'zero')
         end)
         ForkThread(function()
-            WaitSeconds(0.5)  -- 5 ticks at the sandbox's 10 Hz
+            WaitSeconds(0.5)  -- 5 ticks at the sandbox's 10 Hz → counter 4
             table.insert(woke, 'half')
         end)
     )"));
 
     CHECK(ai.pump(0) == 3);   // all three start and yield
     CHECK(ai.pump(1) == 1);   // only the floored zero-wait returns
-    CHECK(ai.pump(2) == 0);   // the 3-tick wait is NOT back early — retail's n−1
-    CHECK(ai.pump(3) == 1);   // would have resumed it here
-    CHECK(ai.pump(4) == 0);
-    CHECK(ai.pump(5) == 1);   // the half-second wait lands on its fifth tick
+    CHECK(ai.pump(2) == 1);   // the 3-tick wait IS back early — retail's n−1
+    CHECK(ai.pump(3) == 0);   // quirk resumes it here, not on the third beat
+    CHECK(ai.pump(4) == 1);   // the half-second wait lands a beat early too
+    CHECK(ai.pump(5) == 0);
     REQUIRE(ai.eval(R"(
         assert(woke[1] == 'zero' and woke[2] == 'three' and woke[3] == 'half')
     )"));
