@@ -25,6 +25,7 @@
 
 #include "app/FafAi.hpp"
 #include "app/Opponent.hpp"
+#include "core/sim/ThreatGrid.hpp"
 
 #include <set>
 #include <map>
@@ -81,6 +82,20 @@ private:
     static int scoutRouteBinding(lua_State* lua);
     static int enhancementSequenceBinding(lua_State* lua);
     static int openingSurveyBinding(lua_State* lua);
+    /// `__rm_faf_threat_at`/`__rm_faf_threats_around`/`__rm_faf_threat_between`/
+    /// `__rm_faf_threat_highest`/`__rm_faf_threat_assign`: the brain's threat queries
+    /// against this army's influence grid (C-355/C-357).
+    static int threatAtBinding(lua_State* lua);
+    static int threatsAroundBinding(lua_State* lua);
+    static int threatBetweenBinding(lua_State* lua);
+    static int threatHighestBinding(lua_State* lua);
+    static int threatAssignBinding(lua_State* lua);
+
+    /// This army's influence map — retail's `CInfluenceMap` at `CArmyImpl+0x218`
+    /// (C-353). Fed from the observed snapshot every pass; its cell aggregates are
+    /// rebuilt only on the 30-tick stagger (`tick % period == army_`, C-356), so a
+    /// contact's threat outlives the contact by up to one pass.
+    rm::sim::ThreatGrid threatGrid_;
 
     /// Sites already chosen THIS pass. Several decisions convert before any of them
     /// reaches `scene.building`, so the free-site and free-deposit checks would hand every

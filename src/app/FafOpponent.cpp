@@ -477,9 +477,16 @@ function methods:CanBuildStructureAt(bp, position)
     end
     return true
 end
--- Threat over visible enemies in the queried iMAP cell and its neighboring rings.
--- FAF's IMAPSize is in ogrids; our observed positions are in elmos (8 per ogrid).
-function methods:GetThreatAtPosition(position, rings, _, threatType)
+-- Threat queries answer from the army's influence grid (C-355/C-356): a per-cell
+-- SThreat record rebuilt on the 30-tick stagger, so a contact's threat outlives the
+-- contact by up to one pass. The C++ bindings are registered by the opponent before
+-- every decision pass; a bare sandbox (tests that never run an advance) falls back to
+-- summing the observed-enemy snapshot directly, which is what these methods did before
+-- the grid existed.
+function methods:GetThreatAtPosition(position, rings, _, threatType, armyIndex)
+    if __rm_faf_threat_at then
+        return __rm_faf_threat_at(position, rings or 0, nil, threatType, armyIndex)
+    end
     local cellSize = self.IMAPConfig.IMAPSize * 8
     local x, z = math.floor(position[1] / cellSize), math.floor(position[3] / cellSize)
     local total = 0
@@ -491,13 +498,15 @@ function methods:GetThreatAtPosition(position, rings, _, threatType)
     end
     return total
 end
--- One {x, z, threat} row per visible enemy inside `radius`, threat-highest first.
--- That is the shape platoon.lua's air-scout loop reads (`unknownThreats[1][3] > 25`,
--- `AddScoutArea({unknownThreats[1][1], 0, unknownThreats[1][2]})`) and what
--- ParseIntelThread iterates for StructuresNotMex: retail answers from its threat
--- grid, this answers from the same observed-enemy snapshot GetThreatAtPosition sums.
--- Public radii are ogrids; snapshot positions are elmos.
-function methods:GetThreatsAroundPosition(position, radius, _, threatType)
+-- One {x, z, threat} row per GRID CELL inside `radius` — retail's contract (C-357,
+-- `0x597a41`–`0x597a71`), which platoon.lua's air-scout loop reads
+-- (`unknownThreats[1][3] > 25`, `AddScoutArea({unknownThreats[1][1], 0,
+-- unknownThreats[1][2]})`) and ParseIntelThread iterates for StructuresNotMex.
+-- Public radii are ogrids; the grid works in elmos.
+function methods:GetThreatsAroundPosition(position, radius, _, threatType, armyIndex)
+    if __rm_faf_threats_around then
+        return __rm_faf_threats_around(position, radius or 0, nil, threatType, armyIndex)
+    end
     local reach = (radius or 0) * 8
     local out = {}
     for _, e in ipairs(self.snap.enemies or {}) do
@@ -508,6 +517,29 @@ function methods:GetThreatsAroundPosition(position, radius, _, threatType)
     end
     table.sort(out, function(a, b) return a[3] > b[3] end)
     return out
+end
+-- The scalar region query (C-357): the sum over the cells the segment crosses.
+function methods:GetThreatBetweenPositions(position, other, _, threatType, armyIndex)
+    if __rm_faf_threat_between then
+        return __rm_faf_threat_between(position, other, nil, threatType, armyIndex)
+    end
+    return 0
+end
+-- `0x71db2a`/`0x71dbca`: the cell whose rings-neighbourhood sum is largest, and that
+-- sum. nil, 0 on an empty grid — the corpus only consumes the position when threat
+-- exists (aiutilities.lua:545).
+function methods:GetHighestThreatPosition(rings, _, threatType, armyIndex)
+    if __rm_faf_threat_highest then
+        return __rm_faf_threat_highest(rings or 0, nil, threatType, armyIndex)
+    end
+    return nil, 0
+end
+-- `AssignThreatAtPosition`: deposits threat that decays on the army's staggered pass.
+-- Absent/invalid threattype lands in Unknown (C-357) — the binding decides.
+function methods:AssignThreatAtPosition(position, threat, decay, threatType)
+    if __rm_faf_threat_assign then
+        __rm_faf_threat_assign(position, threat or 0, decay or 0, threatType)
+    end
 end
 -- Platoon-level air-scout loop surface (platoon.lua AirScoutingAI, medium-ai.lua:1216-1254):
 -- a must-scout list the brain owns, first-untagged checkout, and adds that dedupe
@@ -2292,6 +2324,156 @@ int FafOpponent::openingSurveyBinding(lua_State* lua) {
     return 1;
 }
 
+namespace {
+
+/// Reads the threat-type string argument shared by every threat query. Absent or
+/// unrecognised spellings read as `Overall` — retail's default `GetThreat` case; the
+/// assign path maps the same miss to `Unknown` instead (C-357).
+[[nodiscard]] rm::sim::ThreatSlot querySlot(lua_State* lua, int arg) {
+    const char* name = lua_isnoneornil(lua, arg) ? nullptr : lua_tostring(lua, arg);
+    if (name == nullptr) {
+        return rm::sim::ThreatSlot::Overall;
+    }
+    return rm::sim::threatSlotFor(name).value_or(rm::sim::ThreatSlot::Overall);
+}
+
+/// The optional trailing army argument the corpus passes (`GetArmyIndex()`, 1-based).
+/// Absent or non-positive means "every army" — retail's `army<0` sum case (`0x71c600`).
+[[nodiscard]] int queryArmy(lua_State* lua, int arg) {
+    if (lua_isnoneornil(lua, arg)) {
+        return -1;
+    }
+    const auto army = static_cast<int>(lua_tointeger(lua, arg));
+    return army > 0 ? army - 1 : -1;
+}
+
+} // namespace
+
+int FafOpponent::threatAtBinding(lua_State* lua) {
+    const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    luaL_checktype(lua, 1, LUA_TTABLE);
+    const auto coord = [lua](int field) {
+        lua_rawgeti(lua, 1, field);
+        const lua_Number value = lua_tonumber(lua, -1);
+        lua_pop(lua, 1);
+        return value;
+    };
+    const lua_Number px = coord(1);
+    const lua_Number pz = coord(3);
+    const int rings = static_cast<int>(luaL_optinteger(lua, 2, 0));
+    const rm::sim::Mag threat = self == nullptr ? rm::sim::Mag{}
+        : self->threatGrid_.threatAt(rm::sim::fxFromFloat(static_cast<float>(px)),
+                                     rm::sim::fxFromFloat(static_cast<float>(pz)),
+                                     rings, querySlot(lua, 4), queryArmy(lua, 5));
+    lua_pushnumber(lua, static_cast<lua_Number>(rm::sim::magToFloat(threat)));
+    return 1;
+}
+
+
+int FafOpponent::threatsAroundBinding(lua_State* lua) {
+    const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    luaL_checktype(lua, 1, LUA_TTABLE);
+    const auto coord = [lua](int field) {
+        lua_rawgeti(lua, 1, field);
+        const lua_Number value = lua_tonumber(lua, -1);
+        lua_pop(lua, 1);
+        return value;
+    };
+    const lua_Number px = coord(1);
+    const lua_Number pz = coord(3);
+    // Public radii are ogrids; the grid works in elmos (8 per ogrid) — the same
+    // conversion `GetUnitsAroundPoint` applies.
+    const lua_Number radius = luaL_optnumber(lua, 2, 0) * 8;
+    std::vector<rm::sim::ThreatRow> rows;
+    if (self != nullptr) {
+        self->threatGrid_.threatsAround(rm::sim::fxFromFloat(static_cast<float>(px)),
+                                        rm::sim::fxFromFloat(static_cast<float>(pz)),
+                                        rm::sim::fxFromFloat(static_cast<float>(radius)),
+                                        querySlot(lua, 4), queryArmy(lua, 5), rows);
+    }
+    lua_newtable(lua);
+    lua_Integer index = 1;
+    for (const rm::sim::ThreatRow& row : rows) {
+        lua_newtable(lua);
+        lua_pushnumber(lua, static_cast<lua_Number>(rm::sim::fxToFloat(row.x)));
+        lua_rawseti(lua, -2, 1);
+        lua_pushnumber(lua, static_cast<lua_Number>(rm::sim::fxToFloat(row.z)));
+        lua_rawseti(lua, -2, 2);
+        lua_pushnumber(lua, static_cast<lua_Number>(rm::sim::magToFloat(row.threat)));
+        lua_rawseti(lua, -2, 3);
+        lua_rawseti(lua, -2, index++);
+    }
+    return 1;
+}
+
+int FafOpponent::threatBetweenBinding(lua_State* lua) {
+    const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    luaL_checktype(lua, 1, LUA_TTABLE);
+    luaL_checktype(lua, 2, LUA_TTABLE);
+    const auto coord = [lua](int arg, int field) {
+        lua_rawgeti(lua, arg, field);
+        const lua_Number value = lua_tonumber(lua, -1);
+        lua_pop(lua, 1);
+        return value;
+    };
+    const rm::sim::Mag threat = self == nullptr ? rm::sim::Mag{}
+        : self->threatGrid_.threatBetween(
+            rm::sim::fxFromFloat(static_cast<float>(coord(1, 1))),
+            rm::sim::fxFromFloat(static_cast<float>(coord(1, 3))),
+            rm::sim::fxFromFloat(static_cast<float>(coord(2, 1))),
+            rm::sim::fxFromFloat(static_cast<float>(coord(2, 3))),
+            querySlot(lua, 4), queryArmy(lua, 5));
+    lua_pushnumber(lua, static_cast<lua_Number>(rm::sim::magToFloat(threat)));
+    return 1;
+}
+
+int FafOpponent::threatHighestBinding(lua_State* lua) {
+    const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    const int rings = static_cast<int>(luaL_optinteger(lua, 1, 0));
+    const auto best = self == nullptr ? std::nullopt
+        : self->threatGrid_.highestThreat(rings, querySlot(lua, 3), queryArmy(lua, 4));
+    if (!best) {
+        lua_pushnil(lua);
+        lua_pushnumber(lua, 0);
+        return 2;
+    }
+    lua_newtable(lua);
+    lua_pushnumber(lua, static_cast<lua_Number>(rm::sim::fxToFloat(best->first[0])));
+    lua_rawseti(lua, -2, 1);
+    lua_pushnumber(lua, 0);
+    lua_rawseti(lua, -2, 2);
+    lua_pushnumber(lua, static_cast<lua_Number>(rm::sim::fxToFloat(best->first[1])));
+    lua_rawseti(lua, -2, 3);
+    lua_pushnumber(lua, static_cast<lua_Number>(rm::sim::magToFloat(best->second)));
+    return 2;
+}
+
+int FafOpponent::threatAssignBinding(lua_State* lua) {
+    auto* self = static_cast<FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    luaL_checktype(lua, 1, LUA_TTABLE);
+    const lua_Number px = (lua_rawgeti(lua, 1, 1), lua_tonumber(lua, -1));
+    const lua_Number pz = (lua_pop(lua, 1), lua_rawgeti(lua, 1, 3), lua_tonumber(lua, -1));
+    lua_pop(lua, 1);
+    const lua_Number threat = luaL_optnumber(lua, 2, 0);
+    const lua_Number decay = luaL_optnumber(lua, 3, 0);
+    // C-357: absent or invalid `threattype` deposits into f[13] (Unknown) — the bucket
+    // `AddInitialEnemyThreat` (aibrain.lua:3606) fills and air scouts hunt.
+    const rm::sim::ThreatSlot slot = [&] {
+        const char* name = lua_isnoneornil(lua, 4) ? nullptr : lua_tostring(lua, 4);
+        if (name == nullptr) {
+            return rm::sim::ThreatSlot::Unknown;
+        }
+        return rm::sim::threatSlotFor(name).value_or(rm::sim::ThreatSlot::Unknown);
+    }();
+    if (self != nullptr) {
+        self->threatGrid_.assign(rm::sim::fxFromFloat(static_cast<float>(px)),
+                                 rm::sim::fxFromFloat(static_cast<float>(pz)),
+                                 rm::sim::magFromFloat(static_cast<float>(threat)),
+                                 rm::sim::magFromFloat(static_cast<float>(decay)), slot);
+    }
+    return 0;
+}
+
 int FafOpponent::scoutRouteBinding(lua_State* lua) {
     const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
     const auto id = unpackHandle(luaL_checkinteger(lua, 1));
@@ -2585,6 +2767,24 @@ void FafOpponent::advance(rm::TickIndex tick) {
     lua_pushlightuserdata(lua, this);
     lua_pushcclosure(lua, openingSurveyBinding, 1);
     lua_setglobal(lua, "__rm_faf_opening_survey");
+    // The threat grid's query surface (C-355/C-357). Bound per pass like the rest —
+    // each opponent's grid is its own, and the VM is shared.
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, threatAtBinding, 1);
+    lua_setglobal(lua, "__rm_faf_threat_at");
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, threatsAroundBinding, 1);
+    lua_setglobal(lua, "__rm_faf_threats_around");
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, threatBetweenBinding, 1);
+    lua_setglobal(lua, "__rm_faf_threat_between");
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, threatHighestBinding, 1);
+    lua_setglobal(lua, "__rm_faf_threat_highest");
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, threatAssignBinding, 1);
+    lua_setglobal(lua, "__rm_faf_threat_assign");
+
 
     // --- The snapshot -------------------------------------------------------------------
     //
@@ -2895,6 +3095,78 @@ void FafOpponent::advance(rm::TickIndex tick) {
         }
         lua_setfield(lua, -2, allied ? "allies" : "enemies");
     }
+
+    // --- The influence map (C-355/C-356) ------------------------------------------------
+    //
+    // The grid's cell is the brain's IMAP cell — `IMAPConfig.IMAPSize` ogrids, the same
+    // table the boot block derives from the map size — so `rings` in GetThreatAtPosition
+    // walks the cells retail's query walks. Configured once; a reconfigure would drop
+    // every blip and deposit the match has learned.
+    if (!threatGrid_.active()) {
+        const int mapOgrids = std::max(world_->field.squaresX * rm::kSquareSize,
+                                       world_->field.squaresZ * rm::kSquareSize) / 8;
+        const int imapOgrids = mapOgrids == 256 || mapOgrids == 512 ? 32
+                             : mapOgrids == 1024 ? 64
+                             : mapOgrids == 2048 ? 128 : 256;
+        threatGrid_.configure(rm::sim::fxFromFloat(
+                                  static_cast<float>(world_->field.squaresX * rm::kSquareSize)),
+                              rm::sim::fxFromFloat(
+                                  static_cast<float>(world_->field.squaresZ * rm::kSquareSize)),
+                              rm::sim::fxFromFloat(static_cast<float>(imapOgrids * 8)));
+    }
+    // Refresh every contact this army currently knows about — the same knowledge the
+    // snapshot publishes: own units always, allies always, enemies only while vision
+    // covers them. A blip not re-observed keeps contributing until the staggered pass
+    // below sweeps it (C-356).
+    const int ownAlliance = scene.armies[armyIndex].alliance;
+    for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+        // `slotAlive`, not `health[slot].alive()`: a killed unit is a tombstone whose
+        // health stays positive until `retireDead` runs, and a corpse must stop
+        // refreshing its blip NOW so the next staggered pass sweeps it (C-356).
+        if (!scene.store.slotAlive(slot)) {
+            continue;
+        }
+        const int owner = motion[slot].armyIndex;
+        if (owner < 0 || static_cast<std::size_t>(owner) >= scene.armies.size()) {
+            continue;
+        }
+        const auto& at = scene.store.transforms()[slot];
+        const bool hostile = scene.armies[static_cast<std::size_t>(owner)].alliance != ownAlliance;
+        if (hostile && !scene.intel.sees(ownAlliance, rm::sim::IntelKind::Vision, at.x, at.z)) {
+            continue;
+        }
+        const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(slot));
+        if (def == nullptr) {
+            continue;
+        }
+        threatGrid_.observe({
+            .unit = scene.store.idAt(slot),
+            .owner = owner,
+            .cell = threatGrid_.cellAt(at.x, at.z),
+            // The four levels the pass caches on the blip (`blip+0x42c..0x438`) —
+            // blueprint Air/Surface/Sub/EconomyThreatLevel.
+            .surface = rm::sim::magFromFloat(def->surfaceThreat),
+            .air = rm::sim::magFromFloat(def->airThreat),
+            .sub = rm::sim::magFromFloat(def->subThreat),
+            .economy = rm::sim::magFromFloat(def->economyThreat),
+            .isAir = def->hasCategory("AIR"),
+            .isExperimental = def->hasCategory("EXPERIMENTAL"),
+            .isCommander = def->hasCategory("COMMAND"),
+            .isArtillery = def->hasCategory("ARTILLERY"),
+            .isStructure = def->hasCategory("STRUCTURE"),
+            .isExtractor = def->hasCategory("MASSEXTRACTION"),
+        });
+    }
+    // `CArmyImpl::Update` `0x70686a`–`0x706891`: the distribute pass runs iff
+    // `tick % 30 == armyIndex` — once per three seconds at retail's 10 Hz, staggered so
+    // no two armies pay for it on the same tick. Scaled by the tick rate so the period
+    // stays three seconds rather than thirty ticks.
+    const rm::TickIndex threatPeriod = std::max<rm::TickIndex>(
+        1, 30 * rm::app::gAppTickRate.ticksPerSecond() / 10);
+    if (tick % threatPeriod == static_cast<rm::TickIndex>(army_) % threatPeriod) {
+        threatGrid_.distribute();
+    }
+
 
     // snap.reclaim — the wreck mass and energy left per retail reclaim-grid cell (Grid.lua:
     // sixteen cells a side, eight on a 256 map, CellSize = max(sizeX, sizeZ) / cells). The

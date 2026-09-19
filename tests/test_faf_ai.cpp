@@ -888,6 +888,105 @@ TEST_CASE("FAF threat queries use authored map cells and separate air from anti-
     REQUIRE(ok);
 }
 
+TEST_CASE("FAF threat grid decays contacts on the 30-tick army stagger",
+          "[faf][ai][threat-query]") {
+    // C-356: `CArmyImpl::Update` (`0x70686a`–`0x706891`) runs the influence map's
+    // distribute pass iff `tick % 30 == armyIndex`. A contact that dies or moves keeps
+    // contributing where it was last seen until the army's next pass sweeps it — the
+    // grid is stale BY DESIGN between passes.
+    const auto root = corpusRoot();
+    const char* home = std::getenv("HOME");
+    const auto contentRoot = home ? std::filesystem::path{home} / "projects/llm/input/faf"
+                                  : std::filesystem::path{};
+    if (root.empty() || !std::filesystem::exists(contentRoot / "units/UEL0001/UEL0001_unit.bp")) {
+        SKIP("requires the vendored FAF corpus and extracted retail unit blueprints");
+    }
+    rm::vfs::Vfs content;
+    content.mountDirectory(contentRoot);
+    auto scene = std::make_unique<rm::app::UnitScene>();
+    scene->armies = {{.index = 0, .alliance = 0}, {.index = 1, .alliance = 1}};
+    scene->economies.resize(scene->armies.size());
+    auto commander = rm::unitbp::loadFile(contentRoot / "units/UEL0001/UEL0001_unit.bp");
+    REQUIRE(commander);
+    // UEL0001: SurfaceThreatLevel 75, EconomyThreatLevel 5, COMMAND category.
+    scene->definitions.push_back(*commander);
+    const auto type = scene->catalog.add(&scene->definitions.back(), rm::sim::TickRate{});
+    const rm::sim::UnitId enemy = scene->store.spawn({
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(100), .z = rm::sim::fxFromFloat(100)},
+        .motion = {.armyIndex = 1},
+        .health = {.current = rm::sim::magFromFloat(100),
+                   .maximum = rm::sim::magFromFloat(100)},
+    });
+    // 512x512 OGRIDS (4096 elmos) -> IMAPSize 32 ogrids -> 256-elmo cells, so (100,100)
+    // is cell (0,0) and (2000,2000) is cell (7,7) — far enough apart that rings stay
+    // honest. HeightField squares are 8 elmos each, so 512 squares a side.
+    rm::HeightField field{.squaresX = 512, .squaresZ = 512};
+    const std::array<rm::mapinfo::StartPosition, 2> starts{{
+        {.x = 0, .z = 0}, {.x = 4000, .z = 4000},
+    }};
+    const rm::ai::World world{.scene = *scene, .content = content, .field = field,
+                              .starts = starts, .markers = {}};
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    rm::ai::FafOpponent opponent(ai, 0);
+    opponent.observe(world, {});
+    opponent.advance(0);  // tick 0 % 30 == army 0: the first distribute pass runs
+    bool ok = ai.eval(R"(
+        local brain = __rm_faf.brains[0]
+        -- The observed commander writes its blueprint levels into its cell (C-356):
+        assert(brain:GetThreatAtPosition({100,0,100}, 0, true, 'AntiSurface') == 75)
+        assert(brain:GetThreatAtPosition({100,0,100}, 0, true, 'Commander') == 80)
+        assert(brain:GetThreatAtPosition({100,0,100}, 0, true, 'Overall') == 80)
+        assert(brain:GetThreatAtPosition({100,0,100}, 0, true, 'Structures') == 5)
+        -- Region queries reduce by SUM over cells (C-357, walker `0x71ca70`).
+        local rows = brain:GetThreatsAroundPosition({0,0,0}, 32, true, 'AntiSurface')
+        assert(#rows == 1 and rows[1][3] == 75, 'one occupied cell inside 32 ogrids')
+        assert(brain:GetThreatBetweenPositions({0,0,0}, {2000,0,0}, true, 'AntiSurface') == 75)
+        -- The per-source-army record: army 2 owns the commander, army 1 owns nothing.
+        assert(brain:GetThreatAtPosition({100,0,100}, 0, true, 'AntiSurface', 2) == 75)
+        assert(brain:GetThreatAtPosition({100,0,100}, 0, true, 'AntiSurface', 1) == 0)
+        local pos, strength = brain:GetHighestThreatPosition(0, true, 'Commander')
+        assert(strength == 80 and pos[1] == 128 and pos[3] == 128, 'cell centre, not the unit')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+
+    // Kill the contact. The grid is stale by design: the blip still contributes until
+    // the army's next `tick % 30 == armyIndex` pass sweeps it.
+    scene->store.kill(enemy);
+    opponent.advance(10);  // 10 % 30 != 0: no pass, the dead commander still threatens
+    ok = ai.eval("assert(__rm_faf.brains[0]:GetThreatAtPosition({100,0,100}, 0, true, 'AntiSurface') == 75)");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+    opponent.advance(30);  // 30 % 30 == 0: the sweep runs and the contribution decays out
+    ok = ai.eval("assert(__rm_faf.brains[0]:GetThreatAtPosition({100,0,100}, 0, true, 'AntiSurface') == 0)");
+    REQUIRE(ok);
+
+    // C-357: an untyped AssignThreatAtPosition deposits into f[13] (Unknown) and decays
+    // by `decay` per pass — 40 minus 20 each stagger.
+    ok = ai.eval("__rm_faf.brains[0]:AssignThreatAtPosition({2000,0,2000}, 40, 20)");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+    opponent.advance(60);
+    ok = ai.eval(R"(
+        local brain = __rm_faf.brains[0]
+        assert(brain:GetThreatAtPosition({2000,0,2000}, 0, true, 'Unknown') == 20,
+            'the deposit decayed once on the staggered pass')
+        assert(brain:GetThreatAtPosition({2000,0,2000}, 0, true, 'AntiSurface') == 0,
+            'untyped threat never reaches a typed slot')
+        local unknown = brain:GetThreatsAroundPosition({2000,0,2000}, 16, true, 'Unknown')
+        assert(#unknown == 1 and unknown[1][3] == 20, 'scouts find the unknown deposit')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+    opponent.advance(90);
+    ok = ai.eval("assert(__rm_faf.brains[0]:GetThreatAtPosition({2000,0,2000}, 0, true, 'Unknown') == 0)");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
 TEST_CASE("FAF must-scout areas checkout untagged first and dedupe nearby adds",
           "[faf][ai][scouting]") {
     const auto root = corpusRoot();

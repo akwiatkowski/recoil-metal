@@ -133,18 +133,22 @@ TEST_CASE("C-355/C-357: the brain's threat answers come from what it can see",
     REQUIRE(ok);
 
     // The spotter walks into vision range; the next snapshot sees the tank, and the
-    // same queries now answer its authored threat — the {x, z, threat} triple
-    // C-357's Around variant returns.
+    // same queries now answer its authored threat — at the TANK's cell, not the
+    // spotter's: the influence map records where the contact is, and the Around
+    // variant returns one {x, z, threat} triple per occupied CELL (C-357), the cell
+    // centre rather than the unit's exact position.
     job.scene.store.transforms()[1].x = rm::sim::fxFromFloat(180.0f);
     job.see();
-    opponent.advance(10);
+    // advance(30), not advance(10): the contact is observed immediately, but the grid's
+    // cell aggregates only rebuild on the army's `tick % 30 == armyIndex` pass (C-356).
+    opponent.advance(30);
     ok = ai.eval(R"(
         local brain = __rm_faf.brains[0]
-        assert(brain:GetThreatAtPosition({180, 0, 100}, 0, true, 'AntiSurface') == 20,
+        assert(brain:GetThreatAtPosition({400, 0, 100}, 0, true, 'AntiSurface') == 20,
             'a spotted enemy contributes its blueprint threat')
-        local rows = brain:GetThreatsAroundPosition({180, 0, 100}, 40, true, 'AntiSurface')
-        assert(#rows == 1 and rows[1][1] == 180 and rows[1][2] == 100 and rows[1][3] == 20,
-            'one {x, z, threat} row for the one visible enemy')
+        local rows = brain:GetThreatsAroundPosition({400, 0, 100}, 40, true, 'AntiSurface')
+        assert(#rows == 1 and rows[1][3] == 20,
+            'one {x, z, threat} row for the one occupied cell')
     )");
     INFO(ai.lastError());
     REQUIRE(ok);
