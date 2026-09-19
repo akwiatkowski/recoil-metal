@@ -376,6 +376,14 @@ struct UnitScene {
     bool hasWater = false;
     float waterLevelElmos = 0.0f;
 
+    /// The map's per-square terrain-type grid (C-288), `.scmap` only — the
+    /// same span `PassabilitySet` builds its ground grids against. Kept on the
+    /// scene so consumers that see the world through it (the FAF opponent's
+    /// placement grids and path probes) answer the same blocking question the
+    /// match's own grids do. Empty on every other map family; the map outlives
+    /// the scene.
+    std::span<const std::uint8_t> terrainTypes;
+
     /// The map's max-height pyramid, built once at scene construction for the flyers'
     /// terrain look-ahead (`C-246`). Shared because scenes are copied; null in the synthetic
     /// scenes tests build, where the terrain view falls back to scanning corners.
@@ -1268,11 +1276,16 @@ struct UnitScene {
 // usually two or three grids rather than a dozen.
 class PassabilitySet {
 public:
-    PassabilitySet(const rm::HeightField& field, bool hasWater, float waterLevel)
-        : field_{&field}, hasWater_{hasWater}, waterLevel_{waterLevel} {}
+    PassabilitySet(const rm::HeightField& field, bool hasWater, float waterLevel,
+                   std::span<const std::uint8_t> terrainTypes = {})
+        : field_{&field}, hasWater_{hasWater}, waterLevel_{waterLevel},
+          terrainTypes_{terrainTypes} {}
 
-    [[nodiscard]] bool matches(const rm::HeightField& field, bool hasWater, float waterLevel) const noexcept {
-        return field_==&field && hasWater_==hasWater && waterLevel_==waterLevel;
+    [[nodiscard]] bool matches(const rm::HeightField& field, bool hasWater, float waterLevel,
+                               std::span<const std::uint8_t> terrainTypes = {}) const noexcept {
+        return field_==&field && hasWater_==hasWater && waterLevel_==waterLevel
+               && terrainTypes_.data() == terrainTypes.data()
+               && terrainTypes_.size() == terrainTypes.size();
     }
 
     [[nodiscard]] const rm::sim::PassabilityGrid& gridFor(float slopeDegrees, float depthElmos) {
@@ -1283,7 +1296,8 @@ public:
         }
 
         rm::sim::PassabilityGrid grid =
-            rm::sim::buildPassability(*field_, waterLevel_, slopeDegrees, depthElmos);
+            rm::sim::buildPassability(*field_, waterLevel_, slopeDegrees, depthElmos,
+                                      terrainTypes_);
         std::printf("passability: %d x %d cells of %.0f elmos, %zu%% walkable"
                     " (maxslope %.0f deg, maxwaterdepth %.0f)\n",
                     grid.cellsX, grid.cellsZ,
@@ -1393,6 +1407,9 @@ private:
     const rm::HeightField* field_;
     bool hasWater_;
     float waterLevel_;
+    /// The map's per-square terrain-type grid (C-288): `.scmap` only, empty on
+    /// every other map family. A span — the map outlives the set.
+    std::span<const std::uint8_t> terrainTypes_;
     std::map<std::pair<float, float>, rm::sim::PassabilityGrid> grids_;
     std::map<float, rm::sim::PassabilityGrid> surfaceWater_;
     rm::sim::PassabilityGrid empty_;

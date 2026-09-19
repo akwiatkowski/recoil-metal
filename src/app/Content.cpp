@@ -353,6 +353,11 @@ namespace rm::app {
         loaded.colours = std::move(colours);
     }
 
+    // The terrain-type grid itself, not just its colouring: passability reads
+    // it for the C-288 blocking LUT (Dirt09/Lava01), so it moves into the
+    // loaded map rather than dying with the parse.
+    loaded.terrainTypes = std::move(map->terrainType);
+
     // The map's own thumbnail, decoded here so the renderer is handed a `dds::Texture` like
     // every other image. A DDS container holding 256x256 uncompressed BGRA on all 60 stock
     // maps — measured, and asserted in `test_real_scmap.cpp`.

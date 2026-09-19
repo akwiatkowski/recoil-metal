@@ -623,3 +623,103 @@ TEST_CASE("a hull's draft decides which water it can sail") {
                                   rm::test::fx(32.0f * rm::kSquareSize))
                     .empty());
 }
+
+TEST_CASE("blocking terrain types wall off ground pathing (C-288)") {
+    // Retail: `STIMap::IsBlockingTerrain` (`0x0057e9f0`) reads the map's
+    // per-square type byte through the `STIMap+0x1434` blocking LUT, and
+    // `COGrid::CheckFootprintAt` (`0x727460`) treats a blocking square exactly
+    // like a cliff — for every `CAiNavigator*` caller and for placement. The
+    // shipped `TerrainTypes.lua` marks exactly two codes `Blocking = true`:
+    // Dirt09 (TypeCode 9, line 703) and Lava01 (TypeCode 230, line 2141).
+    HeightField field = flatField(64);
+    std::vector<std::uint8_t> types(64 * 64, std::uint8_t{1});  // Default: walkable
+
+    // A Dirt09 wall across the map at z = 24..31 (cells z = 3), with one gap
+    // at x = 0..7 (cell x = 0). A Lava01 pool sits directly below the gap at
+    // x = 0..15, z = 40..47 (cells 0-1, z = 5), so the route through the gap
+    // must detour around it.
+    for (int z = 24; z < 32; ++z) {
+        for (int x = 8; x < 64; ++x) {
+            types[static_cast<std::size_t>(z) * 64 + static_cast<std::size_t>(x)] = 9;
+        }
+    }
+    for (int z = 40; z < 48; ++z) {
+        for (int x = 0; x < 16; ++x) {
+            types[static_cast<std::size_t>(z) * 64 + static_cast<std::size_t>(x)] = 230;
+        }
+    }
+
+    const PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, rm::sim::kDefaultMaxSlopeDegrees,
+                                  rm::sim::kDefaultMaxWaterDepthElmos, types);
+
+    // Every walled cell is impassable except the gap; the Default-type ground
+    // around both features is untouched.
+    CHECK(grid.passableAt(0, 3));                    // the gap
+    for (int x = 1; x < grid.cellsX; ++x) {
+        CHECK_FALSE(grid.passableAt(x, 3));
+        CHECK(grid.passableAt(x, 2));
+        CHECK(grid.passableAt(x, 4));
+    }
+    CHECK_FALSE(grid.passableAt(0, 5));              // lava
+    CHECK_FALSE(grid.passableAt(1, 5));
+    CHECK(grid.passableAt(2, 5));
+
+    // A route from above the wall to below it exists — through the gap and
+    // around the lava — and never steps on a blocked cell.
+    const auto path = rm::sim::findPath(grid, rm::test::fx(kCell * 1.5f),
+                                        rm::test::fx(kCell * 1.5f),
+                                        rm::test::fx(kCell * 0.5f),
+                                        rm::test::fx(kCell * 6.5f));
+    REQUIRE_FALSE(path.empty());
+    for (const auto& point : path) {
+        CHECK(grid.passableAt(grid.cellAtWorld(point[0]), grid.cellAtWorld(point[1])));
+    }
+
+    // A destination inside the blocked band yields no path rather than a wrong
+    // one — the same contract the cliff tests hold the grid to.
+    CHECK(rm::sim::findPath(grid, rm::test::fx(kCell * 1.5f), rm::test::fx(kCell * 1.5f),
+                            rm::test::fx(kCell * 4.5f), rm::test::fx(kCell * 3.5f))
+              .empty());
+    CHECK(rm::sim::findPath(grid, rm::test::fx(kCell * 1.5f), rm::test::fx(kCell * 1.5f),
+                            rm::test::fx(kCell * 0.5f), rm::test::fx(kCell * 5.5f))
+              .empty());
+}
+
+TEST_CASE("a partly type-blocked cell is a speed divisor, not a wall (C-288)") {
+    // Blocking lands per SQUARE, like slope and depth: half a cell of Dirt09
+    // costs the cell rather than refusing it — the P10.4 divisor rule.
+    HeightField field = flatField(64);
+    std::vector<std::uint8_t> types(64 * 64, std::uint8_t{1});
+    for (int z = 0; z < 8; ++z) {          // cell (0,0)'s squares
+        for (int x = 0; x < 4; ++x) {      // half of them
+            types[static_cast<std::size_t>(z) * 64 + static_cast<std::size_t>(x)] = 9;
+        }
+    }
+
+    const PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, rm::sim::kDefaultMaxSlopeDegrees,
+                                  rm::sim::kDefaultMaxWaterDepthElmos, types);
+
+    CHECK(grid.passableAt(0, 0));
+    CHECK(grid.divisorAt(0, 0) == 2);   // 32 of 64 squares blocked: ceil(64/32)
+    CHECK(grid.divisorAt(1, 0) == 1);   // untouched neighbour stays full speed
+}
+
+TEST_CASE("a mismatched terrain-type grid is ignored rather than misread (C-288)") {
+    // The type array is full map resolution, one byte per square. A span of
+    // any other size cannot be indexed by square — the same "no guessed
+    // stride" rule `colourTerrainTypes` already keeps.
+    HeightField field = flatField(64);
+    const std::vector<std::uint8_t> wrong(10, std::uint8_t{9});  // all blocking, wrong size
+
+    const PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, rm::sim::kDefaultMaxSlopeDegrees,
+                                  rm::sim::kDefaultMaxWaterDepthElmos, wrong);
+
+    for (int z = 0; z < grid.cellsZ; ++z) {
+        for (int x = 0; x < grid.cellsX; ++x) {
+            CHECK(grid.passableAt(x, z));
+        }
+    }
+}

@@ -1666,10 +1666,12 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                                      std::span<const rm::mapinfo::StartPosition> starts,
                                      bool hasWater, float waterLevelElmos,
                                      const rm::vfs::AssetSearch& search,
-                                     const rm::vfs::Vfs& content) {
+                                     const rm::vfs::Vfs& content,
+                                     std::span<const std::uint8_t> terrainTypes) {
     UnitScene scene;
     scene.hasWater = hasWater;
     scene.waterLevelElmos = waterLevelElmos;
+    scene.terrainTypes = terrainTypes;
     scene.lookAhead = std::make_shared<const rm::MaxHeightPyramid>(field);
 
     for (std::size_t i = 0; i < requests.size(); ++i) {

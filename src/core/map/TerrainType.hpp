@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -37,5 +38,29 @@ struct ColourImage {
 // rather than guessing at a stride.
 [[nodiscard]] ColourImage colourTerrainTypes(std::span<const std::uint8_t> types, int width,
                                              int height);
+
+/// Which terrain-type codes block ground movement — retail's `STIMap+0x1434`
+/// 256-byte LUT (C-288).
+///
+/// The mechanism, not a convenience: retail's `STIMap::LoadTerrainTypes`
+/// (`0x0057ea30`) runs `/lua/TerrainTypes.lua` and writes each entry's
+/// `Blocking` flag into `+0x1434[TypeCode]` (`0x57ed5d`), and
+/// `STIMap::IsBlockingTerrain` (`0x0057e9f0`) is the ONLY thing that reads the
+/// type grid for pathing — `COGrid::CheckFootprintAt` (`0x727460`) calls it for
+/// every `CAiNavigator*` and every placement query. `Slippery`, `Bumpiness`
+/// and `HealthEffectPerSecond` never reach the image (the health applier
+/// `0x006b04d0` is unreferenced dead code), so there is nothing else to model.
+///
+/// The shipped table (`build/re-fa/corpus/lua/lua/TerrainTypes.lua`) marks
+/// exactly two of its 60 codes `Blocking = true`: Dirt09 (TypeCode 9, line
+/// 703) and Lava01 (TypeCode 230, line 2141). Kept as the same 256-entry LUT
+/// retail builds, so the walk loop reads `kTerrainTypeBlocking[type]` exactly
+/// the way `IsBlockingTerrain` reads `+0x1434[type]`.
+inline constexpr std::array<bool, 256> kTerrainTypeBlocking = [] {
+    std::array<bool, 256> blocking{};
+    blocking[9] = true;    // Dirt09  — TerrainTypes.lua:703
+    blocking[230] = true;  // Lava01  — TerrainTypes.lua:2141
+    return blocking;
+}();
 
 } // namespace rm

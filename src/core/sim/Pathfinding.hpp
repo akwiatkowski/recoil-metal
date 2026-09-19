@@ -294,16 +294,27 @@ private:
 /// more the more of it is missing — the P10.4 fix for the old all-or-nothing
 /// rule that let one cliff face refuse a whole 64-elmo cell.
 ///
-/// Two rules, both the engine's. **Slope**: a square is unwalkable when its
+/// Three rules, all the engine's. **Slope**: a square is unwalkable when its
 /// steepest face exceeds the limit, where a face's slope is `1 - normal.y` (the
 /// same quantity Recoil's slope map holds, ReadMap.cpp:778). **Depth**: a
 /// square is unwalkable when its lowest corner sits under more than
 /// `maxWaterDepth` elmos of water, because Recoil's rule is a depth limit and
-/// not a water line — a unit fords shallows.
+/// not a water line — a unit fords shallows. **Terrain type** (C-288): a
+/// square whose type byte names a `Blocking = true` entry in the shipped
+/// `TerrainTypes.lua` is unwalkable, exactly as retail's
+/// `STIMap::IsBlockingTerrain` (`0x0057e9f0`) answers `COGrid::CheckFootprintAt`
+/// (`0x727460`) — the ONLY thing terrain types gate; `Slippery`, `Bumpiness`
+/// and `HealthEffectPerSecond` are dead fields in the retail image.
+///
+/// `terrainTypes` is the map's per-square type grid (`.scmap`'s `terrainType`,
+/// one byte per square at full map resolution). An empty span — every SMF and
+/// procedural map — applies no type blocking, and a span that does not match
+/// the field's square count is ignored rather than read at a guessed stride.
 [[nodiscard]] PassabilityGrid buildPassability(
     const HeightField& field, float waterLevelElmos,
     float maxSlopeDegrees = kDefaultMaxSlopeDegrees,
-    float maxWaterDepthElmos = kDefaultMaxWaterDepthElmos);
+    float maxWaterDepthElmos = kDefaultMaxWaterDepthElmos,
+    std::span<const std::uint8_t> terrainTypes = {});
 
 /// Builds the inverse grid used by surface ships.
 ///

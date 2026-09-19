@@ -288,7 +288,8 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
                                      std::span<const rm::mapinfo::StartPosition> starts,
                                      bool hasWater, float waterLevelElmos,
                                      const rm::vfs::AssetSearch& search,
-                                     const rm::vfs::Vfs& content);
+                                     const rm::vfs::Vfs& content,
+                                     std::span<const std::uint8_t> terrainTypes = {});
 
 /// Loads every projectile blueprint's original mesh — `X_lod0.scm` beside `X_proj.bp`, the
 /// file-name rule of BlueprintMesh.hpp — into its own draw batch, scaled by the blueprint's

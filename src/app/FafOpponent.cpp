@@ -2073,7 +2073,8 @@ int loadBlueprint(lua_State* lua) {
     for (const auto motion : {rm::unitdef::MotionType::Land, rm::unitdef::MotionType::Amphibious}) {
         const auto move = rm::data::moveDefFor(motion);
         const auto grid = rm::sim::buildPassability(world.field, world.scene.waterLevelElmos,
-                                                   move.maxSlopeDegrees, move.maxWaterDepthElmos);
+                                                   move.maxSlopeDegrees, move.maxWaterDepthElmos,
+                                                   world.scene.terrainTypes);
         if (!rm::sim::findPath(grid, rm::sim::fxFromFloat(from.x), rm::sim::fxFromFloat(from.z),
                               rm::sim::fxFromFloat(to.x), rm::sim::fxFromFloat(to.z)).empty()) {
             return motion == rm::unitdef::MotionType::Land ? "Land" : "Amphibious";
@@ -2239,7 +2240,7 @@ int FafOpponent::openingSurveyBinding(lua_State* lua) {
     const float x = rm::sim::fxToFloat(at.x), z = rm::sim::fxToFloat(at.z);
     const auto move = rm::data::moveDefFor(rm::unitdef::MotionType::Amphibious);
     const auto grid = rm::sim::buildPassability(world.field, world.scene.waterLevelElmos,
-        move.maxSlopeDegrees, move.maxWaterDepthElmos);
+        move.maxSlopeDegrees, move.maxWaterDepthElmos, world.scene.terrainTypes);
     const auto reachable = [&](const rm::scenario::Marker& marker) {
         return !rm::sim::findPath(grid, at.x, at.z, rm::sim::fxFromFloat(marker.position[0]),
             rm::sim::fxFromFloat(marker.position[2])).empty();
@@ -2311,7 +2312,8 @@ int FafOpponent::scoutRouteBinding(lua_State* lua) {
     } else {
         const auto move = rm::data::moveDefFor(*def);
         auto grid = rm::sim::buildPassability(world.field, scene.waterLevelElmos,
-                                             move.maxSlopeDegrees, move.maxWaterDepthElmos);
+                                             move.maxSlopeDegrees, move.maxWaterDepthElmos,
+                                             scene.terrainTypes);
         std::map<std::pair<int, int>, float> threat;
         // The Lua VM is shared by armies. Resolve allegiance from the scout rather
         // than the opponent that most recently registered this closure.
@@ -2388,8 +2390,10 @@ void FafOpponent::advance(rm::TickIndex tick) {
     }
     lua_State* lua = sandbox_.state();
     const rm::app::UnitScene& scene = world_->scene;
-    if (!placement_ || !placement_->matches(world_->field,scene.hasWater,scene.waterLevelElmos)) {
-        placement_.emplace(world_->field,scene.hasWater,scene.waterLevelElmos);
+    if (!placement_ || !placement_->matches(world_->field,scene.hasWater,scene.waterLevelElmos,
+                                            scene.terrainTypes)) {
+        placement_.emplace(world_->field,scene.hasWater,scene.waterLevelElmos,
+                           scene.terrainTypes);
     }
     const auto armyIndex = static_cast<std::size_t>(army_);
     if (armyIndex >= scene.armies.size() || armyIndex >= world_->starts.size()) {

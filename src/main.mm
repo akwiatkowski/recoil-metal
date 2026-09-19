@@ -182,7 +182,8 @@ int main(int argc, const char* argv[]) {
         // Scattering above 0 on a FA map drowns most of the units.
         // Not const: the windowed path steps this scene every frame.
         UnitScene units = resolveUnits(unitRequests, map->field, map->starts, map->hasWater,
-                                       map->waterLevel, assetSearch, content);
+                                       map->waterLevel, assetSearch, content,
+                                       map->terrainTypes);
 
         // `--alliances N`: deal the armies into N sides that win together, round-robin, so
         // `--armies 4 --alliances 2` is a 2v2. Free-for-all — every army its own alliance —
@@ -208,7 +209,8 @@ int main(int argc, const char* argv[]) {
         //
         // BEFORE the skirmish block, because `orderFirstExtractors` issues real build commands
         // and `applyCommand` takes a grid for every kind of order.
-        PassabilitySet passability{map->field, map->hasWater, map->waterLevel};
+        PassabilitySet passability{map->field, map->hasWater, map->waterLevel,
+                                   map->terrainTypes};
         for (const auto& marker : map->markers) {
             const auto kind = rm::app::depositKind(marker);
             if (kind != rm::unitdef::BuildRestriction::None) {

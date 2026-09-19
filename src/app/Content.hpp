@@ -120,6 +120,14 @@ struct LoadedMap {
     bool hasWater = true;
     float waterLevel = 0.0f;
 
+    /// .scmap: the per-square terrain-type grid, one byte per square at full
+    /// map resolution (C-288). The passability grids read it through the
+    /// blocking LUT — Dirt09 (9) and Lava01 (230) are the shipped `Blocking =
+    /// true` codes — so it must outlive the scene: kept here, spanned from
+    /// `UnitScene::terrainTypes` and `PassabilitySet`. Empty on SMF and
+    /// procedural maps, which carry no type grid.
+    std::vector<std::uint8_t> terrainTypes;
+
     // The map's own sky and water settings. Empty for an SMF map, which carries
     // no such block — the renderer then keeps the engine's shader defaults.
     std::optional<rm::Renderer::Environment> environment;

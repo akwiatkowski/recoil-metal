@@ -1,5 +1,7 @@
 #include "core/sim/Pathfinding.hpp"
 
+#include "core/map/TerrainType.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -152,7 +154,8 @@ bool sitePlaceable(const PassabilityGrid& grid, Fx x, Fx z, Fx radiusElmos) noex
 }
 
 PassabilityGrid buildPassability(const HeightField& field, float waterLevelElmos,
-                                 float maxSlopeDegrees, float maxWaterDepthElmos) {
+                                 float maxSlopeDegrees, float maxWaterDepthElmos,
+                                 std::span<const std::uint8_t> terrainTypes) {
     PassabilityGrid grid;
     if (field.squaresX <= 0 || field.squaresZ <= 0) {
         return grid;
@@ -170,6 +173,15 @@ PassabilityGrid buildPassability(const HeightField& field, float waterLevelElmos
 
     const float maxSlope = maxSlopeFromDegrees(maxSlopeDegrees);
     const float lowestStandableHeight = waterLevelElmos - maxWaterDepthElmos;
+    // C-288: the map's per-square terrain-type byte gates walkability through
+    // the blocking LUT — retail's `STIMap::IsBlockingTerrain` (`0x0057e9f0`),
+    // which `COGrid::CheckFootprintAt` (`0x727460`) asks for every footprint.
+    // The grid is one byte per square at full map resolution, so it indexes
+    // exactly like the heightfield's squares; a span of any other size cannot
+    // be trusted to line up and is ignored rather than misread.
+    const bool hasTerrainTypes =
+        terrainTypes.size()
+        == static_cast<std::size_t>(field.squaresX) * static_cast<std::size_t>(field.squaresZ);
     constexpr int squares = kPathCellSquares * kPathCellSquares;
 
     grid.divisor.assign(static_cast<std::size_t>(grid.cellsX)
@@ -182,7 +194,13 @@ PassabilityGrid buildPassability(const HeightField& field, float waterLevelElmos
 
             for (int z = cz * kPathCellSquares; z < (cz + 1) * kPathCellSquares; ++z) {
                 for (int x = cx * kPathCellSquares; x < (cx + 1) * kPathCellSquares; ++x) {
-                    if (squareSlope(field, x, z) <= maxSlope
+                    const bool typeBlocked =
+                        hasTerrainTypes
+                        && rm::kTerrainTypeBlocking[terrainTypes[
+                            static_cast<std::size_t>(z) * static_cast<std::size_t>(field.squaresX)
+                            + static_cast<std::size_t>(x)]];
+                    if (!typeBlocked
+                        && squareSlope(field, x, z) <= maxSlope
                         && squareMinHeight(field, x, z) >= lowestStandableHeight) {
                         ++walkable;
                     }
