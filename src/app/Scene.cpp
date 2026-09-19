@@ -177,6 +177,12 @@ void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field) {
             continue;
         }
         const rm::sim::Feature& wreck = scene.features.all()[slot];
+        // `C-292`: retail's `layer == 'Land'` death gate — a crashed gunship or
+        // a sunk hull leaves no scorch. The flag was sampled at death; the
+        // corpse's slot no longer knows its layer.
+        if (!wreck.marksGround) {
+            continue;
+        }
         rm::appendWreckMark(scene.wreckDecals, field,
                             {rm::sim::fxToFloat(wreck.at[0]), rm::sim::fxToFloat(wreck.at[1]),
                              rm::sim::fxToFloat(wreck.at[2])},

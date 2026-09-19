@@ -93,6 +93,13 @@ struct Feature {
     /// state their own (`Prop.lua:39-47`).
     Fx maximumReclaimPerBuildRate{};
     Fx reclaimPerBuildRate{};
+
+    /// `C-292`: whether this feature leaves a scorch mark — retail's `layer == 'Land'`
+    /// death gate (`Unit::OnKilled` → `CreateScorchableDecal`). Recorded at creation
+    /// because the layer dies with the unit: a corpse's slot no longer says whether
+    /// the thing that stood here was a tank or a crashed gunship. False for air,
+    /// submerged, seabed and attached deaths — and for map props, which never mark.
+    bool marksGround = false;
 };
 
 /// Everything on the map that is not a unit.

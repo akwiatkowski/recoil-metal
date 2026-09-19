@@ -407,9 +407,9 @@ struct MoveState {
     /// post-tick sweep can emit on real transitions only. `0xff` means "nothing
     /// reported yet" — the first sweep after spawn reports the unit's current
     /// state once, which is what a retail `OnMotion*EventChange` listener sees
-    /// when it attaches. Retail's values (`enum_registrations.tsv`):
-    /// horz Cruise 0 / TopSpeed 1 / Stopping 2 / Stopped 3; vert Up 0 / Top 1 /
-    /// Hover 2 / Down 3 / Bottom 4; turn Straight 0 / Turn 1 / SharpTurn 2;
+    /// when it attaches. Retail's values (`C-125`/`C-328`):
+    /// horz Cruise 0 / TopSpeed 1 / Stopping 2 / Stopped 3; vert Top 0 /
+    /// Bottom 1 / Up 2 / Down 3 / Hover 4; turn Straight 0 / Turn 1 / SharpTurn 2;
     /// state None 0 / Attached 1 / Ballistic 2 / Crashed 3.
     std::uint8_t lastMotionHorz = 0xff;
     std::uint8_t lastMotionVert = 0xff;

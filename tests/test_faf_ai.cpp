@@ -2935,7 +2935,7 @@ TEST_CASE("FAF enhancement plans read installed slots and emit validated native 
         end
         brain.opening=false -- This test replaces the opening with enhancement-only builders.
         brain.builders={builder('invalid prerequisite',{'T3Engineering'}),
-            builder('unsupported effect',{'Shield'}),builder('engineering',{'AdvancedEngineering','T3Engineering'})}
+            builder('unknown enhancement',{'Sacrifice'}),builder('engineering',{'AdvancedEngineering','T3Engineering'})}
         local u=brain.snap.units[1]
         assert(not u:HasEnhancement('AdvancedEngineering'))
         assert(not u:IsUnitState('Enhancing'))
@@ -3206,9 +3206,20 @@ TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
         function brain:OnBrainUnitVeterancyLevel(unit, level)
             __rm_faf.calls[#__rm_faf.calls + 1] = 'veteran:' .. tostring(level)
         end
+        -- C-301/C-372: the collision manipulator's three contact callbacks,
+        -- (self, bone, x, y, z) like retail's Unit.lua:2289 signatures.
+        function meta:OnAnimCollision(bone, x, y, z)
+            __rm_faf.calls[#__rm_faf.calls + 1] = 'anim:' .. tostring(bone)
+        end
+        function meta:OnAnimTerrainCollision(bone, x, y, z)
+            __rm_faf.calls[#__rm_faf.calls + 1] = 'terrain:' .. tostring(z)
+        end
+        function meta:OnNotAnimTerrainCollision(bone, x, y, z)
+            __rm_faf.calls[#__rm_faf.calls + 1] = 'terrainEnd'
+        end
     )"));
 
-    const std::array<rm::sim::Event, 7> events{{
+    const std::array<rm::sim::Event, 10> events{{
         {.kind = rm::sim::EventKind::IntelChanged, .unit = enemy, .army = 0,
          .intelType = static_cast<std::uint8_t>(rm::sim::IntelType::Radar),
          .intelValue = true},
@@ -3222,6 +3233,19 @@ TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
         {.kind = rm::sim::EventKind::UnitCapLimitReached, .army = 0},
         {.kind = rm::sim::EventKind::UnitVeteranPromoted, .unit = own, .army = 0,
          .amount = rm::sim::magFromFloat(2)},
+        // C-301/C-372: the collision manipulator's contacts dispatch to the
+        // unit's script — bone index plus the contact point.
+        {.kind = rm::sim::EventKind::AnimCollision, .unit = own, .army = 0,
+         .at = {rm::sim::fxFromFloat(10), rm::sim::Fx{},
+                rm::sim::fxFromFloat(100)},
+         .bone = 3},
+        {.kind = rm::sim::EventKind::AnimTerrainCollision, .unit = own, .army = 0,
+         .at = {rm::sim::fxFromFloat(10), rm::sim::Fx{},
+                rm::sim::fxFromFloat(100)}},
+        {.kind = rm::sim::EventKind::AnimTerrainCollisionEnd, .unit = own,
+         .army = 0,
+         .at = {rm::sim::fxFromFloat(10), rm::sim::Fx{},
+                rm::sim::fxFromFloat(100)}},
     }};
     opponent.observe(world, events);
 
@@ -3237,5 +3261,8 @@ TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
         assert(c[7] == 'veteran:2', 'OnBrainUnitVeterancyLevel with the new level')
         assert(__rm_faf.lastBlip ~= nil, 'the blip reached Lua')
         assert(__rm_faf.lastBlip:GetSource() == __rm_faf.lastBlip, 'blip:GetSource()')
+        assert(c[8] == 'anim:3', 'OnAnimCollision with the bone index')
+        assert(c[9] == 'terrain:100.0', 'OnAnimTerrainCollision with the contact point')
+        assert(c[10] == 'terrainEnd', 'OnNotAnimTerrainCollision on the leaving edge')
     )"));
 }

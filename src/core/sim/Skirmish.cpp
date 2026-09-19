@@ -154,6 +154,11 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
                         def != nullptr ? def->reclaimPerBuildRate : Fx{},
                     .reclaimPerBuildRate =
                         def != nullptr ? def->reclaimPerBuildRate : Fx{},
+                    // `C-292`: retail's `layer == 'Land'` death gate — only a
+                    // ground-layer death scorches. Air, submerged, seabed and
+                    // attached (cargo) deaths leave no mark.
+                    .marksGround = !motion[slot].canFly && !motion[slot].submerged
+                        && !motion[slot].seabed && !motion[slot].attached,
                 });
             }
         }
@@ -919,7 +924,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
 
     // Recovery precedes fire: a bubble whose timer reaches zero can intercept this tick,
     // while a hit later in the tick restarts its authored delay.
-    tickShields(store, catalog, match.events);
+    tickShields(store, catalog, match.events, match.economies);
 
     // Hulls heal alongside bubbles, and before the guns: a unit that regenerates back above
     // zero this tick was never dead, and one that does not is retired below. Doing it after
@@ -986,7 +991,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                           match.siloAmmo != nullptr
                                               ? std::span<SiloAmmo>{*match.siloAmmo}
                                               : std::span<SiloAmmo>{},
-                                          terrain, rate, match.events);
+                                          terrain, rate, match.events, tickIndex);
         advanceProjectiles(*match.projectiles, store, match.armies, terrain, rate,
                            match.events, &catalog,
                            match.redirects != nullptr ? std::span<MissileRedirect>{*match.redirects}

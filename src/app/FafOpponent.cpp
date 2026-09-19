@@ -3083,6 +3083,35 @@ void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> ev
         }
         lua_settop(lua, top);
     };
+    // `C-301`/`C-372`: the collision manipulator's three contact callbacks —
+    // `OnAnimCollision`/`OnAnimTerrainCollision`/`OnNotAnimTerrainCollision`
+    // (`0xe71320`/`0xe71308`/`0xe712ec`, Unit.lua:2289) — each takes
+    // (self, bone, x, y, z). Our event carries the bone index and the contact
+    // point; the receiver is the unit's own script, so only our units dispatch.
+    const auto callUnitBone = [&](rm::sim::UnitId id, const char* method,
+                                  std::int32_t bone, const std::array<rm::sim::Fx, 3>& at) {
+        const int top = lua_gettop(lua);
+        unitFor(id);
+        if (lua_isnil(lua, -1)) {
+            lua_settop(lua, top);
+            return;
+        }
+        lua_getfield(lua, -1, method);
+        if (!lua_isfunction(lua, -1)) {
+            lua_settop(lua, top);
+            return;  // no callback installed: a no-op, like retail's absent body
+        }
+        lua_pushvalue(lua, -2);  // self
+        lua_pushinteger(lua, bone);
+        lua_pushnumber(lua, rm::sim::fxToFloat(at[0]));
+        lua_pushnumber(lua, rm::sim::fxToFloat(at[1]));
+        lua_pushnumber(lua, rm::sim::fxToFloat(at[2]));
+        if (lua_pcall(lua, 5, 0, 0) != LUA_OK) {
+            std::printf("faf-opponent: %s failed: %s\n", method,
+                        lua_tostring(lua, -1));
+        }
+        lua_settop(lua, top);
+    };
     const auto callBrain = [&](const char* method, int nargs,
                                const std::function<void()>& pushArgs) {
         const int top = lua_gettop(lua);
@@ -3195,6 +3224,18 @@ void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> ev
             break;
         case rm::sim::EventKind::FailedBeingCaptured:
             if (event.army == army_) callUnit(event.unit, "OnFailedBeingCaptured", event.instigator);
+            break;
+        case rm::sim::EventKind::AnimCollision:
+            if (event.army == army_)
+                callUnitBone(event.unit, "OnAnimCollision", event.bone, event.at);
+            break;
+        case rm::sim::EventKind::AnimTerrainCollision:
+            if (event.army == army_)
+                callUnitBone(event.unit, "OnAnimTerrainCollision", event.bone, event.at);
+            break;
+        case rm::sim::EventKind::AnimTerrainCollisionEnd:
+            if (event.army == army_)
+                callUnitBone(event.unit, "OnNotAnimTerrainCollision", event.bone, event.at);
             break;
         case rm::sim::EventKind::ArmyStatTriggered:
             // `C-361` -> `brain:OnStatsTrigger(name)`: the name Lua registered.

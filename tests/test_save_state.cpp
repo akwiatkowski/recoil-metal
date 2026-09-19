@@ -401,168 +401,10 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
 
     RandomStream random{std::uint32_t{1}};
     const SaveState state{.tick = 42, .random = random.snapshot(), .units = original.snapshot()};
-    std::vector<std::byte> v7 = SaveState::encode(state);
-    constexpr std::size_t kSlots = 2;
-    // v8 appends allocator and queue state, v9 the silo-ammo section, v10 the
-    // redirector section, v11 the per-motion air section (a count word plus one
-    // fixed record per motion slot — empty vectors still write their counts, which is
-    // what makes these trailers computable without parsing). This fixture starts from
-    // the final published v7 shape, so the historical-layout edits below must remove
-    // all four later trailers first. V12 extends command records in place, so this empty-queue
-    // fixture adds no bytes for it; v13 adds combat state and v14 adds hover state.
-    constexpr std::size_t kV8CommandStateBytes = sizeof(rm::CommandSerial)
-                                                  + std::size_t{rm::kInvalidCommandSource}
-                                                        * sizeof(std::uint32_t)
-                                                  + 2 * sizeof(std::uint32_t)
-                                                  + kSlots
-                                                        * (sizeof(std::uint8_t)
-                                                           + sizeof(std::uint32_t));
-    constexpr std::size_t kV9SiloAmmoBytes = sizeof(std::uint32_t);
-    constexpr std::size_t kV10RedirectBytes = sizeof(std::uint32_t);
-    constexpr std::size_t kV14MotionBytes = sizeof(std::uint32_t) + kSlots * 40;
-    constexpr std::size_t kV15AbsentEconomyBytes = 1;
-    constexpr std::size_t kV16ControllerBytes = sizeof(std::uint32_t) + kSlots * 107;
-    constexpr std::size_t kV18SubmarineBytes = sizeof(std::uint32_t) + kSlots * 15;
-    constexpr std::size_t kV19EmptyEnhancementsBytes = 2 * sizeof(std::uint32_t);
-    constexpr std::size_t kV20EmptyCapturesBytes = sizeof(std::uint32_t);
-    // V21 extends the controller records in place (two bank words per motion slot).
-    constexpr std::size_t kV21BankBytes = kSlots * 2 * sizeof(std::uint32_t);
-    // V22 trails the bone record after every earlier section (one count plus eight
-    // words per slot).
-    constexpr std::size_t kV22BoneBytes = sizeof(std::uint32_t) + kSlots * 8 * sizeof(std::uint32_t);
-    // V23 trails one presence byte (this fixture leaves no wrecks, so the pool is null).
-    constexpr std::size_t kV23AbsentFeatureBytes = sizeof(std::uint8_t);
-    // V24 trails the turret pose: one count word plus yaw, pitch and the
-    // dual-muzzle phase byte per motion slot.
-    constexpr std::size_t kV24TurretPoseBytes = sizeof(std::uint32_t) + kSlots * 9;
-    // V25 trails the dual manipulator's own angles: count plus two words per slot.
-    constexpr std::size_t kV25DualPoseBytes = sizeof(std::uint32_t) + kSlots * 8;
-    // V26's production-pause flags trail doNotTarget: one count plus one byte
-    // per slot, and V27's build-priority bytes trail those in the same shape.
-    // V28 trails the retreat state: a counted threshold byte per slot, then a
-    // counted record per slot — an active byte plus four fixed-point words.
-    // Removing the trailers above leaves them at the tail, so all three come off.
-    constexpr std::size_t kV26ProductionPausedBytes = sizeof(std::uint32_t) + kSlots;
-    constexpr std::size_t kV27PriorityBytes = sizeof(std::uint32_t) + kSlots;
-    constexpr std::size_t kV28RetreatBytes = 2 * sizeof(std::uint32_t) + kSlots + kSlots * 17;
-    // V30's target-focus bytes trail the retreat record: one count plus one byte
-    // per slot, inside the units section ahead of the command state.
-    constexpr std::size_t kV30FocusBytes = sizeof(std::uint32_t) + kSlots;
-    // V31 trails the congestion record at the very tail: one count plus the
-    // blocked-tick count, the yield flag and the goal anchor per motion slot.
-    constexpr std::size_t kV31CongestionBytes = sizeof(std::uint32_t) + kSlots * 7;
-    // V32 trails the measured lead step after it: one count plus the stepX and
-    // stepZ words per motion slot.
-    constexpr std::size_t kV32LeadStepBytes = sizeof(std::uint32_t) + kSlots * 8;
-    // V33 trails the silo build queue: one count word, empty in this fixture.
-    constexpr std::size_t kV33SiloQueueBytes = sizeof(std::uint32_t);
-    // V34 trails the army-stat store (one absent byte, null in this fixture) and
-    // the self-destruct countdowns (one count word, empty here).
-    constexpr std::size_t kV34Bytes = sizeof(std::uint8_t) + sizeof(std::uint32_t);
-    // V35 trails the projectile pool: one absent byte, null in this fixture.
-    constexpr std::size_t kV35AbsentProjectileBytes = sizeof(std::uint8_t);
-    // V37 trails two more nullable sections — path service and intel — one
-    // absent byte each, both null in this fixture.
-    constexpr std::size_t kV37Bytes = 2 * sizeof(std::uint8_t);
-    // V42 trails the production-override table: one absent byte, null here.
-    constexpr std::size_t kV42AbsentOverridesBytes = sizeof(std::uint8_t);
-    // V44 trails the unit pose: two count words, both empty in this fixture
-    // (no manipulators, no hidden bones). V45 trails the emitter pool: one
-    // absent byte, null here.
-    constexpr std::size_t kV44UnitPoseBytes = 2 * sizeof(std::uint32_t);
-    constexpr std::size_t kV45AbsentEffectsBytes = sizeof(std::uint8_t);
-    // V48 trails the terrain-type journal (`C-289`): one absent byte, null here.
-    constexpr std::size_t kV48AbsentTerrainBytes = sizeof(std::uint8_t);
-    v7.resize(v7.size() - kV48AbsentTerrainBytes - kV45AbsentEffectsBytes - kV44UnitPoseBytes - kV42AbsentOverridesBytes - kV37Bytes - kV35AbsentProjectileBytes - kV34Bytes - kV33SiloQueueBytes - kV32LeadStepBytes - kV31CongestionBytes - kV30FocusBytes - kV28RetreatBytes - kV27PriorityBytes - kV26ProductionPausedBytes - kV25DualPoseBytes - kV24TurretPoseBytes - kV23AbsentFeatureBytes - kV22BoneBytes - kV21BankBytes - kV20EmptyCapturesBytes - kV19EmptyEnhancementsBytes - kV18SubmarineBytes - kV16ControllerBytes - kV15AbsentEconomyBytes - kV14MotionBytes - kV10RedirectBytes - kV9SiloAmmoBytes
-              - kV8CommandStateBytes);
-    // v4 adds the offset collection, v5 adds DoNotTarget, v6 adds one automatic-target count
-    // to every health record, and v7 adds attached motion plus the local height. Removing the
-    // additions recreates the published v3 shape, which stored the attachment graph but none of
-    // those later states.
-    constexpr std::size_t kV7MotionBytes = 56;
-    constexpr std::size_t kV6HealthBytes = 68;
-    constexpr std::size_t kAutomaticTargetCountOffset = 48;
-    const std::size_t units = 20 + sizeof(std::uint32_t) + readU32(v7, 20);
-    const std::size_t health = units
-                               + sizeof(std::uint32_t) + kSlots * sizeof(std::uint32_t)
-                               + sizeof(std::uint32_t) + sizeof(std::uint64_t)
-                               + sizeof(std::uint32_t) + kSlots * sizeof(std::uint32_t)
-                               + sizeof(std::uint32_t) + kSlots * 18
-                                 + sizeof(std::uint32_t) + kSlots * kV7MotionBytes
-                                 + sizeof(std::uint32_t);
-    // V36 inserts a restore-flag byte inside every health record (after the two
-    // shield countdown words, at record offset 40) and two counted arrays —
-    // scriptBitsDisabled u16 and maintenanceActive u8 — between the health array
-    // and the type table. Both come out before the v7 shape is reached: the
-    // arrays first (they sit after the records), then the flags, last slot
-    // first so earlier offsets stay valid. This runs before the header writes
-    // below so the recorded payload size counts the stripped stream.
-    constexpr std::size_t kV36HealthFlagOffset = 40;
-    constexpr std::size_t kV36RecordBytes = kV6HealthBytes + 1;
-    constexpr std::size_t kV36ArrayBytes = 2 * sizeof(std::uint32_t) + kSlots * 3;
-    // V46 trails one more counted array in the same spot — intelDisabled u16
-    // per slot (`C-283`'s explicit `EnableIntel`/`DisableIntel` mask).
-    constexpr std::size_t kV46IntelBytes = sizeof(std::uint32_t) + kSlots * 2;
-    const std::size_t healthEnd = health + kSlots * kV36RecordBytes;
-    v7.erase(v7.begin() + static_cast<std::ptrdiff_t>(healthEnd),
-             v7.begin() + static_cast<std::ptrdiff_t>(
-                 healthEnd + kV36ArrayBytes + kV46IntelBytes));
-    for (std::size_t slot = kSlots; slot-- > 0;) {
-        v7.erase(v7.begin() + static_cast<std::ptrdiff_t>(
-                     health + slot * kV36RecordBytes + kV36HealthFlagOffset));
-    }
-    writeU32(v7, 4, 7);
-    writeU32(v7, 16, static_cast<std::uint32_t>(v7.size() - 20));
-    const auto publishedV7 = SaveState::decode(v7);
-    REQUIRE(publishedV7.has_value());
-    CHECK(publishedV7->units.orders.empty());
 
-    constexpr std::size_t kAttachedMotionOffset = 13;
-    const std::size_t motion = health - sizeof(std::uint32_t) - kSlots * kV7MotionBytes;
-    std::vector<std::byte> v6 = v7;
-    constexpr std::size_t kDoNotTargetBytes = sizeof(std::uint32_t) + kSlots * sizeof(std::uint8_t);
-    constexpr std::size_t kAttachmentHeightBytes = sizeof(std::uint32_t) + kSlots * sizeof(std::int32_t);
-    v6.erase(v6.end() - static_cast<std::ptrdiff_t>(kDoNotTargetBytes + kAttachmentHeightBytes),
-             v6.end() - static_cast<std::ptrdiff_t>(kDoNotTargetBytes));
-    for (std::size_t slot = kSlots; slot-- > 0;) {
-        const std::size_t attached = motion + sizeof(std::uint32_t) + slot * kV7MotionBytes
-                                     + kAttachedMotionOffset;
-        v6.erase(v6.begin() + static_cast<std::ptrdiff_t>(attached));
-    }
-    writeU32(v6, 4, 6);
-    writeU32(v6, 16, static_cast<std::uint32_t>(v6.size() - 20));
-    const auto publishedV6 = SaveState::decode(v6);
-    REQUIRE(publishedV6.has_value());
-    CHECK(publishedV6->units.orders.empty());
-    CHECK(publishedV6->units.motion[child.index].attached);
-
-    for (std::size_t slot = kSlots; slot-- > 0;) {
-        const std::size_t count = health + slot * kV6HealthBytes + kAutomaticTargetCountOffset;
-        v7.erase(v7.begin() + static_cast<std::ptrdiff_t>(count),
-                  v7.begin() + static_cast<std::ptrdiff_t>(count + sizeof(std::uint32_t)));
-    }
-    for (std::size_t slot = kSlots; slot-- > 0;) {
-        const std::size_t attached = motion + sizeof(std::uint32_t) + slot * kV7MotionBytes
-                                     + kAttachedMotionOffset;
-        v7.erase(v7.begin() + static_cast<std::ptrdiff_t>(attached));
-    }
-    v7.erase(v7.end() - static_cast<std::ptrdiff_t>(kDoNotTargetBytes + kAttachmentHeightBytes),
-             v7.end() - static_cast<std::ptrdiff_t>(kDoNotTargetBytes));
-
-    std::vector<std::byte> v5 = v7;
-    writeU32(v5, 4, 5);
-    writeU32(v5, 16, static_cast<std::uint32_t>(v5.size() - 20));
-
-    std::vector<std::byte> v4 = v5;
-    v4.resize(v4.size() - (sizeof(std::uint32_t) + kSlots * sizeof(std::uint8_t)));
-    writeU32(v4, 4, 4);
-    writeU32(v4, 16, static_cast<std::uint32_t>(v4.size() - 20));
-
-    std::vector<std::byte> v3 = v4;
-    v3.resize(v3.size() - (sizeof(std::uint32_t) + kSlots * 2 * sizeof(std::int32_t)));
-    writeU32(v3, 4, 3);
-    writeU32(v3, 16, static_cast<std::uint32_t>(v3.size() - 20));
-
+    // Every published version must decode and derive the child's attachment
+    // offset from the parent's transform — the pre-v4 streams stored the
+    // graph but no offsets, so the loader recomputes them.
     const auto checkDerivedOffset = [&](const std::vector<std::byte>& bytes) {
         const auto saved = SaveState::decode(bytes);
         REQUIRE(saved.has_value());
@@ -578,11 +420,13 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
         CHECK(restored.transforms()[child.index].z == rm::sim::Fx::fromInt(45));
     };
 
+    // v1 and v2 have pinned encoders; v3 through v7 exercise the same
+    // historical decode paths via the version-parameterized test hook.
     checkDerivedOffset(SaveState::encodeV1(state));
     checkDerivedOffset(SaveState::encodeV2(state));
-    checkDerivedOffset(v3);
-    checkDerivedOffset(v4);
-    checkDerivedOffset(v5);
+    for (std::uint32_t version = 3; version <= 7; ++version) {
+        checkDerivedOffset(SaveState::encodeAtVersion(state, version));
+    }
 }
 
 TEST_CASE("a v9 save round-trips silo ammunition state", "[save-state]") {

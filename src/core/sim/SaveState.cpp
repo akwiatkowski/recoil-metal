@@ -2573,6 +2573,11 @@ std::vector<std::byte> SaveState::encodeV2(const SaveState& state) {
 std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
     return rm::sim::decode(bytes, kVersion2);
 }
+std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
+                                                  std::uint32_t version) {
+    return rm::sim::encode(state, version);
+}
+
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
     return rm::sim::encode(state, kVersion53);
 }

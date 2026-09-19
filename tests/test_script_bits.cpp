@@ -177,3 +177,23 @@ TEST_CASE("maintenance follows the last toggle touched, not the count still on")
     CHECK(roster.store.maintenanceActive(unit));
     CHECK(roster.store.scriptBitDisabled(unit, 5));
 }
+
+TEST_CASE("C-349: a unit attached to a transport refuses the toggle") {
+    // Retail blocks `ToggleScriptBit` while the unit rides a carrier — the
+    // cargo's script bits are the carrier's business until it lands. The
+    // refusal is intake-side: the unit is not accepted and the bit never moves.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(
+        toggledDef("cargo", {"RULEUTC_IntelToggle"}));
+    const UnitId cargo = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+
+    roster.motion(cargo).attached = true;
+    CHECK(toggle(roster, 3, {cargo}).accepted.empty());
+    CHECK_FALSE(roster.store.scriptBitDisabled(cargo, 3));
+
+    // Back on the ground the same click lands — the block is the attachment,
+    // not the unit.
+    roster.motion(cargo).attached = false;
+    REQUIRE(toggle(roster, 3, {cargo}).accepted == std::vector<UnitId>{cargo});
+    CHECK(roster.store.scriptBitDisabled(cargo, 3));
+}

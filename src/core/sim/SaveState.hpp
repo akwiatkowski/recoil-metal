@@ -95,6 +95,10 @@ struct SaveState {
     /// The published v2 format includes path-service and route-revalidation phase state.
     [[nodiscard]] static std::vector<std::byte> encodeV2(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV2(std::span<const std::byte> bytes);
+    /// Test hook: encode at any historical version, for legacy-decode coverage.
+    /// Production callers use `encode` (current) or the pinned `encodeV1`/`encodeV2`.
+    [[nodiscard]] static std::vector<std::byte> encodeAtVersion(const SaveState& state,
+                                                                std::uint32_t version);
     /// V19 adds continuous enhancement work and its carried resource allocation.
     /// V20 adds funded unit-capture tasks with their progress budgets.
     /// V21 adds the bank tuning (`KRoll`, `BankFactor`) to the aircraft snapshot.

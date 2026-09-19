@@ -292,6 +292,52 @@ TEST_CASE("C-292: a shot into the sea leaves no scorch", "[fa-terrain]") {
     }
 }
 
+TEST_CASE("C-292: only a land-layer death scorches the ground", "[fa-terrain]") {
+    // Retail's `Unit::OnKilled` gates `CreateScorchableDecal` on
+    // `layer == 'Land'` — a crashed gunship or a sunk hull leaves no mark.
+    // The layer dies with the unit, so the gate's answer is recorded on the
+    // feature at death (`Feature::marksGround`) and the decal rebuild reads it.
+    const rm::HeightField field = flatField(128, 0.0f);
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "test_unit";
+    def.wreckMass = rm::test::mag(100.0f);
+    const rm::UnitTypeIndex type = roster.addType(def);
+    const rm::sim::UnitId tank = roster.add(type, 512.0f, 200.0f, 0, 500.0f);
+    const rm::sim::UnitId gunship = roster.add(type, 600.0f, 200.0f, 0, 500.0f);
+    roster.motion(gunship).canFly = true;  // the air layer
+
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    const std::vector<int> commandersEver(2, 0);
+    rm::sim::FeatureStore features;
+    rm::sim::Match match{.armies = armies,
+                         .economies = economies,
+                         .features = &features,
+                         .commandersEver = commandersEver};
+    const rm::sim::Terrain terrain{field};
+
+    roster.health(tank).current = rm::sim::Mag{};
+    roster.health(gunship).current = rm::sim::Mag{};
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    REQUIRE(features.size() == 2);
+
+    // The gate's answer, per feature: the tank's wreck marks, the gunship's
+    // does not — even though both left reclaimable mass on the same ground.
+    const rm::sim::Feature& tankWreck = features.all()[0];
+    const rm::sim::Feature& airWreck = features.all()[1];
+    CHECK(tankWreck.marksGround);
+    CHECK_FALSE(airWreck.marksGround);
+
+    // And the projection honours it: only the land wreck becomes a decal.
+    rm::app::UnitScene scene;
+    (void)scene.features.add(tankWreck);
+    (void)scene.features.add(airWreck);
+    rm::app::refreshWreckDecals(scene, field);
+    CHECK(scene.wreckDecals.size() == rm::wreckVertexCount());
+}
+
 TEST_CASE("C-289: a tarmac structure stamps its pad and the stamp dies with it",
           "[fa-terrain]") {
     // Retail's `CreateTarmac` (defaultunits.lua:75) is decal-only because its
