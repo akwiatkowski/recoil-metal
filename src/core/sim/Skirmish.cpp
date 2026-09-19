@@ -1079,14 +1079,30 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     if (!match.over) {
         const std::optional<int> winner = winningAlliance(match.armies);
         const std::size_t survivors = survivorCount(match.armies);
+        // `victory.lua`'s allied-victory gate (`C-346`): a sole surviving
+        // ALLIANCE wins only when every surviving member set
+        // `RequestingAlliedVictory` — `simInit.lua:200` sets it for armies
+        // teamed at setup, and `SimUtils.RequestAlliedVictory` toggles it for
+        // alliances formed mid-match. A single surviving army needs no one's
+        // consent and wins unconditionally.
+        const bool alliedVictoryRequested =
+            survivors <= 1
+            || std::ranges::all_of(match.armies, [](const Army& army) {
+                   return army.defeated || army.requestingAlliedVictory;
+               });
+        // A team wins when it is the only ALLIANCE left, even if several
+        // allied armies survived. `survivorCount <= 1` left a successful
+        // 2v2 running forever.
+        const bool terminal = match.victoryMode != VictoryMode::Sandbox
+            && winner.has_value() && alliedVictoryRequested;
         // `victory.lua`'s two immediate ends, checked before the stability
         // window: nobody left is a draw on the spot (`CallEndGame(true,
         // false)`), and so is every surviving army offering one
-        // (`OfferingDraw` — `SimUtils.SetOfferDraw`). A sole surviving
-        // alliance still wins through the ordinary window even with offers
+        // (`OfferingDraw` — `SimUtils.SetOfferDraw`). A terminal winner
+        // still wins through the ordinary window even with offers
         // on the table, matching retail's win-before-draw order.
         const bool mutualDraw =
-            !winner && survivors > 0
+            !terminal && survivors > 0
             && std::ranges::all_of(match.armies, [](const Army& army) {
                    return army.defeated || army.offeringDraw;
                });
@@ -1098,11 +1114,6 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             emit(match.events, Event{.kind = EventKind::GameOver,
                                      .army = kNoArmy});
         } else {
-            // A team wins when it is the only ALLIANCE left, even if several
-            // allied armies survived. `survivorCount <= 1` left a successful
-            // 2v2 running forever.
-            const bool terminal = match.victoryMode != VictoryMode::Sandbox
-                && winner.has_value();
             if (!terminal) {
                 match.winnerPending = false;
                 match.pendingWinner.reset();

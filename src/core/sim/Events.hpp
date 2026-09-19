@@ -184,6 +184,37 @@ enum class EventKind : std::uint8_t {
     /// `C-361`: an army hit its unit cap — the sim-side record behind
     /// `brain:OnUnitCapLimitReached`. `army` is the capped army.
     UnitCapLimitReached,
+    /// `C-346` (`SimPing.lua:19`): a `SpawnPing` SimCallback placed a ping —
+    /// `army` is the owner, `at` the location, `text` the ping kind (`data.Mesh`),
+    /// `markerId` the assigned marker slot or -1 for a timed ping. The event IS
+    /// the contract: no UI consumes it here, allied brains observe it through the
+    /// callback surface (`DoPingCallbacks`).
+    PingSpawned,
+    /// `C-346` (`SimPing.lua:106`): an `UpdateMarker` SimCallback mutated a
+    /// marker — `army` the owner, `markerId` the slot, `markerAction` the verb
+    /// (delete/move/rename/renew), `at` the new location on a move, `text` the
+    /// new name on a rename.
+    MarkerUpdated,
+    /// `C-344` (`SessionSendChatMessage`): a chat line or taunt crossed the
+    /// session channel — `army` the sender, `to` the recipient (`kChatAll`,
+    /// `kChatAllies`, or an army index), `text` the message, `tauntIndex` the
+    /// taunt-table row or -1 for plain text.
+    ChatMessage,
+    /// `C-344` (`build_templates.lua:89`): a shared build template crossed the
+    /// same channel — `army` the sender, `to` the recipient army, `text` the
+    /// serialized template table.
+    TemplateShared,
+};
+
+/// `UpdateMarker`'s action word (`SimPing.lua:106`), as a byte on the event and
+/// the marker record. `Renew` is retail's re-sync request — it mutates nothing
+/// and only re-sends, so it is an event action with no state transition.
+enum class MarkerAction : std::uint8_t {
+    None = 0,
+    Delete = 1,
+    Move = 2,
+    Rename = 3,
+    Renew = 4,
 };
 
 /// Retail's native projectile impact classifier (`C-124`, `C-170`).
@@ -291,6 +322,22 @@ struct Event {
     /// `C-361`: the name Lua registered for an `ArmyStatTriggered` event.
     /// A string because the trigger name is Lua's, not an enum the sim owns.
     std::string statName;
+
+    /// `C-344`/`C-346` callback payloads: the recipient for `ChatMessage` and
+    /// `TemplateShared` (`kChatAll`/`kChatAllies` or an army index; `kNoArmy`
+    /// elsewhere), the marker slot for `PingSpawned`/`MarkerUpdated` (-1 for a
+    /// timed ping), the taunt-table row for a taunt `ChatMessage` (-1 for plain
+    /// text), and the `UpdateMarker` verb for `MarkerUpdated`.
+    int to = kNoArmy;
+    int markerId = -1;
+    int tauntIndex = -1;
+    MarkerAction markerAction = MarkerAction::None;
+
+    /// The text half of the callback kinds: the chat line for `ChatMessage`,
+    /// the serialized template for `TemplateShared`, the ping kind for
+    /// `PingSpawned`, the new name for a rename `MarkerUpdated`. A string like
+    /// `statName` because the payload is Lua's, not an enum the sim owns.
+    std::string text;
 };
 
 [[nodiscard]] bool operator==(const Event& a, const Event& b) noexcept;

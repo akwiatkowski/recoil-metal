@@ -91,6 +91,12 @@ struct Sandbox {
 
     /// Print LOG/WARN/SPEW instead of only counting them (`--ai-log`).
     bool logPassthrough = false;
+
+    /// The UI→sim outbox (`C-319`/`C-344`): what `SimCallback` and
+    /// `SessionSendChatMessage` queued since the last `drainSimMessages`.
+    /// On the sandbox rather than a global so two VMs in one process keep
+    /// their own channels.
+    std::vector<FafAi::SimMessage> simMessages;
 };
 
 /// The adapter's tick rate assumption, matching the app's default. WaitSeconds converts
@@ -1200,6 +1206,215 @@ table.removeByValue = table.removeByValue or function(t, value)
 end
 )lua";
 
+
+// --- The UI→sim channel (`C-319`, `C-344`) -------------------------------------
+//
+// `SimCallback` (`0x008c0520`) and `SessionSendChatMessage` are USER-side bindings
+// in retail, so the generator never counted them for FafApi.inc — but the sandbox
+// is where a brain's Lua would reach them, and the channel is the same one the UI
+// uses. Both queue onto the sandbox's outbox; the match drains it into
+// `rm::sim::doSimCallback`/`sendChatMessage` once per tick, which is what keeps
+// the port's no-mutation rule: Lua never touches sim state directly.
+
+/// `Args` table → `SimCallbackArgs`. Lua's army indices are 1-based; a missing
+/// or non-numeric field maps to `kNoArmy` (0 − 1), which is also what a Lua 0
+/// produces — retail's `OkayToMessWithArmy` refuses it either way.
+rm::sim::SimCallbackArgs simCallbackArgsFromLua(lua_State* lua, int table) {
+    rm::sim::SimCallbackArgs args;
+    const auto army = [lua, table](const char* field) {
+        lua_getfield(lua, table, field);
+        const int value = static_cast<int>(lua_tointeger(lua, -1)) - 1;
+        lua_pop(lua, 1);
+        return value;
+    };
+    const auto number = [lua, table](const char* field) {
+        lua_getfield(lua, table, field);
+        const double value = lua_tonumber(lua, -1);
+        lua_pop(lua, 1);
+        return value;
+    };
+    const auto flag = [lua, table](const char* field) {
+        lua_getfield(lua, table, field);
+        const bool value = lua_toboolean(lua, -1) != 0;
+        lua_pop(lua, 1);
+        return value;
+    };
+    const auto text = [lua, table](const char* field) -> std::string {
+        lua_getfield(lua, table, field);
+        const char* value = lua_tostring(lua, -1);
+        std::string out = value != nullptr ? value : "";
+        lua_pop(lua, 1);
+        return out;
+    };
+    args.from = army("From");
+    args.to = army("To");
+    args.army = army("Army");
+    args.owner = army("Owner");
+    args.id = static_cast<int>(number("ID"));
+    args.value = flag("Value");
+    args.marker = flag("Marker");
+    args.mass = rm::sim::fxFromFloat(static_cast<float>(number("Mass")));
+    args.energy = rm::sim::fxFromFloat(static_cast<float>(number("Energy")));
+    args.action = text("Action");
+    // `data.Mesh` names the ping kind; `data.Type` is the FAF alias for it.
+    args.text = text("Mesh");
+    if (args.text.empty()) args.text = text("Type");
+    args.name = text("Name");
+    lua_getfield(lua, table, "Location");
+    if (lua_istable(lua, -1)) {
+        for (int i = 0; i < 3; ++i) {
+            lua_rawgeti(lua, -1, i + 1);
+            args.location[static_cast<std::size_t>(i)] =
+                rm::sim::fxFromFloat(static_cast<float>(lua_tonumber(lua, -1)));
+            lua_pop(lua, 1);
+        }
+    }
+    lua_pop(lua, 1);
+    return args;
+}
+
+/// `SimCallback{callback, addUnitSelection}` — retail's `0x008c0520`. The
+/// selection flag is ignored: no whitelisted name in the bounded slice consumes
+/// the `units` argument it would append.
+int simCallbackBinding(lua_State* lua) {
+    Sandbox* sandbox = sandboxOf(lua);
+    if (sandbox == nullptr || !lua_istable(lua, 1)) {
+        return 0;
+    }
+    lua_getfield(lua, 1, "Func");
+    const char* name = lua_tostring(lua, -1);
+    lua_pop(lua, 1);
+    if (name == nullptr) {
+        return 0;
+    }
+    FafAi::SimMessage message{.name = name};
+    lua_getfield(lua, 1, "Args");
+    if (lua_istable(lua, -1)) {
+        message.args = simCallbackArgsFromLua(lua, lua_gettop(lua));
+    }
+    lua_pop(lua, 1);
+    sandbox->simMessages.push_back(std::move(message));
+    return 0;
+}
+
+/// A Lua value → its `repr`-style source text, for the template payload
+/// (`build_templates.lua:89` sends the raw template table; the event carries
+/// text, and the receiving brain re-loads it). Depth-capped like any
+/// serializer; cycles degrade to `'<table>'` rather than recursing.
+void serializeLuaValue(lua_State* lua, int index, std::string& out, int depth) {
+    index = lua_absindex(lua, index);
+    switch (lua_type(lua, index)) {
+    case LUA_TNIL:
+        out += "nil";
+        return;
+    case LUA_TBOOLEAN:
+        out += lua_toboolean(lua, index) ? "true" : "false";
+        return;
+    case LUA_TNUMBER: {
+        char buffer[32];
+        std::snprintf(buffer, sizeof(buffer), "%.9g", lua_tonumber(lua, index));
+        out += buffer;
+        return;
+    }
+    case LUA_TSTRING:
+        out += '"';
+        out += lua_tostring(lua, index);
+        out += '"';
+        return;
+    case LUA_TTABLE: {
+        if (depth <= 0) {
+            out += "{}";
+            return;
+        }
+        out += '{';
+        bool first = true;
+        lua_pushnil(lua);
+        while (lua_next(lua, index) != 0) {
+            if (!first) out += ',';
+            first = false;
+            if (lua_type(lua, -2) == LUA_TSTRING) {
+                out += lua_tostring(lua, -2);
+                out += '=';
+            } else {
+                out += '[';
+                serializeLuaValue(lua, -2, out, 0);
+                out += "]=";
+            }
+            serializeLuaValue(lua, -1, out, depth - 1);
+            lua_pop(lua, 1);
+        }
+        out += '}';
+        return;
+    }
+    default:
+        out += "nil";
+        return;
+    }
+}
+
+/// `SessionSendChatMessage(client, message)` (`C-344`). Retail addresses
+/// CLIENTS; the bounded slice addresses armies — a numeric client or a numeric
+/// `msg.to` is a 1-based army index, 'all'/'allies' map to the broadcast
+/// constants, and 'notify' is UI-internal traffic the sim never sees.
+int sessionSendChatMessageBinding(lua_State* lua) {
+    Sandbox* sandbox = sandboxOf(lua);
+    if (sandbox == nullptr) {
+        return 0;
+    }
+    // One argument means broadcast (`chat.lua:762`'s bare `SessionSendChatMessage(msg)`).
+    const int messageArg = lua_gettop(lua) >= 2 ? 2 : 1;
+    int to = rm::sim::kChatAll;
+    if (messageArg == 2 && lua_isnumber(lua, 1)) {
+        to = static_cast<int>(lua_tointeger(lua, 1)) - 1;
+    }
+    FafAi::SimMessage message{.chat = true, .chatTo = to};
+    if (lua_istable(lua, messageArg)) {
+        lua_getfield(lua, messageArg, "to");
+        if (lua_isnumber(lua, -1)) {
+            message.chatTo = static_cast<int>(lua_tointeger(lua, -1)) - 1;
+        } else if (const char* word = lua_tostring(lua, -1)) {
+            if (std::string_view{word} == "allies") {
+                message.chatTo = rm::sim::kChatAllies;
+            } else if (std::string_view{word} == "notify") {
+                lua_pop(lua, 1);
+                return 0;  // UI-internal traffic — the sim relay drops it
+            }
+        }
+        lua_pop(lua, 1);
+        lua_getfield(lua, messageArg, "From");
+        if (lua_isnumber(lua, -1)) {
+            message.chatFrom = static_cast<int>(lua_tointeger(lua, -1)) - 1;
+        }
+        lua_pop(lua, 1);
+        lua_getfield(lua, messageArg, "Taunt");
+        const bool taunt = lua_toboolean(lua, -1) != 0;
+        lua_pop(lua, 1);
+        if (taunt) {
+            lua_getfield(lua, messageArg, "data");
+            message.tauntIndex = static_cast<int>(lua_tointeger(lua, -1));
+            lua_pop(lua, 1);
+        }
+        lua_getfield(lua, messageArg, "Template");
+        const bool templated = lua_toboolean(lua, -1) != 0;
+        lua_pop(lua, 1);
+        if (templated) {
+            message.templated = true;
+            lua_getfield(lua, messageArg, "data");
+            serializeLuaValue(lua, -1, message.args.text, 8);
+            lua_pop(lua, 1);
+        }
+        lua_getfield(lua, messageArg, "text");
+        if (const char* text = lua_tostring(lua, -1)) {
+            message.args.text = text;
+        }
+        lua_pop(lua, 1);
+    } else if (const char* text = lua_tostring(lua, messageArg)) {
+        message.args.text = text;
+    }
+    sandbox->simMessages.push_back(std::move(message));
+    return 0;
+}
+
 } // namespace
 
 std::string rewriteLegacyLua(const std::string& source) { return rewriteMohoSource(source, true); }
@@ -1355,6 +1570,16 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
     lua_setglobal(state_, "ResumeThread");
     lua_pushcfunction(state_, eventSignal);
     lua_setglobal(state_, "EventSignal");
+
+    // `C-319`/`C-344`: the UI→sim channel. Not in FafApi.inc — the generator
+    // counts only names the AI corpus calls, and these are user-side bindings —
+    // but the sandbox is where a brain's Lua would reach them. Both queue onto
+    // the outbox `drainSimMessages` empties; the whitelist lives in
+    // `rm::sim::doSimCallback`, not here.
+    lua_pushcfunction(state_, simCallbackBinding);
+    lua_setglobal(state_, "SimCallback");
+    lua_pushcfunction(state_, sessionSendChatMessageBinding);
+    lua_setglobal(state_, "SessionSendChatMessage");
 
     // Chunk first, THEN its argument — lua_pcall reads the stack as [function, arg1, ...], and
     // pushing the method table before the chunk left them the wrong way round, so the bootstrap
@@ -1668,6 +1893,19 @@ std::size_t FafAi::boundCount() const noexcept {
     }
     const Sandbox* sandbox = sandboxOf(state_);
     return sandbox != nullptr ? sandbox->slots.size() : 0;
+}
+
+std::vector<FafAi::SimMessage> FafAi::drainSimMessages() {
+    if (state_ == nullptr) {
+        return {};
+    }
+    Sandbox* sandbox = sandboxOf(state_);
+    if (sandbox == nullptr) {
+        return {};
+    }
+    std::vector<SimMessage> out;
+    out.swap(sandbox->simMessages);
+    return out;
 }
 
 std::vector<Binding> FafAi::report() const {

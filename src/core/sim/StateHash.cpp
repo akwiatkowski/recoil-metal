@@ -670,6 +670,17 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, army.cheatEnabled);
         }
     }
+    // `RequestingAlliedVictory` (C-346) joins the stream only once some army has
+    // asked for the shared win, so a match that never touches diplomacy hashes
+    // exactly as before. `resourceSharing` stays out: it gates nothing in the
+    // sim — retail's flag is read by the UI's sharing controls, not by
+    // `GiveResourcesToPlayer`.
+    if (std::ranges::any_of(match.armies,
+                          [](const Army& army) { return army.requestingAlliedVictory; })) {
+        for (const Army& army : match.armies) {
+            feed(h, army.requestingAlliedVictory);
+        }
+    }
 
 
     if (match.pathService != nullptr) {

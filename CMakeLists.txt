@@ -214,6 +214,7 @@ add_library(rm_core STATIC
     src/core/sim/UnitCatalog.cpp
     src/core/sim/UnitCensus.cpp
     src/core/sim/Skirmish.cpp
+    src/core/sim/SimCallbacks.cpp
     src/core/sim/StateHash.cpp
     src/core/sim/RandomStream.cpp
     src/core/sim/SaveState.cpp
@@ -440,6 +441,7 @@ if(BUILD_TESTING)
         tests/test_fa_content.cpp
         tests/test_fa_lua.cpp
         tests/test_fa_match.cpp
+        tests/test_fa_simcallbacks.cpp
         tests/test_fa_cmd.cpp
         tests/test_fa_econ.cpp
         tests/test_fa_land.cpp

@@ -34,6 +34,8 @@
 #include <utility>
 #include <vector>
 
+#include "core/sim/SimCallbacks.hpp"
+
 struct lua_State;
 
 namespace rm::ai {
@@ -158,6 +160,32 @@ public:
     /// is not the generator's total, something failed to register and the AI would have hit a
     /// nil mid-match instead of a counted stub.
     [[nodiscard]] std::size_t boundCount() const noexcept;
+
+
+    /// What the UI→sim bindings queued since the last drain (`C-319`/`C-344`):
+    /// `SimCallback{Func=…, Args=…}` calls and `SessionSendChatMessage`
+    /// payloads. The sandbox is shared by every FAF opponent, so the outbox
+    /// lives on the VM rather than on one opponent's decision list — a
+    /// callback any brain issues lands in the same place, and the match drains
+    /// it into `rm::sim::doSimCallback`/`sendChatMessage` once per tick.
+    struct SimMessage {
+        /// The `Func` name for a SimCallback; empty for a chat message.
+        std::string name;
+        /// The `Args` table, flattened — army fields already converted from
+        /// Lua's 1-based indices to the sim's 0-based ones.
+        rm::sim::SimCallbackArgs args;
+        /// Chat (`C-344`): the sender army, the recipient (`kChatAll`,
+        /// `kChatAllies` or an army index), the payload, and the taunt/template
+        /// markers. `chat` distinguishes the message from a SimCallback.
+        bool chat = false;
+        int chatFrom = rm::sim::kNoArmy;
+        int chatTo = rm::sim::kChatAll;
+        int tauntIndex = -1;
+        bool templated = false;
+    };
+
+    /// Empties the outbox — one call per tick from the match loop.
+    [[nodiscard]] std::vector<SimMessage> drainSimMessages();
 
     /// The raw state, for the adapter that drives it. Null until `ready()`.
     [[nodiscard]] lua_State* state() const noexcept { return state_; }

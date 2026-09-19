@@ -151,6 +151,15 @@ constexpr std::uint32_t kVersion45 = 45;
 // script-bit masks whose `RULEUTC_*` half is already carried. Older saves
 // decode with every intel type enabled.
 constexpr std::uint32_t kVersion46 = 46;
+// 47: `C-346`'s diplomacy flags on each army record — `RequestingAlliedVictory`
+// (the allied-victory gate) and `resourceSharing` — so a saved mid-negotiation
+// match keeps who asked for the shared win. Older saves decode with both clear.
+constexpr std::uint32_t kVersion47 = 47;
+// 48: the terrain-type grid's journal (`C-289`) — `SetTerrainTypeRect` writes
+// and unit-owned tarmac stamps, nullable like `features`. The effective cells
+// are derived, so the save carries the writes and restore replays them.
+// Older saves decode with no journal: the map's base grid, unmutated.
+[[maybe_unused]] constexpr std::uint32_t kVersion48 = 48;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -287,7 +296,7 @@ bool readMag(PayloadReader& r, Mag& value) {
 
 void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>& state,
                         bool includesOfferingDraw, bool includesUnitCap,
-                        bool includesCheat) {
+                        bool includesCheat, bool includesDiplomacy) {
     w.u8(state.has_value());
     if (!state) return;
     const auto& s = *state;
@@ -298,6 +307,9 @@ void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>&
         if (includesOfferingDraw) w.u8(army.offeringDraw);
         if (includesUnitCap) w.i32(army.unitCap.raw());
         if (includesCheat) w.u8(army.cheatEnabled);
+        if (includesDiplomacy) {
+            w.u8(army.requestingAlliedVictory); w.u8(army.resourceSharing);
+        }
     }
     w.count(s.economies.size());
     for (const auto& economy : s.economies) {
@@ -332,7 +344,7 @@ void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>&
 }
 bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
                        bool includesOfferingDraw, bool includesUnitCap,
-                       bool includesCheat) {
+                       bool includesCheat, bool includesDiplomacy) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) return true;
@@ -348,6 +360,9 @@ bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
         army.faction = static_cast<Faction>(faction);
         if (includesUnitCap && !readFx(r, army.unitCap)) return false;
         if (includesCheat && !readFlag(r, army.cheatEnabled)) return false;
+        if (includesDiplomacy
+            && (!readFlag(r, army.requestingAlliedVictory)
+                || !readFlag(r, army.resourceSharing))) return false;
         if (army.index != &army - s.armies.data()) return false;
     }
     if (!r.count(count, 142) || count != s.armies.size()) return false;
@@ -2176,7 +2191,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     }
     if (version >= kVersion15) writeEconomyArmies(payloadWriter, state.economyArmies,
                                                   version >= kVersion40, version >= kVersion41,
-                                                  version >= kVersion43);
+                                                  version >= kVersion43, version >= kVersion47);
     if (version >= kVersion16)
         writeAirController(payloadWriter, state.units.motion, version >= kVersion21);
     if (version >= kVersion18) writeSubMotion(payloadWriter, state.units.motion);
@@ -2253,7 +2268,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion39 && version != kVersion40 && version != kVersion41
                && version != kVersion42 && version != kVersion43
                && version != kVersion44 && version != kVersion45
-               && version != kVersion46)
+               && version != kVersion46 && version != kVersion47
+               && version != kVersion48)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2300,7 +2316,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::optional<EconomyArmyState> economyArmies;
     if (version >= kVersion15 && !readEconomyArmies(reader, economyArmies,
                                                     version >= kVersion40, version >= kVersion41,
-                                                    version >= kVersion43)) return std::nullopt;
+                                                    version >= kVersion43, version >= kVersion47)) return std::nullopt;
     if (version >= kVersion16
         && !readAirController(reader, units.motion, version >= kVersion21))
         return std::nullopt;

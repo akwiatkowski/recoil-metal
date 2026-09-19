@@ -1368,6 +1368,10 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
             },
     };
 
+    // `ScenarioInfo.Options.TeamLock == 'locked'` (`simInit.lua:162`): locked
+    // teams refuse `BreakAlliance` and `RequestAlliedVictory` outright.
+    scene.teamLock = scenarioOptions.is("TeamLock", "locked");
+
     // `ScenarioInfo.Options.UnitCap`, the lobby's per-army ceiling. Retail's
     // session-create writes 500 when the option is absent (`0x008e8035`), which
     // is `Army::unitCap`'s own default — so only a stated value is applied, and
@@ -1599,6 +1603,32 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         runOpponents(scene, runner.content, runner.field, runner.starts, runner.markers,
                        runner.scripts, now,
                        static_cast<rm::TickIndex>(tickIndex), runner.match.playableRect);
+    }
+
+    // `C-319`/`C-344`: the UI→sim channel. `SimCallback`/`SessionSendChatMessage`
+    // calls the FAF sandbox's Lua made during this pass queue on the VM's outbox;
+    // they dispatch HERE — after `beginFrame`, so their events join this tick's
+    // stream — through the same whitelist `SimCallbacks.lua` is in retail. An
+    // unknown `Func` is refused like retail's `error('No callback named …')`.
+    if (runner.fafSandbox != nullptr) {
+        rm::sim::SimCallbackContext callbacks{
+            .armies = scene.armies,
+            .economies = scene.economies,
+            .events = &scene.events,
+            .state = scene.simCallbacks,
+            .teamLock = scene.teamLock,
+            .tick = static_cast<rm::TickIndex>(tickIndex),
+            .rate = gAppTickRate};
+        for (const rm::ai::FafAi::SimMessage& message :
+             runner.fafSandbox->drainSimMessages()) {
+            if (message.chat) {
+                (void)rm::sim::sendChatMessage(callbacks, message.chatFrom,
+                                               message.chatTo, message.args.text,
+                                               message.tauntIndex, message.templated);
+            } else {
+                (void)rm::sim::doSimCallback(callbacks, message.name, message.args);
+            }
+        }
     }
 
     dispatchPhase(rm::sim::CommandPhase::PreTick, replayPre);

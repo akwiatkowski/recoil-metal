@@ -3207,6 +3207,84 @@ void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> ev
             if (event.army != army_) break;
             callBrain("OnUnitCapLimitReached", 0, [] {});
             break;
+        case rm::sim::EventKind::PingSpawned: {
+            // `C-346` -> `brain:DoPingCallbacks(data)`: `SimPing.lua:55` calls
+            // every ALLIED brain but the owner's own. The ping data table is
+            // retail's shape — Owner 1-based, Location a 3-vector, Mesh the
+            // kind, ID set for a persistent marker.
+            if (event.army == army_ || event.army < 0
+                || static_cast<std::size_t>(event.army) >= scene.armies.size()
+                || army_ < 0
+                || static_cast<std::size_t>(army_) >= scene.armies.size()) {
+                break;
+            }
+            if (scene.armies[static_cast<std::size_t>(event.army)].alliance
+                != scene.armies[static_cast<std::size_t>(army_)].alliance) {
+                break;
+            }
+            callBrain("DoPingCallbacks", 1, [&] {
+                lua_newtable(lua);
+                lua_pushinteger(lua, event.army + 1);
+                lua_setfield(lua, -2, "Owner");
+                lua_newtable(lua);
+                for (int i = 0; i < 3; ++i) {
+                    lua_pushnumber(lua, rm::sim::fxToFloat(event.at[static_cast<std::size_t>(i)]));
+                    lua_rawseti(lua, -2, i + 1);
+                }
+                lua_setfield(lua, -2, "Location");
+                if (!event.text.empty()) {
+                    lua_pushstring(lua, event.text.c_str());
+                    lua_setfield(lua, -2, "Mesh");
+                }
+                if (event.markerId >= 0) {
+                    lua_pushinteger(lua, event.markerId);
+                    lua_setfield(lua, -2, "ID");
+                    lua_pushboolean(lua, 1);
+                    lua_setfield(lua, -2, "Marker");
+                }
+            });
+            break;
+        }
+        case rm::sim::EventKind::ChatMessage: {
+            // `C-344` -> `brain:OnChatMessage(from, to, text, tauntIndex)`:
+            // delivered when the recipient names this army, broadcasts to all,
+            // or addresses the sender's alliance — which includes the sender
+            // itself, like retail's own UI echoing its line.
+            const bool allied = event.army >= 0
+                && static_cast<std::size_t>(event.army) < scene.armies.size()
+                && army_ >= 0
+                && static_cast<std::size_t>(army_) < scene.armies.size()
+                && scene.armies[static_cast<std::size_t>(event.army)].alliance
+                       == scene.armies[static_cast<std::size_t>(army_)].alliance;
+            const bool addressed = event.to == army_
+                || event.to == rm::sim::kChatAll
+                || (event.to == rm::sim::kChatAllies && allied);
+            if (!addressed) break;
+            callBrain("OnChatMessage", 4, [&] {
+                lua_pushinteger(lua, event.army + 1);  // Lua armies are 1-based
+                lua_pushinteger(lua, event.to);
+                lua_pushstring(lua, event.text.c_str());
+                lua_pushinteger(lua, event.tauntIndex);
+            });
+            break;
+        }
+        case rm::sim::EventKind::TemplateShared: {
+            // `C-344` -> `brain:OnTemplateShared(from, template)`: the payload
+            // is the serialized table the sender's binding wrote; the brain
+            // gets it re-loaded as a real table, like retail's chat payload.
+            if (event.to != army_ && event.to != rm::sim::kChatAll) break;
+            callBrain("OnTemplateShared", 2, [&] {
+                lua_pushinteger(lua, event.army + 1);
+                const std::string chunk = "return " + event.text;
+                if (luaL_loadbuffer(lua, chunk.c_str(), chunk.size(), "@template") == LUA_OK
+                    && lua_pcall(lua, 0, 1, 0) == LUA_OK) {
+                    return;  // the table is on top
+                }
+                lua_pop(lua, 1);  // error: hand the brain the raw text instead
+                lua_pushstring(lua, event.text.c_str());
+            });
+            break;
+        }
         default:
             break;
         }

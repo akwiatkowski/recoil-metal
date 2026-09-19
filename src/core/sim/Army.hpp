@@ -118,13 +118,21 @@ struct Army {
     bool defeated = false;
 
     /// `victory.lua`'s `OfferingDraw` (`SimUtils.SetOfferDraw`): when every
-    /// surviving army offers, the match ends in a draw immediately. Retail's
-    /// sibling flag `RequestingAlliedVictory` is deliberately not modelled —
-    /// it only matters under dynamic alliances (simInit sets it for teamed
-    /// armies and `RequestAlliedVictory` refuses in team games), and our
-    /// alliances are fixed at setup, where a sole surviving alliance already
-    /// wins unconditionally.
+    /// surviving army offers, the match ends in a draw immediately.
     bool offeringDraw = false;
+
+    /// `victory.lua`'s `RequestingAlliedVictory` (`SimUtils.RequestAlliedVictory`,
+    /// `C-346`): a multi-member surviving alliance wins only when every surviving
+    /// member asked for the shared win — the tick's terminal check reads it.
+    /// `simInit.lua:200` sets it for armies teamed at setup; a sole survivor
+    /// needs no one's consent and wins unconditionally.
+    bool requestingAlliedVictory = false;
+
+    /// `brain:SetResourceSharing` (`SimUtils.SetResourceSharing`, `C-346`): the
+    /// army opted into sharing resources with allies. Presentation state —
+    /// retail's flag gates the UI's sharing controls, and `GiveResourcesToPlayer`
+    /// does not consult it, so neither does the transfer here.
+    bool resourceSharing = false;
 
     /// `ScenarioInfo.Options.UnitCap`, retail's per-army ceiling on live units
     /// (`CArmyImpl` vfuncs `0xa4`/`0xa8`; the engine writes 500 at session

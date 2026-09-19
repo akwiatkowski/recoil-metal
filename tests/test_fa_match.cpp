@@ -124,6 +124,9 @@ TEST_CASE("C-210: a pending win that becomes a draw ends immediately",
     armies[1].alliance = 0;
     armies[2].alliance = 1;
     armies[3].alliance = 1;
+    // `simInit.lua:200`: armies teamed at setup request the allied victory —
+    // `victory.lua`'s win check requires it of every surviving member.
+    for (Army& army : armies) army.requestingAlliedVictory = true;
     std::vector<rm::sim::Economy> economies(4);
     std::vector<rm::sim::Projectile> projectiles;
     const std::vector<int> commandersEver(4, 1);
@@ -269,6 +272,8 @@ TEST_CASE("a survivor dying inside the winning alliance restarts the fifteen sec
     armies[1].alliance = 0;
     armies[2].alliance = 1;
     armies[3].alliance = 1;
+    // `simInit.lua:200`: teamed armies request the allied victory at setup.
+    for (Army& army : armies) army.requestingAlliedVictory = true;
     std::vector<rm::sim::Economy> economies(4);
     std::vector<rm::sim::Projectile> projectiles;
     const std::vector<int> commandersEver(4, 1);

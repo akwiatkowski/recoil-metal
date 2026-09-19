@@ -33,6 +33,7 @@
 #include "core/sim/Movement.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/sim/Skirmish.hpp"
+#include "core/sim/SimCallbacks.hpp"
 #include "core/sim/Snapshot.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -599,6 +600,17 @@ struct UnitScene {
 
     /// One economy per army, indexed by army. Empty outside a skirmish.
     std::vector<rm::sim::Economy> economies;
+
+    /// `SimCallbacks.lua`'s module-local tables (`C-319`/`C-346`): pending
+    /// diplomacy offers, ignored-offer lists, live map markers and the ping
+    /// debounce. Scene-owned like `armies` because the callbacks negotiate over
+    /// them; `rm::sim::doSimCallback` mutates it through `SimCallbackContext`.
+    rm::sim::SimCallbackState simCallbacks;
+
+    /// `ScenarioInfo.TeamGame` (`simInit.lua:162`): `Options.TeamLock ==
+    /// 'locked'` refuses `BreakAlliance` and `RequestAlliedVictory` outright.
+    /// Set from the scenario options at match build; false everywhere else.
+    bool teamLock = false;
     std::vector<rm::sim::UnitResourceFlow> resourceFlows;
 
     /// Everything under construction, all armies together. Partitioned per army each tick

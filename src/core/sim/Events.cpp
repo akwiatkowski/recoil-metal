@@ -76,6 +76,14 @@ std::string_view eventKindName(EventKind kind) noexcept {
         return "army-stat-triggered";
     case EventKind::UnitCapLimitReached:
         return "unit-cap-limit-reached";
+    case EventKind::PingSpawned:
+        return "ping-spawned";
+    case EventKind::MarkerUpdated:
+        return "marker-updated";
+    case EventKind::ChatMessage:
+        return "chat-message";
+    case EventKind::TemplateShared:
+        return "template-shared";
     }
     return "unknown";
 }
@@ -83,7 +91,9 @@ std::string_view eventKindName(EventKind kind) noexcept {
 bool operator==(const Event& a, const Event& b) noexcept {
     return a.kind == b.kind && a.unit == b.unit && a.instigator == b.instigator && a.builder == b.builder
            && a.army == b.army && a.amount == b.amount && a.at == b.at
-           && a.impactType == b.impactType;
+           && a.impactType == b.impactType && a.to == b.to && a.markerId == b.markerId
+           && a.tauntIndex == b.tauntIndex && a.markerAction == b.markerAction
+           && a.text == b.text;
 }
 
 std::size_t EventQueue::count(EventKind kind) const noexcept {
