@@ -286,6 +286,22 @@ public:
         Fx selfRestHeight{};
     };
 
+    /// The `AttachBones::parent` value a tractor claw's victim carries
+    /// (`C-381`, `aeonweapons.lua` `ADFTractorClaw.TractorThread`). Retail's
+    /// `AttachBoneTo(-1, unit, muzzle)` is a real bone attach, but the sim owns
+    /// no skeleton — the sentinel marks the attachment as script cargo rather
+    /// than transport cargo, which is what `kill`/`destroy` read to drop the
+    /// victim ALIVE instead of rolling it through `C-197`'s 99% cascade.
+    /// `kNoBone - 1` so it can never collide with a resolved bone index.
+    static constexpr std::int32_t kTractorAttachBone = kNoBone - 1;
+
+    /// Moves an attached child's stored offset — the slider half of the
+    /// tractor claw (`C-381`): `CreateSlider(unit, muzzle)` retracts the bone
+    /// the victim hangs from, which in boneless sim terms is this offset
+    /// shrinking toward zero. `propagateAttachments` publishes the new world
+    /// position on the next pass. No-op on a unit with no attachment.
+    void setAttachmentOffset(UnitId child, std::array<Fx, 2> offset, Fx height) noexcept;
+
     /// Attaches a live child to a live parent. A child has exactly one parent, and an
     /// attachment may not introduce a cycle.
     [[nodiscard]] bool attach(UnitId parent, UnitId child);

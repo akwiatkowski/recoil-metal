@@ -1793,6 +1793,99 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
     return turned.load();
 }
 
+namespace {
+
+/// `C-381`: the Galactic Colossus's tractor claw, keyed the way the catalog
+/// keys every script-only rule — blueprint id plus the weapon `Label` the
+/// script binds (`C-265`'s precedent). `UAL0401_Script.lua:20-21` binds
+/// `RightArmTractor`/`LeftArmTractor` to `ADFTractorClaw`, and no other
+/// shipped unit carries the class.
+[[nodiscard]] bool isTractorClaw(const unitdef::UnitDef& def,
+                                 const unitdef::Weapon& weapon) noexcept {
+    return def.name == "UAL0401"
+           && (weapon.label == "RightArmTractor" || weapon.label == "LeftArmTractor");
+}
+
+/// The grab half of `ADFTractorClaw.PlayFxBeamStart`
+/// (`aeonweapons.lua:51-83`). The category refusal lives INSIDE the firing
+/// effect, not in acquisition — the claw still fires on a structure, it just
+/// never picks it up — so this runs after the weapon's own target and arc
+/// checks have passed, and a `false` return falls through to the ordinary
+/// shot (the authored `Damage = 0.01` is the beam's chip damage).
+///
+/// `IsTargetAlreadyUsed` — the sibling-weapon check that keeps both claws
+/// off one victim — reduces to the attachment test here: a victim already on
+/// an arm is `attached`, which also covers a claw that grabbed it this same
+/// tick. `GetRealTarget`'s blip unwrap is already done: acquisition never
+/// hands down a recon blip.
+[[nodiscard]] bool clawGrab(UnitStore& store, const UnitCatalog& catalog, UnitId holder,
+                            UnitId victim) noexcept {
+    if (!store.alive(victim) || store.parentOf(victim).has_value()) {
+        return false;
+    }
+    const unitdef::UnitDef* victimDef = catalog.def(store.typeAt(victim.index));
+    if (victimDef == nullptr || victimDef->hasCategory("STRUCTURE")
+        || victimDef->hasCategory("COMMAND") || victimDef->hasCategory("SUBCOMMANDER")
+        || victimDef->hasCategory("EXPERIMENTAL") || victimDef->hasCategory("NAVAL")) {
+        return false;
+    }
+    // `TractorThread`'s order: do-not-target first, then `AttachBoneTo(-1,
+    // unit, muzzle)`. The sentinel parent bone marks the victim as SCRIPT
+    // cargo rather than transport cargo — `kill`/`destroy` read it to drop
+    // the unit alive instead of rolling `C-197`'s 99% cascade.
+    (void)store.setDoNotTarget(victim, true);
+    return store.attach(holder, victim,
+                        UnitStore::AttachBones{.parent = UnitStore::kTractorAttachBone});
+}
+
+/// The slider half of `TractorThread` (`aeonweapons.lua:121-160`): every
+/// claw-held victim's stored offset retracts toward the muzzle at the
+/// slider's `SetSpeed(15)` — 15 elmos a second — and arrival is the crush,
+/// `target:Kill(self.unit, 'Damage', 100)` credited to the colossus. A
+/// victim that died on the way is detached, `TractorWatchThread`'s
+/// `DetachAll(muzzle)`; a holder that died already dropped its victims in
+/// `kill`, so this pass only ever sees live pairs.
+void slideTractorVictims(UnitStore& store, const UnitCatalog& catalog,
+                         std::span<const Army> armies, UnitId holder, UnitIndex slot,
+                         TickRate rate, EventQueue* events) {
+    const std::vector<UnitId> held = store.childrenOf(holder);
+    for (const UnitId victim : held) {
+        if (store.attachmentBonesOf(victim).parent != UnitStore::kTractorAttachBone) {
+            continue;
+        }
+        if (!store.alive(victim) || !store.health()[victim.index].alive()) {
+            (void)store.detach(victim);
+            (void)store.setDoNotTarget(victim, false);
+            continue;
+        }
+        const std::array<Fx, 2> offset = store.attachmentOffsetOf(victim);
+        const Fx height = store.attachmentHeightOf(victim);
+        const Fx distance = fxSqrt(offset[0] * offset[0] + height * height
+                                   + offset[1] * offset[1]);
+        const Fx step = Fx::fromInt(15)
+                        / Fx::fromInt(static_cast<std::int32_t>(rate.ticksPerSecond()));
+        if (distance <= step) {
+            // The crush: retail's `Kill` is not a damage packet — no armour
+            // multiplier, no shield — so this is a magnitude the hull cannot
+            // stand, through the ordinary damage path for the death event,
+            // the kill credit, and the overkill that vaporises the wreck.
+            (void)damageTarget(victim.index,
+                               unitdef::DamageProfile{.base = Mag::fromInt(1'000'000)},
+                               armyAt(store, slot), store, armies, &catalog, holder,
+                               events, unitdef::TargetLayerMask::Both);
+            if (store.parentOf(victim).has_value()) {
+                (void)store.detach(victim);
+            }
+            continue;
+        }
+        const Fx scale = (distance - step) / distance;
+        store.setAttachmentOffset(victim, {offset[0] * scale, offset[1] * scale},
+                                  height * scale);
+    }
+}
+
+} // namespace
+
 std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                           std::span<const Army> armies,
                            std::vector<Projectile>& projectiles, TickRate rate,
@@ -1868,6 +1961,11 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
         if (slot < motions.size() && motions[slot].attached) {
             continue;  // cargo does not fight from the rack
         }
+
+        // `C-381`: the tractor claw's pull runs here, in the same pass that
+        // fires it — a victim grabbed last tick retracts toward the muzzle
+        // this tick, and the crush lands through the ordinary damage path.
+        slideTractorVictims(store, catalog, armies, store.idAt(slot), slot, rate, events);
 
         const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
         if (def == nullptr || def->weapons.empty()) {
@@ -2163,6 +2261,35 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     continue;
                 }
             } else if (!canFireAt(weapon, transforms[slot].heading, bearingTo(from, to))) {
+                continue;
+            }
+
+            // `C-381`: the tractor claw's trigger pull is a GRAB, not a shot.
+            // The gate sits here — after the turret is on the target, before
+            // any damage — because retail's refusal is inside
+            // `PlayFxBeamStart`: a structure still eats the beam's 0.01, it
+            // is simply never picked up. A refused or failed grab falls
+            // through to the ordinary fire path below.
+            if (isTractorClaw(*def, weapon)
+                && clawGrab(store, catalog, store.idAt(slot), *target)) {
+                emit(events, Event{
+                                 .kind = EventKind::BeamFired,
+                                 .unit = store.idAt(slot),
+                                 .instigator = *target,
+                                 .army = army,
+                                 .amount = weapon.damage,
+                                 .at = to,
+                                 .at2 = from,
+                                 .visualId = def->name + ":" + weapon.label,
+                                 .visualDuration =
+                                     Fx::fromRatio(static_cast<std::int32_t>(rates.reloadTicks),
+                                                   static_cast<std::int32_t>(rate.ticksPerSecond())),
+                                 .visualDirection = {to[0]-from[0], to[1]-from[1], to[2]-from[2]},
+                             });
+                ++fired;
+                health.burstRemaining[w] = 0;
+                health.reloadRemaining[w] = static_cast<int>(
+                    adjacencyReload(adjacency, slot, rates.reloadTicks));
                 continue;
             }
 

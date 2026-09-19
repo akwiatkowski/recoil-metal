@@ -335,6 +335,15 @@ bool UnitStore::detach(UnitId child) {
     return true;
 }
 
+void UnitStore::setAttachmentOffset(UnitId child, std::array<Fx, 2> offset,
+                                    Fx height) noexcept {
+    if (!alive(child) || !parents_[child.index]) {
+        return;
+    }
+    attachmentOffsets_[child.index] = offset;
+    attachmentHeights_[child.index] = height;
+}
+
 std::optional<UnitId> UnitStore::parentOf(UnitId child) const noexcept {
     if (!alive(child)) {
         return std::nullopt;
@@ -437,17 +446,17 @@ void UnitStore::kill(UnitId id, RandomStream* random) {
     enhancements_[id.index].clear();
     lifetimeRemainingTicks_[id.index] = kLifetimeUnset;
     (void)detach(id);
-    // `C-197`: `Moho::Unit::Kill` runs `TransportDetachAllUnits(destroySome =
-    // true)` BEFORE Lua's `OnKilled` (`0x006aee5f`), and inside it each
-    // external cargo child draws from the sim MT19937 (`Sim+0x904`) and dies
-    // iff `r < 0.99` (`0x005edeb0`) — the survivors detach where the carrier
-    // fell. The list is copied because each recursive kill detaches its child,
-    // which erases from `children_[id.index]` under iteration; the draw is
-    // taken per child in forward order, exactly as retail's Phase B walks it.
-    // Callers without a stream keep the old unconditional kill — there is no
-    // honest roll to make without the sim's own RNG.
     const std::vector<UnitId> cargo = children_[id.index];
     for (const UnitId child : cargo) {
+        if (attachmentParentBones_[child.index] == kTractorAttachBone) {
+            // `C-381`: a tractor-claw victim is script cargo, not transport
+            // cargo — `TractorWatchThread`'s teardown is `DetachAll(muzzle)`,
+            // so the holder dying drops the victim ALIVE and targetable
+            // again, never through the `C-197` roll below.
+            (void)detach(child);
+            (void)setDoNotTarget(child, false);
+            continue;
+        }
         if (random != nullptr) {
             // `r < 0.99` on a uint32 draw — the constant `0x00ea2c5c = 0.99f`
             // read from the image — so the top 1% of the range survives.
@@ -490,6 +499,14 @@ void UnitStore::destroy(UnitId id) {
     health_[slot].current = Mag{};
     const std::vector<UnitId> cargo = children_[slot];
     for (const UnitId child : cargo) {
+        if (attachmentParentBones_[child.index] == kTractorAttachBone) {
+            // `C-381`: same exemption as `kill` — `Destroy()` on the holder
+            // still runs the claw's `DetachAll(muzzle)` teardown, so the
+            // victim is dropped alive rather than destroyed with it.
+            (void)detach(child);
+            (void)setDoNotTarget(child, false);
+            continue;
+        }
         destroy(child);
     }
     kill(id);
