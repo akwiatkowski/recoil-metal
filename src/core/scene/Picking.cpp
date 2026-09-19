@@ -156,6 +156,25 @@ std::optional<simd_float3> pickGround(const Ray& ray, const HeightField& field) 
     return std::nullopt;
 }
 
+std::optional<simd_float3> pickSurface(const Ray& ray, const HeightField& field,
+                                       float waterLevelElmos) noexcept {
+    // The water plane first: a ray descending through it inside the map, over
+    // drowned ground, hits water before it could ever reach the terrain.
+    if (ray.direction.y < 0.0f) {
+        const float t = (waterLevelElmos - ray.origin.y) / ray.direction.y;
+        if (t > 0.0f) {
+            const simd_float3 at = ray.origin + ray.direction * t;
+            if (insideMap(field, at)
+                && field.heightAtWorld(at.x, at.z) < waterLevelElmos) {
+                return simd_make_float3(at.x, waterLevelElmos, at.z);
+            }
+        }
+    }
+    // Dry ground, a shoreline, or a ray that never reaches the water plane:
+    // the terrain answer is the surface answer.
+    return pickGround(ray, field);
+}
+
 float distanceToRay(const Ray& ray, simd_float3 point) noexcept {
     const simd_float3 toPoint = point - ray.origin;
 

@@ -58,6 +58,19 @@ struct Ray {
 [[nodiscard]] std::optional<simd_float3> pickGround(const Ray& ray,
                                                     const HeightField& field) noexcept;
 
+/// Where a ray first meets the SURFACE — the ground, or the water plane where
+/// the ground is drowned. `C-019`'s `STIMap::SurfaceIntersection` to
+/// `pickGround`'s `TerrainIntersection`: the same ray, answered against the
+/// higher of terrain and water level.
+///
+/// The water half is analytic — a ray meets a horizontal plane in one step —
+/// and only counts where the plane lies inside the map and above the ground
+/// there. A ray that clears the water but not the terrain still reports the
+/// terrain hit, so a shoreline answers the beach, not the seabed.
+[[nodiscard]] std::optional<simd_float3> pickSurface(const Ray& ray,
+                                                     const HeightField& field,
+                                                     float waterLevelElmos) noexcept;
+
 /// Perpendicular distance from a point to the ray, or infinity if the point is
 /// behind the origin.
 ///

@@ -12,6 +12,7 @@
 #include "core/map/TerrainType.hpp"
 #include "core/sim/Terrain.hpp"
 #include "core/map/ScenarioSave.hpp"
+#include "core/scene/Picking.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/vfs/Vfs.hpp"
 
@@ -349,6 +350,42 @@ TEST_CASE("C-019: IsPlayable answers inside the declared rect, true without one"
     CHECK(terrain.isPlayable(rm::sim::fxFromFloat(100.0f), rm::sim::fxFromFloat(500.0f)));
     CHECK_FALSE(terrain.isPlayable(rm::sim::fxFromFloat(50.0f), rm::sim::fxFromFloat(300.0f)));
     CHECK_FALSE(terrain.isPlayable(rm::sim::fxFromFloat(300.0f), rm::sim::fxFromFloat(600.0f)));
+}
+
+TEST_CASE("C-019: surface intersection answers water over drowned ground",
+          "[fa-content]") {
+    // `STIMap::SurfaceIntersection` vs `TerrainIntersection`: the same ray,
+    // answered against the higher of terrain and water. `pickGround` is the
+    // terrain half (test_picking.cpp); `pickSurface` adds the water plane.
+    rm::HeightField field;
+    field.squaresX = 128;
+    field.squaresZ = 128;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    // A ramp: the west half drowned at water level 50, the east half dry.
+    for (std::int32_t z = 0; z <= field.squaresZ; ++z) {
+        for (std::int32_t x = 0; x <= field.squaresX; ++x) {
+            field.raw[static_cast<std::size_t>(z * (field.squaresX + 1) + x)] =
+                static_cast<std::uint16_t>(x * 100 / 128);
+        }
+    }
+
+    // A ray straight down over drowned ground hits the water plane, not the
+    // seabed 40 elmos below it.
+    const rm::Ray down{.origin = simd_make_float3(200.0f, 200.0f, 200.0f),
+                       .direction = simd_make_float3(0.0f, -1.0f, 0.0f)};
+    const std::optional<simd_float3> water = rm::pickSurface(down, field, 50.0f);
+    REQUIRE(water.has_value());
+    CHECK(water->y == Approx(50.0f));
+    CHECK(water->x == Approx(200.0f));
+
+    // The same ray over dry ground falls through to the terrain answer.
+    const rm::Ray dry{.origin = simd_make_float3(1000.0f, 200.0f, 200.0f),
+                      .direction = simd_make_float3(0.0f, -1.0f, 0.0f)};
+    const std::optional<simd_float3> ground = rm::pickSurface(dry, field, 50.0f);
+    REQUIRE(ground.has_value());
+    CHECK(ground->y == Approx(field.heightAtWorld(1000.0f, 200.0f)));
+    CHECK(ground->y > 50.0f);
 }
 
 // --- C-271: the bp→script binding chain ---------------------------------------
