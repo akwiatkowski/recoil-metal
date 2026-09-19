@@ -9,20 +9,20 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-19, main through `c69b662`. The 2026-09-18 analysis wave
-closed the retail-analyzed goal — every gameplay subsystem reads ≥85%
-(`C-251`–`C-381` across ten subsystem passes). The 2026-09-19 claim-coverage
-wave then pushed every findings file past 90% TESTED-or-NA_INTERNAL
-(`build/re-fa/findings/FA-*.md`): FA-UI and FA-PERSIST at 100%, FA-PROGRESS 96%,
-FA-INTEL 100%, FA-FOUND-CONTENT 97.5%, FA-WEAPONS/TRANSPORT-MISSILES/DAMAGE at
-100%, FA-LAND 92.9%, FA-AIR-NAVY 95.8%, FA-LUA 94.7%, FA-CMD 95.2%, FA-AI 93.8%,
-FA-TERRAIN-PRESENT ~92%. Three latent bugs surfaced and were fixed in the merge:
-a stale `UnitId{}` incumbent aimed a holding guard's hull at slot 0 forever
-(`c96b463`), `installEnhancement` wrote through a `Health&` freed by the pod
-spawn's `health_` growth (ASan heap-use-after-free, `c96b463`), and the C-231
-being-built gate refused orders to upgrading units retail accepts (`c96b463`).
-C-292 ground-scorch gating and C-301/C-372 anim-collision dispatch landed with
-SaveState v51 (`c69b662`). CTest passes all 2,073 cases.
+**Snapshot:** 2026-09-19, main through `267ca2d` + coverage-audit fixups. The
+2026-09-18 analysis wave closed the retail-analyzed goal — every gameplay
+subsystem reads ≥85% (`C-251`–`C-381` across ten subsystem passes). A
+re-audit of `build/re-fa/coverage/FA-*.md` (TESTED + 0.5×PARTIAL over
+implementable claims) then corrected three stale footers and flipped five
+stale PARTIALs the merge had already implemented: C-292 `marksGround`,
+C-301/C-372 anim-collision Lua dispatch, C-349's transport toggle block, and
+C-231 (gate removed as vacuous — retail accepts queued orders on `upgradeOf`
+targets). C-262 ring detonation gained its missing impact test
+(nested-disc damage per band). Final per-file coverage: FA-UI, FA-PERSIST,
+FA-PROGRESS, FA-INTEL, FA-CMD, FA-WEAPONS, FA-TRANSPORT-MISSILES, FA-DAMAGE,
+FA-MATCH at 100%; FA-FOUND-CONTENT 97.5%, FA-AIR-NAVY 97.9%, FA-LAND 96.4%,
+FA-LUA 94.7%, FA-AI 93.8%, FA-ECON 93.2%, FA-TERRAIN-PRESENT 92.1% — every
+subsystem file above 90%.
 
 **Update:** same day, later wave — the five backed `RULEUTC_*` toggles now drive
 the sim (`C-350`): shield, jamming, intel, stealth and cloak issue as

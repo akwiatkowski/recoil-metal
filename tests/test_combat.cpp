@@ -1938,6 +1938,52 @@ TEST_CASE("a pending splash stays at its contact point when bodies move") {
     CHECK(rm::test::asFloat(roster.health(entering).current) == Approx(60.0f));
 }
 
+TEST_CASE("C-262: a ringed warhead resolves as nested discs at impact") {
+    // The Yolona Oss's `NukeInner/OuterRing*` bands: retail's Lua controllers sweep
+    // `DamageRing` annuli whose union is a disc per ring, each applying its full damage
+    // once — so a target under the inner ring takes inner + outer + base, one under the
+    // outer ring takes outer + base, and one inside the plain blast takes base alone.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    // Radii: inner disc 10, outer disc 30, base blast 50. Bodies are r=2 boxes, so the
+    // sphere reaches 2 elmos past each radius — the placements sit clear of every edge.
+    const UnitId inner = roster.add(type, 5.0f, 0.0f, 1, 1000.0f);
+    const UnitId outer = roster.add(type, 20.0f, 0.0f, 1, 1000.0f);
+    const UnitId base = roster.add(type, 40.0f, 0.0f, 1, 1000.0f);
+    const UnitId beyond = roster.add(type, 60.0f, 0.0f, 1, 1000.0f);
+    for (const UnitId u : {inner, outer, base, beyond}) {
+        roster.motion(u).radiusElmos = rm::test::fx(2.0f);
+    }
+    std::vector<Projectile> shots{Projectile{
+        .position = rm::test::at(0, 20, 0),
+        .velocity = rm::test::at(0, -40, 0),
+        .damage = rm::unitdef::flatDamage(rm::test::mag(10.0f)),
+        .damageRadiusElmos = rm::test::fx(50.0f),
+        .targetLayers = rm::unitdef::TargetLayerMask::Surface,
+        .firedByArmy = 0,
+        .ticksRemaining = 1,
+        .innerRing = rm::unitdef::flatDamage(rm::test::mag(100.0f)),
+        .outerRing = rm::unitdef::flatDamage(rm::test::mag(50.0f)),
+        .innerRingRadiusElmos = rm::test::fx(10.0f),
+        .outerRingRadiusElmos = rm::test::fx(30.0f),
+    }};
+    rm::sim::EventQueue events;
+    const rm::sim::Terrain terrain{flatField()};
+
+    // C-173: contact is detected on the first advance and delivered on the second.
+    rm::sim::advanceProjectiles(shots, roster.store, armies, terrain, roster.rate,
+                                &events, &roster.catalog);
+    rm::sim::advanceProjectiles(shots, roster.store, armies, terrain, roster.rate,
+                                &events, &roster.catalog);
+
+    CHECK(shots.empty());
+    CHECK(rm::test::asFloat(roster.health(inner).current) == Approx(840.0f));   // 100+50+10
+    CHECK(rm::test::asFloat(roster.health(outer).current) == Approx(940.0f));   // 50+10
+    CHECK(rm::test::asFloat(roster.health(base).current) == Approx(990.0f));    // 10
+    CHECK(rm::test::asFloat(roster.health(beyond).current) == Approx(1000.0f)); // untouched
+}
+
 TEST_CASE("non-positive damage neither heals nor reports a hit") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;
