@@ -9,18 +9,12 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-18, main through `b5cb7dc`. The 2026-09-18 analysis wave
-closed the retail-analyzed goal — every gameplay subsystem now reads ≥85%
-(`C-251`–`C-381` across ten subsystem passes). The same day's implementation
-wave landed fifteen claims: the weapon water gates (`C-321`/`C-322`/`C-327`/
-`C-203` — firer gate reads the weapon-bone Y, `FlyInWater` is a waterline test
-via `MoveState::belowWater`, seabed layer, auto-surface on attack), the intel
-fixes (`C-278`/`C-280`/`C-277`/`C-284` — jammer fakes, omni blips, cloak vs
-radar, intel recovery in the state hash), transport+enhancement (`C-196`/
-`C-376`/`C-254` — cargo collision, EnhanceTask stopping gate, registry cleared
-on kill), and economy/match (`C-051`/`C-243`/`C-227`/`C-345` — T2 power-build
-bonus, multi-captor banks, army-stats store as SaveState v34, self-destruct
-countdowns). CTest passes all 1,898 cases.
+**Snapshot:** 2026-09-19, main through `ae31a1a`. The 2026-09-18 analysis wave
+closed the retail-analyzed goal — every gameplay subsystem reads ≥85%
+(`C-251`–`C-381` across ten subsystem passes). The 2026-09-19 fix wave landed
+two more: `WaitTicks(n)` resumes on the (n−1)th beat per `C-305`'s
+`CTaskStage` counter quirk, and the enhancement mass drain uses the energy
+cost per `C-253`'s `WorkItemBuildCostMass` bug. CTest passes all 1,909 cases.
 
 **Update:** same day, later wave — the five backed `RULEUTC_*` toggles now drive
 the sim (`C-350`): shield, jamming, intel, stealth and cloak issue as
