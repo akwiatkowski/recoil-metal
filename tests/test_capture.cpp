@@ -164,6 +164,103 @@ TEST_CASE("an engineer captures an enemy structure and the army changes", "[capt
     CHECK(f.roster.store.orders()[captor.index].empty());
 }
 
+TEST_CASE("capture callbacks fire in retail's order", "[capture]") {
+    // `C-237` (`0x0060B942`-`0x0060B968`, `0x0060B822`-`0x0060B870`): activation
+    // is target `OnStartBeingCaptured` then captor `OnStartCapture`; completion
+    // is captor `OnStopCapture`, target `OnStopBeingCaptured`, target
+    // `OnCaptured` — and `OnCaptured`'s Lua body performs the transfer, so the
+    // replacement's `UnitCreated` trails it.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.capture(captor, target));
+
+    const auto kinds = [&f] {
+        std::vector<rm::sim::EventKind> out;
+        for (const rm::sim::Event& event : f.events.all()) {
+            out.push_back(event.kind);
+        }
+        return out;
+    };
+    const auto position = [](const std::vector<rm::sim::EventKind>& all,
+                             rm::sim::EventKind kind) {
+        const auto found = std::ranges::find(all, kind);
+        return found == all.end() ? all.size()
+                                  : static_cast<std::size_t>(found - all.begin());
+    };
+
+    f.tick(60);  // the whole capture: reach, fifty funded beats, transfer
+
+    const std::vector<rm::sim::EventKind> all = kinds();
+    const std::size_t startBeing = position(all, rm::sim::EventKind::StartBeingCaptured);
+    const std::size_t start = position(all, rm::sim::EventKind::StartCapture);
+    const std::size_t stop = position(all, rm::sim::EventKind::StopCapture);
+    const std::size_t stopBeing = position(all, rm::sim::EventKind::StopBeingCaptured);
+    const std::size_t captured = position(all, rm::sim::EventKind::Captured);
+    const std::size_t created = position(all, rm::sim::EventKind::UnitCreated);
+
+    REQUIRE(startBeing < all.size());
+    REQUIRE(start < all.size());
+    REQUIRE(stop < all.size());
+    REQUIRE(stopBeing < all.size());
+    REQUIRE(captured < all.size());
+    CHECK(startBeing < start);        // target first, then captor
+    CHECK(stop < stopBeing);          // captor first at completion
+    CHECK(stopBeing < captured);      // then the target's OnCaptured
+    CHECK(captured < created);        // OnCaptured's body does the transfer
+    CHECK(position(all, rm::sim::EventKind::FailedCapture) == all.size());
+    CHECK(position(all, rm::sim::EventKind::FailedBeingCaptured) == all.size());
+
+    // The events name their parties: the target-side kinds carry the target,
+    // the captor-side kinds the captor, each with the other as instigator.
+    for (const rm::sim::Event& event : f.events.all()) {
+        if (event.kind == rm::sim::EventKind::StartBeingCaptured
+            || event.kind == rm::sim::EventKind::StopBeingCaptured
+            || event.kind == rm::sim::EventKind::Captured) {
+            CHECK(event.unit == target);
+            CHECK(event.instigator == captor);
+        }
+        if (event.kind == rm::sim::EventKind::StartCapture
+            || event.kind == rm::sim::EventKind::StopCapture) {
+            CHECK(event.unit == captor);
+            CHECK(event.instigator == target);
+        }
+    }
+}
+
+TEST_CASE("a cancelled capture reports failure, not stop", "[capture]") {
+    // `C-237` (spec §"Deactivation reports failure"): an active task ending on
+    // a LIVE target fires `OnFailedBeingCaptured`/`OnFailedCapture` — the order
+    // cancelled mid-capture is the ordinary case.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.capture(captor, target));
+
+    f.tick(5);  // in reach and working: the start pair has fired
+    REQUIRE(f.captures.size() == 1);
+    REQUIRE(f.captures[0].inReach);
+
+    // Cancel: a Move order replaces the Capture head.
+    REQUIRE(rm::sim::applyCommand(
+        Command{.kind = CommandKind::Move, .unit = captor,
+                .targetX = rm::sim::fxFromFloat(400.0f),
+                .targetZ = rm::sim::fxFromFloat(400.0f)},
+        f.roster.store, f.roster.catalog, f.players, f.armies, f.terrain, f.grid,
+        f.roster.rate, &f.building));
+    f.tick(1);
+
+    std::size_t failedBeing = 0;
+    std::size_t failed = 0;
+    for (const rm::sim::Event& event : f.events.all()) {
+        failedBeing += event.kind == rm::sim::EventKind::FailedBeingCaptured ? 1 : 0;
+        failed += event.kind == rm::sim::EventKind::FailedCapture ? 1 : 0;
+    }
+    CHECK(failedBeing == 1);
+    CHECK(failed == 1);
+    CHECK(f.captures.empty());
+}
+
 TEST_CASE("capture intake refuses the inadmissible", "[capture]") {
     Fixture f;
     const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);

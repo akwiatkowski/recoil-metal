@@ -41,6 +41,10 @@ namespace rm::sim {
 // engine has no vision — every event is fully informed. When intel lands, filtering happens on
 // the way out of this queue rather than by making the queue itself lossy.
 
+/// `UnitStore.hpp`'s intel enum, forward-declared so `Event::intelType` can carry
+/// it as a byte without this header dragging the store in.
+enum class IntelType : std::uint8_t;
+
 /// What kind of thing happened.
 ///
 /// A flat enum rather than a variant: an event is fixed-size and trivially copyable, which is
@@ -114,6 +118,72 @@ enum class EventKind : std::uint8_t {
     /// `visualId` the effect name. Emitted once per spawn — the record itself
     /// lives in `Match::effects`.
     EffectEmitted,
+    /// `C-125`: a unit's horizontal motion state changed — started or stopped
+    /// moving. `motionHorz` carries retail's `MotionHorzEvent` value
+    /// (`enum_registrations.tsv`: Cruise 0, TopSpeed 1, Stopping 2, Stopped 3);
+    /// only Cruise and Stopped are reachable — the movers have no acceleration
+    /// model, so TopSpeed/Stopping have no transition to hang on.
+    MotionHorz,
+    /// `C-125`: a unit's vertical motion state changed. `motionVert` carries
+    /// retail's `MotionVertEvent` value (Up 0, Top 1, Hover 2, Down 3, Bottom 4);
+    /// Hover is unmodelled — the air layer has no hover state, so a flyer is
+    /// climbing, cruising at altitude, descending, or on the ground.
+    MotionVert,
+    /// `C-125`: a unit's turn state changed. `motionTurn` carries retail's
+    /// `MotionTurnEvent` value (Straight 0, Turn 1, SharpTurn 2); a quarter-turn
+    /// or more of heading error is SharpTurn, anything less a Turn.
+    MotionTurn,
+    /// `C-125`: a unit's coarse motion state changed — attached to a transport
+    /// or detached from one. `motionState` carries retail's `MotionState` value
+    /// (None 0, Attached 1, Ballistic 2, Crashed 3); Ballistic and Crashed are
+    /// unmodelled — nothing here flies a ballistic arc or a crash trajectory.
+    MotionState,
+    /// `C-282`: one of a unit's intel bits changed for one army — the per-bit
+    /// edge behind `OnIntelChange(blip, type, val)`. `unit` is the blip's unit,
+    /// `army` the army whose picture changed, `intelType` the bit that flipped
+    /// (Radar/Sonar/Omi/LOSNow — the four `CIntel::Update` writes), `intelValue`
+    /// its new state, `at` the unit's position.
+    IntelChanged,
+    /// `C-282`: a unit appeared on an army's picture for the first time — the
+    /// edge behind `OnDetectedBy(army)`. `unit` is the detected unit, `army` the
+    /// detecting army, `at` where it was first seen.
+    DetectedBy,
+    /// `C-237` (`0x0060B942`): a capture task activated on a target — the
+    /// target-side `OnStartBeingCaptured`. `unit` is the target, `instigator`
+    /// the captor. Fires when the captor first comes in reach, which is when
+    /// retail's task flips `UNITSTATE_BeingCaptured` on.
+    StartBeingCaptured,
+    /// `C-237` (`0x0060B968`): the captor-side `OnStartCapture`, emitted
+    /// immediately after `StartBeingCaptured` — retail's start order is
+    /// target-then-captor. `unit` is the captor, `instigator` the target.
+    StartCapture,
+    /// `C-237` (`0x0060B822`): the captor-side `OnStopCapture` at completion —
+    /// FIRST of the completion triple. `unit` is the captor, `instigator` the
+    /// target. Retail's dead-target preamble exit passes the captor as the arg;
+    /// that corner is unread in the bounded slice.
+    StopCapture,
+    /// `C-237` (`0x0060B84A`): the target-side `OnStopBeingCaptured`, second of
+    /// the completion triple. `unit` is the target, `instigator` the captor.
+    StopBeingCaptured,
+    /// `C-237` (`0x0060B870`): the target-side `OnCaptured`, last of the
+    /// completion triple — retail's Lua body then performs the ownership
+    /// transfer, which is why this precedes `UnitCreated` for the replacement.
+    /// `unit` is the target, `instigator` the captor.
+    Captured,
+    /// `C-237` (spec §"Deactivation reports failure"): a capture task
+    /// deactivated on a LIVE target — the captor-side `OnFailedCapture`.
+    /// `unit` is the captor, `instigator` the target.
+    FailedCapture,
+    /// `C-237`: the target-side `OnFailedBeingCaptured`, emitted with
+    /// `FailedCapture`. `unit` is the target, `instigator` the captor.
+    FailedBeingCaptured,
+    /// `C-361`: an `ArmyStats` trigger fired — the sim-side record behind
+    /// `brain:OnStatsTrigger`. `army` is the owning army, `statName` the name
+    /// Lua registered.
+    ArmyStatTriggered,
+    /// `C-361`: an army hit its unit cap — the sim-side record behind
+    /// `brain:OnUnitCapLimitReached`. `army` is the capped army.
+    UnitCapLimitReached,
 };
 
 /// Retail's native projectile impact classifier (`C-124`, `C-170`).
@@ -135,6 +205,7 @@ enum class ImpactType : std::uint8_t {
     UnitAir = 10,
     UnitUnderwater = 11,
 };
+
 
 [[nodiscard]] std::string_view eventKindName(EventKind kind) noexcept;
 
@@ -201,6 +272,25 @@ struct Event {
     /// set means that army may see the emission. All-ones for every other
     /// kind and for a match with no fog of war.
     std::uint64_t viewerMask = ~std::uint64_t{0};
+    /// `C-125` motion payloads: retail's `MotionHorzEvent`/`MotionVertEvent`/
+    /// `MotionTurnEvent`/`MotionState` values for the matching `Motion*` kinds,
+    /// `0xff` for every other kind and for the never-emitted states. Kept as
+    /// bytes rather than four enum classes because the values are a wire format
+    /// — Lua receives the integer, not a name.
+    std::uint8_t motionHorz = 0xff;
+    std::uint8_t motionVert = 0xff;
+    std::uint8_t motionTurn = 0xff;
+    std::uint8_t motionState = 0xff;
+
+    /// `C-282` intel payloads: which bit flipped (`IntelType`, stored as its
+    /// byte so this header needs only the forward declaration) and its new
+    /// state, for `IntelChanged`. `IntelType::None`/false for other kinds.
+    std::uint8_t intelType = 0;
+    bool intelValue = false;
+
+    /// `C-361`: the name Lua registered for an `ArmyStatTriggered` event.
+    /// A string because the trigger name is Lua's, not an enum the sim owns.
+    std::string statName;
 };
 
 [[nodiscard]] bool operator==(const Event& a, const Event& b) noexcept;

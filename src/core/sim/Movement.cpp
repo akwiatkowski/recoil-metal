@@ -1263,4 +1263,69 @@ void resolveCongestion(UnitStore& store, const Terrain& terrain,
     }
 }
 
+void emitMotionEvents(UnitStore& store, EventQueue* events) {
+    const std::span<const Transform> transforms = store.transforms();
+    const std::span<MoveState> motion = store.motion();
+    const std::size_t count = std::min(transforms.size(), motion.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        MoveState& state = motion[i];
+        if (!store.slotAlive(static_cast<UnitIndex>(i))) {
+            continue;
+        }
+
+        // `C-125` (`enum_registrations.tsv`): the four retail motion tables,
+        // evaluated against the SETTLED state — the sweep runs after every pass
+        // that can move a unit, so a start-and-stop inside one tick reports the
+        // net transition, which is what a retail listener sees too.
+        //
+        // horz: Cruise while moving, Stopped otherwise. TopSpeed/Stopping are
+        // unreachable — the movers have no acceleration model.
+        const std::uint8_t horz = state.moving ? 0 : 3;
+        // vert: the air layer's own state, for flyers only. A ground unit keeps
+        // whatever it last reported — Bottom is its spawn state and there is no
+        // transition to announce. Hover is unmodelled.
+        const std::uint8_t vert = state.canFly ? static_cast<std::uint8_t>(state.airState)
+                                             : state.lastMotionVert;
+        // turn: heading error against the destination while moving — a quarter
+        // turn or more is SharpTurn, anything less a Turn, aligned Straight.
+        std::uint8_t turn = 0;
+        if (state.moving) {
+            const Brad want = fxBearing(state.destinationX - transforms[i].x,
+                                        state.destinationZ - transforms[i].z);
+            const std::int32_t error = shortestTurn(transforms[i].heading, want);
+            const std::int32_t magnitude = error < 0 ? -error : error;
+            turn = magnitude >= kBradQuarterTurn ? 2 : (magnitude > 0 ? 1 : 0);
+        }
+        // state: Attached while riding a transport, None otherwise. Ballistic
+        // and Crashed are unmodelled — nothing flies those trajectories.
+        const std::uint8_t motionState = state.attached ? 1 : 0;
+
+        Event event{.unit = store.idAt(static_cast<UnitIndex>(i)),
+                    .at = {transforms[i].x, transforms[i].y, transforms[i].z}};
+        // Prime silently, then report transitions only: `0xff` means the sweep
+        // has never seen this unit, and a unit that has not CHANGED has nothing
+        // to announce — retail's `OnMotion*EventChange` is an edge callback, so
+        // a unit spawned idle does not fire `Stopped` at creation.
+        const auto report = [&](EventKind kind, std::uint8_t value,
+                                std::uint8_t& last, std::uint8_t Event::*field) {
+            if (last == 0xff) {
+                last = value;
+                return;
+            }
+            if (value == last) {
+                return;
+            }
+            last = value;
+            event.kind = kind;
+            event.*field = value;
+            emit(events, event);
+        };
+        report(EventKind::MotionHorz, horz, state.lastMotionHorz, &Event::motionHorz);
+        report(EventKind::MotionVert, vert, state.lastMotionVert, &Event::motionVert);
+        report(EventKind::MotionTurn, turn, state.lastMotionTurn, &Event::motionTurn);
+        report(EventKind::MotionState, motionState, state.lastMotionState,
+               &Event::motionState);
+    }
+}
+
 } // namespace rm::sim

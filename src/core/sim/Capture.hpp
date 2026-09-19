@@ -92,7 +92,7 @@ inline constexpr Fx kCaptureWorkEdgeElmos = Fx::fromInt(10 * 8);
 
 void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
                      std::span<const Army> armies, std::vector<CaptureWork>& captures,
-                     TickRate rate);
+                     TickRate rate, EventQueue* events = nullptr);
 
 /// One tick of funded captures: fully funded beats advance progress by one per
 /// active captor, capped at the budget, and a finished capture transfers the

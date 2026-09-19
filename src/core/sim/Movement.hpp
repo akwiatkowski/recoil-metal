@@ -7,6 +7,7 @@
 #include "core/sim/Terrain.hpp"
 #include "core/sim/TickRate.hpp"
 #include "core/sim/Transform.hpp"
+#include "core/sim/Events.hpp"
 #include "core/sim/RandomStream.hpp"
 
 #include <algorithm>
@@ -401,6 +402,19 @@ struct MoveState {
     /// derived-from-anything because which muzzle a shot leaves is a sim fact —
     /// the fired position is hashed through the projectile list either way.
     std::uint8_t turretMuzzlePhase = 0;
+
+    /// `C-125`: the motion-event values last reported for this unit, so the
+    /// post-tick sweep can emit on real transitions only. `0xff` means "nothing
+    /// reported yet" — the first sweep after spawn reports the unit's current
+    /// state once, which is what a retail `OnMotion*EventChange` listener sees
+    /// when it attaches. Retail's values (`enum_registrations.tsv`):
+    /// horz Cruise 0 / TopSpeed 1 / Stopping 2 / Stopped 3; vert Up 0 / Top 1 /
+    /// Hover 2 / Down 3 / Bottom 4; turn Straight 0 / Turn 1 / SharpTurn 2;
+    /// state None 0 / Attached 1 / Ballistic 2 / Crashed 3.
+    std::uint8_t lastMotionHorz = 0xff;
+    std::uint8_t lastMotionVert = 0xff;
+    std::uint8_t lastMotionTurn = 0xff;
+    std::uint8_t lastMotionState = 0xff;
 };
 
 /// C-224 state/deadline transitions, owning the aircraft's next steering destination.
@@ -536,6 +550,7 @@ inline constexpr Fx kSidestepMargin = Fx::fromInt(8);
 ///                                           yield never touches the blocker's
 ///                                           order queue — an idle unit has no
 ///                                           route to corrupt.
+
 ///   anything else                        -> a DETOUR: the mover's path gains
 ///                                           one waypoint beside the nearest
 ///                                           such blocker, on its far side.
@@ -549,6 +564,20 @@ void resolveCongestion(
     std::span<const PassabilityGrid* const> gridForType = {},
     std::span<const Army> armies = {},
     std::span<const PassabilityGrid* const> gridForTypeSubmerged = {});
+
+/// `C-125`: emits `MotionHorz`/`MotionVert`/`MotionTurn`/`MotionState` events for
+/// every unit whose motion state CHANGED since the last sweep.
+///
+/// A sweep after the whole movement pass rather than emits inside the movers,
+/// because the tick is parallel and several passes mutate the same fields —
+/// `moving` alone is written by the mover, the command advance, the transport
+/// attach, and congestion. Comparing stored last-emitted values against the
+/// settled state catches every mutation uniformly and reports each transition
+/// exactly once, which is what retail's `OnMotion*EventChange` callbacks see.
+///
+/// Serial, in slot order. The last-emitted values live on `MoveState` so a
+/// save/load mid-match does not re-announce states the listener already has.
+void emitMotionEvents(UnitStore& store, EventQueue* events);
 
 /// How close counts as reaching an intermediate waypoint, in elmos.
 ///

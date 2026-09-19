@@ -46,6 +46,36 @@ std::string_view eventKindName(EventKind kind) noexcept {
         return "anim-collision";
     case EventKind::EffectEmitted:
         return "effect-emitted";
+    case EventKind::MotionHorz:
+        return "motion-horz";
+    case EventKind::MotionVert:
+        return "motion-vert";
+    case EventKind::MotionTurn:
+        return "motion-turn";
+    case EventKind::MotionState:
+        return "motion-state";
+    case EventKind::IntelChanged:
+        return "intel-changed";
+    case EventKind::DetectedBy:
+        return "detected-by";
+    case EventKind::StartBeingCaptured:
+        return "start-being-captured";
+    case EventKind::StartCapture:
+        return "start-capture";
+    case EventKind::StopCapture:
+        return "stop-capture";
+    case EventKind::StopBeingCaptured:
+        return "stop-being-captured";
+    case EventKind::Captured:
+        return "captured";
+    case EventKind::FailedCapture:
+        return "failed-capture";
+    case EventKind::FailedBeingCaptured:
+        return "failed-being-captured";
+    case EventKind::ArmyStatTriggered:
+        return "army-stat-triggered";
+    case EventKind::UnitCapLimitReached:
+        return "unit-cap-limit-reached";
     }
     return "unknown";
 }

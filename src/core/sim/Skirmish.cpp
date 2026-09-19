@@ -828,6 +828,13 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     resolveCongestion(store, terrain, match.passability, match.armies,
                       match.passabilitySubmerged);
 
+    //    `C-125`'s motion-event sweep: the whole movement story for this tick is
+    //    settled — mover, collisions, congestion — so the last-emitted values on
+    //    each `MoveState` now diff against the final state and every transition
+    //    is reported exactly once. Before the manipulator beat, which is where
+    //    retail's `Unit::MotionTick` raises the same callbacks.
+    emitMotionEvents(store, match.events);
+
     //    THE MANIPULATOR BEAT — retail's `CAniActor::UpdateManipulators`
     //    (`C-293`, `0x641550`, sole caller `0x6afb65` inside `Unit::MotionTick`).
     //    Here, on the post-movement world, because the collision manipulator's
@@ -1207,9 +1214,9 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // the per-army partition below, so new tasks enter with computed budgets and
     // retired orders leave with their progress rather than lingering.
     if (match.captures != nullptr) {
-        syncCaptureWork(store, catalog, match.armies, *match.captures, rate);
+        syncCaptureWork(store, catalog, match.armies, *match.captures, rate,
+                        match.events);
     }
-
     // Components are keyed by a generational UnitId. Remove before partitioning so a dead silo
     // cannot pay, and a subsequently recycled slot cannot inherit its ammunition (`C-081`).
     if (match.siloAmmo != nullptr) {

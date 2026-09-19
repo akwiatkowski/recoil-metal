@@ -104,7 +104,7 @@ Fx captureEdgeDistance(const UnitCatalog& catalog, UnitTypeIndex captorType,
 
 void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
                      std::span<const Army> armies, std::vector<CaptureWork>& captures,
-                     TickRate rate) {
+                     TickRate rate, EventQueue* events) {
     const std::span<const CommandQueue> orders = store.orders();
     const std::span<const Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
@@ -123,6 +123,24 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
         });
         if (!capturing) {
             if (found != captures.end()) {
+                // `C-237` (spec §"Deactivation reports failure"): an active task
+                // ending on a LIVE target fires `OnFailedBeingCaptured`/
+                // `OnFailedCapture` — the order cancelled, the target turned
+                // uncapturable, or the captor walked off. A dead target's arm is
+                // a no-op, which is why a completed transfer fires none.
+                if (found->inReach && store.alive(found->target)) {
+                    const Transform& at = transforms[found->target.index];
+                    emit(events, Event{.kind = EventKind::FailedBeingCaptured,
+                                       .unit = found->target,
+                                       .instigator = store.idAt(captor),
+                                       .army = motion[found->target.index].armyIndex,
+                                       .at = {at.x, at.y, at.z}});
+                    emit(events, Event{.kind = EventKind::FailedCapture,
+                                       .unit = store.idAt(captor),
+                                       .instigator = found->target,
+                                       .army = motion[captor].armyIndex,
+                                       .at = {at.x, at.y, at.z}});
+                }
                 captures.erase(found);
             }
             continue;
@@ -139,6 +157,44 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
         const bool inReach =
             captureEdgeDistance(catalog, store.typeAt(captor), store.typeAt(target.index),
                                 gap) <= kCaptureWorkEdgeElmos;
+        // `C-237` (`0x0060B942`-`0x0060B968`): a task ACTIVATES when its captor
+        // comes in reach — retail flips `UNITSTATE_BeingCaptured` and bumps the
+        // target's `+0x690` count there — and activation is what fires the start
+        // pair: target `OnStartBeingCaptured` first, then captor `OnStartCapture`.
+        // `inReach` is the activation flag's persistent form, so the edge is the
+        // transition into it; a restored task with `inReach` already set does not
+        // re-fire, which is the saved-game behaviour for free.
+        const bool wasInReach = found != captures.end() && found->inReach;
+        if (inReach && !wasInReach) {
+            const Transform& at = transforms[target.index];
+            emit(events, Event{.kind = EventKind::StartBeingCaptured,
+                               .unit = target,
+                               .instigator = store.idAt(captor),
+                               .army = motion[target.index].armyIndex,
+                               .at = {at.x, at.y, at.z}});
+            emit(events, Event{.kind = EventKind::StartCapture,
+                               .unit = store.idAt(captor),
+                               .instigator = target,
+                               .army = motion[captor].armyIndex,
+                               .at = {at.x, at.y, at.z}});
+        }
+        if (!inReach && wasInReach && store.alive(found->target)) {
+            // Deactivation on a LIVE target reports failure, not stop (spec
+            // §"Deactivation reports failure"): `OnFailedBeingCaptured` on the
+            // target, `OnFailedCapture` on the captor. A dead target's arm is a
+            // no-op — which is why a completed transfer's destruction fires none.
+            const Transform& at = transforms[found->target.index];
+            emit(events, Event{.kind = EventKind::FailedBeingCaptured,
+                               .unit = found->target,
+                               .instigator = store.idAt(captor),
+                               .army = motion[found->target.index].armyIndex,
+                               .at = {at.x, at.y, at.z}});
+            emit(events, Event{.kind = EventKind::FailedCapture,
+                               .unit = store.idAt(captor),
+                               .instigator = found->target,
+                               .army = motion[captor].armyIndex,
+                               .at = {at.x, at.y, at.z}});
+        }
         // A production-paused captor asks for nothing, like one out of reach: the
         // task and its progress survive, but no funded beat accumulates under it.
         const bool funded = inReach && !store.productionPaused(store.idAt(captor));
@@ -151,6 +207,21 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
             continue;
         }
         if (found != captures.end()) {
+            // Retargeting deactivates the old task on its old target — the same
+            // live-target failure pair as any other deactivation.
+            if (found->inReach && store.alive(found->target)) {
+                const Transform& at = transforms[found->target.index];
+                emit(events, Event{.kind = EventKind::FailedBeingCaptured,
+                                   .unit = found->target,
+                                   .instigator = store.idAt(captor),
+                                   .army = motion[found->target.index].armyIndex,
+                                   .at = {at.x, at.y, at.z}});
+                emit(events, Event{.kind = EventKind::FailedCapture,
+                                   .unit = store.idAt(captor),
+                                   .instigator = found->target,
+                                   .army = motion[captor].armyIndex,
+                                   .at = {at.x, at.y, at.z}});
+            }
             captures.erase(found);
         }
         // A fresh task: budget from the target's blueprint and the captor's
@@ -172,14 +243,29 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
                                        .funded = Fx{},
                                        .inReach = inReach});
     }
-    // Captors gone from the queue entirely (dead or reordered) leave orphans.
+    // Captors gone from the queue entirely (dead or reordered) leave orphans —
+    // the same live-target failure pair as the in-loop deactivations.
     std::erase_if(captures, [&](const CaptureWork& work) {
-        if (work.captor >= orders.size()) {
-            return true;
+        bool orphan = work.captor >= orders.size();
+        if (!orphan) {
+            const QueuedCommand* head = orders[work.captor].active();
+            orphan = head == nullptr || head->kind() != CommandKind::Capture
+                || !store.alive(head->target()) || head->target() != work.target;
         }
-        const QueuedCommand* head = orders[work.captor].active();
-        return head == nullptr || head->kind() != CommandKind::Capture
-            || !store.alive(head->target()) || head->target() != work.target;
+        if (orphan && work.inReach && store.alive(work.target)) {
+            const Transform& at = transforms[work.target.index];
+            emit(events, Event{.kind = EventKind::FailedBeingCaptured,
+                               .unit = work.target,
+                               .instigator = store.idAt(work.captor),
+                               .army = motion[work.target.index].armyIndex,
+                               .at = {at.x, at.y, at.z}});
+            emit(events, Event{.kind = EventKind::FailedCapture,
+                               .unit = store.idAt(work.captor),
+                               .instigator = work.target,
+                               .army = work.armyIndex,
+                               .at = {at.x, at.y, at.z}});
+        }
+        return orphan;
     });
 }
 
@@ -193,11 +279,26 @@ std::size_t applyCaptureWork(UnitStore& store, std::vector<CaptureWork>& capture
             && store.health()[work.captor].alive() && store.alive(work.target)
             && store.health()[work.target.index].alive();
         if (!live) {
+            // `C-237` (spec §"Deactivation reports failure"): teardown on a dead
+            // captor fires the failure pair on a LIVE target; a dead target's
+            // arm is a no-op — which is why a completed transfer fires none.
+            if (work.inReach && store.alive(work.target)
+                && store.health()[work.target.index].alive()) {
+                const Transform& at = store.transforms()[work.target.index];
+                emit(events, Event{.kind = EventKind::FailedBeingCaptured,
+                                   .unit = work.target,
+                                   .instigator = store.idAt(work.captor),
+                                   .army = store.motion()[work.target.index].armyIndex,
+                                   .at = {at.x, at.y, at.z}});
+                emit(events, Event{.kind = EventKind::FailedCapture,
+                                   .unit = store.idAt(work.captor),
+                                   .instigator = work.target,
+                                   .army = work.armyIndex,
+                                   .at = {at.x, at.y, at.z}});
+            }
             captures.erase(captures.begin() + static_cast<std::ptrdiff_t>(i));
             continue;
         }
-        // All-or-nothing per beat, like the retail task: a partially funded beat
-        // advances nothing. Reach gates explicitly: a zero demand is trivially "fully
         // funded" by the allocator, so the ratio alone cannot tell waiting apart
         // from free.
         if (!work.inReach || work.funded < kFxOne || work.workTicks <= 0) {
@@ -220,6 +321,29 @@ std::size_t applyCaptureWork(UnitStore& store, std::vector<CaptureWork>& capture
         if (work.progress < work.workTicks) {
             ++i;
             continue;
+        }
+        // `C-237` (`0x0060B822`-`0x0060B870`): the completion triple, in retail's
+        // order — captor `OnStopCapture`, target `OnStopBeingCaptured`, then
+        // target `OnCaptured`, whose Lua body performs the transfer. The native
+        // transfer below stands in for that body, so `Captured` precedes the
+        // replacement's `UnitCreated` exactly as retail's does.
+        {
+            const Transform& at = store.transforms()[work.target.index];
+            emit(events, Event{.kind = EventKind::StopCapture,
+                               .unit = store.idAt(work.captor),
+                               .instigator = work.target,
+                               .army = work.armyIndex,
+                               .at = {at.x, at.y, at.z}});
+            emit(events, Event{.kind = EventKind::StopBeingCaptured,
+                               .unit = work.target,
+                               .instigator = store.idAt(work.captor),
+                               .army = store.motion()[work.target.index].armyIndex,
+                               .at = {at.x, at.y, at.z}});
+            emit(events, Event{.kind = EventKind::Captured,
+                               .unit = work.target,
+                               .instigator = store.idAt(work.captor),
+                               .army = store.motion()[work.target.index].armyIndex,
+                               .at = {at.x, at.y, at.z}});
         }
         const UnitId replacement =
             transferUnitArmy(store, work.target, work.armyIndex, events, siloAmmo,
