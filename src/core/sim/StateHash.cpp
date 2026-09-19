@@ -606,6 +606,14 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         feed(h, army.alliance);
         feed(h, army.defeated);
     }
+    // `OfferingDraw` joins the stream only once some army has offered, so a
+    // match that never touches the mechanic hashes exactly as before.
+    if (std::ranges::any_of(match.armies,
+                          [](const Army& army) { return army.offeringDraw; })) {
+        for (const Army& army : match.armies) {
+            feed(h, army.offeringDraw);
+        }
+    }
 
     if (match.pathService != nullptr) {
         // Preserve the pre-service byte stream for compatibility seams that do not own one.

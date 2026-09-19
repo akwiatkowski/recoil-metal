@@ -668,7 +668,7 @@ bool ApplyCommandResult::acceptedUnit(UnitId unit) const noexcept {
 ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                                 const UnitCatalog& catalog,
                                 std::span<const Player> players,
-                                std::span<const Army> armies, const Terrain& terrain,
+                                std::span<Army> armies, const Terrain& terrain,
                                  const CommandGridForUnit& gridForUnit, TickRate rate,
                                  std::vector<Construction>* building, EventQueue* events,
                                  const FeatureStore* features, PathService* pathService,
@@ -689,6 +689,19 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                 || issue.scriptData.size() > kMaxScriptTaskDataBytes))
         || (issue.kind != CommandKind::Script
             && (!issue.scriptTask.empty() || !issue.scriptData.empty()))) {
+        return result;
+    }
+    if (issue.kind == CommandKind::OfferDraw) {
+        // Army-level, not a unit order: `SimUtils.SetOfferDraw` flips
+        // `brain.OfferingDraw` on the issuing army, and `victory.lua` ends the
+        // match in a draw the moment every surviving brain offers. `scriptBit`
+        // carries the flag so an offer can be withdrawn. The issuer's army is
+        // already validated above.
+        for (Army& army : armies) {
+            if (army.index == playerFor(issue.player, players)->army) {
+                army.offeringDraw = issue.scriptBit != 0;
+            }
+        }
         return result;
     }
 
@@ -1184,7 +1197,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     return result;
 }
 bool applyCommand(const Command& ordered, UnitStore& store, const UnitCatalog& catalog,
-                  std::span<const Player> players, std::span<const Army> armies,
+                  std::span<const Player> players, std::span<Army> armies,
                    const Terrain& terrain, const PassabilityGrid& grid, TickRate rate,
                    std::vector<Construction>* building, EventQueue* events,
                    const FeatureStore* features, PathService* pathService,

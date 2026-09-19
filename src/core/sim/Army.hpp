@@ -115,6 +115,15 @@ struct Army {
     /// list: a defeated army's units may still be standing while it plays no further
     /// part.
     bool defeated = false;
+
+    /// `victory.lua`'s `OfferingDraw` (`SimUtils.SetOfferDraw`): when every
+    /// surviving army offers, the match ends in a draw immediately. Retail's
+    /// sibling flag `RequestingAlliedVictory` is deliberately not modelled —
+    /// it only matters under dynamic alliances (simInit sets it for teamed
+    /// armies and `RequestAlliedVictory` refuses in team games), and our
+    /// alliances are fixed at setup, where a sole surviving alliance already
+    /// wins unconditionally.
+    bool offeringDraw = false;
 };
 
 /// Whether a blueprint id names a commander.

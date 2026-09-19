@@ -59,7 +59,7 @@ namespace {
 /// issue naming `bit` for `units`.
 rm::sim::ApplyCommandResult toggle(rm::test::Roster& roster, std::uint8_t bit,
                                    std::vector<UnitId> units) {
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     return rm::sim::applyCommand(
         CommandIssue{.tick = 1,

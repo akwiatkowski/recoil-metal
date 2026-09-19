@@ -98,7 +98,7 @@ TEST_CASE("build priority defaults to Normal and cycles on a producer",
 
     const std::vector<Player> players{Player{.index = 0, .army = 0},
                                       Player{.index = 1, .army = 1}};
-    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<Army> armies = rm::sim::freeForAll(2);
     const auto apply = [&](const CommandIssue& issue) {
         return rm::sim::applyCommand(issue, roster.store, roster.catalog, players,
                                      armies, terrain,

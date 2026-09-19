@@ -95,6 +95,8 @@ const char* commandKindName(CommandKind kind) noexcept {
         return "self-destruct";
     case CommandKind::ToggleScriptBit:
         return "toggle-script-bit";
+    case CommandKind::OfferDraw:
+        return "offer-draw";
     }
     return "stop";
 }

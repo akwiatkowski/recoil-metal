@@ -210,6 +210,11 @@ enum class CommandKind : std::uint8_t {
     /// no-op, 4 is `ToggleProduction`, 6/7 are out of scope. Authoritative and
     /// unqueued like `ToggleProduction`; `scriptBit` carries the index.
     ToggleScriptBit = 30,
+    /// Set the issuing army's draw offer (`victory.lua`'s `OfferingDraw`,
+    /// `SimUtils.SetOfferDraw`): when every surviving army offers, the match
+    /// ends in a draw immediately — no stability window. Army-level, not a
+    /// unit order: `units` stays empty and `scriptBit` carries the flag.
+    OfferDraw = 31,
 };
 
 [[nodiscard]] constexpr bool isGuardCommand(CommandKind kind) noexcept {
@@ -433,7 +438,7 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// which is what a scene with nothing on the ground should do.
 [[nodiscard]] bool applyCommand(const Command& command, UnitStore& store,
                                 const UnitCatalog& catalog, std::span<const Player> players,
-                                std::span<const Army> armies, const Terrain& terrain,
+                                std::span<Army> armies, const Terrain& terrain,
                                  const PassabilityGrid& grid, TickRate rate,
                                   std::vector<Construction>* building = nullptr,
                                    EventQueue* events = nullptr,
@@ -458,7 +463,7 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 /// what a scene with no silos should do.
 [[nodiscard]] ApplyCommandResult applyCommand(
     const CommandIssue& issue, UnitStore& store, const UnitCatalog& catalog,
-    std::span<const Player> players, std::span<const Army> armies, const Terrain& terrain,
+    std::span<const Player> players, std::span<Army> armies, const Terrain& terrain,
     const CommandGridForUnit& gridForUnit, TickRate rate,
     std::vector<Construction>* building = nullptr, EventQueue* events = nullptr,
     const FeatureStore* features = nullptr, PathService* pathService = nullptr,

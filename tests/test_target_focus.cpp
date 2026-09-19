@@ -92,7 +92,7 @@ TEST_CASE("the target focus cycles on an armed unit and refuses an unarmed one",
     const UnitId unarmed = roster.add(bystander, 60.0f, 60.0f, 0, 500.0f);
 
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
-    const std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<Army> armies = rm::sim::freeForAll(1);
 
     CHECK(roster.store.targetFocus(armed) == rm::TargetFocus::Default);
     std::uint32_t serial = 1;
@@ -117,7 +117,7 @@ TEST_CASE("the target focus cycles on an armed unit and refuses an unarmed one",
 
 TEST_CASE("a snipe focus prefers a high-tier target over a nearer ordinary one",
           "[target-focus]") {
-    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<Army> armies = rm::sim::freeForAll(2);
     rm::test::Roster roster;
 
     UnitDef ordinary;
@@ -148,7 +148,7 @@ TEST_CASE("a snipe focus prefers a high-tier target over a nearer ordinary one",
 
 TEST_CASE("an air-only focus engages aircraft and declines a ground-only field",
           "[target-focus]") {
-    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<Army> armies = rm::sim::freeForAll(2);
     rm::test::Roster roster;
 
     UnitDef tank;
@@ -187,7 +187,7 @@ TEST_CASE("an air-only focus engages aircraft and declines a ground-only field",
 
 TEST_CASE("an economy-only focus walks past troops to the base",
           "[target-focus]") {
-    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<Army> armies = rm::sim::freeForAll(2);
     rm::test::Roster roster;
 
     UnitDef tank;

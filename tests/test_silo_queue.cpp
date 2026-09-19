@@ -240,7 +240,7 @@ TEST_CASE("a silo-build command queues a round and a full silo refuses it",
     std::vector<SiloAmmo> ammo{record(silo, false, 1)};
     std::vector<SiloBuild> queue;
     const std::vector<Player> players{Player{.index = 0, .army = 0}};
-    const std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<Army> armies = rm::sim::freeForAll(1);
 
     const auto issue = [&](std::uint32_t serial) {
         return rm::sim::applyCommand(
@@ -277,7 +277,7 @@ TEST_CASE("the silo auto toggle holds the refill without losing queued work",
     std::vector<SiloAmmo> ammo{record(silo, false, 1)};
     std::vector<SiloBuild> queue;
     const std::vector<Player> players{Player{.index = 0, .army = 0}};
-    const std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<Army> armies = rm::sim::freeForAll(1);
 
     const auto toggle = [&](std::uint32_t serial) {
         return rm::sim::applyCommand(

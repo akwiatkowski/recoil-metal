@@ -271,7 +271,7 @@ TEST_CASE("a submerged submarine routes on its own depth, not the hull's draft",
     roster.motion(sub).submersible = true;
     roster.motion(sub).surfaceWater = true;
 
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<Player> players = rm::sim::onePlayerPerArmy(1, /*humanArmy=*/0);
     // Queued, so intake stores the order and `advanceOrders` routes it — the
     // deferred pick is what the per-type spans feed.

@@ -798,36 +798,56 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
 
     if (!match.over) {
         const std::optional<int> winner = winningAlliance(match.armies);
-        // A team wins when it is the only ALLIANCE left, even if several allied armies
-        // survived. `survivorCount <= 1` left a successful 2v2 running forever. No
-        // survivors is the other terminal state and remains an ordinary draw.
-        // Sandbox never ends, so no alliance can be terminal even alone.
-        const bool terminal = match.victoryMode != VictoryMode::Sandbox
-            && (winner || survivorCount(match.armies) == 0);
-        if (!terminal) {
-            match.winnerPending = false;
-            match.pendingWinner.reset();
-            match.winnerStableTicks = 0;
+        const std::size_t survivors = survivorCount(match.armies);
+        // `victory.lua`'s two immediate ends, checked before the stability
+        // window: nobody left is a draw on the spot (`CallEndGame(true,
+        // false)`), and so is every surviving army offering one
+        // (`OfferingDraw` — `SimUtils.SetOfferDraw`). A sole surviving
+        // alliance still wins through the ordinary window even with offers
+        // on the table, matching retail's win-before-draw order.
+        const bool mutualDraw =
+            !winner && survivors > 0
+            && std::ranges::all_of(match.armies, [](const Army& army) {
+                   return army.defeated || army.offeringDraw;
+               });
+        if (match.victoryMode != VictoryMode::Sandbox
+            && (survivors == 0 || mutualDraw)) {
+            match.over = true;
+            report.matchEnded = true;
+            report.winner = std::nullopt;
+            emit(match.events, Event{.kind = EventKind::GameOver,
+                                     .army = kNoArmy});
         } else {
-            if (!match.winnerPending || match.pendingWinner != winner) {
-                match.winnerPending = true;
-                match.pendingWinner = winner;
+            // A team wins when it is the only ALLIANCE left, even if several
+            // allied armies survived. `survivorCount <= 1` left a successful
+            // 2v2 running forever.
+            const bool terminal = match.victoryMode != VictoryMode::Sandbox
+                && winner.has_value();
+            if (!terminal) {
+                match.winnerPending = false;
+                match.pendingWinner.reset();
                 match.winnerStableTicks = 0;
-            }
+            } else {
+                if (!match.winnerPending || match.pendingWinner != winner) {
+                    match.winnerPending = true;
+                    match.pendingWinner = winner;
+                    match.winnerStableTicks = 0;
+                }
 
-            // C-210: the retail win condition waits for fifteen seconds of the same winner.
-            // Derive the duration from this tick's rate so changing the simulation clock does
-            // not change the wall-clock confirmation time.
-            const TickCount confirmationTicks = rate.ticks(seconds(15.0f));
-            ++match.winnerStableTicks;
-            if (match.winnerStableTicks >= confirmationTicks) {
-                match.over = true;
-                report.matchEnded = true;
-                report.winner = winner;
-                // A draw is an ordinary outcome — every commander dying at once — so the event
-                // carries `kNoArmy` rather than being suppressed.
-                emit(match.events, Event{.kind = EventKind::GameOver,
-                                         .army = report.winner.value_or(kNoArmy)});
+                // C-210: the retail win condition waits for fifteen seconds of the same winner.
+                // Derive the duration from this tick's rate so changing the simulation clock does
+                // not change the wall-clock confirmation time.
+                const TickCount confirmationTicks = rate.ticks(seconds(15.0f));
+                ++match.winnerStableTicks;
+                if (match.winnerStableTicks >= confirmationTicks) {
+                    match.over = true;
+                    report.matchEnded = true;
+                    report.winner = winner;
+                    // A draw is an ordinary outcome — every commander dying at once — so the event
+                    // carries `kNoArmy` rather than being suppressed.
+                    emit(match.events, Event{.kind = EventKind::GameOver,
+                                             .army = report.winner.value_or(kNoArmy)});
+                }
             }
         }
     }

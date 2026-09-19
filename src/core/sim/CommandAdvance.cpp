@@ -2168,6 +2168,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     case CommandKind::ToggleSiloAuto:
     case CommandKind::SelfDestruct:
     case CommandKind::ToggleScriptBit:
+    case CommandKind::OfferDraw:
         return false;  // applied immediately by semantic issue intake; it never enters a queue
     case CommandKind::Script:
         return false;  // dispatched through ScriptTaskHost, never as a movement/build command

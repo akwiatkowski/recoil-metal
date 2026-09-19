@@ -332,7 +332,7 @@ TEST_CASE("C-202/C-323: a submerged deck gun stays silent while the torpedo answ
     rm::sim::placeOnMotionLayer(roster.transform(target), roster.motion(target), terrain);
     roster.reindex();
 
-    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<Army> armies = rm::sim::freeForAll(2);
     auto& motion = roster.motion(boat);
     REQUIRE(motion.submerged);
 
@@ -406,7 +406,7 @@ TEST_CASE("C-321: the fire gates compare the firer's Y against its own Elevation
     rm::sim::placeOnMotionLayer(roster.transform(target), roster.motion(target), terrain);
     roster.reindex();
 
-    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<Army> armies = rm::sim::freeForAll(2);
     auto& motion = roster.motion(boat);
     REQUIRE(motion.submerged);
     REQUIRE(roster.motion(defaultBoat).submerged);
@@ -496,7 +496,7 @@ TEST_CASE("C-322: the target gates apply to Seabed-layer candidates only",
     CHECK(roster.motion(deepId).seabed);
     CHECK_FALSE(roster.motion(subId).seabed);
 
-    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<Army> armies = rm::sim::freeForAll(2);
     const auto firesAt = [&](std::string_view label, UnitId victim) {
         roster.health(shooter).reloadRemaining.assign(ship.weapons.size(), 0);
         rm::sim::EventQueue events;
@@ -579,7 +579,7 @@ TEST_CASE("C-327: an Air-layer unit below the waterline cannot fire unless FlyIn
     roster.motion(wet).belowWater = true;
     roster.reindex();
 
-    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<Army> armies = rm::sim::freeForAll(2);
     const auto fires = [&](UnitId shooter, const UnitDef& def) {
         roster.health(shooter).reloadRemaining.assign(def.weapons.size(), 0);
         rm::sim::EventQueue events;
@@ -694,7 +694,7 @@ TEST_CASE("C-204: StayUnderwater clamps a shot under the waterline; DestroyOnWat
     const rm::sim::Terrain terrain = waterTerrain(field);  // waterline at 80
 
     rm::test::Roster roster;
-    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<Army> armies = rm::sim::freeForAll(2);
 
     const auto fly = [&](rm::sim::Projectile shot, int ticks) {
         std::vector<rm::sim::Projectile> shots{shot};

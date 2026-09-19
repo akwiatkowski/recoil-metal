@@ -101,13 +101,14 @@ TEST_CASE("C-210: a commander replaced inside the poll window is never missed",
     CHECK_FALSE(match.over);
 }
 
-TEST_CASE("C-210: a pending win that becomes a draw waits its own fifteen seconds",
+TEST_CASE("C-210: a pending win that becomes a draw ends immediately",
           "[fa-match]") {
-    // The winner must remain stable for fifteen seconds — and the verdict
-    // CHANGING restarts the confirmation. Here alliance 0 becomes the sole
-    // survivor, then its armies fall too: the pending win is replaced by a
-    // pending draw, which needs its own fifteen seconds rather than
-    // inheriting the win's elapsed time.
+    // The winner must remain stable for fifteen seconds — but a draw is not a
+    // pending verdict at all: `victory.lua` calls `CallEndGame(true, false)`
+    // the moment no brain is left, with no stability window. Here alliance 0
+    // becomes the sole survivor, banks confirmation time, then its armies
+    // fall too — and the match ends on the spot rather than waiting out a
+    // second fifteen seconds.
     const rm::HeightField field = flatField();
     const rm::sim::Terrain terrain{field};
 
@@ -146,38 +147,104 @@ TEST_CASE("C-210: a pending win that becomes a draw waits its own fifteen second
     REQUIRE(*match.pendingWinner == 0);
 
     // Let the win almost confirm, then kill alliance 0 inside the next poll
-    // window: the verdict flips from "alliance 0 wins" to "draw".
+    // window: the pending win is gone, and the draw lands immediately.
     for (rm::TickCount tick = 0; tick < confirmTicks - pollTicks - 5; ++tick) {
         (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
     }
     REQUIRE_FALSE(match.over);
     roster.health(oursA).current = rm::sim::Mag{};
     roster.health(oursB).current = rm::sim::Mag{};
-    for (rm::TickCount tick = 0; tick < pollTicks; ++tick) {
-        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    TickReport report{};
+    for (rm::TickCount tick = 0; tick < pollTicks && !report.matchEnded; ++tick) {
+        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
     }
     REQUIRE(armies[0].defeated);
     REQUIRE(armies[1].defeated);
-    // The draw is now the pending verdict — and it must NOT inherit the
-    // fourteen seconds the win had already banked: the stability counter
-    // restarted when the verdict flipped.
-    REQUIRE_FALSE(match.over);
-    CHECK(match.pendingWinner == std::nullopt);
-    CHECK(match.winnerStableTicks < confirmTicks / 2);
-
-    TickReport report{};
-    // However many stable ticks the draw has already banked, the match ends
-    // exactly when the counter reaches fifteen seconds — not earlier.
-    const rm::TickCount banked = match.winnerStableTicks;
-    for (rm::TickCount tick = 0; tick < confirmTicks - banked - 1; ++tick) {
-        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
-    }
-    CHECK_FALSE(match.over);
-
-    report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
     CHECK(match.over);
     CHECK(report.matchEnded);
     CHECK_FALSE(report.winner.has_value());  // a draw, not a win
+}
+
+TEST_CASE("every surviving army offering a draw ends the match on the spot",
+          "[fa-match]") {
+    // `victory.lua`'s `OfferingDraw` path: `SimUtils.SetOfferDraw` flips the
+    // flag on the issuing brain, and the moment every surviving brain offers,
+    // `CallEndGame(true, false)` fires — no stability window, and a sole
+    // surviving alliance still wins through the ordinary window even with its
+    // own offer on the table.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex commander = roster.addType(commanderDef());
+    (void)roster.add(commander, 0.0f, 0.0f, 0, 12000.0f);
+    (void)roster.add(commander, 400.0f, 0.0f, 1, 12000.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<rm::sim::Projectile> projectiles;
+    const std::vector<int> commandersEver{1, 1};
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .commandersEver = commandersEver};
+    const rm::sim::TickRate rate{};
+
+    // One offer changes nothing.
+    armies[0].offeringDraw = true;
+    TickReport report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    CHECK_FALSE(report.matchEnded);
+    CHECK_FALSE(match.over);
+
+    // Withdrawing it and offering from the other side alone changes nothing either.
+    armies[0].offeringDraw = false;
+    armies[1].offeringDraw = true;
+    report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    CHECK_FALSE(report.matchEnded);
+
+    // Both offers on the table: the draw lands immediately.
+    armies[0].offeringDraw = true;
+    report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    CHECK(match.over);
+    CHECK(report.matchEnded);
+    CHECK_FALSE(report.winner.has_value());
+}
+
+TEST_CASE("a sole surviving alliance wins even with its draw offer standing",
+          "[fa-match]") {
+    // Retail checks the win before the draw: `potentialWinners` is one
+    // alliance, so `OfferingDraw` on the last army standing cannot turn its
+    // victory into a draw.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex commander = roster.addType(commanderDef());
+    (void)roster.add(commander, 0.0f, 0.0f, 0, 12000.0f);
+    const UnitId theirs = roster.add(commander, 400.0f, 0.0f, 1, 12000.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<rm::sim::Projectile> projectiles;
+    const std::vector<int> commandersEver{1, 1};
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .commandersEver = commandersEver};
+    const rm::sim::TickRate rate{};
+
+    armies[0].offeringDraw = true;
+    roster.health(theirs).current = rm::sim::Mag{};
+    const rm::TickCount pollTicks = rate.ticks(rm::sim::seconds(3.0f));
+    const rm::TickCount confirmTicks = rate.ticks(rm::sim::seconds(15.0f));
+    TickReport report{};
+    for (rm::TickCount tick = 0; tick < pollTicks + confirmTicks && !report.matchEnded; ++tick) {
+        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    REQUIRE(armies[1].defeated);
+    CHECK(match.over);
+    CHECK(report.matchEnded);
+    CHECK(report.winner == armies[0].alliance);  // a win, not a draw
 }
 
 TEST_CASE("C-210: annihilation counts everything but walls, not commanders",

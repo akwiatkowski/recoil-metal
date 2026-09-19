@@ -43,6 +43,7 @@ template <typename Order>
     case CommandKind::ToggleSiloAuto:
     case CommandKind::SelfDestruct:
     case CommandKind::ToggleScriptBit:
+    case CommandKind::OfferDraw:
         return false;
     case CommandKind::Move:
     case CommandKind::AttackMove:

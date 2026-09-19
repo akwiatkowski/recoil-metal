@@ -100,7 +100,7 @@ TEST_CASE("the retreat threshold cycles on a mobile unit and refuses a building"
     const UnitId building = roster.add(mechanic, 60.0f, 60.0f, 0, 500.0f);
 
     const std::vector<Player> players{Player{.index = 0, .army = 0}};
-    const std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<Army> armies = rm::sim::freeForAll(1);
 
     CHECK(roster.store.retreatThreshold(mover) == rm::RetreatThreshold::Off);
     std::uint32_t serial = 1;

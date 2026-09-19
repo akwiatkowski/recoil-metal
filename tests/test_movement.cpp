@@ -453,7 +453,7 @@ TEST_CASE("an allied idler steps aside for a jammed mover", "[congestion]") {
 TEST_CASE("a hostile blocker is routed around rather than asked to move", "[congestion]") {
     const HeightField field = flatField();
     const rm::sim::Terrain terrain{field};
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     Crowd crowd;
     crowd.add(100.0f, 100.0f, false, false, 0);
     crowd.add(100.0f, 140.0f, false, false, 1);   // enemy idler

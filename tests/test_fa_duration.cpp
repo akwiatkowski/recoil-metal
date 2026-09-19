@@ -282,7 +282,7 @@ namespace {
 
 /// The ticks, within `ticks`, on which a lone gunner of this type got a shot away.
 [[nodiscard]] std::vector<int> shotTicks(const rm::unitdef::UnitDef& shooter, int ticks) {
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     rm::test::Roster roster;
     (void)roster.add(roster.addType(shooter), 0.0f, 0.0f, 0, 100.0f);
     // Tough enough to survive the whole window: this measures cadence, not lethality.

@@ -109,7 +109,7 @@ TEST_CASE("the production toggle flips a producer and refuses a pure combat unit
     const UnitId fighter = roster.add(combat, 60.0f, 60.0f, 0, 500.0f);
 
     const std::vector<Player> players{Player{.index = 0, .army = 0}};
-    const std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<Army> armies = rm::sim::freeForAll(1);
 
     const auto result = rm::sim::applyCommand(
         toggleIssue(builder, 1), roster.store, roster.catalog, players, armies, terrain,
@@ -150,7 +150,7 @@ TEST_CASE("a paused factory holds its construction, pays nothing, and resumes",
     const UnitId factory = roster.add(factoryType, 40.0f, 40.0f, 0, 500.0f);
 
     const std::vector<Player> players{Player{.index = 0, .army = 0}};
-    const std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<Army> armies = rm::sim::freeForAll(1);
     std::vector<Construction> building;
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
 
@@ -289,7 +289,7 @@ TEST_CASE("a paused engineer submits no repair demand", "[production][pause]") {
     roster.store.health()[hurt.index].current = rm::sim::Mag::fromInt(100);
 
     const std::vector<Player> players{Player{.index = 0, .army = 0}};
-    const std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<Army> armies = rm::sim::freeForAll(1);
     REQUIRE(rm::sim::applyCommand(
                 CommandIssue{.source = 0,
                              .id = rm::commandId(0, 1),

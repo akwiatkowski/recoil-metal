@@ -354,7 +354,7 @@ TEST_CASE("accepted commands consume one match-global creation serial") {
     const rm::UnitTypeIndex type = roster.addType(walkerDef());
     const UnitId first = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
     const UnitId second = roster.add(type, 40.0f, 80.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const auto apply = [&](const Command& command) {
         return rm::sim::applyCommand(command, roster.store, roster.catalog, players, armies,
@@ -417,7 +417,7 @@ TEST_CASE("one grouped issue shares immutable intent and keeps execution local")
     const rm::UnitTypeIndex type = roster.addType(walkerDef());
     const UnitId first = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
     const UnitId second = roster.add(type, 40.0f, 80.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
 
     const CommandIssue issue{
@@ -472,7 +472,7 @@ TEST_CASE("a grouped issue skips refused members without putting them in shared 
     const UnitId unauthorized = roster.add(type, 80.0f, 40.0f, 1, 100.0f);
     const UnitId dead = roster.add(type, 120.0f, 40.0f, 0, 100.0f);
     roster.store.kill(dead);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
 
     const auto apply = [&](std::vector<UnitId> units, rm::CommandId id) {
@@ -520,7 +520,7 @@ TEST_CASE("source-tagged command IDs are unique only while a queue owns them") {
     const rm::UnitTypeIndex type = roster.addType(walkerDef());
     const UnitId first = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
     const UnitId second = roster.add(type, 40.0f, 80.0f, 1, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     const std::vector<rm::sim::Player> players{
         rm::sim::Player{.index = 0, .army = 0},
         rm::sim::Player{.index = 1, .army = 1},
@@ -589,7 +589,7 @@ TEST_CASE("count exhaustion removes one exact shared command from every member q
     const rm::UnitTypeIndex type = roster.addType(walkerDef());
     const UnitId first = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
     const UnitId second = roster.add(type, 40.0f, 80.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const auto apply = [&](const CommandIssue& issue) {
         return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
@@ -652,7 +652,7 @@ TEST_CASE("command intake orders sources before preserving FIFO within a source"
     rm::test::Roster roster;
     const rm::UnitTypeIndex type = roster.addType(walkerDef());
     const UnitId unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{
         rm::sim::Player{.index = 0, .army = 0},
         rm::sim::Player{.index = 1, .army = 0},
@@ -713,7 +713,7 @@ TEST_CASE("replay preserves an ID consumed by an issue that no unit accepted") {
     const rm::UnitTypeIndex type = live.addType(walkerDef());
     const UnitId dead = live.add(type, 40.0f, 40.0f, 0, 100.0f);
     live.store.kill(dead);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     rm::sim::CommandBuffer input;
     REQUIRE(input.submit(CommandIssue{
@@ -757,7 +757,7 @@ TEST_CASE("a grouped first patrol stores each origin outside the shared payload"
     const rm::UnitTypeIndex type = roster.addType(walkerDef());
     const UnitId first = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
     const UnitId second = roster.add(type, 80.0f, 80.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
 
     const CommandIssue issue{
@@ -861,7 +861,7 @@ TEST_CASE("a queued command on an idle unit starts in the dispatch stage") {
     rm::test::Roster roster;
     const rm::UnitTypeIndex type = roster.addType(walkerDef());
     const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
 
@@ -894,7 +894,7 @@ TEST_CASE("replacement kind controls movement teardown between clear and insert"
     structureDef.buildTime = rm::sim::magFromFloat(100.0f);
     const rm::UnitTypeIndex structureType = roster.addType(structureDef);
     const UnitId engineer = roster.add(engineerType, 40.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     std::vector<rm::sim::Construction> building;
 
@@ -956,7 +956,7 @@ TEST_CASE("ordinary unstartable commands cascade within one dispatch beat") {
     rm::test::Roster roster;
     const rm::UnitTypeIndex type = roster.addType(walkerDef());
     const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
 
@@ -990,7 +990,7 @@ TEST_CASE("an attack-position cycles only while another command follows") {
     rm::test::Roster roster;
     const rm::UnitTypeIndex type = roster.addType(walkerDef());
     const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
 
@@ -1042,7 +1042,7 @@ TEST_CASE("an attack-entity retires instead of cycling when its target dies") {
     const rm::UnitTypeIndex targetType = roster.addType(walkerDef());
     const UnitId fighter = roster.add(fighterType, 40.0f, 40.0f, 0, 100.0f);
     const UnitId target = roster.add(targetType, 300.0f, 40.0f, 1, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
 
@@ -1176,7 +1176,7 @@ TEST_CASE("an interceptor refuses an explicit attack on a surface unit") {
     const UnitId fighter = roster.add(roster.addType(interceptor), 40.0f, 40.0f, 0, 100.0f);
     const UnitId surface =
         roster.add(roster.addType(walkerDef()), 120.0f, 40.0f, 1, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const Command attack{.kind = CommandKind::Attack,
                          .unit = fighter,
@@ -1313,7 +1313,7 @@ TEST_CASE("a lone patrol retires instead of rotating forever") {
     rm::test::Roster roster;
     const rm::UnitTypeIndex type = roster.addType(walkerDef());
     const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
 
@@ -1352,7 +1352,7 @@ TEST_CASE("a queued patrol joins the current cycle before its oldest waypoint") 
     rm::test::Roster roster;
     const rm::UnitTypeIndex type = roster.addType(walkerDef());
     const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
 
     Command patrol = moveTo(300.0f, 40.0f, walker);
@@ -1465,7 +1465,7 @@ TEST_CASE("a queued mobile product waits for and starts on its own grid") {
     const rm::UnitTypeIndex productType = roster.addType(productDef);
 
     const UnitId engineer = roster.add(engineerType, 40.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     std::vector<rm::sim::Construction> building;
 
@@ -1538,7 +1538,7 @@ TEST_CASE("production queued on a factory under construction stacks on the found
     const rm::UnitTypeIndex productType = roster.addType(productDef);
 
     const UnitId engineer = roster.add(engineerType, 40.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     std::vector<rm::sim::Construction> building;
 
@@ -1595,7 +1595,7 @@ TEST_CASE("factory repeat consumes a shared count before cycling mobile producti
     productDef.buildTime = rm::sim::magFromFloat(100.0f);
     const rm::UnitTypeIndex productType = roster.addType(productDef);
     const UnitId factory = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
     std::vector<rm::sim::Construction> building;
@@ -1713,7 +1713,7 @@ TEST_CASE("one factory finishing a grouped build leaves its sibling factory's or
     const rm::UnitTypeIndex productType = roster.addType(productDef);
     const UnitId first = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
     const UnitId second = roster.add(factoryType, 80.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
     std::vector<rm::sim::Construction> building;
@@ -1764,7 +1764,7 @@ TEST_CASE("a guarding factory reserves one shared build and finishes it without 
     const rm::UnitTypeIndex productType = roster.addType(productDef);
     const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
     const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
     std::vector<rm::sim::Construction> building;
@@ -1862,7 +1862,7 @@ TEST_CASE("factory guard skips a singleton head and locally takes the queued bui
     const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
     const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
     const UnitId peer = roster.add(factoryType, 80.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
     std::vector<rm::sim::Construction> building;
@@ -1942,7 +1942,7 @@ TEST_CASE("a guarding factory builds its own queued product before the guardee's
     const rm::UnitTypeIndex guardedProductType = roster.addType(guardedProduct);
     const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
     const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
     std::vector<rm::sim::Construction> building;
@@ -2017,7 +2017,7 @@ TEST_CASE("a guarding factory retires its own queued build through normal count 
     const rm::UnitTypeIndex productType = roster.addType(product);
     const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
     const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
     std::vector<rm::sim::Construction> building;
@@ -2092,7 +2092,7 @@ TEST_CASE("a guarding factory completion retires the first of identical own buil
     const rm::UnitTypeIndex productType = roster.addType(product);
     const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
     const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
     std::vector<rm::sim::Construction> building;
@@ -2163,7 +2163,7 @@ TEST_CASE("factory repeat toggles through a logged semantic issue and replays") 
     rm::unitdef::UnitDef factoryDef;
     factoryDef.name = "factory";
     factoryDef.categories = {"FACTORY"};
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const auto makeRoster = [&] {
         rm::test::Roster roster;
@@ -2238,7 +2238,7 @@ TEST_CASE("a queued immobile structure falls back to its builder grid") {
     const rm::UnitTypeIndex structureType = roster.addType(structureDef);
 
     const UnitId engineer = roster.add(engineerType, 40.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     std::vector<rm::sim::Construction> building;
 
@@ -2318,7 +2318,7 @@ TEST_CASE("a winged entity attack enters head-on then tail-chase inside the 30 d
     roster.transform(target).heading = rm::sim::kBradHalfTurn;
     rm::sim::RandomStream random{std::uint32_t{1}};
 
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
     Command attack = moveTo(40.0f, 120.0f, fighter);
@@ -2391,7 +2391,7 @@ TEST_CASE("the order queue stops taking shift-clicks at retail's cap, and a plai
     rm::test::Roster roster;
     const rm::UnitTypeIndex type = roster.addType(walkerDef());
     const UnitId walker = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
 
     // Distinct destinations, so nothing is taken for a duplicate and cancelled instead.
@@ -2468,7 +2468,7 @@ TEST_CASE("a guarding commander chases an enemy inside its scan radius instead o
     const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
     const UnitId enemy = roster.add(enemyType, 40.0f, 190.0f, 1, 100.0f);
     (void)enemy;
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
     std::vector<rm::sim::Construction> building;
@@ -2531,7 +2531,7 @@ TEST_CASE("a guarding commander ignores an enemy outside its scan radius") {
     // 300 elmos out: beyond the scan, so the guard keeps assisting and holds still —
     // the guardee is 8 elmos off, inside assist reach.
     (void)roster.add(enemyType, 40.0f, 340.0f, 1, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
     std::vector<rm::sim::Construction> building;
@@ -2588,7 +2588,7 @@ TEST_CASE("a bingo-fuel air guard holds instead of pursuing", "[guard][fuel]") {
     // gun. A fueled guard would pursue; at a tenth of a tank it holds station so
     // idleness can land it and the ground can refuel it.
     (void)roster.add(enemyType, 40.0f, 190.0f, 1, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
     std::vector<rm::sim::Construction> building;
@@ -2641,7 +2641,7 @@ TEST_CASE("a fueled air guard pursues like its land twin", "[guard][fuel]") {
     roster.store.motion()[guard.index].airborne = true;
     const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
     (void)roster.add(enemyType, 40.0f, 190.0f, 1, 100.0f);
-    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
     std::vector<rm::sim::Construction> building;
