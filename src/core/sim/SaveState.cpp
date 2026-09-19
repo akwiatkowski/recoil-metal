@@ -128,6 +128,11 @@ constexpr std::uint32_t kVersion40 = 40;
 // derived from the live unit list and recomputed on the first tick back.
 // Older saves decode with the engine's own default of 500 (`0x008e8035`).
 constexpr std::uint32_t kVersion41 = 41;
+// 42: the per-slot deficit-covering production overrides (`C-263`) — a saved
+// Paragon must keep its recomputed rate or a restored match reports the
+// static zero for up to one recompute beat. Nullable like `features`: a
+// match with no covering producers saves the absent byte.
+constexpr std::uint32_t kVersion42 = 42;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1313,6 +1318,36 @@ void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state) {
     return true;
 }
 
+void writeProductionOverrides(PayloadWriter& w,
+                              const std::optional<std::vector<Resources>>& state) {
+    w.u8(state.has_value());
+    if (!state) {
+        return;
+    }
+    w.count(state->size());
+    for (const Resources& value : *state) {
+        writeResources(w, value);
+    }
+}
+
+[[nodiscard]] bool readProductionOverrides(PayloadReader& r,
+                                           std::optional<std::vector<Resources>>& state) {
+    bool present{};
+    if (!readFlag(r, present)) return false;
+    if (!present) {
+        state.reset();
+        return true;
+    }
+    std::size_t slots{};
+    if (!r.count(slots, 8)) return false;
+    state.emplace();
+    state->resize(slots);
+    for (Resources& value : *state) {
+        if (!readResources(r, value)) return false;
+    }
+    return true;
+}
+
 void writeRedirects(PayloadWriter& w, std::span<const MissileRedirect> redirects) {
     w.count(redirects.size());
     for (const MissileRedirect& value : redirects) {
@@ -1998,6 +2033,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                                                version >= kVersion38, version >= kVersion39);
     if (version >= kVersion37) writePathService(payloadWriter, state.pathService);
     if (version >= kVersion37) writeIntel(payloadWriter, state.intel);
+    if (version >= kVersion42) writeProductionOverrides(payloadWriter, state.productionOverrides);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -2041,7 +2077,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion31 && version != kVersion32
                && version != kVersion33 && version != kVersion34 && version != kVersion35
                && version != kVersion36 && version != kVersion37 && version != kVersion38
-               && version != kVersion39 && version != kVersion40 && version != kVersion41)
+               && version != kVersion39 && version != kVersion40 && version != kVersion41
+               && version != kVersion42)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2118,6 +2155,10 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion37 && !readPathService(reader, pathService)) return std::nullopt;
     std::optional<Intel::Snapshot> intel;
     if (version >= kVersion37 && !readIntel(reader, intel)) return std::nullopt;
+    std::optional<std::vector<Resources>> productionOverrides;
+    if (version >= kVersion42 && !readProductionOverrides(reader, productionOverrides)) {
+        return std::nullopt;
+    }
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
@@ -2130,7 +2171,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        .features = std::move(features),
                        .projectiles = std::move(projectiles),
                        .pathService = std::move(pathService),
-                       .intel = std::move(intel)};
+                       .intel = std::move(intel),
+                       .productionOverrides = std::move(productionOverrides)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -2155,7 +2197,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion41);
+    return rm::sim::encode(state, kVersion42);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

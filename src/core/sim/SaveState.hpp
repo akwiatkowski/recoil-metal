@@ -74,6 +74,12 @@ struct SaveState {
     /// recovery (`C-158`/`C-284`), from v37 — null when the match has no intel.
     /// Grids re-stamp from unit positions on the first `update` after restore.
     std::optional<Intel::Snapshot> intel;
+    /// Per-slot deficit-covering production overrides (`C-263`), from v42 —
+    /// indexed by unit slot like `motion()`. Null when the match has no
+    /// covering producers; a restored match recomputes a zero entry on the
+    /// unit's first tick, so older saves decode to the same income stream
+    /// after at most one recompute beat.
+    std::optional<std::vector<Resources>> productionOverrides;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);

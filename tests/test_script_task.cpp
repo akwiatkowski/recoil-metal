@@ -266,14 +266,17 @@ TEST_CASE("native enhancement task installs only after funded work and cancels w
     REQUIRE(work.size() == 1);
     CHECK(work[0].buildTimeRemaining == Mag::fromInt(8));
     CHECK(roster.store.enhancements()[unit.index].empty());
-    economies[0].stored = {Mag::fromInt(8),Mag::fromInt(80)};
+    // C-253's retail bug: the mass line drains at the ENERGY cost — 80 over
+    // 8 s at 10/s build rate is 10 mass and 10 energy per funded tick, so the
+    // full 80/80 bank covers exactly the eight beats the install needs.
+    economies[0].stored = {Mag::fromInt(80),Mag::fromInt(80)};
     (void)tickSkirmish(roster.store, roster.catalog, match, terrain);
     roster.store.orders()[unit.index].clear();
     CHECK(work.empty());
-    CHECK(economies[0].stored.mass == Mag::fromInt(7));
+    CHECK(economies[0].stored.mass == Mag::fromInt(70));
     CHECK(roster.store.enhancements()[unit.index].empty());
     REQUIRE(issue());
-    economies[0].stored = {Mag::fromInt(8),Mag::fromInt(80)};
+    economies[0].stored = {Mag::fromInt(80),Mag::fromInt(80)};
     (void)tickSkirmish(roster.store, roster.catalog, match, terrain);
     const SaveState saved{.units=roster.store.snapshot(), .enhancements=work};
     const auto decoded = SaveState::decode(SaveState::encode(saved));

@@ -813,7 +813,10 @@ TEST_CASE("app match runner executes a logged paid engineering enhancement", "[e
     const auto type = scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
     scene.setTypeTraits(type, rm::data::moveDefFor(def), 1);
     const auto unit = scene.store.spawn({.type=type, .motion=rm::app::motionFor(def, 0), .health={.current=def.health,.maximum=def.health}});
-    scene.economies[0].stored = {Mag::fromInt(8),Mag::fromInt(80)};
+    // C-253's retail bug: the mass line drains at the ENERGY cost — 80 over
+    // 8 s at 10/s build rate is 10 mass and 10 energy per funded tick, so the
+    // full 80/80 bank covers exactly the eight beats the install needs.
+    scene.economies[0].stored = {Mag::fromInt(80),Mag::fromInt(80)};
     rm::app::PassabilitySet passability{field, false, 0};
     rm::vfs::Vfs content;
     auto runner = rm::app::makeMatchRunner(scene, field, passability, content, {}, {});

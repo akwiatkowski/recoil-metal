@@ -67,6 +67,17 @@ public:
         /// which varies per unit and so cannot live in a per-type table — see
         /// `tickRegeneration`.
         Mag regenPerTick{};
+
+        /// `C-263`: a deficit-covering producer (the Paragon, the only shipped
+        /// blueprint carrying `Economy.MaxMass`/`MaxEnergy`) recomputes its
+        /// rate every 0.5 s as `base + max(0, requested − income)`, clamped to
+        /// these caps — retail's `SetProductionPerSecond*` override, which
+        /// REPLACES the static rate rather than adding to it. `coversDeficit`
+        /// is the marker; the live per-unit rate lives in
+        /// `Match::productionOverrides`, not here.
+        bool coversDeficit = false;
+        Mag maxMassPerTick{};
+        Mag maxEnergyPerTick{};
     };
 
     struct EnhancementEffects {

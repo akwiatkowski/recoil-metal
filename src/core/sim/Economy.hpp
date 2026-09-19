@@ -251,6 +251,14 @@ inline constexpr float kCommanderTrickleEnergyPerSecond = 5.0f;
 /// `tickIndex` 4 with the run loop's first beat at index 0.
 inline constexpr TickIndex kInitialResourceGrantTick = 4;
 
+/// The floor a deficit-covering producer pays even with zero demand
+/// (`C-263`): `XAB1401_script.lua`'s `ResourceOn` writes
+/// `massAdd = 20` / `energyAdd = 1000` before adding the measured deficit.
+/// Script constants, not blueprint fields — the Paragon's bp authors only the
+/// `MaxMass`/`MaxEnergy` clamps. Per SECOND, converted at the point of use.
+inline constexpr float kDeficitCoverBaseMassPerSecond = 20.0f;
+inline constexpr float kDeficitCoverBaseEnergyPerSecond = 1000.0f;
+
 /// What one thing under construction wants, per second, and what it has had.
 struct Construction {
     /// Who is paying, and where it is being built.

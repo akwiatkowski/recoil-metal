@@ -12,9 +12,13 @@ does not replace its claims, addresses, counterevidence, or confirmation gate.
 **Snapshot:** 2026-09-19, main through `ae31a1a`. The 2026-09-18 analysis wave
 closed the retail-analyzed goal — every gameplay subsystem reads ≥85%
 (`C-251`–`C-381` across ten subsystem passes). The 2026-09-19 fix wave landed
-two more: `WaitTicks(n)` resumes on the (n−1)th beat per `C-305`'s
-`CTaskStage` counter quirk, and the enhancement mass drain uses the energy
-cost per `C-253`'s `WorkItemBuildCostMass` bug. CTest passes all 1,909 cases.
+three more: `WaitTicks(n)` resumes on the (n−1)th beat per `C-305`'s
+`CTaskStage` counter quirk, the enhancement mass drain uses the energy
+cost per `C-253`'s `WorkItemBuildCostMass` bug, and the Paragon's
+`ResourceOn` is deficit-covering per `C-263` — `SetProductionPerSecond*`
+writes `base + max(0, requested − income)` clamped to `Economy.MaxMass/
+MaxEnergy` every 0.5 s, riding SaveState v42 and the state hash. CTest
+passes 1,938 cases (two pre-existing `test_fa_lua.cpp` failures).
 
 **Update:** same day, later wave — the five backed `RULEUTC_*` toggles now drive
 the sim (`C-350`): shield, jamming, intel, stealth and cloak issue as

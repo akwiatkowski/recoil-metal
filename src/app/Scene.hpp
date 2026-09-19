@@ -342,6 +342,11 @@ struct UnitScene {
     // Created after scene construction, once its address is stable. These precede the
     // store so command queues can destroy their tasks while host and work still exist.
     std::vector<rm::sim::EnhancementWork> enhancementWork;
+
+    /// Per-slot deficit-covering production rates (`C-263`, the Paragon's
+    /// `ResourceOn`): recomputed every 0.5 s inside `recomputeIncome` and
+    /// serialized as SaveState v42. Indexed by unit slot like `motion()`.
+    std::vector<rm::sim::Resources> productionOverrides;
     std::unique_ptr<rm::sim::EnhancementTasks> enhancementTasks;
     rm::sim::UnitStore store;
 

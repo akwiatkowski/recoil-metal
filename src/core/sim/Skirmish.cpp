@@ -198,7 +198,7 @@ void advanceDefeatCleanup(UnitStore& store, const UnitCatalog& catalog, Match& m
 /// pointing at when it started.
 void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& match,
                      TickRate rate, const Terrain& terrain,
-                     std::vector<AdjacencyEffects>& adjacency) {
+                     std::vector<AdjacencyEffects>& adjacency, TickIndex tickIndex) {
     // The commander's trickle, per tick. Computed once for the whole pass rather than per
     // commander: it is the same number for all of them.
     const Resources trickle{
@@ -216,6 +216,10 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
     adjacencyEffects(store, catalog, adjacency,
                      terrain.placement() == PlacementMode::Grid ? Fx{} : kAdjacencyGapElmos);
     if (match.resourceFlows) match.resourceFlows->assign(store.slotCount(), {});
+    if (match.productionOverrides != nullptr
+        && match.productionOverrides->size() < store.slotCount()) {
+        match.productionOverrides->resize(store.slotCount());
+    }
 
     for (Economy& economy : match.economies) {
         economy.incomePerTick = {};
@@ -280,8 +284,15 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
             // not production.
             const AdjacencyEffects& beside = adjacency[slot];
             if (!store.productionPaused(store.idAt(slot))) {
-                economy.incomePerTick.mass += rates.massPerTick * beside.massProduction;
-                economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction;
+                if (rates.coversDeficit && match.productionOverrides != nullptr) {
+                    // `C-263`: the Paragon's `SetProductionPerSecond*` override
+                    // REPLACES the static rate — the stored per-slot value,
+                    // recomputed below on retail's 0.5 s cadence.
+                    economy.incomePerTick += (*match.productionOverrides)[slot];
+                } else {
+                    economy.incomePerTick.mass += rates.massPerTick * beside.massProduction;
+                    economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction;
+                }
                 // `SetMaintenanceConsumption{Active,Inactive}` gates upkeep only —
                 // the script-bit toggles cut a unit's draw without touching what
                 // it produces (`Unit.lua`'s `OnScriptBitSet`/`OnScriptBitClear`).
@@ -299,6 +310,62 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
                 .upkeepPerTick = {.mass = economy.upkeepPerTick.mass - upkeepBefore.mass,
                                   .energy = economy.upkeepPerTick.energy - upkeepBefore.energy},
             };
+        }
+    }
+
+    // `C-263`'s deficit-covering producers, on retail's `WaitSeconds(.5)`
+    // cadence (`XAB1401_script.lua:35-72`): each covering unit recomputes its
+    // override once per half-second window, phased by slot so the pass stays
+    // O(units/5) — retail's per-unit threads phase by creation order, which
+    // no native record preserves, so a fixed slot phase is the honest spread.
+    // A zero entry means "never computed" and recomputes immediately, the
+    // same first pass retail's thread runs before its first wait.
+    if (match.productionOverrides != nullptr) {
+        const TickIndex period = rate.ticks(Seconds{0.5f});
+        const Mag baseMass = rate.magPerTick(kDeficitCoverBaseMassPerSecond);
+        const Mag baseEnergy = rate.magPerTick(kDeficitCoverBaseEnergyPerSecond);
+        for (UnitIndex slot = 0; slot < motion.size(); ++slot) {
+            const UnitCatalog::Rates& rates = catalog.rates(store.typeAt(slot));
+            if (!rates.coversDeficit) {
+                continue;
+            }
+            Resources& override_ = (*match.productionOverrides)[slot];
+            const bool due = period > 0
+                && (tickIndex % period) == static_cast<TickIndex>(slot % period);
+            if (!due && (override_.mass > Mag{} || override_.energy > Mag{})) {
+                continue;
+            }
+            const int owner = motion[slot].armyIndex;
+            if (owner < 0 || static_cast<std::size_t>(owner) >= match.economies.size()) {
+                continue;
+            }
+            Economy& economy = match.economies[static_cast<std::size_t>(owner)];
+            // Retail subtracts only its OWN current contribution before
+            // measuring the deficit (`massIncome = income − massAdd`), so two
+            // Paragons split the shortfall rather than each covering all of it.
+            const Mag massIncome = economy.incomePerTick.mass - override_.mass;
+            const Mag energyIncome = economy.incomePerTick.energy - override_.energy;
+            const Mag massNeed = economy.requestedLastTick.mass;
+            const Mag energyNeed = economy.requestedLastTick.energy;
+            Mag massAdd = baseMass;
+            if (massNeed > massIncome) {
+                massAdd += massNeed - massIncome;
+            }
+            Mag energyAdd = baseEnergy;
+            if (energyNeed > energyIncome) {
+                energyAdd += energyNeed - energyIncome;
+            }
+            // `if maxMass and massAdd > maxMass` — the clamp applies only when
+            // the blueprint states the cap; zero means unclamped.
+            if (rates.maxMassPerTick > Mag{} && massAdd > rates.maxMassPerTick) {
+                massAdd = rates.maxMassPerTick;
+            }
+            if (rates.maxEnergyPerTick > Mag{} && energyAdd > rates.maxEnergyPerTick) {
+                energyAdd = rates.maxEnergyPerTick;
+            }
+            economy.incomePerTick.mass += massAdd - override_.mass;
+            economy.incomePerTick.energy += energyAdd - override_.energy;
+            override_ = {.mass = massAdd, .energy = energyAdd};
         }
     }
 }
@@ -902,7 +969,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    cap — reclaiming over a full mass bar overflows and is lost, the same rule as
     //    every other income (`core/sim/Reclaim.hpp`).
     std::vector<AdjacencyEffects> adjacency;
-    recomputeIncome(store, catalog, match, rate, terrain, adjacency);
+    recomputeIncome(store, catalog, match, rate, terrain, adjacency, tickIndex);
     // The ACU's `GiveInitialResources` (`UEL0001_script.lua:159` and its three
     // siblings — the four ACU scripts are the corpus's only callers): the unit
     // script forks the grant at `OnCreate`, `WaitTicks(5)` resumes on the fourth

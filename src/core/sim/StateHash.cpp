@@ -1028,6 +1028,29 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         feed(h, static_cast<std::uint64_t>(remaining));
     }
 
+    // `C-263`'s deficit-covering rates: a Paragon's recomputed override decides
+    // next tick's income, so two matches differing only in it must hash apart
+    // now. Only NONZERO entries feed — the vector is lazily sized to slotCount,
+    // so an all-zero table and an empty one are the same state, and a restored
+    // match must hash identically before its first recompute.
+    if (match.productionOverrides != nullptr) {
+        std::size_t live = 0;
+        for (const Resources& value : *match.productionOverrides) {
+            live += (value.mass > Mag{} || value.energy > Mag{}) ? 1 : 0;
+        }
+        if (live > 0) {
+            feedText(h, "production-overrides");
+            feed(h, live);
+            for (UnitIndex slot = 0; slot < match.productionOverrides->size(); ++slot) {
+                const Resources& value = (*match.productionOverrides)[slot];
+                if (value.mass > Mag{} || value.energy > Mag{}) {
+                    feed(h, static_cast<std::size_t>(slot));
+                    feed(h, value);
+                }
+            }
+        }
+    }
+
     return h;
 }
 

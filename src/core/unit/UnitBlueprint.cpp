@@ -557,6 +557,11 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.buildRate = numberOr(*economy, "BuildRate", 0.0f);
         def.producesMassPerSecond = numberOr(*economy, "ProductionPerSecondMass", 0.0f);
         def.producesEnergyPerSecond = numberOr(*economy, "ProductionPerSecondEnergy", 0.0f);
+        // `C-263`: the Paragon's deficit-covering caps. `MaxMass`/`MaxEnergy`
+        // appear on no other shipped blueprint, so their presence is also the
+        // marker that this type's production is dynamic rather than static.
+        def.economyMaxMassPerSecond = numberOr(*economy, "MaxMass", 0.0f);
+        def.economyMaxEnergyPerSecond = numberOr(*economy, "MaxEnergy", 0.0f);
         def.upkeepEnergyPerSecond =
             numberOr(*economy, "MaintenanceConsumptionPerSecondEnergy", 0.0f);
         def.storageMass = sim::magFromFloat(numberOr(*economy, "StorageMass", 0.0f));

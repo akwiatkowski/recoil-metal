@@ -126,6 +126,15 @@ struct Match {
     /// Missile-redirector state, separate from UnitStore (`C-088`).
     std::vector<MissileRedirect>* redirects = nullptr;
 
+    /// Per-slot dynamic production rates for deficit-covering producers
+    /// (`C-263`, the Paragon's `ResourceOn`): `base + max(0, requested −
+    /// income)`, recomputed every 0.5 s and clamped to the type's
+    /// `Economy.MaxMass`/`MaxEnergy`. Indexed by unit slot like `motion()`;
+    /// a zero entry means "not yet computed" and recomputes on the unit's
+    /// first tick. Null for a scene with no such units — the income pass then
+    /// reads static rates for everything.
+    std::vector<Resources>* productionOverrides = nullptr;
+
     /// What is on the ground that is not a unit — wrecks (§7 P6.2). Null for a scene with
     /// nothing to leave behind.
     ///

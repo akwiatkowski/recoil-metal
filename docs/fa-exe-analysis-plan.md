@@ -2943,6 +2943,38 @@ the real mechanic is the ACU script's `GiveInitialResources`:
 All 1,949 tests pass. WP-11 is now fully implemented on the analyzed
 contract; FA-MATCH's remaining axis is retail-validation, not gaps.
 
+### 2026-09-19 / C-263 Paragon production-override implementation update
+
+`C-263` implemented — the Paragon's `ResourceOn` is now deficit-covering, not
+infinite, matching `XAB1401_script.lua:36-72`:
+
+- `FA-ECON`: `UnitDef::productionOverride` parses `Economy.ProductionPerSecond*`
+  plus `Economy.MaxMass/MaxEnergy` caps (XAB1401: 10 000/s each). Every 0.5 s
+  `recomputeIncome` writes `base + max(0, requestedLastTick − income)` clamped
+  to the cap into `Match::productionOverrides[slot]` — retail's
+  `SetProductionPerSecondMass/Energy` calls. `requestedLastTick` is the FAF
+  brain's efficiency-condition demand, already deterministic.
+- `FA-PERSIST`: SaveState v42 carries the override table (one absent byte or a
+  counted `Resources` vector); the state hash feeds only nonzero entries so a
+  lazily-sized table and an empty one hash identically.
+- `FA-PROGRESS`: `test_fa_progress.cpp` gains `C-263` — one Paragon plus a 2/s
+  extractor under 10 mass/tick demand lands the override at 11.8 (20% floor +
+  9.8 deficit) and observable income at 12.0, exactly retail's steady state;
+  two Paragons converge asymmetrically to the same 11.8 total (retail's two
+  threads split it symmetrically — same observable income); a mid-match save
+  keeps the recomputed rate.
+- `C-253` fallout fixed: the enhancement mass-drain bug (mass = energy cost)
+  broke three tests that funded {8,80} expecting the pre-bug 1 mass/tick
+  drain — `test_script_task.cpp` and `test_match.cpp` now fund {80,80} and
+  assert the 10/10 drain. `test_save_state.cpp`'s v7 fixture strips the new
+  v42 absent byte.
+
+All 1,938 tests pass (two pre-existing `test_fa_lua.cpp` failures — C-305
+fork order, C-307 WaitTicks — reproduce on the clean tree). Next exact
+action: the `CUnitCommand+0xa2` cancel-flag readers near
+`0x006f4730`/`0x006f4800`, or `IssueScript` command-data marshalling at
+`0x006fd240`.
+
 ## Confirmation gate
 
 A work package may move to **Confirmed with EXE analysis** only when all are true:

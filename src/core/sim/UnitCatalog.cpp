@@ -61,6 +61,13 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
         derived.buildSkirtElmos = fxFromFloat(
             std::max(def->skirtSquaresX, def->skirtSquaresZ) * scmap::kElmosPerOgrid);
         derived.regenPerTick = rate.magPerTick(def->regenPerSecond);
+        // `C-263`: `Economy.MaxMass`/`MaxEnergy` mark the Paragon's dynamic
+        // production — `ResourceOn` clamps its recomputed rate to them. Both
+        // present on the only shipped carrier; either alone still flags it.
+        derived.coversDeficit =
+            def->economyMaxMassPerSecond > 0.0f || def->economyMaxEnergyPerSecond > 0.0f;
+        derived.maxMassPerTick = rate.magPerTick(def->economyMaxMassPerSecond);
+        derived.maxEnergyPerTick = rate.magPerTick(def->economyMaxEnergyPerSecond);
     }
     rates_.push_back(derived);
     auto& enhancements = enhancements_.emplace_back();

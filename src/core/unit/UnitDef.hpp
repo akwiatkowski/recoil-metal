@@ -475,6 +475,14 @@ struct UnitDef {
     float producesMassPerSecond = 0.0f;
     float producesEnergyPerSecond = 0.0f;
 
+    /// `Economy.MaxMass`/`MaxEnergy` — the ceiling on a deficit-covering
+    /// producer's dynamic rate. Only XAB1401 (the Paragon) ships them: its
+    /// `ResourceOn` script recomputes `SetProductionPerSecond*` every 0.5 s as
+    /// `base + max(0, requested − income)`, clamped here (`C-263`). Zero on
+    /// everything else, which is what marks a static producer.
+    float economyMaxMassPerSecond = 0.0f;
+    float economyMaxEnergyPerSecond = 0.0f;
+
     /// What it costs to RUN, per second, once standing. Energy only: 104 units state
     /// `MaintenanceConsumptionPerSecondEnergy` and not one states a mass counterpart.
     ///

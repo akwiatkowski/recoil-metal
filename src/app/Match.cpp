@@ -1298,6 +1298,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 .siloQueue = &scene.siloQueue,
                 .enhancements = &scene.enhancementWork,
                 .redirects = &scene.redirects,
+                .productionOverrides = &scene.productionOverrides,
                 .features = &scene.features,
                 .events = &scene.events,
                 .scriptTasks = scene.enhancementTasks.get(),

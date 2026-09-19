@@ -12,6 +12,7 @@
 #include "core/sim/Enhancement.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/StateHash.hpp"
+#include "core/sim/SaveState.hpp"
 #include "core/sim/Terrain.hpp"
 #include "core/unit/UnitDef.hpp"
 #include "support/FxMatchers.hpp"
@@ -405,4 +406,89 @@ TEST_CASE("C-254: a dead unit's enhancement registry entry leaves with it",
     // enhancements rather than the corpse's LCH suite.
     const auto replacement = roster.add(type, 60.0f, 60.0f, 0, 100.0f);
     CHECK(roster.store.enhancements()[replacement.index].empty());
+}
+
+TEST_CASE("C-263: a deficit-covering producer tops up the shortfall, clamped "
+          "to its MaxMass/MaxEnergy", "[fa-progress][paragon]") {
+    // `XAB1401_script.lua`'s `ResourceOn`: every 0.5 s the Paragon writes
+    // `SetProductionPerSecond*` to `base + max(0, requested − income)` — the
+    // script's own 20/1000 floor plus whatever the army is short — clamped to
+    // the blueprint's `Economy.MaxMass`/`MaxEnergy`. The override REPLACES the
+    // static rate, and each unit subtracts only its own contribution before
+    // measuring, so two Paragons split the deficit rather than doubling it.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef paragon;
+    paragon.name = "xab1401";
+    paragon.categories = {"STRUCTURE"};
+    paragon.health = rm::test::mag(1000.0f);
+    paragon.economyMaxMassPerSecond = 10000.0f;
+    paragon.economyMaxEnergyPerSecond = 1000000.0f;
+    const auto paragonType = roster.addType(paragon);
+    rm::unitdef::UnitDef mex;
+    mex.name = "mex";
+    mex.categories = {"STRUCTURE"};
+    mex.health = rm::test::mag(100.0f);
+    mex.producesMassPerSecond = 2.0f;
+    const auto mexType = roster.addType(mex);
+
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::TickRate rate{10};
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<rm::sim::Resources> overrides;
+    const std::vector<int> commandersEver{0, 0};
+    rm::sim::Match match{.armies = armies,
+                         .economies = economies,
+                         .productionOverrides = &overrides,
+                         .commandersEver = commandersEver,
+                         .victoryMode = rm::sim::VictoryMode::Sandbox};
+
+    // One Paragon plus a 2/s extractor. Demand 10 mass/tick: the deficit is
+    // 10 − 0.2 = 9.8/tick, so the override lands at 2 + 9.8 = 11.8 — the
+    // script's 20/s floor plus the shortfall, all at 10 Hz.
+    const auto para = roster.add(paragonType, 40.0f, 40.0f, 0, 1000.0f);
+    (void)roster.add(mexType, 60.0f, 40.0f, 0, 100.0f);
+    economies[0].requestedLastTick = {.mass = rm::test::mag(10.0f),
+                                    .energy = rm::test::mag(0.0f)};
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate, 0);
+    REQUIRE(overrides.size() > para.index);
+    CHECK(rm::test::asFloat(overrides[para.index].mass) == Catch::Approx(11.8f));
+    CHECK(rm::test::asFloat(overrides[para.index].energy) == Catch::Approx(100.0f));
+    // The override replaced the static rate: income is mex 0.2 + paragon 11.8
+    // — demand plus the floor, exactly retail's steady state.
+    CHECK(rm::test::asFloat(economies[0].incomePerTick.mass) == Catch::Approx(12.0f));
+
+    // Demand beyond the cap clamps to MaxMass — 10000/s = 1000/tick.
+    economies[0].requestedLastTick = {.mass = rm::test::mag(100000.0f),
+                                    .energy = rm::test::mag(0.0f)};
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate, 5);
+    CHECK(rm::test::asFloat(overrides[para.index].mass) == Catch::Approx(1000.0f));
+
+    // A second Paragon keeps the same total: each subtracts only its own
+    // contribution, so the pair covers the deficit once — combined override
+    // stays at need + floor = 11.8, the same fixed point retail's two threads
+    // reach (retail splits it symmetrically; ours converges asymmetrically —
+    // the observable income is identical either way).
+    const auto para2 = roster.add(paragonType, 80.0f, 40.0f, 0, 1000.0f);
+    economies[0].requestedLastTick = {.mass = rm::test::mag(10.0f),
+                                    .energy = rm::test::mag(0.0f)};
+    for (rm::TickIndex tick = 6; tick < 16; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate, tick);
+    }
+    const float total = rm::test::asFloat(overrides[para.index].mass)
+                      + rm::test::asFloat(overrides[para2.index].mass);
+    CHECK(total == Catch::Approx(11.8f).margin(0.05f));
+
+    // The override rides the save: a mid-match snapshot keeps the recomputed
+    // rate rather than restarting at the floor.
+    rm::sim::SaveState state;
+    state.tick = 16;
+    state.productionOverrides = overrides;
+    const std::vector<std::byte> bytes = rm::sim::SaveState::encode(state);
+    const std::optional<rm::sim::SaveState> decoded = rm::sim::SaveState::decode(bytes);
+    REQUIRE(decoded.has_value());
+    REQUIRE(decoded->productionOverrides.has_value());
+    CHECK(rm::test::asFloat(decoded->productionOverrides->at(para.index).mass)
+          == Catch::Approx(rm::test::asFloat(overrides[para.index].mass)));
 }
