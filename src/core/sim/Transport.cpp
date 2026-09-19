@@ -136,6 +136,13 @@ using AirState = MoveState::AirState;
 } // namespace
 
 bool canEverCarry(const unitdef::UnitDef& carrier, const unitdef::UnitDef& cargo) noexcept {
+    // `C-225`: a CARRIER's storage pool takes aircraft only — the retail
+    // script feeds it `AddUnitToStorage` straight off the build pad, and the
+    // native capacity check is `(stored + reserved) < StorageSlots` with no
+    // class matching at all.
+    if (carrier.isCarrier()) {
+        return cargo.motion == unitdef::MotionType::Air;
+    }
     const int cost = carrier.transportAttachCost(cargo.transportCargoClass());
     return cost > 0 && cost <= carrier.transportCapacity();
 }
@@ -218,6 +225,13 @@ bool hasRoomFor(const UnitStore& store, const UnitCatalog& catalog, UnitId carri
     // fallback: the arithmetic path is for carriers whose mesh was never read.
     const std::span<const UnitCatalog::AttachBone> bones =
         catalog.attachBones(store.typeAt(carrier.index));
+    if (carrierDef->isCarrier()) {
+        // The pool is a plain integer: stored children against
+        // `StorageSlots`. Retail also counts reserved slots (aircraft still
+        // on the build pad); the spawn-side check adds those separately.
+        return static_cast<int>(store.childrenOf(carrier).size())
+               < carrierDef->transport.storageSlots;
+    }
     if (!bones.empty()) {
         const std::vector<const UnitCatalog::AttachBone*> order = genericBoneOrder(bones);
         return freeGenericBones(store, catalog, *carrierDef, carrier, order) >= cost;
@@ -233,6 +247,16 @@ bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
     const std::span<const MoveState> motion = store.motion();
     if (!store.alive(carrierId) || !store.alive(cargo) || store.parentOf(cargo)) {
         return false;
+    }
+    if (carrier.isCarrier()) {
+        // `C-225`: a stored aircraft rides at the carrier's origin with no
+        // bone and no deck — `IAiTransport::AttachUnit` is a plain list
+        // append, and the unit is hidden while stored.
+        Transform& at = transforms[cargo.index];
+        at.x = transforms[carrierId.index].x;
+        at.z = transforms[carrierId.index].z;
+        at.y = transforms[carrierId.index].y;
+        return store.attach(carrierId, cargo);
     }
     if (!grounded(motion[carrierId.index])) {
         return false;  // the deck is where a unit steps aboard
@@ -309,12 +333,36 @@ bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
 }
 
 
-void detachCargo(UnitStore& store, const Terrain& terrain, UnitId carrier) noexcept {
+void detachCargo(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
+                 UnitId carrier) noexcept {
     const std::vector<UnitId> children = store.childrenOf(carrier);
     if (children.empty()) {
         return;
     }
     const Transform& at = store.transforms()[carrier.index];
+    const unitdef::UnitDef* carrierDef = catalog.def(store.typeAt(carrier.index));
+    if (carrierDef != nullptr && carrierDef->isCarrier()) {
+        // `C-225`: a carrier launch is a detach, not a landing — the stored
+        // aircraft leaves the hold already airborne at the carrier's own
+        // position, engines on, ready for whatever order comes next.
+        for (const UnitId child : children) {
+            if (!store.detach(child)) {
+                continue;
+            }
+            Transform& place = store.transforms()[child.index];
+            place.x = at.x;
+            place.z = at.z;
+            place.y = at.y;
+            place.pitch = 0;
+            place.roll = 0;
+            MoveState& launched = store.motion()[child.index];
+            launched.airborne = true;
+            launched.moving = false;
+            launched.path.clear();
+            launched.pathIndex = 0;
+        }
+        return;
+    }
     const Fx spread = store.motion()[carrier.index].radiusElmos + Fx::fromInt(2);
     // A deterministic ring: evenly spaced headings, each child the same reach
     // out from the keel. Fixed-point trig is not needed — the pattern is a
@@ -522,7 +570,7 @@ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terra
     case TransportPhase::ToDrop: {
         if (grounded(motion) && !motion.moving
             && nearPoint(drop, kFerryPickupRadius + motion.radiusElmos)) {
-            detachCargo(store, terrain, self);
+            detachCargo(store, catalog, terrain, self);
             order.setTransportPhase(TransportPhase::ToBeacon);
             return;
         }
@@ -600,7 +648,7 @@ void advanceGuardFerry(UnitStore& store, const UnitCatalog& catalog, const Terra
 
 /// The carrier-side drive for `UnloadTransport`: get there, come down, and
 /// set the hold on the ground. Completes when the last child steps off.
-void advanceUnload(UnitStore& store, const UnitCatalog& /*catalog*/, const Terrain& terrain,
+void advanceUnload(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
                    std::span<const PassabilityGrid* const> gridForType, UnitIndex slot,
                    QueuedCommand& order) {
     const UnitId self = store.idAt(slot);
@@ -626,12 +674,22 @@ void advanceUnload(UnitStore& store, const UnitCatalog& /*catalog*/, const Terra
             return;
         }
     }
+    // A CARRIER's hold is aircraft in internal storage (`C-225`): the unload
+    // is a launch, not a landing — it happens where the carrier already is,
+    // deck or sky, and the children leave airborne.
+    const unitdef::UnitDef* selfDef = catalog.def(store.typeAt(slot));
+    if (selfDef != nullptr && selfDef->isCarrier()) {
+        detachCargo(store, catalog, terrain, self);
+        (void)queue.finish();
+        return;
+    }
+
 
     const Fx dx = at.x - order.targetX();
     const Fx dz = at.z - order.targetZ();
     const Fx arrive = motion.radiusElmos + Fx::fromInt(4);
     if (grounded(motion) && !motion.moving && dx * dx + dz * dz <= arrive * arrive) {
-        detachCargo(store, terrain, self);
+        detachCargo(store, catalog, terrain, self);
         (void)queue.finish();
         return;
     }

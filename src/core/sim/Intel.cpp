@@ -772,6 +772,20 @@ std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,
     if (!store.slotAlive(target)) {
         return std::nullopt;
     }
+    // `C-225`: an aircraft stored inside a CARRIER is hidden — it projects no
+    // radar, sonar, or vision contact of its own until launched. (Cargo on an
+    // ordinary transport stays visible; only carrier storage conceals.)
+    if (store.motion()[target].attached) {
+        const std::optional<UnitId> parent = store.parentOf(store.idAt(target));
+        if (parent.has_value()) {
+            const unitdef::UnitDef* parentDef =
+                catalog.def(store.typeAt(parent->index));
+            if (parentDef != nullptr && parentDef->isCarrier()) {
+                return std::nullopt;
+            }
+        }
+    }
+
     const int armyIndex = store.motion()[target].armyIndex;
     const auto army = std::ranges::find_if(
         armies, [armyIndex](const Army& candidate) { return candidate.index == armyIndex; });

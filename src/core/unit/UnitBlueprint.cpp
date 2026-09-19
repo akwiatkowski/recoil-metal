@@ -709,6 +709,10 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.transport.class4AttachSize = integer("Class4AttachSize");
         def.transport.classGenericUpTo = integer("ClassGenericUpTo");
         def.transport.dockingSlots = integer("DockingSlots");
+        // `C-225`: the carrier's internal storage pool — `(stored + reserved)
+        // < StorageSlots` is the whole capacity check; no class matching, no
+        // bone machinery. Distinct from `DockingSlots`, which is dead code.
+        def.transport.storageSlots = integer("StorageSlots");
         const auto flag = [transport](std::string_view key) {
             const lua::Value* value = transport->find(key);
             return value != nullptr && value->asBoolean().value_or(false);

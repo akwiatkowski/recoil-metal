@@ -10,6 +10,7 @@
 #include "core/sim/Replay.hpp"
 #include "core/sim/SlowUpdate.hpp"
 #include "core/sim/StateHash.hpp"
+#include "core/sim/Transport.hpp"
 #include "core/log/Log.hpp"
 
 #include <algorithm>
@@ -1802,8 +1803,42 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 .at = work.position,
             });
         }
+        // `C-225`: a CARRIER stores its air product in internal storage
+        // instead of rolling it off — retail's `AddUnitToStorage` gated by
+        // `TransportHasAvailableStorage`, i.e. `(stored + reserved) <
+        // StorageSlots`. "Reserved" is the carrier's other air products
+        // still rising on the pad. This is state, not a command, so it runs
+        // identically under replay.
+        bool storedOnCarrier = false;
+        if (spawned && scene.store.alive(work.builder)) {
+            const rm::unitdef::UnitDef* builderDef =
+                scene.catalog.def(scene.store.typeAt(work.builder.index));
+            const rm::unitdef::UnitDef& productDef =
+                buildableDef(scene, work.blueprintIndex);
+            if (builderDef != nullptr && builderDef->isCarrier()
+                && productDef.motion == rm::unitdef::MotionType::Air) {
+                int reserved = 0;
+                for (const rm::sim::Construction& rising : scene.building) {
+                    if (rising.builder == work.builder && !rising.finished()
+                        && buildableDef(scene, rising.blueprintIndex).motion
+                               == rm::unitdef::MotionType::Air) {
+                        ++reserved;
+                    }
+                }
+                const int stored =
+                    static_cast<int>(scene.store.childrenOf(work.builder).size());
+                if (stored + reserved < builderDef->transport.storageSlots) {
+                    storedOnCarrier = rm::sim::attachCargo(
+                        scene.store, scene.catalog, *builderDef, work.builder,
+                        *spawned);
+                }
+            }
+        }
         // The roll-off STANDS DOWN in a replay: its move was recorded by the original
         // run and replays from the log — issuing it here as well would order it twice.
+        if (storedOnCarrier) {
+            continue;  // a stored aircraft does not roll off the pad
+        }
         if (spawned && runner.replay == nullptr
             && buildableDef(scene, work.blueprintIndex).isMobile()) {
             // Off the factory floor: straight to the fight once the wave has gone, to the

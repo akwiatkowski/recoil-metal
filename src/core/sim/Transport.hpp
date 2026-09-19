@@ -78,9 +78,12 @@ inline constexpr Fx kFerryPickupRadius = Fx::fromInt(10);
                                const unitdef::UnitDef& carrier,
                                UnitId carrierId, UnitId cargo) noexcept;
 
-/// Sets every child down on the deck around the carrier, in deterministic
-/// ring order. Their queues keep whatever follows the boarding order.
-void detachCargo(UnitStore& store, const Terrain& terrain, UnitId carrier) noexcept;
+/// Sets every child down around the carrier — in deterministic ring order on
+/// the deck for transports, or airborne at the carrier's position for a
+/// `CARRIER`'s internal storage launch (`C-225`). Their queues keep whatever
+/// follows the boarding order.
+void detachCargo(UnitStore& store, const UnitCatalog& catalog,
+                 const Terrain& terrain, UnitId carrier) noexcept;
 
 } // namespace sim
 } // namespace rm

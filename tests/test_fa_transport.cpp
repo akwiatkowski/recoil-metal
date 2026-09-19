@@ -7,9 +7,8 @@
 // with it (C-197), and a ferry holding at the beacon for a straggler (C-199).
 //
 // Deliberately absent: the 99% cargo-survival roll (C-197 — the kill cascade
-// is unconditional here, a recorded divergence), carrier storage pools
-// (C-225, not implemented), and the carrier/mobile-factory attach-store
-// pattern (C-264, not implemented).
+// is unconditional here, a recorded divergence) and the carrier/mobile-factory
+// attach-store pattern (C-264, not implemented).
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -73,6 +72,32 @@ namespace {
     def.commandCaps = {"RULEUCC_CallTransport"};
     def.commandCapsDeclared = true;
     def.transport.transportClass = cls;
+    return def;
+}
+
+/// A URS0303-shaped carrier: `CARRIER` + `NAVALCARRIER`, `StorageSlots = 2`
+/// (the shipped 50 is shrunk so a test can fill the pool).
+[[nodiscard]] UnitDef carrierDef() {
+    UnitDef def;
+    def.name = "test_carrier";
+    def.categories = {"CARRIER", "MOBILE", "NAVALCARRIER"};
+    def.motion = rm::unitdef::MotionType::Water;
+    def.speedElmosPerSecond = 4.0f;
+    def.commandCaps = {"RULEUCC_Transport"};
+    def.commandCapsDeclared = true;
+    def.transport.storageSlots = 2;
+    return def;
+}
+
+/// An aircraft the carrier's pad can produce — the only cargo a storage
+/// pool accepts (`C-225`).
+[[nodiscard]] UnitDef airCargoDef() {
+    UnitDef def;
+    def.name = "test_air_cargo";
+    def.categories = {"AIR", "MOBILE"};
+    def.motion = rm::unitdef::MotionType::Air;
+    def.canFly = true;
+    def.speedElmosPerSecond = 12.0f;
     return def;
 }
 
@@ -767,4 +792,55 @@ TEST_CASE("C-198: a class-2 cargo consumes two class-1 points",
     CHECK_FALSE(rm::sim::attachCargo(roster.store, roster.catalog, carrierDef,
                                    transport, third));
     CHECK_FALSE(roster.motion(third).attached);
+}
+
+TEST_CASE("C-225: a carrier stores aircraft in its pool and launches them airborne",
+          "[fa-transport]") {
+    // Retail's carrier storage is a plain integer pool — `(stored + reserved)
+    // < StorageSlots`, no class matching, no bone machinery — fed by
+    // `AddUnitToStorage` off the build pad and emptied by a detach that reads
+    // as a launch, not a landing.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex carrierType = roster.addType(carrierDef());
+    const rm::UnitTypeIndex airType = roster.addType(airCargoDef());
+    const rm::UnitTypeIndex landType = roster.addType(cargoDef());
+    const UnitDef& carrier = *roster.catalog.def(carrierType);
+    const UnitDef& aircraft = *roster.catalog.def(airType);
+    const UnitDef& tank = *roster.catalog.def(landType);
+
+    const UnitId carrierId = roster.add(carrierType, 100.0f, 100.0f, 0, 500.0f);
+
+    // The pool takes aircraft only — a tank is not carrier cargo.
+    CHECK(rm::sim::canEverCarry(carrier, aircraft));
+    CHECK_FALSE(rm::sim::canEverCarry(carrier, tank));
+
+    // Stored aircraft ride at the carrier's origin — no bone, no deck offset.
+    const UnitId first = roster.add(airType, 120.0f, 120.0f, 0, 500.0f);
+    const UnitId second = roster.add(airType, 130.0f, 130.0f, 0, 500.0f);
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog, carrier,
+                               carrierId, first));
+    CHECK(roster.motion(first).attached);
+    CHECK(roster.transform(first).x == roster.transform(carrierId).x);
+    CHECK(roster.transform(first).z == roster.transform(carrierId).z);
+
+    // Two of two slots filled: the pool is full.
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog, carrier,
+                               carrierId, second));
+    const UnitId third = roster.add(airType, 140.0f, 140.0f, 0, 500.0f);
+    CHECK_FALSE(rm::sim::hasRoomFor(roster.store, roster.catalog, carrierId,
+                                    aircraft));
+
+    // The launch is a detach, not a landing: both aircraft leave the hold
+    // already airborne at the carrier's position.
+    rm::sim::detachCargo(roster.store, roster.catalog, terrain, carrierId);
+    CHECK_FALSE(roster.motion(first).attached);
+    CHECK_FALSE(roster.motion(second).attached);
+    CHECK(roster.motion(first).airborne);
+    CHECK(roster.motion(second).airborne);
+    CHECK(roster.transform(first).x == roster.transform(carrierId).x);
+    CHECK(roster.transform(first).y == roster.transform(carrierId).y);
+    (void)third;
 }

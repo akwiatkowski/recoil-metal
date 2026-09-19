@@ -765,6 +765,11 @@ struct UnitDef {
         /// it is used here anyway because it is the only capacity the file
         /// states, and on every shipped pad it equals the attach-bone count.
         int dockingSlots = 0;
+        /// `StorageSlots` — the carrier's internal aircraft pool (`C-225`):
+        /// `(stored + reserved) < StorageSlots` is the whole capacity check,
+        /// with no class matching and no bone machinery. Authored on the four
+        /// `CARRIER`/`NAVALCARRIER` units (50–150).
+        int storageSlots = 0;
         /// `AirClass` — the carrier flies, so loading means coming down to the deck.
         bool airClass = false;
         /// `CanFireFromTransport` — parsed; firing while attached is outside the
@@ -816,6 +821,14 @@ struct UnitDef {
     /// blueprints carry the category: UAB5202, UEB5202, URB5202, XSB5202.
     [[nodiscard]] bool isAirStagingPad() const noexcept {
         return hasCategory("AIRSTAGINGPLATFORM");
+    }
+
+    /// A `CARRIER`/`NAVALCARRIER` with an internal storage pool (`C-225`) —
+    /// URS0303, UAS0303, UES0401, UAA0310. Storage is a plain integer pool,
+    /// not the transport attach machinery.
+    [[nodiscard]] bool isCarrier() const noexcept {
+        return transport.storageSlots > 0
+            && (hasCategory("CARRIER") || hasCategory("NAVALCARRIER"));
     }
 
     /// A `FERRYBEACON` — the spawned marker a ferry route loads at (`C-199`,
