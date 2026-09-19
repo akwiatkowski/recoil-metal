@@ -5,6 +5,7 @@
 #include "core/sim/Events.hpp"
 #include "core/sim/Intel.hpp"
 #include "core/sim/UnitStore.hpp"
+#include "core/sim/UnitCatalog.hpp"
 
 #include <algorithm>
 #include <vector>
@@ -151,6 +152,55 @@ void tickManipulators(UnitStore& store, std::span<const Economy> economies,
                 break;
             }
         }
+    }
+}
+
+void syncBuilderArms(UnitStore& store, const UnitCatalog& catalog,
+                     std::span<const Construction> building) {
+    const std::span<const MoveState> motion = store.motion();
+    const std::span<std::vector<Manipulator>> lists = store.manipulators();
+    for (UnitIndex slot = 0; slot < lists.size(); ++slot) {
+        if (!store.slotAlive(slot)) {
+            continue;
+        }
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+        if (def == nullptr) {
+            continue;
+        }
+        std::vector<Manipulator>& list = lists[slot];
+        auto arm = std::ranges::find_if(list, [](const Manipulator& manip) {
+            return manip.kind == ManipulatorKind::BuilderArm;
+        });
+        if (!def->builderArm.exists()) {
+            // `C-249`'s creation gate, read the other way: retail's
+            // `SetupBuildBones` creates the manipulator only when all three
+            // `General.BuildBones` references exist, so a unit whose blueprint
+            // lacks any of them never carries the record at all.
+            if (arm != list.end()) {
+                list.erase(arm);
+            }
+            continue;
+        }
+        if (arm == list.end()) {
+            (void)store.addManipulator(
+                store.idAt(slot),
+                Manipulator{.kind = ManipulatorKind::BuilderArm,
+                            .precedence = 5,   // retail's authored precedence
+                            .enabled = false}); // parked until the bay opens
+            arm = std::ranges::find_if(list, [](const Manipulator& manip) {
+                return manip.kind == ManipulatorKind::BuilderArm;
+            });
+        }
+        // The build-open lifecycle without a skeleton: retail disables the arm
+        // while `AnimationBuild` opens the bay and re-enables it when the arm
+        // may aim (`defaultunits.lua:1609-1645`). The sim's honest proxy for
+        // "the bay is open" is live construction work naming this unit as its
+        // builder — an idle factory's arm stays parked.
+        const UnitId self = store.idAt(slot);
+        const bool atWork = std::ranges::any_of(building, [&](const Construction& work) {
+            return !work.finished() && work.builder == self;
+        });
+        arm->enabled = atWork;
     }
 }
 

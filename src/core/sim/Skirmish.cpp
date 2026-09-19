@@ -823,8 +823,13 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     //    intel stamp follows below. Storage slides read the economies as they
     //    stood at the last recompute: a slide is a gauge, and a gauge shows
     //    the reading it has, not the one being taken.
+    // `C-249`'s builder-arm lifecycle runs first: the pass creates the record
+    // for a unit whose blueprint carries all three BuildBones and parks it
+    // while the unit has no live construction work — the build-open proxy.
+    syncBuilderArms(store, catalog,
+                    match.building != nullptr ? std::span<const Construction>{*match.building}
+                                              : std::span<const Construction>{});
     tickManipulators(store, match.economies, match.events);
-
     // `C-265`'s blueprint `Lifetime`, retail's `seraphimunits.lua` Othuy timer:
     // a spawned unit with `UnitDef::lifetimeSeconds` counts down and
     // `Destroy()`s itself — no wreck, no report, no kill credit. Armed LAZILY

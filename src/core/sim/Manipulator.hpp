@@ -16,6 +16,8 @@ class Intel;
 struct Army;
 struct Economy;
 class EventQueue;
+class UnitCatalog;
+struct Construction;
 
 /// No bone: an attachment sits at its carrier's origin. Namespace scope (rather
 /// than a class constant) so nested record initializers may name it.
@@ -153,6 +155,19 @@ inline constexpr std::int32_t kMuzzleBone = 0;
 /// hold their offset at zero, the honest reading of "nothing stored".
 void tickManipulators(UnitStore& store, std::span<const Economy> economies,
                       EventQueue* events);
+
+/// The builder-arm lifecycle — `C-249`'s two halves that the tick can own
+/// without a skeleton. Retail creates the `CBuilderArmManipulator` in
+/// `SetupBuildBones` only when all three `General.BuildBones` references
+/// exist (`builderArm.exists()`), and the factory's build-open animation
+/// disables it while the bay opens and re-enables it when the arm may aim.
+/// With no animation timeline the honest proxy for "the bay is open" is
+/// "the unit has live construction work": a builder named on an unfinished
+/// `Construction` row has its arm enabled; idle it is parked disabled.
+/// Runs before `tickManipulators` so a freshly parked arm does not update.
+void syncBuilderArms(UnitStore& store, const UnitCatalog& catalog,
+                     std::span<const Construction> building);
+
 
 /// The effect-manager beat — retail's `Sim+0x8C0` tick in `AdvanceBeat`
 /// (`C-296`, `0x65fda0`).

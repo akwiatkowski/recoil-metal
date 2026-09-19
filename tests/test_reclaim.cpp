@@ -277,6 +277,61 @@ TEST_CASE("C-146: overkill scales the wreck's value, and enough of it vaporises 
     }
 }
 
+TEST_CASE("C-249: the builder arm exists only with all three BuildBones and opens with work") {
+    // `SetupBuildBones` creates the `CBuilderArmManipulator` only when
+    // `General.BuildBones` names YawBone, PitchBone AND AimBone; the factory's
+    // build-open animation disables it while the bay opens and re-enables it
+    // when the arm may aim — here, while a live construction names the unit.
+    Fixture f;
+    rm::unitdef::UnitDef armed;
+    armed.name = "test_armed_builder";
+    armed.builderArm.yawBone.name = "Torso";
+    armed.builderArm.pitchBone.name = "Arm";
+    armed.builderArm.aimBone.name = "Tool";
+    const rm::UnitTypeIndex armedType = f.roster.addType(armed);
+
+    rm::unitdef::UnitDef partial = armed;
+    partial.name = "test_partial_builder";
+    partial.builderArm.aimBone = {};  // missing one of the three
+    const rm::UnitTypeIndex partialType = f.roster.addType(partial);
+
+    const UnitId armedUnit = f.roster.add(armedType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId partialUnit = f.roster.add(partialType, 300.0f, 200.0f, 0, 100.0f);
+
+    const auto armOf = [&](UnitId unit) -> const rm::sim::Manipulator* {
+        const auto& list = f.roster.store.manipulators()[unit.index];
+        const auto found = std::ranges::find_if(list, [](const rm::sim::Manipulator& m) {
+            return m.kind == rm::sim::ManipulatorKind::BuilderArm;
+        });
+        return found != list.end() ? &*found : nullptr;
+    };
+
+    f.tick();
+    // All three bones: the record exists, parked disabled while the unit is idle.
+    REQUIRE(armOf(armedUnit) != nullptr);
+    CHECK_FALSE(armOf(armedUnit)->enabled);
+    // One bone short: no record at all — retail never creates the manipulator.
+    CHECK(armOf(partialUnit) == nullptr);
+
+    // Live construction naming the unit opens the bay: the arm enables.
+    f.building.push_back(rm::sim::Construction{
+        .armyIndex = 0,
+        .position = {rm::test::fx(210.0f), rm::sim::Fx{}, rm::test::fx(200.0f)},
+        .buildTimeRemaining = rm::test::mag(50.0f),
+        .totalBuildTime = rm::test::mag(100.0f),
+        .builder = armedUnit,
+    });
+    f.tick();
+    REQUIRE(armOf(armedUnit) != nullptr);
+    CHECK(armOf(armedUnit)->enabled);
+
+    // Work done, the bay closes: the arm parks again.
+    f.building.clear();
+    f.tick();
+    REQUIRE(armOf(armedUnit) != nullptr);
+    CHECK_FALSE(armOf(armedUnit)->enabled);
+}
+
 TEST_CASE("a mid-reclaim save resumes the same harvest", "[save-state][reclaim]") {
     // The continued-hash proof for the wreck pool: save four ticks into a 90-mass
     // reclaim, restore units, features and economies through the envelope, and both
