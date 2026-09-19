@@ -42,6 +42,15 @@ struct Thread {
     long long wake = 0;
     int firstArgs = -1;  ///< args to pass on the FIRST resume; -1 after it has run once
     bool dead = false;
+
+    /// `C-309` (`0x004d1430`, `0x4093e0`): `WaitFor(event)` parks the thread on the
+    /// stage's suspended ring — `STaskEventLinkage` in retail, this pair here.
+    /// `suspended` is the linkage's presence (a `SuspendCurrentThread` has no event
+    /// at all), `event` the registry ref to the event object the thread waits on.
+    /// A suspended thread ignores `wake` entirely: only `ResumeThread`/`EventSignal`
+    /// clears the linkage and re-links it at the active head.
+    bool suspended = false;
+    int event = LUA_NOREF;
 };
 
 struct Sandbox {
@@ -412,6 +421,96 @@ int currentThread(lua_State* lua) {
     lua_rawgeti(lua, LUA_REGISTRYINDEX, sandbox->threads[sandbox->currentThread].handle);
     return 1;
 }
+
+/// `C-309`: the event-wait half of the scheduler (`0x004d1430` `WaitFor`,
+/// `0x004d1730` `ResumeThread`, `0x4093e0` `EventSignal`). Retail links the thread
+/// into the stage's suspended ring via `STaskEventLinkage`; here the linkage is the
+/// `suspended`/`event` pair on `Thread`, and the pump skips suspended threads
+/// regardless of `wake`.
+///
+/// The yield protocol: `WaitFor`/`SuspendCurrentThread` yield `false` (a boolean,
+/// which no timed wait ever produces — the wait family yields integers) followed by
+/// the event object for `WaitFor`. The pump reads that back, parks the thread, and
+/// refs the event so `EventSignal` can find its waiters by identity.
+
+/// `SuspendCurrentThread` — the eventless suspend (`Core.lua:459`). Only a
+/// `ResumeThread` can wake it; no wake tick ever arrives.
+int suspendCurrentThread(lua_State* lua) {
+    if (lua_isyieldable(lua) == 0) {
+        return 0;  // top level: nothing to suspend, same as the wait family
+    }
+    lua_pushboolean(lua, 0);
+    return lua_yield(lua, 1);
+}
+
+/// `WaitFor(event)` — suspend until `EventSignal(event)` or `ResumeThread` fires.
+/// Retail waits on a manipulator's `CTaskEvent`; here ANY Lua value can be the
+/// event, because the corpus's own `SingleEvent`/`MultiEvent` objects are plain
+/// tables and identity is all the linkage needs.
+int waitFor(lua_State* lua) {
+    if (lua_isyieldable(lua) == 0) {
+        return 0;
+    }
+    lua_pushboolean(lua, 0);
+    lua_pushvalue(lua, 1);  // the event object, carried through the yield
+    return lua_yield(lua, 2);
+}
+
+/// Shared wake: clear the linkage and re-link at the head of the active ring —
+/// `wake = tick` makes the thread due at the END of the current pass, which is
+/// what retail's re-link achieves (`0x4d1830`-`0x4d1865`).
+void wakeThread(lua_State* lua, Thread& thread) {
+    Sandbox* sandbox = sandboxOf(lua);
+    if (thread.event != LUA_NOREF) {
+        luaL_unref(lua, LUA_REGISTRYINDEX, thread.event);
+        thread.event = LUA_NOREF;
+    }
+    thread.suspended = false;
+    thread.wake = sandbox != nullptr ? sandbox->tick : 0;
+}
+
+/// `ResumeThread(handle)` — wake one suspended (or merely waiting) thread by the
+/// handle `ForkThread` returned. Retail clears `thread+0x14`/`+0x18` and re-links;
+/// a thread that was not suspended is unaffected beyond an earlier wake.
+int resumeThread(lua_State* lua) {
+    Sandbox* sandbox = sandboxOf(lua);
+    if (sandbox == nullptr || !lua_istable(lua, 1)) {
+        return 0;
+    }
+    lua_getfield(lua, 1, "__rm_thread");
+    const lua_Integer index = lua_tointeger(lua, -1);
+    lua_pop(lua, 1);
+    if (index >= 1 && static_cast<std::size_t>(index) <= sandbox->threads.size()) {
+        Thread& thread = sandbox->threads[static_cast<std::size_t>(index - 1)];
+        if (!thread.dead) {
+            wakeThread(lua, thread);
+        }
+    }
+    return 0;
+}
+
+/// `EventSignal(event)` — wake every thread parked on THIS event object. Identity
+/// compare (`lua_rawequal`), because the event is a key, not a value with `__eq`.
+/// A signal with no waiters is gone: the event is an edge, not a level.
+int eventSignal(lua_State* lua) {
+    Sandbox* sandbox = sandboxOf(lua);
+    if (sandbox == nullptr) {
+        return 0;
+    }
+    for (Thread& thread : sandbox->threads) {
+        if (thread.dead || !thread.suspended || thread.event == LUA_NOREF) {
+            continue;
+        }
+        lua_rawgeti(lua, LUA_REGISTRYINDEX, thread.event);
+        const bool match = lua_rawequal(lua, -1, 1) != 0;
+        lua_pop(lua, 1);
+        if (match) {
+            wakeThread(lua, thread);
+        }
+    }
+    return 0;
+}
+
 
 /// Moho's Lua is not stock Lua, and the corpus proves it in five ways rather than the zero
 /// ADR-039 first measured. That measurement checked the 5.0-isms `PLAN.md` catalogued on the SIM
@@ -1246,6 +1345,16 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
     lua_setglobal(state_, "WaitTicks");
     lua_pushcfunction(state_, currentThread);
     lua_setglobal(state_, "CurrentThread");
+    // `C-309`: the event-wait family — absent from FafApi.inc for the same reason
+    // (the corpus wraps them rather than calling them as globals).
+    lua_pushcfunction(state_, suspendCurrentThread);
+    lua_setglobal(state_, "SuspendCurrentThread");
+    lua_pushcfunction(state_, waitFor);
+    lua_setglobal(state_, "WaitFor");
+    lua_pushcfunction(state_, resumeThread);
+    lua_setglobal(state_, "ResumeThread");
+    lua_pushcfunction(state_, eventSignal);
+    lua_setglobal(state_, "EventSignal");
 
     // Chunk first, THEN its argument — lua_pcall reads the stack as [function, arg1, ...], and
     // pushing the method table before the chunk left them the wrong way round, so the bootstrap
@@ -1361,42 +1470,80 @@ std::size_t FafAi::pump(long long tick) {
     // thread starts without waiting a sim beat. A `Thread&` stays valid across the resume
     // because `threads` is a deque (see Sandbox::threads), which is what makes holding the
     // reference through a call that can grow the container legal.
-    for (std::size_t i = 0; i < sandbox->threads.size(); ++i) {
-        Thread& thread = sandbox->threads[i];
-        if (thread.dead || thread.wake > tick) {
-            continue;
-        }
-        lua_rawgeti(state_, LUA_REGISTRYINDEX, thread.coroutine);
-        lua_State* co = lua_tothread(state_, -1);
-        lua_pop(state_, 1);
-        if (co == nullptr) {
-            thread.dead = true;
-            continue;
-        }
-
-        sandbox->currentThread = i;
-        refill(*sandbox);
-        int results = 0;
-        const int args = thread.firstArgs >= 0 ? thread.firstArgs : 0;
-        thread.firstArgs = -1;
-        const int status = lua_resume(co, state_, args, &results);
-        sandbox->currentThread = SIZE_MAX;
-        ++resumed;
-
-        if (status == LUA_YIELD) {
-            // The yield carries the delay in ticks (the wait family's contract). A bare
-            // coroutine.yield() waits one tick, which is Moho's smallest beat.
-            const long long delay =
-                results > 0 ? std::max(1ll, static_cast<long long>(lua_tointeger(co, -1)))
-                            : 1;
-            lua_settop(co, 0);
-            thread.wake = tick + delay;
-        } else {
-            if (status != LUA_OK) {
-                const char* message = lua_tostring(co, -1);
-                sandbox->threadErrors.push_back(message != nullptr ? message : "?");
+    //
+    // The outer sweep exists for `C-309`: `ResumeThread`/`EventSignal` re-link a woken
+    // thread at the head of the active ring — it runs at the END of this same pass —
+    // and the index walk cannot revisit an earlier slot. So after each pass, check
+    // whether any thread became due and sweep again. Bounded at 64: a legal chain of
+    // signals is short, and a thread that re-arms itself without yielding would
+    // otherwise spin the pump forever.
+    for (int sweep = 0; sweep < 64; ++sweep) {
+        for (std::size_t i = 0; i < sandbox->threads.size(); ++i) {
+            Thread& thread = sandbox->threads[i];
+            if (thread.dead || thread.suspended || thread.wake > tick) {
+                continue;
             }
-            thread.dead = true;
+            lua_rawgeti(state_, LUA_REGISTRYINDEX, thread.coroutine);
+            lua_State* co = lua_tothread(state_, -1);
+            lua_pop(state_, 1);
+            if (co == nullptr) {
+                thread.dead = true;
+                continue;
+            }
+
+            sandbox->currentThread = i;
+            refill(*sandbox);
+            int results = 0;
+            const int args = thread.firstArgs >= 0 ? thread.firstArgs : 0;
+            thread.firstArgs = -1;
+            const int status = lua_resume(co, state_, args, &results);
+            sandbox->currentThread = SIZE_MAX;
+            ++resumed;
+
+            if (status == LUA_YIELD) {
+                if (results > 0 && lua_isboolean(co, -results)
+                    && lua_toboolean(co, -results) == 0) {
+                    // `C-309`: `WaitFor`/`SuspendCurrentThread` yield `false` — a
+                    // boolean no timed wait produces — so the thread joins the
+                    // suspended ring instead of taking a wake tick. `WaitFor`
+                    // carries the event object as a second yield value; ref it so
+                    // `EventSignal` can find its waiters by identity.
+                    thread.suspended = true;
+                    if (results > 1) {
+                        thread.event = luaL_ref(co, LUA_REGISTRYINDEX);
+                    }
+                    lua_settop(co, 0);
+                } else {
+                    // The yield carries the delay in ticks (the wait family's
+                    // contract). A bare coroutine.yield() waits one tick, which is
+                    // Moho's smallest beat.
+                    const long long delay =
+                        results > 0
+                            ? std::max(1ll, static_cast<long long>(lua_tointeger(co, -1)))
+                            : 1;
+                    lua_settop(co, 0);
+                    thread.wake = tick + delay;
+                }
+            } else {
+                if (status != LUA_OK) {
+                    const char* message = lua_tostring(co, -1);
+                    sandbox->threadErrors.push_back(message != nullptr ? message : "?");
+                }
+                thread.dead = true;
+            }
+        }
+
+        // Did a `ResumeThread`/`EventSignal` inside this pass make an earlier thread
+        // due again? If so, sweep once more so it runs at the end of this pass.
+        bool signalled = false;
+        for (const Thread& thread : sandbox->threads) {
+            if (!thread.dead && !thread.suspended && thread.wake <= tick) {
+                signalled = true;
+                break;
+            }
+        }
+        if (!signalled) {
+            break;
         }
     }
 
@@ -1417,6 +1564,10 @@ std::size_t FafAi::pump(long long tick) {
         if (thread.handle != LUA_NOREF) {
             luaL_unref(state_, LUA_REGISTRYINDEX, thread.handle);
             thread.handle = LUA_NOREF;
+        }
+        if (thread.event != LUA_NOREF) {
+            luaL_unref(state_, LUA_REGISTRYINDEX, thread.event);
+            thread.event = LUA_NOREF;
         }
     }
     return resumed;

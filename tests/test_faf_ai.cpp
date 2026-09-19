@@ -446,6 +446,102 @@ TEST_CASE("a thread that kills itself mid-body is reclaimed without leaking its 
     REQUIRE(ai.eval("assert(reached == 1)"));
 }
 
+TEST_CASE("WaitFor suspends on an event until EventSignal or ResumeThread",
+          "[faf][ai][threads]") {
+    // `C-309` (`0x004d1430`, `0x004d1730`, `0x4093e0`): `WaitFor(event)` links the
+    // thread into the stage's suspended ring — no wake tick ever arrives for it —
+    // and `EventSignal`/`ResumeThread` clears the linkage and re-links at the
+    // active head, so the thread runs at the end of the SAME pass that signalled.
+    // `SuspendCurrentThread` is the eventless form: only `ResumeThread` wakes it.
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+
+    REQUIRE(ai.eval(R"(
+        order = {}
+        event = {}
+        waiter = ForkThread(function()
+            order[#order + 1] = 'waiter-start'
+            WaitFor(event)
+            order[#order + 1] = 'waiter-woke'
+        end)
+        signaller = ForkThread(function()
+            order[#order + 1] = 'signaller'
+            EventSignal(event)
+        end)
+        suspended = ForkThread(function()
+            order[#order + 1] = 'suspended-start'
+            SuspendCurrentThread()
+            order[#order + 1] = 'suspended-woke'
+        end)
+    )"));
+
+    // Tick 0: all three start. The waiter parks on the event, the signaller fires
+    // it, and the suspended thread parks with no event at all. The signalled
+    // waiter re-links at the head of the active ring and runs at the END of this
+    // same pass — after the suspended thread, which was still ahead of it.
+    (void)ai.pump(0);
+    REQUIRE(ai.eval(R"(
+        assert(order[1] == 'waiter-start')
+        assert(order[2] == 'signaller')
+        assert(order[3] == 'suspended-start')
+        assert(order[4] == 'waiter-woke', 'signalled thread runs at end of the pass')
+        assert(order[5] == nil)
+    )"));
+    CHECK(ai.threadsAlive() == 1);  // only the suspended thread is left
+
+    // No pump wakes it: suspension is not a timed wait.
+    CHECK(ai.pump(1) == 0);
+    CHECK(ai.pump(2) == 0);
+    REQUIRE(ai.eval("assert(order[5] == nil)"));
+
+    // ResumeThread by handle clears the linkage; the thread runs at the end of
+    // the next pass.
+    REQUIRE(ai.eval("ResumeThread(suspended)"));
+    CHECK(ai.pump(3) == 1);
+    REQUIRE(ai.eval("assert(order[5] == 'suspended-woke')"));
+    CHECK(ai.threadsAlive() == 0);
+}
+
+TEST_CASE("a WaitFor on an already-signalled event still suspends until the next signal",
+          "[faf][ai][threads]") {
+    // The event is a one-shot edge, not a level: a thread that waits AFTER the
+    // signal sleeps like any other, and a second WaitFor needs a second signal.
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+
+    REQUIRE(ai.eval(R"(
+        event = {}
+        EventSignal(event)   -- nobody waiting: the signal is gone
+        woke = 0
+        ForkThread(function()
+            WaitFor(event)
+            woke = woke + 1
+            WaitFor(event)
+            woke = woke + 1
+        end)
+    )"));
+    (void)ai.pump(0);
+    REQUIRE(ai.eval("assert(woke == 0)"));
+    CHECK(ai.pump(1) == 0);
+
+    REQUIRE(ai.eval("EventSignal(event)"));
+    CHECK(ai.pump(2) == 1);
+    REQUIRE(ai.eval("assert(woke == 1)"));
+
+    REQUIRE(ai.eval("EventSignal(event)"));
+    CHECK(ai.pump(3) == 1);
+    REQUIRE(ai.eval("assert(woke == 2)"));
+    CHECK(ai.threadsAlive() == 0);
+}
+
 TEST_CASE("bare table iteration works, as LuaPlus meant it", "[faf][ai]") {
     const std::filesystem::path root = corpusRoot();
     if (root.empty()) {
