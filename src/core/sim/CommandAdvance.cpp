@@ -300,6 +300,26 @@ bool publishPathResult(const PathResult& result, UnitStore& store,
     orderAlongPath(store.motion()[result.unit.index], result.path);
     return true;
 }
+/// `C-102`: retail's `OnBuildProgress`/`OnBeingBuiltProgress` fire when a
+/// build's fraction crosses a quarter — the thresholds `Unit.lua:555-620`
+/// installs at 25/50/75%. One event per boundary crossed this beat, so a
+/// sacrifice grant or a heavily assisted tick that jumps two quarters reports
+/// both, in order.
+void emitProgressCrossings(const Construction& work, Fx before, EventQueue* events) {
+    static constexpr std::array<float, 3> kQuarters{0.25f, 0.5f, 0.75f};
+    const Fx after = work.fraction();
+    for (const float quarter : kQuarters) {
+        const Fx boundary = fxFromFloat(quarter);
+        if (before < boundary && after >= boundary) {
+            emit(events, Event{.kind = EventKind::ConstructionProgress,
+                               .instigator = work.builder,
+                               .army = work.armyIndex,
+                               .amount = Mag::fromRaw(boundary.raw()),
+                               .at = work.position});
+        }
+    }
+}
+
 std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
                            std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                            std::vector<Construction>* building, EventQueue* events,
@@ -528,7 +548,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 // never run `tickSkirmish` — tests driving the queue directly — see the
                 // pause in the same tick it was ordered.
                 work->paused = store.productionPaused(work->builder);
+                const Fx progressBefore = work->fraction();
                 advanceConstruction(*work);
+                emitProgressCrossings(*work, progressBefore, events);
                 if (!work->finished()) {
                     return false;  // still rising; the order stays at the head
                 }
@@ -733,7 +755,9 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 && !guardDef->isMobile() && guardDef->isBuilder()) {
                 if (Construction* work = activeConstruction(*building, store.idAt(slot))) {
                     work->paused = store.productionPaused(work->builder);
+                    const Fx progressBefore = work->fraction();
                     advanceConstruction(*work);
+                    emitProgressCrossings(*work, progressBefore, events);
                     if (!work->finished()) {
                         continue;
                     }
@@ -1574,8 +1598,13 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                             std::max(Mag{}, target.buildTimeRemaining - grant);
                     } else {
                         Construction& target = (*building)[work->index];
+                        const Fx progressBefore = target.fraction();
                         target.buildTimeRemaining =
                             std::max(Mag{}, target.buildTimeRemaining - grant);
+                        // The one-shot grant crosses quarters like any other
+                        // progress — `Materialize` is the same call the build
+                        // task makes, so the thresholds fire here too.
+                        emitProgressCrossings(target, progressBefore, events);
                     }
                     store.kill(store.idAt(slot));
                     continue;

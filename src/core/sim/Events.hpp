@@ -80,6 +80,12 @@ enum class EventKind : std::uint8_t {
     /// A construction completed. The unit it becomes is a separate `UnitFinished`, because the
     /// sim cannot make one — that needs a model out of the VFS.
     ConstructionFinished,
+    /// A construction's fraction crossed a quarter boundary — retail's
+    /// `OnBuildProgress`/`OnBeingBuiltProgress` thresholds at 25/50/75%
+    /// (`C-102`). `amount` is the boundary crossed (0.25, 0.5 or 0.75), `at`
+    /// the site, `instigator` the builder. One event per boundary per beat —
+    /// a sacrifice or a fast assist can cross two at once and reports both.
+    ConstructionProgress,
     /// A unit reached a new veterancy level. `amount` is the level it reached, 1 through 5,
     /// as a whole number — the one kind whose amount is a count rather than a quantity of
     /// health, because there is nowhere else for it to go and a separate field used by one

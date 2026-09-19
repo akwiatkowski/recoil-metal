@@ -668,3 +668,45 @@ TEST_CASE("C-161: a unit's production is throttled by its own consumption ratio"
     CHECK(rm::test::asFloat(economies[0].incomePerTick.energy)
           == Catch::Approx(0.1f).margin(0.001));
 }
+
+TEST_CASE("C-102: build progress crossing a quarter emits an event", "[fa-econ]") {
+    // `OnBuildProgress`/`OnBeingBuiltProgress` fire at 25/50/75%
+    // (`Unit.lua:555-620`): a funded build reports each boundary once, in
+    CaptureFixture f;
+    rm::unitdef::UnitDef engineer;
+    engineer.name = "test_econ_engineer";
+    engineer.buildRate = 10.0f;  // 1 build unit per tick at 10 Hz
+    engineer.buildableCategory = {{"ECONHUT"}};
+    const auto engineerType = f.roster.addType(engineer);
+    rm::unitdef::UnitDef hut;
+    hut.name = "test_econ_hut";
+    hut.categories = {"ECONHUT"};
+    hut.buildCostMass = rm::sim::magFromFloat(100.0f);
+    hut.buildCostEnergy = rm::sim::magFromFloat(100.0f);
+    hut.buildTime = rm::sim::magFromFloat(100.0f);
+    const auto hutType = f.roster.addType(hut);
+    const UnitId builder = f.roster.add(engineerType, 200.0f, 200.0f, 0, 100.0f);
+
+    REQUIRE(rm::sim::applyCommand(
+        Command{.kind = CommandKind::Build, .unit = builder,
+                .targetX = rm::sim::fxFromFloat(205.0f),
+                .targetZ = rm::sim::fxFromFloat(200.0f),
+                .buildType = hutType},
+        f.roster.store, f.roster.catalog, f.players, f.armies, f.terrain, f.grid,
+        f.roster.rate, &f.building));
+    // 100 work units at 1/tick: the quarters land at ticks 25, 50 and 75.
+    const auto progressEvents = [&] {
+        return f.events.count(rm::sim::EventKind::ConstructionProgress);
+    };
+    f.tick(24);
+    CHECK(progressEvents() == 0);
+    f.tick(1);
+    CHECK(progressEvents() == 1);
+    f.tick(25);
+    CHECK(progressEvents() == 2);
+    f.tick(25);
+    CHECK(progressEvents() == 3);
+    // The last quarter is the finish itself — no fourth progress event.
+    f.tick(25);
+    CHECK(progressEvents() == 3);
+}

@@ -30,6 +30,8 @@ std::string_view eventKindName(EventKind kind) noexcept {
         return "construction-started";
     case EventKind::ConstructionFinished:
         return "construction-finished";
+    case EventKind::ConstructionProgress:
+        return "construction-progress";
     case EventKind::UnitVeteranPromoted:
         return "unit-veteran-promoted";
     case EventKind::TeamDefeated:
