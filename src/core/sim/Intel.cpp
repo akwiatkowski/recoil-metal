@@ -1,4 +1,5 @@
 #include "core/sim/Intel.hpp"
+#include "core/sim/Enhancement.hpp"
 
 #include "core/sim/Terrain.hpp"
 #include "core/sim/Army.hpp"
@@ -773,7 +774,7 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
             continue;  // off the map: seeing nothing is right, and so is re-checking next tick
         }
 
-        const UnitCatalog::IntelRadii& radii = catalog.intel(store.typeAt(slot));
+        const UnitCatalog::IntelRadii radii = intelRadiiFor(store, catalog, slot);
         // Underwater the vision radius is silent and `WaterVisionRadius`
         // speaks; surfaced it is the other way around — the toggle above.
         Fx byKind[kIntelKindCount] = {underwater ? Fx{} : radii.vision,
@@ -1045,7 +1046,7 @@ std::array<Fx, 2> radarBlipPosition(UnitId unit, Fx x, Fx z, TickIndex tick,
         return kReconLos;  // own units are always visually known
     }
 
-    const UnitCatalog::IntelRadii& hiding = catalog.intel(store.typeAt(target));
+    const UnitCatalog::IntelRadii hiding = intelRadiiFor(store, catalog, target);
     const std::uint16_t counterIntel = store.intelDisabledMaskAt(target);
     const bool cloakOff = (counterIntel & intelTypeBit(IntelType::Cloak)) != 0;
     const bool radarStealthOff =
@@ -1165,7 +1166,7 @@ std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,
         return ContactKind::Seen;
     }
 
-    const UnitCatalog::IntelRadii& hiding = catalog.intel(store.typeAt(target));
+    const UnitCatalog::IntelRadii hiding = intelRadiiFor(store, catalog, target);
     // The owner's toggles can withdraw its counter-intel (`C-283`'s enabled
     // bytes, written by `DisableIntel` or by the `RULEUTC_*` bits through
     // `scriptBitIntelMask`): a disabled cloak stops hiding it from vision,
@@ -1247,7 +1248,7 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
         }
 
         const Transform& at = transforms[slot];
-        const UnitCatalog::IntelRadii& hiding = catalog.intel(store.typeAt(slot));
+        const UnitCatalog::IntelRadii hiding = intelRadiiFor(store, catalog, slot);
         const std::optional<ContactKind> kind =
             contactKindForUnit(alliance, slot, store, catalog, armies, intel);
         if (kind == ContactKind::Seen) {

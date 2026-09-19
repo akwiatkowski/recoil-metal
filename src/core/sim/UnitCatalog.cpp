@@ -1,6 +1,7 @@
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/Enhancement.hpp"
 #include "core/unit/BuildTree.hpp"
+#include "core/unit/FaDuration.hpp"
 
 #include "core/map/Scmap.hpp"
 
@@ -105,6 +106,90 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
                     spec.parameters.numberAt("MaintenanceConsumptionPerSecondEnergy")) {
                 effects.maintenanceEnergyPerTick =
                     rate.magPerTick(static_cast<float>(*value));
+            }
+            // `C-255`: the shield/pod/stat/intel parameters the scripts read
+            // straight off the enhancement table (`bp.ShieldMaxHealth`,
+            // `bp.NewOmniRadius`, `bp.NewMaxRadius`, …). Parsed here once so
+            // the per-unit readers get fixed-point values like every other
+            // rate.
+            const auto num = [&](std::string_view key) {
+                return spec.parameters.numberAt(key);
+            };
+            const auto flag = [&](std::string_view key) {
+                const lua::Value* value = spec.parameters.find(key);
+                return value != nullptr && value->asBoolean().value_or(false);
+            };
+            if (const auto maxHealth = num("ShieldMaxHealth");
+                maxHealth && *maxHealth > 0.0) {
+                ShieldInfo shield;
+                shield.maximum = magFromFloat(static_cast<float>(*maxHealth));
+                shield.verticalOffsetElmos =
+                    fxFromFloat(static_cast<float>(num("ShieldVerticalOffset").value_or(0.0))
+                                * scmap::kElmosPerOgrid);
+                if (flag("PersonalShield")) {
+                    // Retail's UnitShield is an attached BOX, not a sphere
+                    // (`shield.lua:420-477`) — same shape `UnitBlueprint.cpp`
+                    // gives `Defense.Shield`'s `PersonalShield`.
+                    shield.shape = unitdef::ShieldShape::Box;
+                    static constexpr std::string_view kSize[] = {
+                        "CollisionSizeX", "CollisionSizeY", "CollisionSizeZ"};
+                    static constexpr std::string_view kCentre[] = {
+                        "CollisionCenterX", "CollisionCenterY", "CollisionCenterZ"};
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        shield.boxHalfExtentsElmos[axis] = fxFromFloat(
+                            static_cast<float>(num(kSize[axis]).value_or(1.0))
+                            * scmap::kElmosPerOgrid * 0.5f);
+                        shield.collisionCenterElmos[axis] = fxFromFloat(
+                            static_cast<float>(num(kCentre[axis]).value_or(0.0))
+                            * scmap::kElmosPerOgrid);
+                    }
+                } else {
+                    shield.radiusElmos = fxFromFloat(
+                        static_cast<float>(num("ShieldSize").value_or(0.0))
+                        * scmap::kElmosPerOgrid * 0.5f);
+                }
+                shield.boundingRadiusElmos =
+                    shield.shape == unitdef::ShieldShape::Sphere
+                        ? shield.radiusElmos
+                        : fxSqrt(shield.boxHalfExtentsElmos[0]
+                                     * shield.boxHalfExtentsElmos[0]
+                                 + shield.boxHalfExtentsElmos[1]
+                                     * shield.boxHalfExtentsElmos[1]
+                                 + shield.boxHalfExtentsElmos[2]
+                                     * shield.boxHalfExtentsElmos[2]);
+                shield.regenPerTick = rate.magPerTick(
+                    static_cast<float>(num("ShieldRegenRate").value_or(0.0)));
+                shield.regenDelay = rate.ticks(unitdef::faWaitSeconds(
+                    seconds(static_cast<float>(
+                        num("ShieldRegenStartTime").value_or(0.0)))));
+                shield.recharge = rate.ticks(unitdef::faWaitSeconds(seconds(std::max(
+                    static_cast<float>(num("ShieldRechargeTime").value_or(0.0)),
+                    static_cast<float>(
+                        num("ShieldEnergyDrainRechargeTime").value_or(0.0))))));
+                shield.personalBubble = flag("PersonalBubble");
+                effects.shield = shield;
+            }
+            const auto ogrid = [&](std::string_view key) -> std::optional<Fx> {
+                if (const auto value = num(key)) {
+                    return fxFromFloat(static_cast<float>(*value)
+                                       * scmap::kElmosPerOgrid);
+                }
+                return std::nullopt;
+            };
+            effects.visionRadiusElmos = ogrid("NewVisionRadius");
+            effects.omniRadiusElmos = ogrid("NewOmniRadius");
+            effects.jammerRadiusElmos = ogrid("NewJammerRadius");
+            if (const auto radius = ogrid("NewMaxRadius")) {
+                effects.maxRadiusElmos = *radius;
+            }
+            if (const auto rof = num("NewRateOfFire")) {
+                effects.rateOfFire = static_cast<float>(*rof);
+            }
+            for (const char* key : {"ZephyrDamageMod", "NewDamageMod",
+                                    "AdditionalDamage"}) {
+                if (const auto value = num(key)) {
+                    effects.damageMod += magFromFloat(static_cast<float>(*value));
+                }
             }
             enhancements.emplace(spec.name, std::move(effects));
         }

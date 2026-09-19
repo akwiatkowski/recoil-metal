@@ -379,9 +379,25 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     // A stale handle first, before anything else looks at the slot. A player may click a unit
     // that died on the tick their order was issued, and a replay of an old log may name a unit
     // that no longer exists — in both cases the generation has moved on, so this must not
-    // resolve to whoever inherited the slot.
     if (!store.alive(command.unit)) {
         return false;
+    }
+
+    // `C-231` (`0x006f6460`): `Sim::IssueCommand`'s per-unit gate refuses a
+    // unit still being built unless it is a FACTORY. A rising structure is a
+    // `Construction` row here, not a live unit, so the only live being-built
+    // unit is an upgrade's target — the row's `upgradeOf`. A factory mid-tier
+    // keeps taking production orders; anything else under the knife refuses.
+    if (building != nullptr) {
+        const bool beingBuilt = std::ranges::any_of(*building, [&](const Construction& work) {
+            return !work.finished() && work.upgradeOf == command.unit;
+        });
+        if (beingBuilt) {
+            const unitdef::UnitDef* def = catalog.def(store.typeAt(command.unit.index));
+            if (def == nullptr || !def->hasCategory("FACTORY")) {
+                return false;
+            }
+        }
     }
 
     const Player* player = playerFor(command.player, players);
@@ -903,7 +919,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             const auto* def = catalog.def(store.typeAt(unit.index));
             auto& motion = store.motion()[unit.index];
             if (!player || !authorised(*player, store, unit, armies) || !def
-                || !motion.submersible || !def->hasCommandCap("RULEUCC_Dive")) continue;
+                || !motion.submersible
+                || !unitHasCommandCap(store, catalog, unit.index, "RULEUCC_Dive")) continue;
             // C-198: choose from the committed layer, even while already transitioning.
             motion.diveTargetSubmerged = !motion.submerged;
             result.accepted.push_back(unit);
@@ -961,7 +978,9 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             return result;
         }
         for (const UnitId unit : canonical) {
-            if (!store.alive(unit)) {
+            // `C-349`: toggles are blocked while attached to a transport — the
+            // cargo's script bits are the carrier's business until it lands.
+            if (!store.alive(unit) || store.motion()[unit.index].attached) {
                 continue;
             }
             const Player* player = playerFor(issue.player, players);
@@ -985,7 +1004,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                 // belongs to damage collapse alone.
                 Health& health = store.health()[unit.index];
                 const UnitCatalog::ShieldInfo& shield =
-                    catalog.shield(store.typeAt(unit.index));
+                    shieldFor(store, catalog, unit.index);
                 if (shield.exists() && health.shield.maximum > Mag{}
                     && health.shield.rechargeRemaining == 0) {
                     health.shield.rechargeRemaining = shield.recharge;
@@ -1102,8 +1121,9 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             // nothing can read — `nearestTarget` early-outs on exactly this
             // weapon shape, so the gate asks the same question it does.
             const bool canAcquire = definition != nullptr
-                && std::ranges::any_of(definition->weapons, [](const unitdef::Weapon& w) {
-                       return w.fires() && !w.manuallyFired() && !w.targetsProjectiles
+                && std::ranges::any_of(definition->weapons, [&](const unitdef::Weapon& w) {
+                       return weaponFiresFor(store, catalog, unit.index, w)
+                              && !weaponManuallyFiredFor(store, catalog, unit.index, w)
                               && !w.targetPriorities.empty();
                    });
             if (player == nullptr || !authorised(*player, store, unit, armies)

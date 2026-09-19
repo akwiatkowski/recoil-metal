@@ -80,6 +80,32 @@ public:
         Mag maxEnergyPerTick{};
     };
 
+    /// One ordinary bubble in fixed-point, per-tick simulation units.
+    struct ShieldInfo {
+        Mag maximum{};
+        unitdef::ShieldShape shape = unitdef::ShieldShape::Sphere;
+        Fx radiusElmos{};
+        Fx verticalOffsetElmos{};
+        std::array<Fx, 3> boxHalfExtentsElmos{};
+        std::array<Fx, 3> collisionCenterElmos{};
+        Fx boundingRadiusElmos{};
+        Mag regenPerTick{};
+        TickCount regenDelay = 0;
+        TickCount recharge = 0;
+        /// `C-145`: `shield.lua`'s `ChargingUp` accumulates
+        /// `GetResourceConsumed()/10` per tick against the authored seconds —
+        /// a brownout stretches the recharge rather than the countdown simply
+        /// running. The sim keeps the same shape in ticks: `recharge` is the
+        /// full-power length and `ShieldState::rechargeProgress` accrues the
+        /// granted fraction of a tick per tick.
+        bool personalBubble = false;
+        bool transportShield = false;
+
+        [[nodiscard]] bool exists() const noexcept {
+            return maximum > Mag{} && boundingRadiusElmos > Fx{};
+        }
+    };
+
     struct EnhancementEffects {
         std::optional<Mag> buildPerTick;
         Mag healthAdd{};
@@ -98,6 +124,24 @@ public:
         /// cloak generators' `SetEnergyMaintenanceConsumptionOverride`, per
         /// tick. Drains while the enhancement is installed.
         Mag maintenanceEnergyPerTick{};
+        /// `C-255`: `CreatePersonalShield`/`CreateShield` — the enhancement's
+        /// own `Shield*` parameters parsed like `Defense.Shield`, per unit
+        /// rather than per type. `exists()` is false for enhancements that
+        /// carry none.
+        ShieldInfo shield;
+        /// `C-255`: `SetIntelRadius` writes — absolute per-kind overrides in
+        /// elmos (`NewVisionRadius`/`NewOmniRadius`/`NewJammerRadius` are
+        /// authored in ogrids like the `Intel.` fields they replace).
+        std::optional<Fx> visionRadiusElmos;
+        std::optional<Fx> omniRadiusElmos;
+        std::optional<Fx> jammerRadiusElmos;
+        /// `C-255`: `ChangeMaxRadius`/`ChangeRateOfFire`/`AddDamageMod` values —
+        /// the LABELS they land on are script-side (`EnhancementScriptEffects`),
+        /// these are the parameters the scripts read. Radius and rate are
+        /// absolute writes; damage is additive.
+        Fx maxRadiusElmos{};
+        float rateOfFire = 0.0f;
+        Mag damageMod{};
         std::vector<std::string> buildableAdds;
     };
     [[nodiscard]] const EnhancementEffects* enhancementEffects(
@@ -158,32 +202,6 @@ public:
         Fx jamRadiusMin{};
         Fx jamRadius{};
         int jammerBlips = 0;
-    };
-
-    /// One ordinary bubble in fixed-point, per-tick simulation units.
-    struct ShieldInfo {
-        Mag maximum{};
-        unitdef::ShieldShape shape = unitdef::ShieldShape::Sphere;
-        Fx radiusElmos{};
-        Fx verticalOffsetElmos{};
-        std::array<Fx, 3> boxHalfExtentsElmos{};
-        std::array<Fx, 3> collisionCenterElmos{};
-        Fx boundingRadiusElmos{};
-        Mag regenPerTick{};
-        TickCount regenDelay = 0;
-        TickCount recharge = 0;
-        /// `C-145`: `shield.lua`'s `ChargingUp` accumulates
-        /// `GetResourceConsumed()/10` per tick against the authored seconds —
-        /// a brownout stretches the recharge rather than the countdown simply
-        /// running. The sim keeps the same shape in ticks: `recharge` is the
-        /// full-power length and `ShieldState::rechargeProgress` accrues the
-        /// granted fraction of a tick per tick.
-        bool personalBubble = false;
-        bool transportShield = false;
-
-        [[nodiscard]] bool exists() const noexcept {
-            return maximum > Mag{} && boundingRadiusElmos > Fx{};
-        }
     };
 
     /// One type's place in the adjacency game (`core/unit/Adjacency.hpp`), in the types

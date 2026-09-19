@@ -718,7 +718,7 @@ struct ProjectileTickStart {
         // before the owner's body and is deliberately independent of unit target layers: the
         // native shield primitive occupies its own collision layer (`C-169`).
         if (!proximityFallback && catalog != nullptr) {
-            const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(slot));
+            const UnitCatalog::ShieldInfo& shield = shieldFor(store, *catalog, slot);
             if (shield.exists() && store.health()[slot].shield.active()
                 && !store.scriptBitDisabledAt(slot, 0)) {
                 const std::array<Fx, 3> centre = shieldCentre(shield, transforms[slot]);
@@ -903,8 +903,9 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
 
 [[nodiscard]] ReachClass classifyReach(const unitdef::Weapon& weapon, Fx groundDistance,
                                         Fx heightDifference, std::optional<Brad> heading = std::nullopt,
-                                        std::optional<Brad> targetBearing = std::nullopt) noexcept {
-    if (groundDistance > weapon.maxRange) {
+                                        std::optional<Brad> targetBearing = std::nullopt,
+                                        std::optional<Fx> maxRange = std::nullopt) noexcept {
+    if (groundDistance > maxRange.value_or(weapon.maxRange)) {
         return ReachClass::CannotReach;
     }
     // Zero means unlimited: no shipped weapon states 0, and a literal zero would stop every
@@ -1027,7 +1028,8 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
                                            const UnitStore& store,
                                            std::span<const Army> armies,
                                            const UnitCatalog& catalog,
-                                           const Intel* intel, std::optional<bool> sourceSubmerged) noexcept {
+                                           const Intel* intel, std::optional<bool> sourceSubmerged,
+                                           UnitIndex shooter) noexcept {
     if (!shootable(fromArmy, store, target.index, armies)) {
         return false;
     }
@@ -1055,7 +1057,9 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
     const Transform& transform = store.transforms()[target.index];
     const std::array<Fx, 3> to = positionOf(transform);
     const Fx heightDifference = to[1] > from[1] ? to[1] - from[1] : from[1] - to[1];
-    const ReachClass reach = classifyReach(weapon, groundDistanceElmos(from, to), heightDifference);
+    const ReachClass reach = classifyReach(weapon, groundDistanceElmos(from, to), heightDifference,
+                                           std::nullopt, std::nullopt,
+                                           weaponMaxRangeFor(store, catalog, shooter, weapon));
     return reach != ReachClass::CannotReach && reach != ReachClass::TooClose;
 }
 
@@ -1299,7 +1303,8 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                                     : from[1] - transforms[slot].y;
         const std::array<Fx, 3> aimAt{candidateX, transforms[slot].y, candidateZ};
         const ReachClass reach = classifyReach(weapon, distance, dy, heading,
-                                                bearingTo(from, aimAt));
+                                                bearingTo(from, aimAt),
+                                                weaponMaxRangeFor(store, *catalog, shooter, weapon));
         if (reach == ReachClass::CannotReach || reach == ReachClass::TooClose) {
             return std::nullopt;
         }
@@ -1360,8 +1365,9 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
     // per-candidate reach check below still decides on blip coordinates; `minRange` is
     // still applied there, because a dead zone is a hole in the middle of the disc and
     // not a smaller disc.
-    const Fx queryRange = intel != nullptr ? weapon.maxRange + Fx::fromInt(kRadarErrorElmos)
-                                           : weapon.maxRange;
+    const Fx baseRange = weaponMaxRangeFor(store, *catalog, shooter, weapon);
+    const Fx queryRange = intel != nullptr ? baseRange + Fx::fromInt(kRadarErrorElmos)
+                                           : baseRange;
     for (const UnitIndex slot : store.space().within(from[0], from[2], queryRange)) {
         const std::optional<Candidate> candidate = classifyCandidate(slot);
         if (!candidate) {
@@ -1787,7 +1793,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                 if (hasExplicitAttack) {
                     candidateUnit = forced && canShootExplicitTarget(
                                                  *forced, from, motion[slot].armyIndex, weapon,
-                                                 store, armies, catalog, intel, sourceSubmerged)
+                                                 store, armies, catalog, intel, sourceSubmerged, slot)
                                         ? forced
                                         : std::nullopt;
                 } else {
@@ -2305,7 +2311,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             // identical answer to the inline query it replaced.
             const std::optional<UnitId> target = hasExplicitAttack
                 ? (forced && canShootExplicitTarget(*forced, from, army, weapon, store, armies,
-                                                    catalog, intel, sourceSubmerged)
+                                                    catalog, intel, sourceSubmerged, slot)
                        ? forced
                        : std::nullopt)
                 : (w < automaticTargets[slot].size()
@@ -2487,9 +2493,11 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                         muzzled && mount.dual && motions[slot].turretMuzzlePhase != 0;
                     lastSecond = second;
                     const std::size_t pushIndex = projectiles.size();
+                    unitdef::DamageProfile damage = rates.damage;
+                    damage.base += weaponDamageModFor(store, catalog, slot, weapon);
                     projectiles.push_back(
                         launch(from, to, weapon, army, rate, rates.muzzlePerTick,
-                               rates.damage, store.idAt(slot), false, *target,
+                               damage, store.idAt(slot), false, *target,
                                muzzled
                                    ? std::optional{mountMuzzleWorld(mount, transforms[slot],
                                                                     motions[slot], second)}
@@ -2540,6 +2548,13 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             // a coroutine that has already committed to its count — and it is also the only
             // version that is order-independent, since a burst that reset on a lost target
             // would depend on which shooter's projectile resolved first.
+            // `ChangeRateOfFire` rewrites the reload, not the burst gap
+            // (`C-255`): the burst delay is authored per-shot cadence.
+            const float effectiveRate = weaponRateOfFireFor(store, catalog, slot, weapon);
+            const TickCount effectiveReload =
+                effectiveRate > 0.0f
+                    ? rate.ticks(sim::seconds(1.0f / effectiveRate))
+                    : TickCount{1};
             if (weapon.bursts()) {
                 if (health.burstRemaining[w] == 0) {
                     health.burstRemaining[w] = rates.burstSize;
@@ -2547,13 +2562,13 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 --health.burstRemaining[w];
                 health.reloadRemaining[w] = health.burstRemaining[w] > 0
                                                 ? static_cast<int>(rates.burstDelayTicks)
-                                                : static_cast<int>(adjacencyReload(adjacency, slot, rates.reloadTicks));
+                                                : static_cast<int>(adjacencyReload(adjacency, slot, effectiveReload));
             } else {
                 // The volley above delivered the whole rack at once; a plain reload
                 // follows. Letting the burst cycle run here with a zero delay would fire
                 // again next tick and deliver the salvo twice over.
                 health.burstRemaining[w] = 0;
-                health.reloadRemaining[w] = static_cast<int>(adjacencyReload(adjacency, slot, rates.reloadTicks));
+                health.reloadRemaining[w] = static_cast<int>(adjacencyReload(adjacency, slot, effectiveReload));
             }
         }
     }
@@ -2625,7 +2640,7 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
 
             const std::array<Fx, 3> from = positionOf(transforms[slot]);
             const std::array<Fx, 3> to = positionOf(transforms[head->target().index]);
-            if (groundDistanceElmos(from, to) > weapon.maxRange) {
+            if (groundDistanceElmos(from, to) > weaponMaxRangeFor(store, catalog, slot, weapon)) {
                 continue;  // the pursuit is still closing
             }
 
@@ -2653,15 +2668,22 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
             const bool muzzled =
                 mount.present && mount.weapon == w && slot < motions.size();
             const std::size_t pushIndex = projectiles.size();
+            unitdef::DamageProfile damage = rates.damage;
+            // `AddDamageMod` adds to the profile's base amount (`C-255`).
+            damage.base += weaponDamageModFor(store, catalog, slot, weapon);
             projectiles.push_back(
                 launch(from, to, weapon, army, rate, rates.muzzlePerTick,
-                       rates.damage, store.idAt(slot), false, head->target(),
+                       damage, store.idAt(slot), false, head->target(),
                        muzzled
                            ? std::optional{mountMuzzleWorld(mount, transforms[slot],
                                                             motions[slot], false)}
                            : std::nullopt));
             projectiles.back().serial = projectileSerial(tick, pushIndex);
-            healths[slot].reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
+            const float effectiveRate = weaponRateOfFireFor(store, catalog, slot, weapon);
+            healths[slot].reloadRemaining[w] = static_cast<int>(
+                effectiveRate > 0.0f
+                    ? static_cast<int>(rate.ticks(sim::seconds(1.0f / effectiveRate)))
+                    : 1);
             emit(events, Event{
                              .kind = EventKind::WeaponFired,
                              .unit = store.idAt(slot),
@@ -2764,7 +2786,7 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
             }
 
             const Fx gap = groundDistanceElmos(from, to);
-            if (gap > weapon.maxRange || gap <= weapon.minRange) {
+            if (gap > weaponMaxRangeFor(store, catalog, slot, weapon) || gap <= weapon.minRange) {
                 continue;  // outside the envelope — the pursuit closes, the dead zone stays
             }
             // THE TUBE. An empty silo holds the order rather than refusing it: the
@@ -2780,9 +2802,11 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
             const bool muzzled =
                 mount.present && mount.weapon == w && slot < motions.size();
             const std::size_t pushIndex = projectiles.size();
+            unitdef::DamageProfile damage = rates.damage;
+            damage.base += weaponDamageModFor(store, catalog, slot, weapon);
             projectiles.push_back(
                 launch(from, to, weapon, army, rate, rates.muzzlePerTick,
-                       rates.damage, store.idAt(slot), false, aimTarget,
+                       damage, store.idAt(slot), false, aimTarget,
                        muzzled
                            ? std::optional{mountMuzzleWorld(mount, transforms[slot],
                                                             motions[slot], false)}
@@ -2796,7 +2820,11 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
             missile.innerRingRadiusElmos = weapon.innerRingRadius;
             missile.outerRingRadiusElmos = weapon.outerRingRadius;
             consumeSiloAmmo(store.idAt(slot), weapon, siloAmmo);
-            healths[slot].reloadRemaining[w] = static_cast<int>(rates.reloadTicks);
+            const float effectiveRate = weaponRateOfFireFor(store, catalog, slot, weapon);
+            healths[slot].reloadRemaining[w] = static_cast<int>(
+                effectiveRate > 0.0f
+                    ? static_cast<int>(rate.ticks(sim::seconds(1.0f / effectiveRate)))
+                    : 1);
             emit(events, Event{
                              .kind = EventKind::WeaponFired,
                              .unit = store.idAt(slot),
@@ -2830,7 +2858,7 @@ void tickShields(UnitStore& store, const UnitCatalog& catalog, EventQueue* event
             continue;
         }
         ShieldState& state = health[slot].shield;
-        const UnitCatalog::ShieldInfo& shield = catalog.shield(store.typeAt(slot));
+        const UnitCatalog::ShieldInfo& shield = shieldFor(store, catalog, slot);
         // Script bit 0 (`RULEUTC_ShieldToggle`) is retail's manual off switch:
         // `OffState` kills the regen thread and removes the collision shape, so a
         // disabled shield neither absorbs (the call sites above) nor regenerates.
@@ -3083,7 +3111,7 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
             if (!damageable(slot) || slot >= healths.size()) {
                 continue;
             }
-            const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(slot));
+            const UnitCatalog::ShieldInfo& shield = shieldFor(store, *catalog, slot);
             if (!shield.exists() || !healths[slot].shield.active()
                 || store.scriptBitDisabledAt(slot, 0)) {
                 continue;
@@ -3358,7 +3386,7 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
             continue;
         }
         Health& owner = healths[bubble.slot];
-        const UnitCatalog::ShieldInfo& shield = catalog->shield(store.typeAt(bubble.slot));
+        const UnitCatalog::ShieldInfo& shield = shieldFor(store, *catalog, bubble.slot);
         const Mag absorbed = std::min(owner.shield.current, bubble.absorb);
         owner.shield.current -= absorbed;
         owner.shield.regenDelayRemaining = shield.regenDelay;

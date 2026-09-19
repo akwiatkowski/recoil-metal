@@ -97,6 +97,20 @@ struct ScriptEffectRow {
 };
 
 constexpr std::string_view kWeaponChrono[]{"ChronoDampener"};
+constexpr std::string_view kWeaponRightDisruptor[]{"RightDisruptor"};
+constexpr std::string_view kWeaponRightDisruptorOC[]{"RightDisruptor", "OverCharge"};
+constexpr std::string_view kWeaponRightZephyr[]{"RightZephyr"};
+constexpr std::string_view kWeaponRightZephyrOC[]{"RightZephyr", "OverCharge"};
+constexpr std::string_view kWeaponChronotron[]{"ChronotronCannon"};
+constexpr std::string_view kWeaponChronotronOC[]{"ChronotronCannon", "OverCharge"};
+constexpr std::string_view kWeaponRightRipperMLG[]{"RightRipper", "MLG"};
+constexpr std::string_view kWeaponRightRipperMLGOC[]{"RightRipper", "MLG", "OverCharge"};
+constexpr std::string_view kWeaponRightDisintegrator[]{"RightDisintegrator"};
+constexpr std::string_view kWeaponRightHeavyPlasma[]{"RightHeavyPlasmaCannon"};
+constexpr std::string_view kIntelJammer[]{"Jammer"};
+constexpr std::string_view kIntelStealth[]{"RadarStealth", "SonarStealth"};
+constexpr std::string_view kIntelCloak[]{"Cloak"};
+constexpr std::string_view kIntelSonar[]{"Sonar"};
 constexpr std::string_view kWeaponMissile[]{"Missile"};
 constexpr std::string_view kWeaponNMissile[]{"NMissile"};
 constexpr std::string_view kWeaponTacMissile[]{"TacMissile"};
@@ -125,13 +139,18 @@ constexpr ScriptEffectRow kScriptEffects[] = {
                        .weaponDisables = kWeaponMissile}},
     {"TacticalMissile", {.commandCapAdds = kCapTacticalPair,
                          .weaponEnables = kWeaponTacMissile}},
-    {"TacticalNukeMissile",
-     {.commandCapAdds = kCapNukePair, .commandCapRemoves = kCapTacticalPair,
-      .weaponEnables = kWeaponTacNuke, .weaponDisables = kWeaponTacMissile}},
+
     {"TacticalMissileRemove", {.commandCapRemoves = kCapAllSilo,
-                               .weaponDisables = kWeaponTacBoth}},
+                               .weaponDisables = kWeaponTacBoth,
+                               .clearsSiloAmmo = true}},
+    {"TacticalNukeMissile", {.commandCapAdds = kCapNukePair,
+                            .commandCapRemoves = kCapTacticalPair,
+                            .weaponEnables = kWeaponTacNuke,
+                            .weaponDisables = kWeaponTacMissile,
+                            .clearsSiloAmmo = true}},
     {"TacticalNukeMissileRemove", {.commandCapRemoves = kCapAllSilo,
-                                   .weaponDisables = kWeaponTacBoth}},
+                                   .weaponDisables = kWeaponTacBoth,
+                                   .clearsSiloAmmo = true}},
     // UAL0001's ChronoDampener: the enhancement IS the weapon's label.
     {"ChronoDampener", {.weaponEnables = kWeaponChrono}},
     {"ChronoDampenerRemove", {.weaponDisables = kWeaponChrono}},
@@ -140,17 +159,64 @@ constexpr ScriptEffectRow kScriptEffects[] = {
     {"NaniteMissileSystemRemove", {.weaponDisables = kWeaponNMissile}},
     // Shields: `Shield` adds the toggle cap everywhere; `ShieldHeavy` and
     // `ShieldGeneratorField` do not — the Remove branches still take it away.
-    {"Shield", {.toggleCapAdds = kToggleShield}},
-    {"ShieldRemove", {.toggleCapRemoves = kToggleShield}},
-    {"ShieldHeavyRemove", {.toggleCapRemoves = kToggleShield}},
-    {"ShieldGeneratorFieldRemove", {.toggleCapRemoves = kToggleShield}},
-    // UEL0301's RadarJammer adds the jamming toggle; the stealth/cloak
-    // generators ride the cloak toggle (URL0001/URL0301).
-    {"RadarJammer", {.toggleCapAdds = kToggleJamming}},
-    {"RadarJammerRemove", {.toggleCapRemoves = kToggleJamming}},
-    {"StealthGenerator", {.toggleCapAdds = kToggleCloak}},
-    {"StealthGeneratorRemove", {.toggleCapRemoves = kToggleCloak}},
-    {"CloakingGeneratorRemove", {.toggleCapRemoves = kToggleCloak}},
+    // Shields, intel, stat mods, pods and the silo purge live in the rows
+    // below — merged here so each name appears once.
+    // `C-255`/`C-379`: the rest of the shipped mutation surface — shield
+    // create/destroy, intel enables and radius writes, weapon stat mods, pod
+    // spawn/kill, silo-ammo purge. Values ride `EnhancementEffects`; these are
+    // the script-side labels and flags.
+    {"Shield", {.toggleCapAdds = kToggleShield, .createsShield = true}},
+    {"ShieldRemove", {.toggleCapRemoves = kToggleShield, .destroysShield = true}},
+    {"ShieldHeavyRemove", {.toggleCapRemoves = kToggleShield,
+                           .destroysShield = true}},
+    {"ShieldGeneratorField", {.createsShield = true}},
+    {"ShieldGeneratorFieldRemove", {.toggleCapRemoves = kToggleShield,
+                                    .destroysShield = true}},
+    {"RadarJammer", {.toggleCapAdds = kToggleJamming,
+                     .intelEnables = kIntelJammer}},
+    {"RadarJammerRemove", {.toggleCapRemoves = kToggleJamming,
+                           .intelDisables = kIntelJammer}},
+    {"StealthGenerator", {.toggleCapAdds = kToggleCloak,
+                          .intelEnables = kIntelStealth}},
+    {"StealthGeneratorRemove", {.toggleCapRemoves = kToggleCloak,
+                                .intelDisables = kIntelStealth}},
+    {"CloakingGenerator", {.intelEnables = kIntelCloak}},
+    {"CloakingGeneratorRemove", {.toggleCapRemoves = kToggleCloak,
+                                 .intelDisables = kIntelCloak}},
+    {"NaniteTorpedoTube", {.intelEnables = kIntelSonar}},
+    {"NaniteTorpedoTubeRemove", {.intelDisables = kIntelSonar}},
+    // Weapon stat mods: labels are the script's `GetWeaponByLabel` targets;
+    // the values are the enhancement's own parameters.
+    {"CrysalisBeam", {.maxRadiusLabels = kWeaponRightDisruptorOC}},
+    {"CrysalisBeamRemove", {.maxRadiusLabels = kWeaponRightDisruptorOC}},
+    {"HeatSink", {.rateOfFireLabels = kWeaponRightDisruptor}},
+    {"HeatSinkRemove", {.rateOfFireLabels = kWeaponRightDisruptor}},
+    {"HeavyAntiMatterCannon", {.maxRadiusLabels = kWeaponRightZephyrOC,
+                              .damageModLabels = kWeaponRightZephyr}},
+    {"HeavyAntiMatterCannonRemove", {.maxRadiusLabels = kWeaponRightZephyrOC,
+                                    .damageModLabels = kWeaponRightZephyr}},
+    {"RateOfFire", {.maxRadiusLabels = kWeaponChronotronOC,
+                    .rateOfFireLabels = kWeaponChronotron}},
+    {"RateOfFireRemove", {.maxRadiusLabels = kWeaponChronotronOC,
+                          .rateOfFireLabels = kWeaponChronotron}},
+    {"BlastAttack", {.damageModLabels = kWeaponChronotron}},
+    {"BlastAttackRemove", {.damageModLabels = kWeaponChronotron}},
+    {"FocusConvertor", {.damageModLabels = kWeaponRightDisintegrator}},
+    {"FocusConvertorRemove", {.damageModLabels = kWeaponRightDisintegrator}},
+    {"AdvancedCoolingUpgrade", {.rateOfFireLabels = kWeaponRightHeavyPlasma}},
+    {"AdvancedCoolingUpgradeRemove", {.rateOfFireLabels = kWeaponRightHeavyPlasma}},
+    {"CoolingUpgrade", {.maxRadiusLabels = kWeaponRightRipperMLGOC,
+                        .rateOfFireLabels = kWeaponRightRipperMLG}},
+    {"CoolingUpgradeRemove", {.maxRadiusLabels = kWeaponRightRipperMLGOC,
+                              .rateOfFireLabels = kWeaponRightRipperMLG}},
+    // Pods: UEL0001's LeftPod/RightPod and UEL0301's Pod — `CreateUnitHPR` +
+    // `SetParent`; the Remove branches `Kill()` them.
+    {"LeftPod", {.podBlueprint = "UEA0001", .podBone = "AttachSpecial02"}},
+    {"RightPod", {.podBlueprint = "UEA0001", .podBone = "AttachSpecial01"}},
+    {"Pod", {.podBlueprint = "UEA0003", .podBone = "AttachSpecial01"}},
+    {"LeftPodRemove", {.killsPods = true}},
+    {"RightPodRemove", {.killsPods = true}},
+    {"PodRemove", {.killsPods = true}},
     // `C-258`: the three `SetRegenRate` writes — absolute, not adds. UEL0001's
     // name is retail's own typo (`DamageStablization`); the Seraphim
     // `DamageStabilization` is a Regen buff and is NOT in this list.
@@ -293,8 +359,45 @@ std::expected<void, std::string> canInstallEnhancement(
     const std::array sequence{std::string{name}};
     return validateEnhancementSequence(store, catalog, unit, sequence);
 }
+namespace {
+/// `EnableUnitIntel`/`DisableUnitIntel`'s string argument → `IntelType`. The
+/// names are the scripts' own spellings; anything else is `None`, which the
+/// caller skips — a name the sim has no sense for disables nothing.
+[[nodiscard]] IntelType intelTypeNamed(std::string_view name) noexcept {
+    if (name == "Vision") return IntelType::Vision;
+    if (name == "WaterVision") return IntelType::WaterVision;
+    if (name == "Radar") return IntelType::Radar;
+    if (name == "Sonar") return IntelType::Sonar;
+    if (name == "Omni") return IntelType::Omni;
+    if (name == "RadarStealthField") return IntelType::RadarStealthField;
+    if (name == "SonarStealthField") return IntelType::SonarStealthField;
+    if (name == "CloakField") return IntelType::CloakField;
+    if (name == "Jammer") return IntelType::Jammer;
+    if (name == "Spoof") return IntelType::Spoof;
+    if (name == "Cloak") return IntelType::Cloak;
+    if (name == "RadarStealth") return IntelType::RadarStealth;
+    if (name == "SonarStealth") return IntelType::SonarStealth;
+    return IntelType::None;
+}
+
+/// Whether any installed enhancement's branch names `label` in `field` — the
+/// shared half of the three stat-override readers.
+template <typename Field>
+[[nodiscard]] bool statLabelled(const UnitStore& store, UnitIndex slot,
+                                std::string_view label, Field field) noexcept {
+    if (slot >= store.enhancements().size()) return false;
+    for (const auto& [position, installed] : store.enhancements()[slot]) {
+        if (capListHas(enhancementScriptEffects(installed).*field, label)) {
+            return true;
+        }
+    }
+    return false;
+}
+} // namespace
+
 std::expected<void, std::string> installEnhancement(
-    UnitStore& store, const UnitCatalog& catalog, UnitId unit, std::string_view name) {
+    UnitStore& store, const UnitCatalog& catalog, UnitId unit, std::string_view name,
+    std::span<SiloAmmo> siloAmmo) {
     if (const auto valid = canInstallEnhancement(store, catalog, unit, name); !valid) return valid;
     const auto* def = catalog.def(store.typeAt(unit.index));
     const auto* spec = def->enhancement(name);
@@ -328,6 +431,81 @@ std::expected<void, std::string> installEnhancement(
         health.regenWrite = Health::RegenWrite::Reverted;
     } else if (touchesRegenBuff) {
         health.regenWrite = Health::RegenWrite::None;
+    }
+    // `C-255`/`C-379`: the remaining script-side effects — shield create and
+    // destroy, intel enables, pod spawn/kill, and the silo swap's ammo purge.
+    // Stat mods (radius/rate/damage) and intel radii are read-time overrides,
+    // so they need no install-time write.
+    if (own.destroysShield) {
+        health.shield = ShieldState{};
+    }
+    if (own.createsShield) {
+        if (const auto* effects =
+                catalog.enhancementEffects(store.typeAt(unit.index), name);
+            effects != nullptr && effects->shield.exists()) {
+            // `CreatePersonalShield`/`CreateShield` stand the bubble up
+            // CHARGING: full maximum, zero current, the authored recharge
+            // countdown running — `shield.lua`'s `ChargingUp` state.
+            health.shield.maximum = effects->shield.maximum;
+            health.shield.current = Mag{};
+            health.shield.rechargeRemaining = effects->shield.recharge;
+            health.shield.rechargeRestoresFull = true;
+            health.shield.rechargeProgress = Fx{};
+        }
+    }
+    for (const std::string_view intel : own.intelEnables) {
+        if (const auto type = intelTypeNamed(intel); type != IntelType::None) {
+            (void)store.setIntelEnabled(unit, type, true);
+        }
+    }
+    for (const std::string_view intel : own.intelDisables) {
+        if (const auto type = intelTypeNamed(intel); type != IntelType::None) {
+            (void)store.setIntelEnabled(unit, type, false);
+        }
+    }
+    if (!own.podBlueprint.empty()) {
+        // `CreateUnitHPR` + `SetParent`: the pod is a real unit of its own
+        // blueprint, spawned at the bone and attached to the commander. A
+        // catalog without the pod's def (a test that never loaded UEA0001)
+        // simply spawns nothing — the enhancement still installs.
+        for (UnitTypeIndex type = 0; type < catalog.size(); ++type) {
+            const unitdef::UnitDef* podDef = catalog.def(type);
+            if (podDef != nullptr && podDef->name == own.podBlueprint) {
+                const Transform& at = store.transforms()[unit.index];
+                const UnitId pod = store.spawn(UnitStore::Spawn{
+                    .type = type,
+                    .transform = at,
+                    .motion = {.armyIndex = store.motion()[unit.index].armyIndex},
+                    .health = initialHealth(podDef->health,
+                                            catalog.shield(type).maximum)});
+                (void)store.attach(unit, pod);
+                break;
+            }
+        }
+    }
+    if (own.killsPods) {
+        // `XxxRemove` `Kill()`s the pods — every attached child whose def is a
+        // pod blueprint, the way the scripts kill both pods at once.
+        if (const auto children = store.childrenOf(unit); !children.empty()) {
+            for (const UnitId child : children) {
+                const unitdef::UnitDef* childDef =
+                    catalog.def(store.typeAt(child.index));
+                if (childDef != nullptr
+                    && (childDef->name == "UEA0001" || childDef->name == "UEA0003")) {
+                    store.kill(child);
+                }
+            }
+        }
+    }
+    if (own.clearsSiloAmmo) {
+        // `RemoveTacticalSiloAmmo`/`RemoveNukeSiloAmmo`/`StopSiloBuild`: every
+        // record the owner carries empties and stops mid-build.
+        for (SiloAmmo& ammo : siloAmmo) {
+            if (ammo.owner == unit) {
+                ammo.stored = 0;
+                ammo.elapsedTicks = 0;
+            }
+        }
     }
     const Mag previous = health.maximum;
     health.maximum = veterancyMaxHealth(def->health + enhancementHealthAdd(store, catalog, unit.index), health.veterancy.level);
@@ -391,8 +569,11 @@ std::int32_t EnhancementTasks::taskTick(UnitId unit, std::string_view task,
     }
     advanceEnhancement(*work);
     if (!work->finished()) return static_cast<std::int32_t>(ScriptTaskStatus::NextBeat);
-    return static_cast<std::int32_t>(installEnhancement(store_, catalog_, unit, name)
-        ? ScriptTaskStatus::Done : ScriptTaskStatus::Abort);
+    return static_cast<std::int32_t>(
+        installEnhancement(store_, catalog_, unit, name,
+                           siloAmmo_ != nullptr ? std::span{*siloAmmo_}
+                                                : std::span<SiloAmmo>{})
+            ? ScriptTaskStatus::Done : ScriptTaskStatus::Abort);
 }
 void EnhancementTasks::onDestroy(UnitId unit, std::string_view task,
     std::span<const std::uint8_t> data, ScriptTaskState&) {
@@ -400,5 +581,117 @@ void EnhancementTasks::onDestroy(UnitId unit, std::string_view task,
     const std::string name(data.begin(), data.end());
     // Already consumed resources are not refunded, whether finished, cancelled, or killed.
     std::erase_if(work_, [&](const auto& entry) { return entry.owner == unit && entry.name == name; });
+}
+
+const UnitCatalog::ShieldInfo& shieldFor(const UnitStore& store,
+                                         const UnitCatalog& catalog,
+                                         UnitIndex slot) noexcept {
+    // A `DestroyShield` branch leaves the unit bare even if the TYPE authored
+    // one; a `CreatePersonalShield`/`CreateShield` branch supplies its own
+    // parameters. Installed order decides between competing writers — the
+    // scripts' own last-write rule.
+    if (slot < store.enhancements().size()) {
+        bool destroyed = false;
+        const UnitCatalog::ShieldInfo* created = nullptr;
+        for (const auto& [position, installed] : store.enhancements()[slot]) {
+            const EnhancementScriptEffects effects =
+                enhancementScriptEffects(installed);
+            if (effects.destroysShield) {
+                destroyed = true;
+                created = nullptr;
+            }
+            if (effects.createsShield) {
+                if (const auto* params =
+                        catalog.enhancementEffects(store.typeAt(slot), installed);
+                    params != nullptr && params->shield.exists()) {
+                    created = &params->shield;
+                    destroyed = false;
+                }
+            }
+        }
+        if (destroyed) {
+            static constexpr UnitCatalog::ShieldInfo kNone{};
+            return kNone;
+        }
+        if (created != nullptr) return *created;
+    }
+    return catalog.shield(store.typeAt(slot));
+}
+
+UnitCatalog::IntelRadii intelRadiiFor(const UnitStore& store,
+                                      const UnitCatalog& catalog,
+                                      UnitIndex slot) noexcept {
+    UnitCatalog::IntelRadii radii = catalog.intel(store.typeAt(slot));
+    if (slot >= store.enhancements().size()) return radii;
+    for (const auto& [position, installed] : store.enhancements()[slot]) {
+        if (const auto* effects =
+                catalog.enhancementEffects(store.typeAt(slot), installed)) {
+            if (effects->visionRadiusElmos) radii.vision = *effects->visionRadiusElmos;
+            if (effects->omniRadiusElmos) radii.omni = *effects->omniRadiusElmos;
+            if (effects->jammerRadiusElmos) {
+                // `SetIntelRadius('Jammer', r)` sets the jammer's outer radius;
+                // the blip range keeps its authored minimum.
+                radii.jamRadius = *effects->jammerRadiusElmos;
+            }
+        }
+    }
+    return radii;
+}
+
+Fx weaponMaxRangeFor(const UnitStore& store, const UnitCatalog& catalog,
+                     UnitIndex slot, const unitdef::Weapon& weapon) noexcept {
+    if (statLabelled(store, slot, weapon.label,
+                     &EnhancementScriptEffects::maxRadiusLabels)) {
+        // Last installed writer wins, like the scripts' sequential writes.
+        Fx result = weapon.maxRange;
+        for (const auto& [position, installed] : store.enhancements()[slot]) {
+            const EnhancementScriptEffects script =
+                enhancementScriptEffects(installed);
+            if (!capListHas(script.maxRadiusLabels, weapon.label)) continue;
+            if (const auto* effects =
+                    catalog.enhancementEffects(store.typeAt(slot), installed);
+                effects != nullptr && effects->maxRadiusElmos > Fx{}) {
+                result = effects->maxRadiusElmos;
+            }
+        }
+        return result;
+    }
+    return weapon.maxRange;
+}
+
+float weaponRateOfFireFor(const UnitStore& store, const UnitCatalog& catalog,
+                          UnitIndex slot, const unitdef::Weapon& weapon) noexcept {
+    if (statLabelled(store, slot, weapon.label,
+                     &EnhancementScriptEffects::rateOfFireLabels)) {
+        float result = weapon.rateOfFire;
+        for (const auto& [position, installed] : store.enhancements()[slot]) {
+            const EnhancementScriptEffects script =
+                enhancementScriptEffects(installed);
+            if (!capListHas(script.rateOfFireLabels, weapon.label)) continue;
+            if (const auto* effects =
+                    catalog.enhancementEffects(store.typeAt(slot), installed);
+                effects != nullptr && effects->rateOfFire > 0.0f) {
+                result = effects->rateOfFire;
+            }
+        }
+        return result;
+    }
+    return weapon.rateOfFire;
+}
+
+Mag weaponDamageModFor(const UnitStore& store, const UnitCatalog& catalog,
+                       UnitIndex slot, const unitdef::Weapon& weapon) noexcept {
+    Mag result{};
+    if (slot >= store.enhancements().size()) return result;
+    for (const auto& [position, installed] : store.enhancements()[slot]) {
+        const EnhancementScriptEffects script =
+            enhancementScriptEffects(installed);
+        if (!capListHas(script.damageModLabels, weapon.label)) continue;
+        if (const auto* effects =
+                catalog.enhancementEffects(store.typeAt(slot), installed)) {
+            result += effects->damageMod;
+        }
+    }
+    return result;
 }
 } // namespace rm::sim
