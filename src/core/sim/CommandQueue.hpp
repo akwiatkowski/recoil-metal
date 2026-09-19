@@ -216,6 +216,16 @@ public:
         transportPhase_ = TransportPhase::ToBeacon;
     }
 
+    /// `C-190`'s mobile-build retry counter — retail's `task+0xb4`, which
+    /// `CUnitMobileBuildTask` state 3 reads as "give up after 10". Lives on the
+    /// queue entry rather than the shared payload because attempts are this
+    /// unit's execution, not the order's intent. Deliberately outside
+    /// `Snapshot`: a save/load restarts the count, the same honesty a dead
+    /// task thread's counter has.
+    [[nodiscard]] std::uint32_t buildAttempts() const noexcept { return buildAttempts_; }
+    void noteBuildAttempt() noexcept { ++buildAttempts_; }
+    void resetBuildAttempts() noexcept { buildAttempts_ = 0; }
+
 private:
     UnitId unit_{};
     Fx targetX_{};
@@ -227,6 +237,7 @@ private:
     ScriptTaskState scriptState_;
     std::optional<std::array<Fx, 2>> transportAnchor_;
     TransportPhase transportPhase_ = TransportPhase::None;
+    std::uint32_t buildAttempts_ = 0;
 };
 
 /// A unit's order list.

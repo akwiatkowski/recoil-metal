@@ -1046,6 +1046,56 @@ TEST_CASE("a build command refuses a blocked target footprint") {
     CHECK(fix.building.empty());
 }
 
+TEST_CASE("C-190: a blocked mobile build retries ten times before giving up") {
+    // `CUnitMobileBuildTask` state 3 counts `task+0xb4` and gives up past 10 —
+    // a blocked placement RETRIES, it does not die on the first refusal. The
+    // order survives ten failed beats and is dropped on the eleventh.
+    Fixture fix;
+
+    rm::unitdef::UnitDef engineerDef;
+    engineerDef.name = "engineer";
+    engineerDef.buildRate = 10.0f;
+    engineerDef.buildableCategory = {{"TESTSTRUCTURE"}};
+    engineerDef.collisionRadiusElmos = 4.0f;  // a footprint, so it can block a site
+    const rm::UnitTypeIndex engineerType = fix.roster.addType(engineerDef);
+
+    rm::unitdef::UnitDef structureDef;
+    structureDef.name = "structure";
+    structureDef.categories = {"TESTSTRUCTURE"};
+    structureDef.collisionRadiusElmos = 8.0f;
+    structureDef.buildTime = rm::test::mag(60.0f);
+    const rm::UnitTypeIndex structureType = fix.roster.addType(structureDef);
+
+    const UnitId engineer = fix.roster.add(engineerType, 390.0f, 400.0f, 0, 500.0f);
+    // The blocker parks on the site AFTER the order is accepted — the retry
+    // path only exists for a refusal at dispatch, not at issue. The engineer
+    // starts inside its 40-elmo reach, so every beat is an attempt.
+    const UnitId blocker = fix.roster.add(engineerType, 400.0f, 400.0f, 0, 500.0f);
+    (void)blocker;
+
+    CommandLog log;
+    // QUEUED, so the order is appended without an issue-time `startCommand` —
+    // a plain order is refused outright on the blocked site and the retry
+    // path, which lives in dispatch, never sees it.
+    REQUIRE(log.record(logged(Command{.tick = 0,
+                                      .player = 0,
+                                      .kind = CommandKind::Build,
+                                      .queued = true,
+                                      .unit = engineer,
+                                      .targetX = rm::test::fx(400.0f),
+                                      .targetZ = rm::test::fx(400.0f),
+                                      .buildType = structureType})));
+    // Ten failed attempts and the order still stands — retail's task returns
+    // 50 (a five-second retry) on each, it does not die on the first refusal.
+    fix.run(log, 10);
+    CHECK_FALSE(fix.roster.store.orders()[engineer.index].empty());
+    CHECK(fix.building.empty());
+
+    // The eleventh attempt is the one retail's `> 10` gives up on.
+    fix.run(log, 5);
+    CHECK(fix.roster.store.orders()[engineer.index].empty());
+}
+
 TEST_CASE("only a builder builds") {
     // A tank founding a factory is a caller bug, and refusing it deterministically beats
     // letting it through.

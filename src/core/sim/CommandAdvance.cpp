@@ -455,31 +455,62 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     orders[slot].markCurrentActive();
                     ++started;
                     return;
-                } else if (pending->kind() == CommandKind::Build && building != nullptr
-                           && finished != nullptr) {
-                    // PRODUCTION QUEUED ON A RISING FACTORY. The founder's construction
-                    // completed THIS BEAT (`finished` holds the row) and the cascade would
-                    // otherwise drop the parked mobile-product order before the caller's
-                    // completion hand-over can move it to the factory unit that is about to
-                    // stand. Leave it at the head for that hand-over; a factory construction
-                    // that was cancelled never reaches `finished`, so the refusal below stays
-                    // the answer for every other illegal build.
-                    const unitdef::UnitDef* founder = catalog.def(store.typeAt(slot));
-                    const unitdef::UnitDef* product = catalog.def(pending->buildType());
-                    if (founder != nullptr && product != nullptr && product->isMobile()
-                        && !founder->hasCategory("FACTORY")) {
+                } else if (pending->kind() == CommandKind::Build && building != nullptr) {
+                    // `C-190`: `CUnitMobileBuildTask` state 3 gives up after
+                    // `task+0xb4 > 10` attempts — a refused placement RETRIES,
+                    // it does not die on the first refusal. The order stays
+                    // PENDING — never marked active, so `materialiseHead`
+                    // cannot retire it as a row-less build — and the next
+                    // beat's `startPending` is the retry. Upgrades and factory
+                    // production are different task types with their own
+                    // retry rules, so only the mobile build counts.
+                    const unitdef::UnitDef* builderDef =
+                        catalog.def(store.typeAt(slot));
+                    const unitdef::UnitDef* productDef =
+                        catalog.def(pending->buildType());
+                    const bool mobileBuild =
+                        builderDef != nullptr && productDef != nullptr
+                        && !(builderDef->hasCategory("FACTORY")
+                             && productDef->isMobile())
+                        && (builderDef->upgradesTo.empty()
+                            || builderDef->upgradesTo != productDef->name);
+
+                    // PRODUCTION QUEUED ON A RISING FACTORY, checked before the
+                    // retry count: the founder's construction completed THIS
+                    // BEAT (`finished` holds the row) and the cascade would
+                    // otherwise drop the parked mobile-product order before
+                    // the caller's completion hand-over can move it to the
+                    // factory unit that is about to stand. A factory
+                    // construction that was cancelled never reaches
+                    // `finished`, so the refusal below stays the answer for
+                    // every other illegal build.
+                    if (finished != nullptr && builderDef != nullptr
+                        && productDef != nullptr && productDef->isMobile()
+                        && !builderDef->hasCategory("FACTORY")) {
                         const bool risingNow = std::ranges::any_of(
                             *finished, [&](const Construction& work) {
-                                if (work.builder != store.idAt(slot) || work.isUpgrade()) {
+                                if (work.builder != store.idAt(slot)
+                                    || work.isUpgrade()) {
                                     return false;
                                 }
                                 const unitdef::UnitDef* def = catalog.def(
-                                    static_cast<UnitTypeIndex>(work.blueprintIndex));
-                                return def != nullptr && def->hasCategory("FACTORY")
+                                    static_cast<UnitTypeIndex>(
+                                        work.blueprintIndex));
+                                return def != nullptr
+                                    && def->hasCategory("FACTORY")
                                     && !def->isMobile();
                             });
                         if (risingNow) {
                             return;
+                        }
+                    }
+                    if (mobileBuild) {
+                        if (QueuedCommand* head =
+                                orders[slot].currentEntryMutable()) {
+                            head->noteBuildAttempt();
+                            if (head->buildAttempts() <= 10) {
+                                return;  // still pending — next beat retries
+                            }
                         }
                     }
                     (void)orders[slot].finish();
@@ -730,6 +761,32 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                         colleague->paused = store.productionPaused(colleague->builder);
                         serviceBuilds();
                         continue;
+                    }
+                    // `C-190`: `CUnitMobileBuildTask` state 3 gives up after
+                    // `task+0xb4 > 10` attempts — a blocked placement RETRIES
+                    // rather than dying on the first refusal. Upgrades and
+                    // factory production are different task types with their
+                    // own retry rules, so the cap counts only the mobile
+                    // build's failures.
+                    const unitdef::UnitDef* builderDef = catalog.def(store.typeAt(slot));
+                    const unitdef::UnitDef* productDef = catalog.def(current->buildType());
+                    const bool mobileBuild =
+                        builderDef != nullptr && productDef != nullptr
+                        && !(builderDef->hasCategory("FACTORY") && productDef->isMobile())
+                        && (builderDef->upgradesTo.empty()
+                            || builderDef->upgradesTo != productDef->name);
+                    if (mobileBuild) {
+                        if (QueuedCommand* head = orders[slot].activeEntryMutable()) {
+                            head->noteBuildAttempt();
+                            if (head->buildAttempts() <= 10) {
+                                // Not the eleventh yet: stop where the refusal
+                                // happened and try again next beat, the way
+                                // retail's task returns 50 — a five-second
+                                // retry — on a failed create.
+                                teardownMovement(mine);
+                                continue;
+                            }
+                        }
                     }
                     teardownMovement(mine);
                     (void)orders[slot].finish();

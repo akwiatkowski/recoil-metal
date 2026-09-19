@@ -1876,6 +1876,34 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 .amount = work.cost.mass,
                 .at = work.position,
             });
+            // `C-190`: `CUnitMobileBuildTask` state 4 ends by issuing
+            // `UNITCOMMAND_Upgrade` to the unit it just built when the ordered
+            // blueprint's `+0x1ec` is nonzero — the build-then-upgrade chain.
+            // Bounded to what the claim says: a mobile builder's placed
+            // structure whose blueprint names a successor gets the upgrade
+            // order on completion. Upgrades themselves and factory products
+            // are different task types and do not chain.
+            if (!work.isUpgrade()) {
+                const rm::unitdef::UnitDef& built =
+                    buildableDef(scene, work.blueprintIndex);
+                const rm::unitdef::UnitDef* founder =
+                    scene.store.alive(work.builder)
+                        ? scene.catalog.def(scene.store.typeAt(work.builder.index))
+                        : nullptr;
+                if (!built.upgradesTo.empty() && founder != nullptr
+                    && founder->isMobile()) {
+                    if (const std::optional<rm::data::RosterEntry> next =
+                            scene.roster.byId(built.upgradesTo)) {
+                        if (const auto type =
+                                resolveBuildable(scene, runner.content, next->path())) {
+                            (void)issueBuild(scene, *spawned,
+                                             playerDriving(scene, work.armyIndex),
+                                             static_cast<rm::TickIndex>(tickIndex), *type,
+                                             work.position[0], work.position[2], false);
+                        }
+                    }
+                }
+            }
         }
         // `C-261`'s crab-egg hatch, retail's `cybranunits.lua:355-400`: a
         // `CConstructionEggUnit` — the Megalith's FACTORY+STRUCTURE product —
