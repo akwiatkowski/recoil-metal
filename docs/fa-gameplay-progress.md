@@ -64,6 +64,26 @@ Still deferred: `C-264` attach-build, `C-381` tractor claw, platoons
 `C-220`), and the native→Lua callback surface (`C-237`, `C-282`, `C-125`,
 `C-309`, `C-283`). CTest passes all 1,982 cases.
 
+**Update:** 2026-09-19 gap-fill wave 3 — every deferred item from wave 2
+landed, all headless-tested and committed: `C-264` carrier/mobile-factory
+attach-build (`5d858a7`), `C-381` Colossus tractor claw (`0cdfbcb`), `C-283`
+per-type intel enable/disable (`33baaad`), `C-358`/`C-359` real CPlatoon
+objects with plan threads (`f12bdc4`), the native→Lua surface `C-309`
+WaitFor/EventSignal (`a0ec6e5`), `C-125` motion events + `C-237` capture
+callback order (`94ea327`), `C-282` per-bit recon edges (`56c357d`), `C-361`
+brain/unit callback dispatch (`748f7be`), `C-257` veterancy brain hook
+(`3aff91d`), `C-289` `SetTerrainTypeRect` + tarmac stamps (`a56871c`), the
+SimCallbacks channel `C-319`/`C-346`/`C-344` (`e04a38c`), and the mod
+machinery `C-268`/`C-312`/`C-313` mounts + `__active_mods` (`04e3ae5`),
+`C-311`/`C-313` hook concat (`99fc01f`), `C-314`/`C-270` mod blueprint scan
+(`e66bb94`), `C-220` `Merge=true` deep merge (`2a09733`). Two regressions
+caught and fixed in-flight: a withdrawn unit's intel never re-stamped
+(`c251a56`) and the teamed-victory fixture needed `requestingAlliedVictory`
+(`0173018`). Remaining NOT_IMPLEMENTED claims are deliberate divergences
+(`C-037`, `C-065`, `C-078`, `C-139`, `C-152`, `C-267`, `C-276`), dead API
+(`C-375` `SetPivot`, absent like retail), or animation-signal machinery with
+no skeleton to drive it (`C-302`). CTest passes all 2,030 cases.
+
 **Update:** 2026-09-19 gap-fill wave — seven analysis-found gaps implemented
 against the claim contract, all headless-tested and committed: `C-192`
 sacrifice one-shot `min(mass,energy)` transfer (`d2c0405`), `C-148`/`C-191`
