@@ -1,5 +1,6 @@
 #include "core/sim/StateHash.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -552,6 +553,33 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         }
         if (!store.maintenanceActive(store.idAt(slot))) {
             feed(h, std::uint8_t{9});
+        }
+        // `C-293`'s manipulator list and `C-303`'s bone mask are serialized sim
+        // state — a storage slide's offset decides what the pose does next
+        // tick, and a hidden bone suppresses what attaches to it. Empty list
+        // and all-shown mask stay silent, keeping the pre-manipulator stream.
+        if (!store.manipulators()[slot].empty()) {
+            feed(h, std::uint8_t{10});
+            feed(h, store.manipulators()[slot].size());
+            for (const Manipulator& manip : store.manipulators()[slot]) {
+                feed(h, static_cast<std::uint8_t>(manip.kind));
+                feed(h, manip.precedence);
+                feed(h, manip.enabled);
+                feed(h, manip.slideResource);
+                feed(h, manip.slideBone);
+                feed(h, manip.slideRange);
+                feed(h, manip.slideOffset);
+                feed(h, manip.inTerrainContact);
+                feed(h, manip.inUnitContact);
+            }
+        }
+        if (const std::span<const std::uint64_t> mask = store.boneHiddenMaskAt(slot);
+            std::ranges::any_of(mask, [](std::uint64_t word) { return word != 0; })) {
+            feed(h, std::uint8_t{11});
+            feed(h, mask.size());
+            for (const std::uint64_t word : mask) {
+                feed(h, word);
+            }
         }
         // WHETHER THE SLOT IS OCCUPIED, which the generation cannot say on its own. Death is
         // a tombstone: `kill` leaves every array untouched and deliberately does NOT advance

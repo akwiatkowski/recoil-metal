@@ -36,6 +36,8 @@ UnitStore::UnitStore(const Snapshot& snapshot)
         attachmentSelfRest_(snapshot.attachmentSelfRest),
        attachmentSelfRestHeights_(snapshot.attachmentSelfRestHeights),
        lifetimeRemainingTicks_(snapshot.lifetimeRemainingTicks),
+       manipulators_(snapshot.manipulators),
+       boneHidden_(snapshot.boneHidden),
        nextCommandSerial_(snapshot.nextCommandSerial),
         nextCommandCounters_(snapshot.nextCommandCounters) {
     std::vector<std::shared_ptr<SharedCommand>> mutableCommands;
@@ -88,6 +90,10 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     // slot from its blueprint on the next tick — a restored Othuy restarts its
     // `Lifetime` rather than failing to load (C-265).
     lifetimeRemainingTicks_.resize(transforms_.size(), kLifetimeUnset);
+    // Older snapshots carry neither array: empty lists and all-shown bones are
+    // the pre-manipulator defaults, so the resize recovers both.
+    manipulators_.resize(transforms_.size());
+    boneHidden_.resize(transforms_.size());
     for (std::size_t child = 0; child < transforms_.size(); ++child) {
         if (parents_[child]) {
             if (deriveAttachmentHeights) {
@@ -142,6 +148,8 @@ UnitStore::Snapshot UnitStore::snapshot() const {
     for (const CommandQueue& queue : orders_) {
         saved.orders.push_back(queue.snapshot(sharedCommands));
     }
+    saved.manipulators = manipulators_;
+    saved.boneHidden = boneHidden_;
     saved.enhancements = enhancements_;
     return saved;
 }
@@ -174,6 +182,8 @@ UnitId UnitStore::spawn(const Spawn& request) {
         children_.emplace_back();
         attachmentOffsets_.emplace_back();
         attachmentHeights_.emplace_back();
+        manipulators_.emplace_back();
+        boneHidden_.emplace_back();
         attachmentParentBones_.emplace_back(kNoBone);
         attachmentSelfBones_.emplace_back(kNoBone);
         attachmentParentRest_.emplace_back();
@@ -211,6 +221,10 @@ UnitId UnitStore::spawn(const Spawn& request) {
     attachmentHeights_[slot] = {};
     attachmentParentBones_[slot] = kNoBone;
     attachmentSelfBones_[slot] = kNoBone;
+    // `C-293`/`C-303`: manipulator state and bone visibility are live-unit
+    // state — the newcomer starts with no manipulators and every bone shown.
+    manipulators_[slot].clear();
+    boneHidden_[slot].clear();
     attachmentParentRest_[slot] = {};
     attachmentParentRestHeights_[slot] = {};
     attachmentSelfRest_[slot] = {};
@@ -400,6 +414,11 @@ void UnitStore::kill(UnitId id) {
     buildPriority_[id.index] = BuildPriority::Normal;
     scriptBitsDisabled_[id.index] = 0;
     maintenanceActive_[id.index] = true;
+    // `C-293`/`C-303`: the manipulator list and the bone mask are live-unit
+    // state like the enhancements above — a corpse's pose is nobody's business,
+    // and a recycled slot must not inherit either.
+    manipulators_[id.index].clear();
+    boneHidden_[id.index].clear();
     retreatThresholds_[id.index] = RetreatThreshold::Off;
     targetFocus_[id.index] = TargetFocus::Default;
     retreats_[id.index] = {};
@@ -679,6 +698,50 @@ bool UnitStore::decreaseCommandCount(CommandId id, std::uint32_t amount) {
         }
     }
     return true;
+}
+
+bool UnitStore::addManipulator(UnitId unit, Manipulator manipulator) noexcept {
+    if (!alive(unit)) {
+        return false;
+    }
+    std::vector<Manipulator>& list = manipulators_[unit.index];
+    // `C-294`'s precedence sort, done at insert like retail's `SetPrecedence`
+    // re-sort (`0x6417b0`): the tick walks the list as-is. `upper_bound` keeps
+    // equal precedences in registration order — retail's list append.
+    const auto at = std::upper_bound(list.begin(), list.end(), manipulator.precedence,
+        [](std::int32_t precedence, const Manipulator& entry) {
+            return precedence < entry.precedence;
+        });
+    list.insert(at, manipulator);
+    return true;
+}
+
+bool UnitStore::setBoneHidden(UnitId unit, std::int32_t bone, bool hidden) noexcept {
+    if (!alive(unit) || bone < 0) {
+        return false;
+    }
+    std::vector<std::uint64_t>& mask = boneHidden_[unit.index];
+    const auto word = static_cast<std::size_t>(bone) / 64;
+    if (word >= mask.size()) {
+        mask.resize(word + 1, 0);
+    }
+    const std::uint64_t bit = std::uint64_t{1} << (static_cast<std::size_t>(bone) % 64);
+    if (hidden) {
+        mask[word] |= bit;
+    } else {
+        mask[word] &= ~bit;
+    }
+    return true;
+}
+
+bool UnitStore::boneHiddenAt(UnitIndex slot, std::int32_t bone) const noexcept {
+    if (bone < 0 || slot >= boneHidden_.size()) {
+        return false;
+    }
+    const auto word = static_cast<std::size_t>(bone) / 64;
+    const std::vector<std::uint64_t>& mask = boneHidden_[slot];
+    return word < mask.size()
+        && (mask[word] & (std::uint64_t{1} << (static_cast<std::size_t>(bone) % 64))) != 0;
 }
 
 } // namespace rm::sim

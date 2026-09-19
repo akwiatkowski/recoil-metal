@@ -123,3 +123,63 @@ TEST_CASE("C-373: a positional audio request carries where the shot happened",
     rm::audio::playForEvents(mixer, events);
     CHECK(mixer.activeVoices() == 1);  // the near shot sounds; the far one never starts
 }
+
+TEST_CASE("C-294/C-303: the manipulator list is precedence-sorted and bone visibility is serialized sim state",
+          "[fa-present][manipulator]") {
+    // C-294: `IAniManipulator::SetPrecedence` (`0x642610`) re-sorts the actor's
+    // list (`0x6417b0`) — insertion order is not execution order. C-303:
+    // `Unit::HideBone`/`ShowBone` write `CAniPoseBone+0x48` (`0x6d820b`), so the
+    // mask is sim state: it saves, it loads, and it hashes.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "posed_bot";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+
+    // Inserted out of order on purpose: retail's foot-plant registers at
+    // precedence 10 (`Unit.lua:2665`), the builder arm at 5.
+    REQUIRE(roster.store.addManipulator(
+        unit, {.kind = rm::sim::ManipulatorKind::Collision, .precedence = 10}));
+    REQUIRE(roster.store.addManipulator(
+        unit, {.kind = rm::sim::ManipulatorKind::StorageSlide, .precedence = 0}));
+    REQUIRE(roster.store.addManipulator(
+        unit, {.kind = rm::sim::ManipulatorKind::BuilderArm, .precedence = 5}));
+    {
+        const auto& list = roster.store.manipulators()[unit.index];
+        REQUIRE(list.size() == 3);
+        CHECK(list[0].kind == rm::sim::ManipulatorKind::StorageSlide);
+        CHECK(list[1].kind == rm::sim::ManipulatorKind::BuilderArm);
+        CHECK(list[2].kind == rm::sim::ManipulatorKind::Collision);
+    }
+
+    REQUIRE(roster.store.setBoneHidden(unit, 3, true));
+    CHECK(roster.store.boneHiddenAt(unit.index, 3));
+    CHECK_FALSE(roster.store.boneHiddenAt(unit.index, 0));
+
+    rm::sim::RandomStream random{std::uint32_t{1}};
+    const std::vector<std::byte> bytes = rm::sim::SaveState::encode(
+        {.tick = 7, .random = random.snapshot(), .units = roster.store.snapshot()});
+    const auto saved = rm::sim::SaveState::decode(bytes);
+    REQUIRE(saved.has_value());
+    const rm::sim::UnitStore restored{saved->units};
+    {
+        const auto& list = restored.manipulators()[unit.index];
+        REQUIRE(list.size() == 3);
+        CHECK(list[0].kind == rm::sim::ManipulatorKind::StorageSlide);
+        CHECK(list[1].kind == rm::sim::ManipulatorKind::BuilderArm);
+        CHECK(list[2].kind == rm::sim::ManipulatorKind::Collision);
+        CHECK(list[2].precedence == 10);
+    }
+    CHECK(restored.boneHiddenAt(unit.index, 3));
+    CHECK_FALSE(restored.boneHiddenAt(unit.index, 0));
+
+    // A hidden bone is a different match: the mask is hashed like the turret
+    // pose above it, because a replay that cannot see the difference replays
+    // the wrong unit.
+    rm::sim::UnitStore shown{roster.store.snapshot()};
+    REQUIRE(shown.setBoneHidden(unit, 3, false));
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    rm::sim::Match match{.armies = armies, .economies = economies};
+    CHECK(rm::sim::hashMatch(roster.store, match) != rm::sim::hashMatch(shown, match));
+}

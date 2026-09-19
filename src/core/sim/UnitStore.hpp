@@ -4,6 +4,7 @@
 #include "core/sim/CommandQueue.hpp"
 #include "core/sim/Health.hpp"
 #include "core/sim/IdPool.hpp"
+#include "core/sim/Manipulator.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/SpatialGrid.hpp"
 #include "core/sim/Transform.hpp"
@@ -19,9 +20,6 @@
 #include <vector>
 
 namespace rm::sim {
-/// No bone: an attachment sits at its carrier's origin. Namespace scope (rather
-/// than a class constant) so nested record initializers may name it.
-inline constexpr std::int32_t kNoBone = -1;
 
 /// `C-265`'s "not yet armed" marker for `UnitStore::lifetimeRemainingTicks`:
 /// the tick's lifetime pass writes the blueprint's `Lifetime` here on first
@@ -119,6 +117,11 @@ public:
         std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters{};
         std::vector<SharedCommand> sharedCommands;
         std::vector<CommandQueue::Snapshot> orders;
+        /// `C-293`'s per-slot manipulator lists (see `manipulators`) and
+        /// `C-303`'s per-slot bone-visibility masks (see `setBoneHidden`), both
+        /// from SaveState v44.
+        std::vector<std::vector<Manipulator>> manipulators;
+        std::vector<std::vector<std::uint64_t>> boneHidden;
         std::vector<std::map<std::string, std::string>> enhancements;
     };
 
@@ -373,6 +376,41 @@ public:
         return lifetimeRemainingTicks_;
     }
 
+    /// `C-293`'s per-unit manipulator list — retail's `IAniManipulator` chain,
+    /// ticked from `Unit::MotionTick` via `CAniActor::UpdateManipulators`
+    /// (`0x641550`). The list is kept sorted by `Manipulator::precedence`
+    /// (`C-294`, `SetPrecedence` at `0x642610` re-sorts `0x6417b0`), so the
+    /// manipulator tick walks it in execution order. Slot-indexed like the
+    /// other pass-facing arrays; the mutable span is what `tickManipulators`
+    /// writes through.
+    [[nodiscard]] std::span<std::vector<Manipulator>> manipulators() noexcept {
+        return manipulators_;
+    }
+    [[nodiscard]] std::span<const std::vector<Manipulator>> manipulators() const noexcept {
+        return manipulators_;
+    }
+    /// Registers a manipulator on a live unit, inserting at its precedence —
+    /// retail's `SetPrecedence` re-sort. Stable within one precedence, like
+    /// retail's list append.
+    [[nodiscard]] bool addManipulator(UnitId unit, Manipulator manipulator) noexcept;
+
+    /// `C-303`'s bone-visibility mask — retail's `CAniPoseBone+0x48` flag map,
+    /// written by `Unit::HideBone`/`ShowBone` (`0x6d820b`). One bit per bone,
+    /// a SET bit meaning HIDDEN; the word vector grows to the highest bone
+    /// touched rather than fixing a skeleton size the sim does not own.
+    /// Serialized sim state, not a render flag: it saves, loads and hashes.
+    [[nodiscard]] bool setBoneHidden(UnitId unit, std::int32_t bone,
+                                     bool hidden) noexcept;
+    /// The slot-indexed read consumers use — emitter attachment points ask
+    /// "is the bone I ride hidden" without resolving a handle.
+    [[nodiscard]] bool boneHiddenAt(UnitIndex slot, std::int32_t bone) const noexcept;
+    /// The whole mask, for the state hash and serialization.
+    [[nodiscard]] std::span<const std::uint64_t> boneHiddenMaskAt(
+        UnitIndex slot) const noexcept {
+        return slot < boneHidden_.size() ? std::span<const std::uint64_t>{boneHidden_[slot]}
+                                         : std::span<const std::uint64_t>{};
+    }
+
     /// Shared repeat/count operations. Exhaustion removes this exact object from every member
     /// queue, matching retail's cross-queue `DecreaseCommandCount` path.
     [[nodiscard]] bool increaseCommandCount(CommandId id, std::uint32_t amount = 1);
@@ -462,6 +500,12 @@ private:
     /// `Lifetime`. `kLifetimeUnset` until the tick's lifetime pass arms it from
     /// the blueprint; zero for a unit with no lifetime.
     std::vector<TickCount> lifetimeRemainingTicks_;
+
+    /// `C-293`'s manipulator lists, one per slot — see `manipulators()`.
+    std::vector<std::vector<Manipulator>> manipulators_;
+    /// `C-303`'s bone-visibility masks, one word-vector per slot — see
+    /// `setBoneHidden`. A set bit means the bone is hidden.
+    std::vector<std::vector<std::uint64_t>> boneHidden_;
 
     CommandSerial nextCommandSerial_ = 0;
     std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters_{};

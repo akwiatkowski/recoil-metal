@@ -137,6 +137,11 @@ constexpr std::uint32_t kVersion42 = 42;
 // AIx must keep its cheat flag or a restored match silently plays an honest
 // army at half income and build rate. Older saves decode with the flag clear.
 constexpr std::uint32_t kVersion43 = 43;
+// 44: `C-293`'s per-slot manipulator lists and `C-303`'s bone-visibility
+// masks — the sim-serialized pose state WP-41 assigns to the unit. Sparse like
+// the installed enhancements: a unit with no manipulators and every bone shown
+// writes nothing, so older saves decode to the pre-manipulator defaults.
+constexpr std::uint32_t kVersion44 = 44;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1356,6 +1361,105 @@ void writeProductionOverrides(PayloadWriter& w,
     return true;
 }
 
+// V44 trails the payload like every earlier addition: `C-293`'s per-slot
+// manipulator lists and `C-303`'s bone-visibility masks, both sparse — a unit
+// with no manipulators and every bone shown writes nothing, which is the
+// pre-manipulator stream for the matches that never pose a bone.
+void writeUnitPose(PayloadWriter& w, const UnitStore::Snapshot& s) {
+    w.count(static_cast<std::size_t>(std::count_if(s.manipulators.begin(),
+        s.manipulators.end(), [](const auto& list) { return !list.empty(); })));
+    for (std::size_t slot = 0; slot < s.manipulators.size(); ++slot) {
+        const auto& list = s.manipulators[slot];
+        if (list.empty()) {
+            continue;
+        }
+        w.u32(static_cast<std::uint32_t>(slot));
+        w.count(list.size());
+        for (const Manipulator& manip : list) {
+            w.u8(static_cast<std::uint8_t>(manip.kind));
+            w.i32(manip.precedence);
+            w.u8(manip.enabled);
+            w.u8(manip.slideResource);
+            w.i32(manip.slideBone);
+            w.i32(manip.slideRange.raw());
+            w.i32(manip.slideOffset.raw());
+            w.u8(manip.inTerrainContact);
+            w.u8(manip.inUnitContact);
+        }
+    }
+    w.count(static_cast<std::size_t>(std::count_if(s.boneHidden.begin(),
+        s.boneHidden.end(), [](const auto& mask) {
+            return std::ranges::any_of(mask, [](std::uint64_t word) { return word != 0; });
+        })));
+    for (std::size_t slot = 0; slot < s.boneHidden.size(); ++slot) {
+        const auto& mask = s.boneHidden[slot];
+        if (!std::ranges::any_of(mask, [](std::uint64_t word) { return word != 0; })) {
+            continue;
+        }
+        w.u32(static_cast<std::uint32_t>(slot));
+        w.count(mask.size());
+        for (const std::uint64_t word : mask) {
+            w.u64(word);
+        }
+    }
+}
+
+[[nodiscard]] bool readUnitPose(PayloadReader& r, UnitStore::Snapshot& s) {
+    std::size_t count{};
+    if (!r.count(count, 8) || count > s.transforms.size()) return false;
+    s.manipulators.resize(s.transforms.size());
+    for (std::size_t entry = 0; entry < count; ++entry) {
+        std::uint32_t slot{};
+        std::size_t size{};
+        if (!r.u32(slot) || slot >= s.manipulators.size() || !r.count(size, 4)
+            || size == 0 || !s.manipulators[slot].empty()) return false;
+        auto& list = s.manipulators[slot];
+        list.resize(size);
+        std::int32_t lastPrecedence = std::numeric_limits<std::int32_t>::min();
+        for (Manipulator& manip : list) {
+            std::uint8_t kind{}, enabled{}, slideResource{}, inTerrain{}, inUnit{};
+            std::int32_t slideRange{}, slideOffset{};
+            if (!r.u8(kind) || kind > static_cast<std::uint8_t>(ManipulatorKind::BuilderArm)
+                || !r.i32(manip.precedence) || !r.u8(enabled) || enabled > 1
+                || !r.u8(slideResource) || slideResource > 1
+                || !r.i32(manip.slideBone)
+                || !r.i32(slideRange) || !r.i32(slideOffset)
+                || !r.u8(inTerrain) || inTerrain > 1
+                || !r.u8(inUnit) || inUnit > 1) return false;
+            // The list is precedence-sorted by construction (`C-294`); a save
+            // that is not is not one of ours.
+            if (manip.precedence < lastPrecedence) return false;
+            lastPrecedence = manip.precedence;
+            manip.kind = static_cast<ManipulatorKind>(kind);
+            manip.enabled = enabled != 0;
+            manip.slideResource = slideResource;
+            manip.slideRange = Fx::fromRaw(slideRange);
+            manip.slideOffset = Fx::fromRaw(slideOffset);
+            manip.inTerrainContact = inTerrain != 0;
+            manip.inUnitContact = inUnit != 0;
+        }
+    }
+    if (!r.count(count, 8) || count > s.transforms.size()) return false;
+    s.boneHidden.resize(s.transforms.size());
+    for (std::size_t entry = 0; entry < count; ++entry) {
+        std::uint32_t slot{};
+        std::size_t words{};
+        if (!r.u32(slot) || slot >= s.boneHidden.size() || !r.count(words, 4)
+            || words == 0 || !s.boneHidden[slot].empty()) return false;
+        auto& mask = s.boneHidden[slot];
+        mask.resize(words);
+        for (std::uint64_t& word : mask) {
+            if (!r.u64(word)) return false;
+        }
+        // An all-zero mask is the absent case — the writer never emits one, so
+        // accepting it would admit a second encoding of the same state.
+        if (!std::ranges::any_of(mask, [](std::uint64_t word) { return word != 0; })) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void writeRedirects(PayloadWriter& w, std::span<const MissileRedirect> redirects) {
     w.count(redirects.size());
     for (const MissileRedirect& value : redirects) {
@@ -2043,6 +2147,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion37) writePathService(payloadWriter, state.pathService);
     if (version >= kVersion37) writeIntel(payloadWriter, state.intel);
     if (version >= kVersion42) writeProductionOverrides(payloadWriter, state.productionOverrides);
+    if (version >= kVersion44) writeUnitPose(payloadWriter, state.units);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -2087,7 +2192,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion33 && version != kVersion34 && version != kVersion35
                && version != kVersion36 && version != kVersion37 && version != kVersion38
                && version != kVersion39 && version != kVersion40 && version != kVersion41
-               && version != kVersion42 && version != kVersion43)
+               && version != kVersion42 && version != kVersion43
+               && version != kVersion44)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2169,6 +2275,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion42 && !readProductionOverrides(reader, productionOverrides)) {
         return std::nullopt;
     }
+    if (version >= kVersion44 && !readUnitPose(reader, units)) return std::nullopt;
     SaveState decoded{.tick = tick,
                       .random = std::move(random),
                        .pathServiceBeats = pathServiceBeats,
@@ -2207,7 +2314,7 @@ std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion43);
+    return rm::sim::encode(state, kVersion44);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

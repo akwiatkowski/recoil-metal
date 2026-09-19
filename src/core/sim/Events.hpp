@@ -89,6 +89,25 @@ enum class EventKind : std::uint8_t {
     TeamDefeated,
     /// The match ended. `army` is the winning alliance, or `kNoArmy` for a draw.
     GameOver,
+    /// `C-372`'s terrain-contact callback (`OnAnimTerrainCollision`,
+    /// `0xe71308`): a collision manipulator's volume touched the ground — in
+    /// the bounded slice, the unit came to rest on a surface (a landing
+    /// aircraft, a unit placed on the map). `at` is where it touched.
+    AnimTerrainCollision,
+    /// The leaving edge (`OnNotAnimTerrainCollision`, `0xe712ec`): the unit
+    /// stopped resting on a surface — a takeoff, or a unit lifted onto a
+    /// carrier.
+    AnimTerrainCollisionEnd,
+    /// `C-301`'s unit-contact callback (`OnAnimCollision`, `0xe71320` — the
+    /// footfall path into `Unit.lua:2289`): the unit's collision volume
+    /// touched another unit's. `at` is where the touched unit stands.
+    AnimCollision,
+    /// A sim-owned emitter emitted for its viewers (`C-296`/`C-374`):
+    /// `unit` is the emitter's carrier, `at` the attach point, `bone` the
+    /// bone index it rides, `viewerMask` the per-army visibility bits, and
+    /// `visualId` the effect name. Emitted once per spawn — the record itself
+    /// lives in `Match::effects`.
+    EffectEmitted,
 };
 
 /// Retail's native projectile impact classifier (`C-124`, `C-170`).
@@ -166,6 +185,16 @@ struct Event {
     /// with the launch WITHOUT a drawn frame (the headless `--play` pre-run
     /// poses no instances). Zero for an unmuzzled weapon, which has no bore.
     std::array<Fx,3> visualBarrel{};
+
+    /// The bone an `AnimCollision`-family or `EffectEmitted` event names —
+    /// `kNoBone` (-1) when the kind has no bone. A literal rather than the
+    /// constant so this header stays free of `Manipulator.hpp`.
+    std::int32_t bone = -1;
+
+    /// `C-374`'s per-army visibility mask on `EffectEmitted`: bit `armyIndex`
+    /// set means that army may see the emission. All-ones for every other
+    /// kind and for a match with no fog of war.
+    std::uint64_t viewerMask = ~std::uint64_t{0};
 };
 
 [[nodiscard]] bool operator==(const Event& a, const Event& b) noexcept;

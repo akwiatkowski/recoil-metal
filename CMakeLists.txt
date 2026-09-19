@@ -190,6 +190,7 @@ add_library(rm_core STATIC
     src/core/sim/CommandQueue.cpp
     src/core/sim/Combat.cpp
     src/core/sim/Intel.cpp
+    src/core/sim/Manipulator.cpp
     src/core/sim/ThreatGrid.cpp
     src/core/sim/BuildOrder.cpp
     src/core/audio/Cues.cpp

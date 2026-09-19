@@ -36,6 +36,14 @@ std::string_view eventKindName(EventKind kind) noexcept {
         return "team-defeated";
     case EventKind::GameOver:
         return "game-over";
+    case EventKind::AnimTerrainCollision:
+        return "anim-terrain-collision";
+    case EventKind::AnimTerrainCollisionEnd:
+        return "anim-terrain-collision-end";
+    case EventKind::AnimCollision:
+        return "anim-collision";
+    case EventKind::EffectEmitted:
+        return "effect-emitted";
     }
     return "unknown";
 }
