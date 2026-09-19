@@ -74,6 +74,13 @@ struct AssistLink {
     /// vector that may be shortened before the HUD reads it. Two constructions cannot
     /// share a cell, so the position is unambiguous.
     std::array<Fx, 3> position{};
+    /// The shared target's fraction complete, reported as the helper's own work
+    /// progress (`C-017`/`C-098`): retail's builder-side `Unit+0xd8` mirror is
+    /// not a per-builder counter but the target's `GetFractionComplete` read
+    /// through the helper — every assister on one project shows the same
+    /// number, which is exactly what the HUD's progress bar over each engineer
+    /// displays. Recomputed with the link each tick.
+    Fx fraction{};
 };
 
 /// Recomputes every construction's `assistPerTick` from who is currently helping: every

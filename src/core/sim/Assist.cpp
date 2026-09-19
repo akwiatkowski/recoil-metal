@@ -168,7 +168,8 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             ++helping;
             if (links != nullptr) {
                 links->push_back(AssistLink{.helper = store.idAt(slot), .work = i,
-                                            .position = work.position});
+                                            .position = work.position,
+                                            .fraction = work.fraction()});
             }
             break;
         }
@@ -189,7 +190,8 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
         ++helping;
         if (links != nullptr) {
             links->push_back(AssistLink{.helper = store.idAt(slot), .work = *project,
-                                        .position = building[*project].position});
+                                        .position = building[*project].position,
+                                        .fraction = building[*project].fraction()});
         }
     }
 

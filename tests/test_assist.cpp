@@ -1053,6 +1053,34 @@ TEST_CASE("the assist scan reports who is helping, so the help can be drawn") {
     CHECK(f.assistLinks[0].position == f.building[0].position);
 }
 
+TEST_CASE("C-017/C-098: an assisting builder reports the shared target's fraction",
+          "[assist]") {
+    // Retail's builder-side work progress is not a per-builder counter: the
+    // helper's `Unit+0xd8` mirror reads the TARGET's `GetFractionComplete`, so
+    // every engineer on one project shows the same number — the link carries
+    // the shared fraction, not a personal one.
+    Fixture f;
+    const UnitId founder = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId helper = f.roster.add(f.engineerType, 210.0f, 200.0f, 0, 100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(1000.0f),
+                             .energy = rm::sim::magFromFloat(1000.0f)};
+
+    REQUIRE(f.build(founder, 205.0f, 200.0f));
+    REQUIRE(f.assist(helper, founder));
+    // 100 build units of work at a combined 2/tick: 25 ticks lands the shared
+    // fraction at exactly one half.
+    f.tick(25);
+
+    REQUIRE(f.assistLinks.size() == 1);
+    CHECK(rm::test::asFloat(f.assistLinks[0].fraction)
+          == Catch::Approx(0.5f).margin(0.05f));
+    // And it is the TARGET's number, not a helper-side value: the row's own
+    // fraction reads the same (within a tick — the link is stamped before the
+    // row advances this beat).
+    CHECK(rm::test::asFloat(f.assistLinks[0].fraction)
+          == Catch::Approx(rm::test::asFloat(f.building[0].fraction())).margin(0.03f));
+}
+
 TEST_CASE("a helper still walking over reports no link until it lends") {
     Fixture f;
     const UnitId founder = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
