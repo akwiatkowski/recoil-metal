@@ -498,9 +498,13 @@ TEST_CASE("historic attachment saves derive offsets from their transforms", "[sa
     constexpr std::size_t kV36HealthFlagOffset = 40;
     constexpr std::size_t kV36RecordBytes = kV6HealthBytes + 1;
     constexpr std::size_t kV36ArrayBytes = 2 * sizeof(std::uint32_t) + kSlots * 3;
+    // V46 trails one more counted array in the same spot — intelDisabled u16
+    // per slot (`C-283`'s explicit `EnableIntel`/`DisableIntel` mask).
+    constexpr std::size_t kV46IntelBytes = sizeof(std::uint32_t) + kSlots * 2;
     const std::size_t healthEnd = health + kSlots * kV36RecordBytes;
     v7.erase(v7.begin() + static_cast<std::ptrdiff_t>(healthEnd),
-             v7.begin() + static_cast<std::ptrdiff_t>(healthEnd + kV36ArrayBytes));
+             v7.begin() + static_cast<std::ptrdiff_t>(
+                 healthEnd + kV36ArrayBytes + kV46IntelBytes));
     for (std::size_t slot = kSlots; slot-- > 0;) {
         v7.erase(v7.begin() + static_cast<std::ptrdiff_t>(
                      health + slot * kV36RecordBytes + kV36HealthFlagOffset));

@@ -174,6 +174,27 @@ __rm_faf.unitMeta = {
             if state == 'Enhancing' then return u.enhancing == true end
             return false
         end,
+        -- `C-283`'s `Entity::EnableIntel`/`DisableIntel`/`IsIntelEnabled`
+        -- (`0x00694B60`/`0x00694C56`): the enabled byte of the per-type
+        -- (enabled, active) pair. FAF's `Unit.lua` calls the
+        -- `EnableUnitIntel`/`DisableUnitIntel` spellings; both land on the
+        -- same `SetIntel` decision, applied at the pass drain.
+        EnableUnitIntel = function(u, source, intel)
+            if __rm_faf_set_intel then __rm_faf_set_intel(u.h, intel or source, true) end
+        end,
+        DisableUnitIntel = function(u, source, intel)
+            if __rm_faf_set_intel then __rm_faf_set_intel(u.h, intel or source, false) end
+        end,
+        EnableIntel = function(u, intel)
+            if __rm_faf_set_intel then __rm_faf_set_intel(u.h, intel, true) end
+        end,
+        DisableIntel = function(u, intel)
+            if __rm_faf_set_intel then __rm_faf_set_intel(u.h, intel, false) end
+        end,
+        IsIntelEnabled = function(u, intel)
+            if __rm_faf_is_intel_enabled then return __rm_faf_is_intel_enabled(u.h, intel) end
+            return true
+        end,
     },
 }
 
@@ -2267,6 +2288,69 @@ int FafOpponent::beenDestroyedBinding(lua_State* lua) {
     return 1;
 }
 
+/// Maps retail's `INTEL_` names (the strings `EnableIntel`/`DisableIntel`/
+/// `IsIntelEnabled` take in Lua) onto `rm::sim::IntelType`. Unknown names
+/// return nullopt — the corpus only ever sends the registered names.
+static std::optional<rm::sim::IntelType> intelTypeFor(std::string_view name) noexcept {
+    static constexpr std::pair<std::string_view, rm::sim::IntelType> kNames[] = {
+        {"Vision", rm::sim::IntelType::Vision},
+        {"WaterVision", rm::sim::IntelType::WaterVision},
+        {"Radar", rm::sim::IntelType::Radar},
+        {"Sonar", rm::sim::IntelType::Sonar},
+        {"Omni", rm::sim::IntelType::Omni},
+        {"RadarStealthField", rm::sim::IntelType::RadarStealthField},
+        {"SonarStealthField", rm::sim::IntelType::SonarStealthField},
+        {"CloakField", rm::sim::IntelType::CloakField},
+        {"Jammer", rm::sim::IntelType::Jammer},
+        {"Spoof", rm::sim::IntelType::Spoof},
+        {"Cloak", rm::sim::IntelType::Cloak},
+        {"RadarStealth", rm::sim::IntelType::RadarStealth},
+        {"SonarStealth", rm::sim::IntelType::SonarStealth},
+    };
+    for (const auto& [key, value] : kNames) {
+        if (key == name) {
+            return value;
+        }
+    }
+    return std::nullopt;
+}
+
+/// `__rm_faf_set_intel(h, type, enabled)`: queues a `SetIntel` decision —
+/// the port's only write path, since `World` is a read view. The decision is
+/// applied by `applyDecisions` after this pass drains, so the flag flips at
+/// the same boundary every other AI decision does.
+int FafOpponent::setIntelBinding(lua_State* lua) {
+    auto* self = static_cast<FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    const auto id = unpackHandle(lua_tointeger(lua, 1));
+    const char* name = lua_tostring(lua, 2);
+    const bool enabled = lua_toboolean(lua, 3) != 0;
+    const auto type = name != nullptr ? intelTypeFor(name) : std::nullopt;
+    if (self != nullptr && self->world_ && type.has_value()
+        && self->world_->scene.store.alive(id)) {
+        self->pendingIntel_.push_back(rm::ai::Decision{
+            .kind = rm::ai::Decision::Kind::SetIntel,
+            .unit = id,
+            .intelType = *type,
+            .intelEnabled = enabled,
+        });
+    }
+    return 0;
+}
+
+/// `__rm_faf_is_intel_enabled(h, type)`: retail's `Entity:IsIntelEnabled` —
+/// reads the enabled byte live from the store. Writes queued this pass are
+/// not yet visible here, matching the port's apply-at-drain ordering.
+int FafOpponent::isIntelEnabledBinding(lua_State* lua) {
+    const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    const auto id = unpackHandle(lua_tointeger(lua, 1));
+    const char* name = lua_tostring(lua, 2);
+    const auto type = name != nullptr ? intelTypeFor(name) : std::nullopt;
+    const bool enabled = self != nullptr && self->world_ && type.has_value()
+        && self->world_->scene.store.intelEnabled(id, *type);
+    lua_pushboolean(lua, enabled ? 1 : 0);
+    return 1;
+}
+
 int FafOpponent::enhancementSequenceBinding(lua_State* lua) {
     const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
     const auto id = unpackHandle(luaL_checkinteger(lua, 1));
@@ -2593,6 +2677,13 @@ void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> ev
 
 void FafOpponent::advance(rm::TickIndex tick) {
     decisions_.clear();
+    // Intel toggles queued by `__rm_faf_set_intel` since the last pass —
+    // corpus threads resume on `pump` between passes, so their writes land
+    // here and drain with this pass's decisions.
+    decisions_.insert(decisions_.end(),
+                      std::make_move_iterator(pendingIntel_.begin()),
+                      std::make_move_iterator(pendingIntel_.end()));
+    pendingIntel_.clear();
     plannedThisPass_.clear();
     if (!world_ || !sandbox_.ready()) {
         return;
@@ -2817,6 +2908,12 @@ void FafOpponent::advance(rm::TickIndex tick) {
     lua_pushlightuserdata(lua, this);
     lua_pushcclosure(lua, threatAssignBinding, 1);
     lua_setglobal(lua, "__rm_faf_threat_assign");
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, setIntelBinding, 1);
+    lua_setglobal(lua, "__rm_faf_set_intel");
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, isIntelEnabledBinding, 1);
+    lua_setglobal(lua, "__rm_faf_is_intel_enabled");
 
 
     // --- The snapshot -------------------------------------------------------------------

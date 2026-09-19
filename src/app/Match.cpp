@@ -1201,6 +1201,21 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::sim
             }
             break;
         }
+        case rm::ai::Decision::Kind::SetIntel: {
+            // `C-283`: the FAF driver's `EnableUnitIntel`/`DisableUnitIntel`/
+            // `EnableIntel`/`DisableIntel` unit methods land here — the port's
+            // only write path, since `World` is a read view. Guarded to units
+            // this army actually owns, the same ownership rule the other
+            // decision kinds follow.
+            if (!scene.store.alive(decision.unit)
+                || decision.unit.index >= scene.store.slotCount()
+                || scene.store.motion()[decision.unit.index].armyIndex != army.index) {
+                break;
+            }
+            (void)scene.store.setIntelEnabled(decision.unit, decision.intelType,
+                                              decision.intelEnabled);
+            break;
+        }
         }
     }
 

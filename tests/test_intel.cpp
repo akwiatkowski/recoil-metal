@@ -6,6 +6,7 @@
 #include "core/map/HeightField.hpp"
 #include "core/sim/Army.hpp"
 #include "core/sim/Skirmish.hpp"
+#include "core/sim/SaveState.hpp"
 #include "core/sim/Terrain.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -1333,4 +1334,168 @@ TEST_CASE("a cheating army's commander sees the whole map, and only the commande
     intel3.update(tankOnly, catalog, armies, nullptr);
     CHECK_FALSE(intel3.sees(0, IntelKind::Vision, far, far));
     CHECK_FALSE(intel3.sees(0, IntelKind::Omni, far, far));
+}
+
+// --- C-283: per-type intel enable/disable -----------------------------------
+//
+// Retail keeps an (enabled, active) byte pair per intel type on the unit's
+// attributes object — Jammer `+0x24`, Spoof `+0x26`, Cloak `+0x28`, RadarStealth
+// `+0x2A`, SonarStealth `+0x2C` (`0x00694B60`/`0x00694C56`). `enabled` is the
+// toggle `EnableIntel`/`DisableIntel` flips; `active` is whether the intel
+// actually contributes this tick — enabled AND powered AND alive. These cases
+// pin the observable contract: a disabled type contributes nothing until it is
+// re-enabled, and the enabled flags survive a save.
+
+TEST_CASE("C-283: disabling a unit's radar removes its coverage until re-enabled",
+          "[intel]") {
+    rm::unitdef::UnitDef watching = seer(0.0f, 400.0f);
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    const rm::sim::UnitId dish = place(store, watcher, 0, 200.0f, 200.0f);
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    const Fx far = Fx::fromInt(500);
+    const Fx lane = Fx::fromInt(200);
+    CHECK(intel.sees(0, IntelKind::Radar, far, lane));
+    CHECK(intel.intelActive(store, dish.index, rm::sim::IntelType::Radar));
+
+    // `DisableIntel('Radar')`: the dish stops contributing — the same update
+    // withdraws its stamp even though nothing moved, because the enabled mask
+    // is part of the placement's change key.
+    REQUIRE(store.setIntelEnabled(dish, rm::sim::IntelType::Radar, false));
+    CHECK_FALSE(store.intelEnabled(dish, rm::sim::IntelType::Radar));
+    intel.update(store, catalog, armies, nullptr);
+    CHECK_FALSE(intel.sees(0, IntelKind::Radar, far, lane));
+    CHECK_FALSE(intel.intelActive(store, dish.index, rm::sim::IntelType::Radar));
+
+    // `EnableIntel('Radar')` restores it on the next pass.
+    REQUIRE(store.setIntelEnabled(dish, rm::sim::IntelType::Radar, true));
+    intel.update(store, catalog, armies, nullptr);
+    CHECK(intel.sees(0, IntelKind::Radar, far, lane));
+    CHECK(intel.intelActive(store, dish.index, rm::sim::IntelType::Radar));
+}
+
+TEST_CASE("C-283: a disabled jammer stops lying, and a disabled stealth field "
+          "stops hiding", "[intel]") {
+    rm::unitdef::UnitDef watching = seer(0.0f, 800.0f);
+    rm::unitdef::UnitDef deceiver;
+    deceiver.jamRadiusElmos = 208.0f;
+    deceiver.jammerBlips = 10;
+    rm::unitdef::UnitDef generator;
+    generator.radarStealthFieldRadiusElmos = 100.0f;
+    rm::unitdef::UnitDef plain;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex jammer = catalog.add(&deceiver);
+    const rm::UnitTypeIndex field = catalog.add(&generator);
+    const rm::UnitTypeIndex tank = catalog.add(&plain);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 200.0f, 200.0f);
+    const rm::sim::UnitId carrier = place(store, jammer, 1, 700.0f, 500.0f);
+    const rm::sim::UnitId umbrella = place(store, field, 1, 600.0f, 800.0f);
+    const rm::sim::UnitId inside = place(store, tank, 1, 640.0f, 800.0f);
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+
+    const auto contactsOf = [&](rm::sim::UnitId id) {
+        std::vector<rm::sim::Contact> contacts;
+        rm::sim::contactsFor(0, store, catalog, armies, intel, 0, contacts);
+        return std::count_if(contacts.begin(), contacts.end(),
+                             [&](const rm::sim::Contact& c) { return c.unit == id; });
+    };
+
+    // Ten lies plus the carrier's own blip, and the tank under the umbrella is
+    // absent — the baseline the toggles are measured against.
+    CHECK(contactsOf(carrier) == 11);
+    CHECK(contactsOf(inside) == 0);
+
+    // `DisableIntel('Jammer')`: the lies stop immediately — the contact pass
+    // reads the flag live — while the carrier's real blip stays.
+    REQUIRE(store.setIntelEnabled(carrier, rm::sim::IntelType::Jammer, false));
+    CHECK(contactsOf(carrier) == 1);
+
+    // `DisableIntel('RadarStealthField')`: the umbrella folds on the next
+    // intel pass and the tank it hid becomes an ordinary blip.
+    REQUIRE(store.setIntelEnabled(umbrella, rm::sim::IntelType::RadarStealthField,
+                                  false));
+    intel.update(store, catalog, armies, nullptr);
+    CHECK(contactsOf(inside) == 1);
+
+    // Re-enabling restores both contributions.
+    REQUIRE(store.setIntelEnabled(carrier, rm::sim::IntelType::Jammer, true));
+    REQUIRE(store.setIntelEnabled(umbrella, rm::sim::IntelType::RadarStealthField,
+                                  true));
+    intel.update(store, catalog, armies, nullptr);
+    CHECK(contactsOf(carrier) == 11);
+    CHECK(contactsOf(inside) == 0);
+}
+
+TEST_CASE("C-283: the RULEUTC toggles write the same enabled mask", "[intel]") {
+    // `Unit.lua`'s `OnScriptBitSet` maps the toggle bits onto per-type
+    // `DisableUnitIntel` calls — bit 2 the jammer, bit 3 every non-vision type,
+    // bit 5 the stealth family, bit 8 the cloak. The sim's mask is the union
+    // the refcounted `IntelDisables` table converges to.
+    rm::unitdef::UnitDef watching = seer(0.0f, 400.0f);
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+
+    UnitStore store;
+    const rm::sim::UnitId dish = place(store, watcher, 0, 200.0f, 200.0f);
+
+    REQUIRE(store.setScriptBitDisabled(dish, 3, true));
+    CHECK_FALSE(store.intelEnabled(dish, rm::sim::IntelType::Radar));
+    CHECK_FALSE(store.intelEnabled(dish, rm::sim::IntelType::Omni));
+    CHECK_FALSE(store.intelEnabled(dish, rm::sim::IntelType::Jammer));
+    CHECK_FALSE(store.intelEnabled(dish, rm::sim::IntelType::Cloak));
+    // Vision is not in bit 3's group — retail's intel toggle leaves it on.
+    CHECK(store.intelEnabled(dish, rm::sim::IntelType::Vision));
+
+    REQUIRE(store.setScriptBitDisabled(dish, 3, false));
+    CHECK(store.intelEnabled(dish, rm::sim::IntelType::Radar));
+
+    // Bit 5 is the stealth family only: radar stays enabled while both
+    // stealths and both fields go dark.
+    REQUIRE(store.setScriptBitDisabled(dish, 5, true));
+    CHECK(store.intelEnabled(dish, rm::sim::IntelType::Radar));
+    CHECK_FALSE(store.intelEnabled(dish, rm::sim::IntelType::RadarStealth));
+    CHECK_FALSE(store.intelEnabled(dish, rm::sim::IntelType::SonarStealth));
+    CHECK_FALSE(store.intelEnabled(dish, rm::sim::IntelType::RadarStealthField));
+    CHECK_FALSE(store.intelEnabled(dish, rm::sim::IntelType::SonarStealthField));
+}
+
+TEST_CASE("C-283: intel enable flags survive a save", "[intel]") {
+    UnitStore original;
+    UnitStore::Spawn spawn;
+    spawn.motion.armyIndex = 0;
+    spawn.health.current = rm::sim::magFromFloat(100.0f);
+    spawn.health.maximum = spawn.health.current;
+    const rm::sim::UnitId unit = original.spawn(spawn);
+    REQUIRE(original.setIntelEnabled(unit, rm::sim::IntelType::Radar, false));
+    REQUIRE(original.setIntelEnabled(unit, rm::sim::IntelType::Jammer, false));
+
+    rm::sim::RandomStream random{std::uint32_t{1}};
+    const rm::sim::SaveState state{.tick = 7, .random = random.snapshot(),
+                                   .units = original.snapshot()};
+    const auto saved = rm::sim::SaveState::encode(state);
+    const auto restored = rm::sim::SaveState::decode(saved);
+    REQUIRE(restored.has_value());
+
+    const UnitStore resumed{restored->units};
+    CHECK_FALSE(resumed.intelEnabled(unit, rm::sim::IntelType::Radar));
+    CHECK_FALSE(resumed.intelEnabled(unit, rm::sim::IntelType::Jammer));
+    CHECK(resumed.intelEnabled(unit, rm::sim::IntelType::Sonar));
+    CHECK(rm::sim::SaveState::encode(*restored) == saved);
 }

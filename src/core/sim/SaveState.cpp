@@ -146,6 +146,11 @@ constexpr std::uint32_t kVersion44 = 44;
 // `C-298`'s bone attach, `C-374`'s viewer mask) — nullable like `features`:
 // a match with no effect manager saves the absent byte.
 constexpr std::uint32_t kVersion45 = 45;
+// 46: `C-283`'s per-slot intel-disable masks — the explicit
+// `EnableIntel`/`DisableIntel` writes (`0x00694B60`/`0x00694C56`), beside the
+// script-bit masks whose `RULEUTC_*` half is already carried. Older saves
+// decode with every intel type enabled.
+constexpr std::uint32_t kVersion46 = 46;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1913,7 +1918,8 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
                    bool includesAttachedMotion, bool includesCommands,
                    bool includesScriptTasks, bool includesProductionPaused,
                    bool includesBuildPriority, bool includesRetreat,
-                   bool includesTransport, bool includesFocus, bool includesScriptBits) {
+                   bool includesTransport, bool includesFocus, bool includesScriptBits,
+                   bool includesIntelDisabled) {
     w.count(s.ids.generations.size()); for (Generation v : s.ids.generations) w.u32(v);
     w.count(s.ids.free.size()); for (UnitIndex v : s.ids.free) w.u32(v);
     w.u64(s.ids.live);
@@ -1922,6 +1928,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     w.count(s.motion.size()); for (const MoveState& v : s.motion) { w.i32(v.armyIndex); w.i32(v.destinationX.raw()); w.i32(v.destinationZ.raw()); w.u8(v.moving); if (includesAttachedMotion) w.u8(v.attached); w.u8(v.airborne); w.u8(v.surfaceWater); w.i32(v.speedPerTick.raw()); w.i32(v.turnPerTick); w.i32(v.radiusElmos.raw()); w.i32(v.distanceTravelledElmos.raw()); w.count(v.path.size()); for (const auto& p : v.path) { w.i32(p[0].raw()); w.i32(p[1].raw()); } w.u64(v.pathIndex); if (includesPathPhase) { w.i32(v.pathPhaseStartX); w.i32(v.pathPhaseStartZ); w.i32(v.pathPhaseCellsX); } }
     w.count(s.health.size()); for (const Health& v : s.health) { w.i64(v.current.raw()); w.i64(v.maximum.raw()); w.i64(v.shield.current.raw()); w.i64(v.shield.maximum.raw()); w.u32(v.shield.regenDelayRemaining); w.u32(v.shield.rechargeRemaining); if (includesScriptBits) w.u8(v.shield.rechargeRestoresFull); w.count(v.reloadRemaining.size()); for (int x : v.reloadRemaining) w.i32(x); w.count(v.burstRemaining.size()); for (int x : v.burstRemaining) w.i32(x); if (includesAutomaticTargets) { w.count(v.automaticTargets.size()); for (UnitId target : v.automaticTargets) writeId(w, target); } writeId(w, v.lastHitBy); w.i32(v.veterancy.kills); w.i32(v.veterancy.level); }
     if (includesScriptBits) { w.count(s.scriptBitsDisabled.size()); for (std::uint16_t v : s.scriptBitsDisabled) w.u16(v); w.count(s.maintenanceActive.size()); for (bool v : s.maintenanceActive) w.u8(v); }
+    if (includesIntelDisabled) { w.count(s.intelDisabled.size()); for (std::uint16_t v : s.intelDisabled) w.u16(v); }
     w.count(s.types.size()); for (UnitTypeIndex v : s.types) w.u16(v);
     if (includesFactoryRepeat) { w.count(s.factoryRepeat.size()); for (bool v : s.factoryRepeat) w.u8(v); }
     w.count(s.parents.size()); for (const auto& v : s.parents) { w.u8(v.has_value()); if (v) writeId(w, *v); }
@@ -1953,7 +1960,8 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
                                  bool includesReclaimUnit, bool includesCapture,
                                  bool includesProductionPaused, bool includesMissileLaunch,
                                  bool includesBuildPriority, bool includesRetreat,
-                                 bool includesTransport, bool includesFocus, bool includesScriptBits) {
+                                 bool includesTransport, bool includesFocus, bool includesScriptBits,
+                                 bool includesIntelDisabled) {
     std::size_t n{};
     if (!r.count(n, 4)) return false; s.ids.generations.resize(n); for (auto& v : s.ids.generations) if (!r.u32(v)) return false;
     if (!r.count(n, 4)) return false; s.ids.free.resize(n); for (auto& v : s.ids.free) if (!r.u32(v)) return false;
@@ -1965,6 +1973,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     if (!r.count(n, (includesPathPhase ? 58 : 46) + (includesAttachedMotion ? 1 : 0))) return false; s.motion.resize(n); for (auto& v : s.motion) { std::int32_t x{},z{},speed{},radius{},distance{}; std::uint8_t moving{},attached{},airborne{},water{}; if (!r.i32(v.armyIndex)||!r.i32(x)||!r.i32(z)||!r.u8(moving)||(includesAttachedMotion && !r.u8(attached))||!r.u8(airborne)||!r.u8(water)||moving>1||attached>1||airborne>1||water>1||!r.i32(speed)||!r.i32(v.turnPerTick)||!r.i32(radius)||!r.i32(distance)||!r.count(n,8)) return false; v.destinationX=Fx::fromRaw(x); v.destinationZ=Fx::fromRaw(z); v.moving=moving; v.attached=attached; v.airborne=airborne; v.surfaceWater=water; v.speedPerTick=Fx::fromRaw(speed); v.radiusElmos=Fx::fromRaw(radius); v.distanceTravelledElmos=Fx::fromRaw(distance); v.path.resize(n); for(auto& p:v.path){if(!r.i32(x)||!r.i32(z))return false;p={Fx::fromRaw(x),Fx::fromRaw(z)};} std::uint64_t index{}; if(!r.u64(index)||index>std::numeric_limits<std::size_t>::max())return false; v.pathIndex=static_cast<std::size_t>(index); if (includesPathPhase && (!r.i32(v.pathPhaseStartX) || !r.i32(v.pathPhaseStartZ) || !r.i32(v.pathPhaseCellsX))) return false; }
     if (!r.count(n, 52)) return false; s.health.resize(n); for (auto& v : s.health) { std::int64_t a{},b{},c{},d{}; if(!r.i64(a)||!r.i64(b)||!r.i64(c)||!r.i64(d)||!r.u32(v.shield.regenDelayRemaining)||!r.u32(v.shield.rechargeRemaining)||(includesScriptBits && !readShieldRestoreFlag(r, v))||!r.count(n,4))return false; v.current=Mag::fromRaw(a);v.maximum=Mag::fromRaw(b);v.shield.current=Mag::fromRaw(c);v.shield.maximum=Mag::fromRaw(d);v.reloadRemaining.resize(n);for(auto& x:v.reloadRemaining)if(!r.i32(x))return false;if(!r.count(n,4))return false;v.burstRemaining.resize(n);for(auto& x:v.burstRemaining)if(!r.i32(x))return false;if (includesAutomaticTargets) { if (!r.count(n, 8)) return false; v.automaticTargets.resize(n); for (auto& target : v.automaticTargets) if (!readId(r, target)) return false; } if(!readId(r,v.lastHitBy)||!r.i32(v.veterancy.kills)||!r.i32(v.veterancy.level))return false; }
     if (includesScriptBits) { if (!r.count(n, 2)) return false; s.scriptBitsDisabled.resize(n); for (auto& v : s.scriptBitsDisabled) if (!r.u16(v)) return false; if (!r.count(n, 1)) return false; s.maintenanceActive.resize(n); for (auto&& v : s.maintenanceActive) { std::uint8_t enabled{}; if (!r.u8(enabled) || enabled > 1) return false; v = enabled; } }
+    if (includesIntelDisabled) { if (!r.count(n, 2)) return false; s.intelDisabled.resize(n); for (auto& v : s.intelDisabled) if (!r.u16(v)) return false; }
     if (!r.count(n,2)) return false; s.types.resize(n); for(auto& v:s.types)if(!r.u16(v))return false;
     if (includesFactoryRepeat) { if (!r.count(n, 1)) return false; s.factoryRepeat.resize(n); for (auto&& v : s.factoryRepeat) { std::uint8_t enabled{}; if (!r.u8(enabled) || enabled > 1) return false; v = enabled; } }
     if (!r.count(n,1)) return false; s.parents.resize(n); for(auto& v:s.parents){std::uint8_t has{};if(!r.u8(has)||has>1)return false;if(has){UnitId id;if(!readId(r,id))return false;v=id;}}
@@ -1986,6 +1995,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
            || (includesProductionPaused && s.productionPaused.size()!=slots)
            || (includesBuildPriority && s.buildPriority.size()!=slots)
            || (includesScriptBits && (s.scriptBitsDisabled.size()!=slots || s.maintenanceActive.size()!=slots))
+           || (includesIntelDisabled && s.intelDisabled.size()!=slots)
            || (includesRetreat && (s.retreatThreshold.size()!=slots || s.retreats.size()!=slots))
            || (includesFocus && s.targetFocus.size()!=slots)
          || s.ids.live>slots || s.ids.free.size()>slots) return false;
@@ -2043,6 +2053,7 @@ void writeUnits(PayloadWriter& w, const UnitStore::Snapshot& s, bool includesPat
     if (!includesFactoryRepeat) s.factoryRepeat.resize(slots, false);
     if (!includesDoNotTarget) s.doNotTarget.resize(slots, false);
     if (!includesProductionPaused) s.productionPaused.resize(slots, false);
+    if (!includesIntelDisabled) { s.intelDisabled.resize(slots, 0); }
     if (!includesBuildPriority) s.buildPriority.resize(slots, BuildPriority::Normal);
     if (!includesScriptBits) { s.scriptBitsDisabled.resize(slots, 0); s.maintenanceActive.resize(slots, true); }
     if (!includesRetreat) { s.retreatThreshold.resize(slots, RetreatThreshold::Off); s.retreats.resize(slots); }
@@ -2152,10 +2163,10 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion2) payloadWriter.u64(state.pathServiceBeats);
     writeUnits(payloadWriter, state.units, version >= kVersion2, version >= kVersion3,
                    version >= kVersion4, version >= kVersion5, version >= kVersion6,
-                    version >= kVersion7, version >= kVersion7, version >= kVersion8,
-                    version >= kVersion12, version >= kVersion26, version >= kVersion27,
-                    version >= kVersion28, version >= kVersion29, version >= kVersion30,
-                    version >= kVersion36);
+                   version >= kVersion7, version >= kVersion7, version >= kVersion8,
+                   version >= kVersion12, version >= kVersion26, version >= kVersion27,
+                   version >= kVersion28, version >= kVersion29, version >= kVersion30,
+                   version >= kVersion36, version >= kVersion46);
     if (version >= kVersion9)
         writeSiloAmmo(payloadWriter, state.siloAmmo, version >= kVersion33);
     if (version >= kVersion10) writeRedirects(payloadWriter, state.redirects);
@@ -2241,7 +2252,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion36 && version != kVersion37 && version != kVersion38
                && version != kVersion39 && version != kVersion40 && version != kVersion41
                && version != kVersion42 && version != kVersion43
-               && version != kVersion44 && version != kVersion45)
+               && version != kVersion44 && version != kVersion45
+               && version != kVersion46)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2276,7 +2288,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        version >= kVersion26, version >= kVersion26,
                        version >= kVersion27, version >= kVersion28,
                        version >= kVersion29, version >= kVersion30,
-                       version >= kVersion36)) return std::nullopt;
+                       version >= kVersion36, version >= kVersion46)) return std::nullopt;
     std::vector<SiloAmmo> siloAmmo;
     if (version >= kVersion9
         && !readSiloAmmo(reader, siloAmmo, version >= kVersion33)) return std::nullopt;
@@ -2363,9 +2375,8 @@ std::vector<std::byte> SaveState::encodeV2(const SaveState& state) {
 std::optional<SaveState> SaveState::decodeV2(std::span<const std::byte> bytes) {
     return rm::sim::decode(bytes, kVersion2);
 }
-
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion45);
+    return rm::sim::encode(state, kVersion46);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

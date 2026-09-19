@@ -463,6 +463,52 @@ std::span<const UnitId> Intel::seenEver(int alliance) const noexcept {
     return seenEver_[static_cast<std::size_t>(alliance)];
 }
 
+bool Intel::intelActive(const UnitStore& store, UnitIndex slot,
+                        IntelType type) const noexcept {
+    // The ACTIVE byte of C-283's pair: enabled AND powered AND alive. A slot
+    // that never stamped — dead, browned out, off the map, or simply not yet
+    // updated — is active in nothing.
+    if (!active() || slot >= placements_.size() || !store.slotAlive(slot)
+        || store.intelDisabledAt(slot, type)) {
+        return false;
+    }
+    switch (type) {
+    case IntelType::Vision:
+    case IntelType::Radar:
+    case IntelType::Sonar:
+    case IntelType::Omni:
+        // A grid sense is active exactly when this slot stamped it this pass.
+        return !emitters_[slot][static_cast<std::size_t>(
+                                  type == IntelType::Vision ? IntelKind::Vision
+                              : type == IntelType::Radar  ? IntelKind::Radar
+                              : type == IntelType::Sonar  ? IntelKind::Sonar
+                                                          : IntelKind::Omni)]
+                    .squares.empty();
+    case IntelType::RadarStealthField:
+    case IntelType::SonarStealthField:
+        return !hiddenEmitters_[slot][static_cast<std::size_t>(
+                                        type == IntelType::RadarStealthField
+                                            ? HiddenKind::RadarField
+                                            : HiddenKind::SonarField)]
+                    .squares.empty();
+    case IntelType::Jammer:
+    case IntelType::Cloak:
+    case IntelType::RadarStealth:
+    case IntelType::SonarStealth:
+        // The self counter-intel types contribute as a flag read at contact
+        // time, so their active byte is the flag state: enabled (checked
+        // above) and powered — the brownout bank filled (`C-284`).
+        return slot < intelRecovery_.size()
+               && intelRecovery_[slot] >= intelReactivate_;
+    case IntelType::None:
+    case IntelType::WaterVision:
+    case IntelType::CloakField:
+    case IntelType::Spoof:
+        break;  // unmodelled types are never active
+    }
+    return false;
+}
+
 void Intel::withdraw(UnitIndex slot) {
     Placement& placement = placements_[slot];
     if (placement.square == IntelGrid::kNoSquare) {
@@ -507,6 +553,7 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
     // count. Recovery is tracked per slot keyed on the unit generation, so a recycled
     // slot starts powered rather than inheriting its predecessor's blackout.
     const TickCount reactivate = rate.ticks(Seconds{kIntelReactivateSeconds});
+    intelReactivate_ = reactivate;
     const std::size_t slots = store.slotCount();
     placements_.resize(slots);
     emitters_.resize(slots);
@@ -573,7 +620,7 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
         // a move too small to change it cannot change radar's coarser one either.
         const std::int32_t square = grid(alliance, IntelKind::Vision).squareAt(at.x, at.z);
         Placement& placement = placements_[slot];
-        const std::uint16_t scriptBits = store.scriptBitsDisabledMaskAt(slot);
+        const std::uint16_t intelMask = store.intelDisabledMaskAt(slot);
 
         // C-360's `IntelCheat` (`CheatBuffs.lua`: VisionRadius +10000, OmniRadius
         // +10000 — `aiutilities.lua:1771` applies it to COMMAND units only). The
@@ -585,7 +632,7 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
             armies[static_cast<std::size_t>(army)].cheatEnabled
             && intelDef != nullptr && intelDef->hasCategory("COMMAND");
         if (placement.square == square && placement.alliance == alliance
-            && placement.scriptBits == scriptBits && placement.intelCheat == intelCheat
+            && placement.intelMask == intelMask && placement.intelCheat == intelCheat
             && square != IntelGrid::kNoSquare) {
             continue;
         }
@@ -606,16 +653,19 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
             byKind[3] += Fx::fromInt(10000);
         }
 
-        // Script bits 3/5 (`RULEUTC_IntelToggle`/`RULEUTC_StealthToggle`) withdraw
-        // the unit's senses and stealth fields — `DisableUnitIntel` in
-        // `Unit.lua`'s `OnScriptBitSet`. Bit 3 covers every sense and both
-        // fields; bit 5 covers the stealth fields only. Vision is not a script
-        // bit in retail and stays untouched.
-        const bool intelOff = store.scriptBitDisabledAt(slot, 3);
-        const bool stealthOff = intelOff || store.scriptBitDisabledAt(slot, 5);
+        // C-283's per-type enabled bytes (`0x00694B60`/`0x00694C56`): a type
+        // whose bit stands in the effective mask contributes nothing — the
+        // `EnableIntel`/`DisableIntel` writes plus the `RULEUTC_*` toggles'
+        // `scriptBitIntelMask` union. Vision is not in bit 3's group in retail
+        // either, so the mask gates it only through an explicit disable.
+        static constexpr IntelType kSenseType[kIntelKindCount] = {
+            IntelType::Vision, IntelType::Radar, IntelType::Sonar, IntelType::Omni};
+        static constexpr IntelType kFieldType[kHiddenKindCount] = {
+            IntelType::RadarStealthField, IntelType::SonarStealthField};
 
         for (std::size_t kind = 0; kind < kIntelKindCount; ++kind) {
-            if (byKind[kind] <= kFxZero || (intelOff && kind != 0)) {
+            if (byKind[kind] <= kFxZero
+                || (intelMask & intelTypeBit(kSenseType[kind])) != 0) {
                 continue;
             }
             const auto index =
@@ -639,7 +689,8 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
         const Fx byHidden[kHiddenKindCount] = {radii.radarStealthField,
                                                radii.sonarStealthField};
         for (std::size_t kind = 0; kind < kHiddenKindCount; ++kind) {
-            if (byHidden[kind] <= kFxZero || stealthOff) {
+            if (byHidden[kind] <= kFxZero
+                || (intelMask & intelTypeBit(kFieldType[kind])) != 0) {
                 continue;
             }
             const auto index =
@@ -653,7 +704,7 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
 
         placement.square = square;
         placement.alliance = alliance;
-        placement.scriptBits = scriptBits;
+        placement.intelMask = intelMask;
     }
 
     // C-158's `RECON_LOSEver` is per viewing alliance and full unit identity, not a property of
@@ -817,12 +868,16 @@ std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,
     }
 
     const UnitCatalog::IntelRadii& hiding = catalog.intel(store.typeAt(target));
-    // The owner's toggles can withdraw its counter-intel (`DisableUnitIntel` on
-    // bits 3/5/8): a disabled cloak stops hiding it from vision, disabled
-    // stealths stop hiding it from radar and sonar. Bit 3 disables all of them.
-    const bool counterIntelOff = store.scriptBitDisabledAt(target, 3);
-    const bool stealthOff = counterIntelOff || store.scriptBitDisabledAt(target, 5);
-    const bool cloakOff = counterIntelOff || store.scriptBitDisabledAt(target, 8);
+    // The owner's toggles can withdraw its counter-intel (`C-283`'s enabled
+    // bytes, written by `DisableIntel` or by the `RULEUTC_*` bits through
+    // `scriptBitIntelMask`): a disabled cloak stops hiding it from vision,
+    // disabled stealths stop hiding it from radar and sonar.
+    const std::uint16_t counterIntel = store.intelDisabledMaskAt(target);
+    const bool cloakOff = (counterIntel & intelTypeBit(IntelType::Cloak)) != 0;
+    const bool radarStealthOff =
+        (counterIntel & intelTypeBit(IntelType::RadarStealth)) != 0;
+    const bool sonarStealthOff =
+        (counterIntel & intelTypeBit(IntelType::SonarStealth)) != 0;
     // Depth gates the senses, never the geometry. Retail's flag computation
     // (`0x005D1E30`) splits on the target's layer byte: the caller's water flag
     // — `layer ∈ {Seabed(2), Sub(4)}` (`0x005C83C0`, explicit `==2`/`==4`
@@ -855,13 +910,13 @@ std::optional<ContactKind> contactKindForUnit(int alliance, UnitIndex target,
     // blip, not absent — retail clears `LOSNow` on self-cloak and leaves the radar and
     // sonar bits alone. RadarStealth and SonarStealth each defeat their own sense, and
     // only when vision has not already identified the unit. A disabled stealth
-    // (script bits 3/5) stops defeating its sense.
-    if (!underwater && !(hiding.radarStealth && !stealthOff)
+    // (`C-283`'s enabled byte) stops defeating its sense.
+    if (!underwater && !(hiding.radarStealth && !radarStealthOff)
         && !intel.hiddenBy(army->alliance, HiddenKind::RadarField, at.x, at.z)
         && intel.sees(alliance, IntelKind::Radar, at.x, at.z)) {
         return ContactKind::Radar;
     }
-    if (sonarLayer && !(hiding.sonarStealth && !stealthOff)
+    if (sonarLayer && !(hiding.sonarStealth && !sonarStealthOff)
         && !intel.hiddenBy(army->alliance, HiddenKind::SonarField, at.x, at.z)
         && intel.sees(alliance, IntelKind::Sonar, at.x, at.z)) {
         return ContactKind::Sonar;
@@ -915,8 +970,7 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
         // ones use, seeded by the blip's ordinal, so the cluster reads as contacts rather
         // than as a ring of satellites.
         if (hiding.jammerBlips > 0 && hiding.jamRadius > kFxZero
-            && !store.scriptBitDisabledAt(slot, 2)
-            && !store.scriptBitDisabledAt(slot, 3)
+            && !store.intelDisabledAt(slot, IntelType::Jammer)
             && intel.sees(alliance, IntelKind::Radar, at.x, at.z)) {
             const UnitId carrier = store.idAt(slot);
             // Retail draws each fake's offset once: a random direction and a uniform

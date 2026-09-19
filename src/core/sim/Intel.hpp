@@ -21,6 +21,11 @@ class UnitCatalog;
 struct Army;
 struct Economy;
 
+/// Retail's `INTEL_` enum, defined in `UnitStore.hpp` where the per-unit
+/// (enabled, active) pairs live — forward-declared here so the queries below
+/// can name it without dragging the store's includes into every intel reader.
+enum class IntelType : std::uint8_t;
+
 // What an alliance can see, and by what means (ADR-037).
 //
 // WHY THIS EXISTS. Nothing in this engine knew: `nearestTarget` picked from the whole unit
@@ -348,6 +353,19 @@ public:
         return intelRecovery_;
     }
 
+    /// The ACTIVE byte of `C-283`'s (enabled, active) pair — whether this
+    /// unit's intel of `type` actually contributes this tick. Enabled AND
+    /// powered AND alive: a jammer only actively jams while its enabled flag
+    /// is set and its brownout recovery has filled (`C-284`), and a dead unit
+    /// is active in nothing. For the grid-backed senses and fields the answer
+    /// is the literal one — whether this slot stamped that grid this pass; for
+    /// the self counter-intel types (Jammer, Cloak, the stealths) it is the
+    /// flag state, since their contribution is a flag read at contact time.
+    /// Types the sim does not model (WaterVision, CloakField, Spoof) are never
+    /// active.
+    [[nodiscard]] bool intelActive(const UnitStore& store, UnitIndex slot,
+                                   IntelType type) const noexcept;
+
     /// The authoritative recon history in serializable form (SaveState v37):
     /// retained contacts, the seen-ever latches and the brownout recovery
     /// counts. Grids, placements and emitters are deliberately absent — the
@@ -404,13 +422,14 @@ private:
     struct Placement {
         std::int32_t square = IntelGrid::kNoSquare;
         int alliance = 0;
-        /// The unit's `scriptBitsDisabled` mask at stamp time: a RULEUTC_* toggle
-        /// changes what this slot emits without moving it, so the mask is part of
-        /// the "did anything change" key alongside square and alliance.
-        std::uint16_t scriptBits = 0;
+        /// The unit's effective intel-disable mask at stamp time (`C-283`): an
+        /// `EnableIntel`/`DisableIntel` write or a `RULEUTC_*` toggle changes
+        /// what this slot emits without moving it, so the mask is part of the
+        /// "did anything change" key alongside square and alliance.
+        std::uint16_t intelMask = 0;
         /// Whether the stamp carried C-360's `IntelCheat` bonus (the owning army's
         /// `cheatEnabled` plus the unit's COMMAND category). Part of the change key
-        /// like `scriptBits`: a flag flip re-stamps rather than keeping the old radius.
+        /// like `intelMask`: a flag flip re-stamps rather than keeping the old radius.
         bool intelCheat = false;
     };
 
@@ -443,6 +462,10 @@ private:
     /// grids: not saved, and the hash reads it through `intelRecovery`.
     std::vector<TickCount> intelRecovery_;
     std::vector<UnitId> intelRecoveryUnit_;
+    /// The reactivate threshold `intelRecovery_` counts toward, captured from
+    /// the last `update` call's tick rate — what `intelActive` compares
+    /// against without needing the rate handed back in.
+    TickCount intelReactivate_ = 0;
     std::vector<Placement> placements_;
     std::vector<std::array<Emitter, kIntelKindCount>> emitters_;
     std::vector<std::array<Emitter, kHiddenKindCount>> hiddenEmitters_;

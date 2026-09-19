@@ -98,6 +98,10 @@ struct Decision {
         /// The AI names the reclaim-grid cell; the match resolves the wreck, because the
         /// brain sees cells and the sim sees features.
         Reclaim,
+        /// Flip one intel type's enabled byte on a unit — the port's write
+        /// path for retail's `EnableIntel`/`DisableIntel` (`C-283`). FAF's
+        /// `EnableUnitIntel`/`DisableUnitIntel` unit methods land here.
+        SetIntel,
     };
 
     Kind kind = Kind::Move;
@@ -118,6 +122,9 @@ struct Decision {
     bool queued = false;
     /// Reclaim: how far from the centre a wreck may be, in elmos (half a reclaim-grid cell).
     rm::sim::Fx radius{};
+    /// SetIntel: which intel type to flip, and the new enabled state.
+    rm::sim::IntelType intelType = rm::sim::IntelType::None;
+    bool intelEnabled = false;
 };
 
 /// An opponent: something that plays one army.

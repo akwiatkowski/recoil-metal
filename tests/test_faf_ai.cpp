@@ -13,6 +13,7 @@
 
 #include "app/FafAi.hpp"
 #include "app/FafOpponent.hpp"
+#include "app/Match.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 
 #include <cstdlib>
@@ -2756,4 +2757,84 @@ TEST_CASE("a 'cheat' personality flags the brain and skips non-cheat builders",
     )");
     INFO(ai.lastError());
     REQUIRE(ok);
+}
+
+TEST_CASE("FAF unit intel toggles queue SetIntel decisions the port applies",
+          "[faf][ai][intel]") {
+    // `C-283`: `EnableUnitIntel`/`DisableUnitIntel`/`IsIntelEnabled` are the
+    // unit-method spellings of retail's `EnableIntel`/`DisableIntel`/
+    // `IsIntelEnabled` (`0x00694B60`/`0x00694C56`). The write queues a
+    // `SetIntel` decision — the port's only write path — and `applyDecisions`
+    // flips the enabled byte on the store; the read answers the live flag.
+    const auto root = corpusRoot();
+    const char* home = std::getenv("HOME");
+    const auto contentRoot = home ? std::filesystem::path{home} / "projects/llm/input/faf"
+                                  : std::filesystem::path{};
+    if (root.empty() || !std::filesystem::exists(contentRoot / "units/UEL0001/UEL0001_unit.bp")) {
+        SKIP("requires the vendored FAF corpus and extracted retail unit blueprints");
+    }
+    rm::vfs::Vfs content;
+    content.mountDirectory(contentRoot);
+    auto scene = std::make_unique<rm::app::UnitScene>();
+    scene->armies = {{.index = 0, .alliance = 0}, {.index = 1, .alliance = 1}};
+    scene->economies.resize(scene->armies.size());
+    auto commander = rm::unitbp::loadFile(contentRoot / "units/UEL0001/UEL0001_unit.bp");
+    REQUIRE(commander);
+    scene->definitions.push_back(*commander);
+    const auto type = scene->catalog.add(&scene->definitions.back(), rm::sim::TickRate{});
+    const rm::sim::UnitId unit = scene->store.spawn({
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(10), .z = rm::sim::fxFromFloat(100)},
+        .motion = {.armyIndex = 0},
+        .health = {.current = rm::sim::magFromFloat(100),
+                   .maximum = rm::sim::magFromFloat(100)},
+    });
+    rm::HeightField field{.squaresX = 64, .squaresZ = 64};
+    field.raw.resize(field.sampleCount());
+    const std::array<rm::mapinfo::StartPosition, 2> starts{{
+        {.x = 0, .z = 100}, {.x = 50, .z = 100},
+    }};
+    const rm::ai::World world{.scene = *scene, .content = content, .field = field,
+                              .starts = starts, .markers = {}};
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    rm::ai::FafOpponent opponent(ai, 0);
+    opponent.observe(world, {});
+    opponent.advance(0);
+
+    // `DisableUnitIntel('Radar')` queues the write; it is not applied until the
+    // port drains — `IsIntelEnabled` still reads the live enabled byte.
+    REQUIRE(ai.eval(R"(
+        local u = __rm_faf.brains[0].snap.units[1]
+        assert(u:IsIntelEnabled('Radar'), 'retail default: every type enabled')
+        u:DisableUnitIntel('Radar')
+        assert(u:IsIntelEnabled('Radar'), 'the write applies at the pass drain')
+    )"));
+    INFO(ai.lastError());
+    opponent.advance(1);  // the queued write merges into this pass's decisions
+    const auto decisions = opponent.drain();
+    const auto setIntel = std::ranges::find_if(decisions, [](const rm::ai::Decision& d) {
+        return d.kind == rm::ai::Decision::Kind::SetIntel;
+    });
+    REQUIRE(setIntel != decisions.end());
+    CHECK(setIntel->unit == unit);
+    CHECK(setIntel->intelType == rm::sim::IntelType::Radar);
+    CHECK_FALSE(setIntel->intelEnabled);
+
+    rm::app::applyDecisions(*scene, content, scene->armies[0], decisions, 0.0f, 0);
+    CHECK_FALSE(scene->store.intelEnabled(unit, rm::sim::IntelType::Radar));
+    CHECK(scene->store.intelEnabled(unit, rm::sim::IntelType::Sonar));
+
+    // `EnableUnitIntel('Radar')` restores it through the same path.
+    REQUIRE(ai.eval("local u = __rm_faf.brains[0].snap.units[1]; u:EnableUnitIntel('Radar')"));
+    opponent.advance(2);  // the queued write merges into this pass's decisions
+    const auto restore = opponent.drain();
+    const auto enable = std::ranges::find_if(restore, [](const rm::ai::Decision& d) {
+        return d.kind == rm::ai::Decision::Kind::SetIntel;
+    });
+    REQUIRE(enable != restore.end());
+    CHECK(enable->intelEnabled);
+    rm::app::applyDecisions(*scene, content, scene->armies[0], restore, 0.0f, 1);
+    CHECK(scene->store.intelEnabled(unit, rm::sim::IntelType::Radar));
 }

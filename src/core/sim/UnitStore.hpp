@@ -37,6 +37,84 @@ struct RetreatState {
     Fx toX{}, toZ{};
 };
 
+/// Retail's `INTEL_` enum (`enum_registrations.tsv`, `0x00510f60`): the type
+/// argument `Entity:EnableIntel`/`DisableIntel`/`IsIntelEnabled` dispatch on
+/// (`0x00694B60`, `0x00694C56`, `C-283`). Numbering is retail's — types 0–8 are
+/// the grid-backed senses and fields `CIntel` holds handles for, types ≥9 the
+/// self-intel statuses kept as (enabled, active) byte pairs on the unit's
+/// attributes object (`entity+0x1E0`: Jammer `+0x24`, Spoof `+0x26`, Cloak
+/// `+0x28`, RadarStealth `+0x2A`, SonarStealth `+0x2C`).
+enum class IntelType : std::uint8_t {
+    None = 0,
+    Vision = 1,
+    WaterVision = 2,
+    Radar = 3,
+    Sonar = 4,
+    Omni = 5,
+    RadarStealthField = 6,
+    SonarStealthField = 7,
+    CloakField = 8,
+    Jammer = 9,
+    Spoof = 10,
+    Cloak = 11,
+    RadarStealth = 12,
+    SonarStealth = 13,
+};
+
+inline constexpr std::size_t kIntelTypeCount = 14;
+
+/// One type's bit in a per-unit intel mask.
+[[nodiscard]] constexpr std::uint16_t intelTypeBit(IntelType type) noexcept {
+    return static_cast<std::uint16_t>(1u << static_cast<std::uint8_t>(type));
+}
+
+/// The intel types `RULEUTC_IntelToggle` (script bit 3) switches — every
+/// non-vision type, verbatim from `Unit.lua`'s `OnScriptBitSet` (lines
+/// 318-332): both stealths, both fields, sonar, omni, cloak, cloak field,
+/// spoof, jammer, radar. Vision is not in the group; retail's intel toggle
+/// leaves the eyeball on.
+inline constexpr std::uint16_t kIntelToggleMask =
+    static_cast<std::uint16_t>(intelTypeBit(IntelType::Radar)
+                               | intelTypeBit(IntelType::Sonar)
+                               | intelTypeBit(IntelType::Omni)
+                               | intelTypeBit(IntelType::RadarStealthField)
+                               | intelTypeBit(IntelType::SonarStealthField)
+                               | intelTypeBit(IntelType::CloakField)
+                               | intelTypeBit(IntelType::Jammer)
+                               | intelTypeBit(IntelType::Spoof)
+                               | intelTypeBit(IntelType::Cloak)
+                               | intelTypeBit(IntelType::RadarStealth)
+                               | intelTypeBit(IntelType::SonarStealth));
+
+/// The intel types `RULEUTC_StealthToggle` (script bit 5) switches — the
+/// stealth family only (`Unit.lua` lines 337-341).
+inline constexpr std::uint16_t kStealthToggleMask =
+    static_cast<std::uint16_t>(intelTypeBit(IntelType::RadarStealth)
+                               | intelTypeBit(IntelType::RadarStealthField)
+                               | intelTypeBit(IntelType::SonarStealth)
+                               | intelTypeBit(IntelType::SonarStealthField));
+
+/// The intel-type mask a `RULEUTC_*` disabled mask implies — the Lua mapping
+/// flattened: bit 2 jams, bit 3 the whole non-vision suite, bit 5 the stealth
+/// family, bit 8 the cloak. Bits 0/1/4/6/7 carry no intel type.
+[[nodiscard]] constexpr std::uint16_t scriptBitIntelMask(
+    std::uint16_t scriptBits) noexcept {
+    std::uint16_t mask = 0;
+    if ((scriptBits & (1u << 2)) != 0) {
+        mask = static_cast<std::uint16_t>(mask | intelTypeBit(IntelType::Jammer));
+    }
+    if ((scriptBits & (1u << 3)) != 0) {
+        mask = static_cast<std::uint16_t>(mask | kIntelToggleMask);
+    }
+    if ((scriptBits & (1u << 5)) != 0) {
+        mask = static_cast<std::uint16_t>(mask | kStealthToggleMask);
+    }
+    if ((scriptBits & (1u << 8)) != 0) {
+        mask = static_cast<std::uint16_t>(mask | intelTypeBit(IntelType::Cloak));
+    }
+    return mask;
+}
+
 // Every unit in a match, in one place.
 //
 // WHY THIS EXISTS. Unit state is currently three parallel deques of per-batch vectors in an
@@ -101,6 +179,11 @@ public:
         std::vector<RetreatState> retreats;
         std::vector<bool> doNotTarget;
         std::vector<std::uint16_t> scriptBitsDisabled;
+        /// `C-283`'s per-slot intel-disable masks (see `setIntelEnabled`) —
+        /// the explicit `EnableIntel`/`DisableIntel` writes only; the
+        /// `RULEUTC_*` toggles' contribution is derived from
+        /// `scriptBitsDisabled` at read time.
+        std::vector<std::uint16_t> intelDisabled;
         std::vector<bool> maintenanceActive;
         std::vector<std::optional<UnitId>> parents;
         std::vector<std::vector<UnitId>> children;
@@ -359,6 +442,31 @@ public:
     [[nodiscard]] std::uint16_t scriptBitsDisabledMaskAt(UnitIndex slot) const noexcept {
         return slot < scriptBitsDisabled_.size() ? scriptBitsDisabled_[slot] : 0;
     }
+
+    /// Per-live-unit intel enable state, retail's (enabled, active) byte pairs
+    /// (`C-283`, `0x00694B60`/`0x00694C56`). `setIntelEnabled` is the
+    /// `EnableIntel`/`DisableIntel` dispatch: it flips the ENABLED byte of one
+    /// `IntelType`. The effective disabled mask a slot reports is the union of
+    /// these explicit writes and the `RULEUTC_*` toggles' `scriptBitIntelMask`
+    /// — the same answer retail's refcounted `IntelDisables` table converges
+    /// to, since overlapping groups (bit 3's all-intel vs bit 5's stealth) can
+    /// only ever leave a type disabled.
+    [[nodiscard]] bool setIntelEnabled(UnitId unit, IntelType type,
+                                       bool enabled) noexcept;
+    /// `IsIntelEnabled`: the enabled byte — false while either an explicit
+    /// disable or a `RULEUTC_*` toggle covers the type.
+    [[nodiscard]] bool intelEnabled(UnitId unit, IntelType type) const noexcept;
+    /// The slot-indexed per-type read the intel pass uses.
+    [[nodiscard]] bool intelDisabledAt(UnitIndex slot, IntelType type) const noexcept;
+    /// The whole EFFECTIVE mask (explicit ∪ script bits), for the intel pass's
+    /// placement key — a toggle that changes what a unit emits must re-stamp it.
+    [[nodiscard]] std::uint16_t intelDisabledMaskAt(UnitIndex slot) const noexcept;
+    /// The explicit mask alone — what a save serializes, since the script-bit
+    /// half is already carried by `scriptBitsDisabled`.
+    [[nodiscard]] std::uint16_t intelDisabledExplicitMaskAt(
+        UnitIndex slot) const noexcept {
+        return slot < intelDisabled_.size() ? intelDisabled_[slot] : 0;
+    }
     /// The slot-indexed read the hot loops use — `Intel::update` and the shield
     /// passes walk slots, not handles.
     [[nodiscard]] bool scriptBitDisabledAt(UnitIndex slot, std::uint8_t bit) const noexcept;
@@ -486,6 +594,11 @@ private:
     std::vector<bool> doNotTarget_;
     /// Retail's nine script bits fit a u16; a set bit means that feature is OFF.
     std::vector<std::uint16_t> scriptBitsDisabled_;
+    /// `C-283`'s per-slot intel-disable masks — a set bit means that
+    /// `IntelType` is OFF via an explicit `EnableIntel`/`DisableIntel` write.
+    /// The `RULEUTC_*` toggles' contribution is derived on read through
+    /// `scriptBitIntelMask`, so this array only ever holds the explicit half.
+    std::vector<std::uint16_t> intelDisabled_;
     /// `SetMaintenanceConsumption*` — last writer wins; defaults to active.
     std::vector<bool> maintenanceActive_;
     /// `C-360`'s per-slot cheat-buff mirror — see `cheatBuffedAt`.

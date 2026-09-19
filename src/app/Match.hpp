@@ -397,6 +397,13 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                     rm::TickIndex tickIndex,
                     const std::optional<rm::sim::PlayableRect>& playableRect = std::nullopt);
 
+/// Applies one opponent's drained decisions to the scene, in order — the write
+/// half of the port. Declared here so tests can drive the same path
+/// `runOpponents` uses instead of re-implementing it.
+void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::sim::Army& army,
+                    std::span<const rm::ai::Decision> decisions, float elapsedSeconds,
+                    rm::TickIndex tickIndex);
+
 [[nodiscard]] MatchRunner makeMatchRunner(UnitScene& scene, const rm::HeightField& field,
                                           PassabilitySet& passability,
                                             const rm::vfs::Vfs& content,

@@ -105,12 +105,22 @@ private:
     static int threatBetweenBinding(lua_State* lua);
     static int threatHighestBinding(lua_State* lua);
     static int threatAssignBinding(lua_State* lua);
+    /// `__rm_faf_set_intel`/`__rm_faf_is_intel_enabled`: `C-283`'s
+    /// `EnableIntel`/`DisableIntel`/`IsIntelEnabled` — the write queues a
+    /// `SetIntel` decision, the read answers the live enabled byte.
+    static int setIntelBinding(lua_State* lua);
+    static int isIntelEnabledBinding(lua_State* lua);
 
     /// This army's influence map — retail's `CInfluenceMap` at `CArmyImpl+0x218`
     /// (C-353). Fed from the observed snapshot every pass; its cell aggregates are
     /// rebuilt only on the 30-tick stagger (`tick % period == army_`, C-356), so a
     /// contact's threat outlives the contact by up to one pass.
     rm::sim::ThreatGrid threatGrid_;
+
+    /// `SetIntel` decisions queued by `__rm_faf_set_intel` between passes —
+    /// corpus threads resume on `pump`, so their writes accumulate here and
+    /// merge into `decisions_` at the top of `advance`.
+    std::vector<Decision> pendingIntel_;
 
     /// Sites already chosen THIS pass. Several decisions convert before any of them
     /// reaches `scene.building`, so the free-site and free-deposit checks would hand every

@@ -23,6 +23,7 @@ UnitStore::UnitStore(const Snapshot& snapshot)
        retreats_(snapshot.retreats),
        doNotTarget_(snapshot.doNotTarget),
        scriptBitsDisabled_(snapshot.scriptBitsDisabled),
+       intelDisabled_(snapshot.intelDisabled),
        maintenanceActive_(snapshot.maintenanceActive),
        orders_(snapshot.transforms.size()),
        parents_(snapshot.parents),
@@ -82,6 +83,9 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     // Older snapshots carry neither array: resize to the defaults — every
     // feature on, maintenance consuming — rather than fail the load.
     scriptBitsDisabled_.resize(transforms_.size(), 0);
+    // Older snapshots carry no intel-disable array either: every type enabled
+    // is the pre-C-283 default.
+    intelDisabled_.resize(transforms_.size(), 0);
     maintenanceActive_.resize(transforms_.size(), true);
     // `C-360`'s mirror is derived: a restored store starts unbuffed and the first
     // tick's `syncCheatBuffs` re-stamps it from the armies.
@@ -120,6 +124,7 @@ UnitStore::Snapshot UnitStore::snapshot() const {
                    .retreats = retreats_,
                    .doNotTarget = doNotTarget_,
                    .scriptBitsDisabled = scriptBitsDisabled_,
+                   .intelDisabled = intelDisabled_,
                    .maintenanceActive = maintenanceActive_,
                    .parents = parents_,
                    .children = children_,
@@ -170,6 +175,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         factoryRepeat_.emplace_back(false);
         productionPaused_.emplace_back(false);
         buildPriority_.emplace_back(BuildPriority::Normal);
+        intelDisabled_.emplace_back(0);
         retreatThresholds_.emplace_back(RetreatThreshold::Off);
         targetFocus_.emplace_back(TargetFocus::Default);
         scriptBitsDisabled_.emplace_back(0);
@@ -202,6 +208,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
     enhancements_[slot].clear();
     factoryRepeat_[slot] = false;
     productionPaused_[slot] = false;
+    intelDisabled_[slot] = 0;
     buildPriority_[slot] = BuildPriority::Normal;
     retreatThresholds_[slot] = RetreatThreshold::Off;
     targetFocus_[slot] = TargetFocus::Default;
@@ -409,6 +416,7 @@ void UnitStore::kill(UnitId id, RandomStream* random) {
     // command ID expire when this was its final member; the other tombstone arrays remain.
     orders_[id.index].clear();
     orders_[id.index].clearObserver();
+    intelDisabled_[id.index] = 0;
     factoryRepeat_[id.index] = false;
     productionPaused_[id.index] = false;
     buildPriority_[id.index] = BuildPriority::Normal;
@@ -664,6 +672,39 @@ bool UnitStore::setScriptBitDisabled(UnitId unit, std::uint8_t bit,
 
 bool UnitStore::scriptBitDisabled(UnitId unit, std::uint8_t bit) const noexcept {
     return alive(unit) && scriptBitDisabledAt(unit.index, bit);
+}
+
+bool UnitStore::setIntelEnabled(UnitId unit, IntelType type, bool enabled) noexcept {
+    const auto bit = static_cast<std::uint8_t>(type);
+    if (!alive(unit) || bit >= kIntelTypeCount || type == IntelType::None) {
+        return false;
+    }
+    const std::uint16_t mask = intelTypeBit(type);
+    if (enabled) {
+        intelDisabled_[unit.index] &= static_cast<std::uint16_t>(~mask);
+    } else {
+        intelDisabled_[unit.index] |= mask;
+    }
+    return true;
+}
+
+bool UnitStore::intelEnabled(UnitId unit, IntelType type) const noexcept {
+    return alive(unit) && !intelDisabledAt(unit.index, type);
+}
+
+bool UnitStore::intelDisabledAt(UnitIndex slot, IntelType type) const noexcept {
+    return (intelDisabledMaskAt(slot) & intelTypeBit(type)) != 0;
+}
+
+std::uint16_t UnitStore::intelDisabledMaskAt(UnitIndex slot) const noexcept {
+    if (slot >= intelDisabled_.size()) {
+        return 0;
+    }
+    // The explicit disables plus whatever the RULEUTC_* toggles switched off —
+    // `Unit.lua`'s `OnScriptBitSet` calls `DisableUnitIntel` per type, and the
+    // union is what its refcounted `IntelDisables` table converges to.
+    return static_cast<std::uint16_t>(
+        intelDisabled_[slot] | scriptBitIntelMask(scriptBitsDisabledMaskAt(slot)));
 }
 
 bool UnitStore::scriptBitDisabledAt(UnitIndex slot, std::uint8_t bit) const noexcept {

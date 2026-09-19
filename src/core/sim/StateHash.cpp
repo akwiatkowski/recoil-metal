@@ -554,6 +554,16 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         if (!store.maintenanceActive(store.idAt(slot))) {
             feed(h, std::uint8_t{9});
         }
+        // `C-283`'s explicit intel-disable mask (`EnableIntel`/`DisableIntel`)
+        // changes what the unit emits next pass — a disabled radar stops
+        // covering, a disabled jammer stops lying — so a set mask hashes.
+        // The RULEUTC_* half is already covered by tag 8 above; only the
+        // explicit mask is fed here, and all-enabled stays silent.
+        if (const std::uint16_t intelMask = store.intelDisabledExplicitMaskAt(slot);
+            intelMask != 0) {
+            feed(h, std::uint8_t{12});
+            feed(h, intelMask);
+        }
         // `C-293`'s manipulator list and `C-303`'s bone mask are serialized sim
         // state — a storage slide's offset decides what the pose does next
         // tick, and a hidden bone suppresses what attaches to it. Empty list
