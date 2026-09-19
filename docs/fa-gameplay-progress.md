@@ -287,57 +287,50 @@ excluded from the headline.
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 80% | 30% | 90% | Wreck pool in save v23, in-flight projectiles in v35, and now the path service's queues, cached flow fields and intel recon history in v37 — a mid-order save resumes to an identical hash stream for 300 ticks (tested). SaveState v36 adds the script-bit mask, upkeep flag and shield `rechargeRestoresFull`; command log v7 records the toggle bit. Next: remaining intel grids and emitter state. |
 
 
-## Claim-level test coverage (2026-09-18 audit)
+## Claim-level test coverage (2026-09-19 re-audit)
 
-Every claim in the ledger was classified against the test suite (1,879 tests, 133
-files) by sixteen parallel auditors; per-claim detail lives in
+Every claim in the ledger was re-classified against the test suite (2,030 tests)
+after the three gap-fill waves; per-claim detail lives in
 `build/re-fa/coverage/FA-*.md` (gitignored). Statuses: **TESTED** a test asserts the
 claim's behavior; **PARTIAL** tests pin only part of the specifics; **UNTESTED**
 implemented but unpinned; **NOT_IMPL** no implementation; **N/A** analysis-artifact
 claims (provenance, layouts, naming) excluded from the percentage. Coverage% =
-(TESTED + ½·PARTIAL) / implementable claims.
+(TESTED + ½·PARTIAL) / implementable claims. Claims spanning several work packages
+count toward each subsystem they touch.
 
 | Subsystem | Tested | Partial | Untested | Not impl | N/A | Coverage |
 |---|---:|---:|---:|---:|---:|---:|
-| FA-FOUND | 4 | 1 | 0 | 0 | 33 | 90% |
-| FA-CONTENT | 4 | 6 | 0 | 5 | 7 | 47% |
-| FA-LUA | 7 | 3 | 0 | 6 | 1 | 53% |
-| FA-MATCH | 1 | 0 | 0 | 1 | 2 | 50% |
-| FA-CMD | 10 | 2 | 1 | 0 | 5 | 85% |
-| FA-ECON | 28 | 16 | 0 | 6 | 5 | 72% |
-| FA-LAND | 5 | 8 | 0 | 0 | 4 | 69% |
+| FA-FOUND | 0 | 1 | 0 | 1 | 36 | 25% |
+| FA-CONTENT | 8 | 11 | 0 | 1 | 8 | 68% |
+| FA-LUA | 14 | 7 | 0 | 1 | 5 | 80% |
+| FA-CMD | 15 | 8 | 0 | 0 | 12 | 83% |
+| FA-MATCH | 2 | 0 | 0 | 0 | 2 | 100% |
+| FA-ECON | 51 | 8 | 0 | 0 | 10 | 93% |
+| FA-LAND | 7 | 16 | 0 | 0 | 5 | 65% |
 | FA-AIR | 5 | 6 | 0 | 0 | 0 | 73% |
-| FA-NAVY | 8 | 3 | 0 | 4 | 0 | 63% |
-| FA-TRANSPORT | 4 | 2 | 0 | 0 | 0 | 83% |
-| FA-WEAPONS | 7 | 9 | 0 | 0 | 6 | 72% |
-| FA-MISSILES | 8 | 2 | 0 | 0 | 0 | 90% |
-| FA-DAMAGE | 5 | 6 | 0 | 0 | 9 | 73% |
-| FA-INTEL | 8 | 3 | 0 | 5 | 0 | 59% |
-| FA-PROGRESS | 12 | 5 | 0 | 7 | 2 | 60% |
-| FA-TERRAIN | 3 | 1 | 0 | 3 | 0 | 50% |
-| FA-AI | 3 | 2 | 0 | 4 | 2 | 44% |
-| FA-UI | 13 | 7 | 0 | 3 | 2 | 72% |
-| FA-PRESENT | 4 | 5 | 0 | 10 | 0 | 34% |
-| FA-PERSIST | 3 | 1 | 0 | 1 | 5 | 70% |
-| **Total** | **142** | **88** | **1** | **55** | **83** | **~65%** |
+| FA-NAVY | 13 | 6 | 0 | 0 | 1 | 84% |
+| FA-WEAPONS | 11 | 12 | 0 | 0 | 10 | 74% |
+| FA-TRANSPORT | 5 | 4 | 0 | 0 | 1 | 78% |
+| FA-MISSILES | 10 | 5 | 0 | 0 | 1 | 83% |
+| FA-DAMAGE | 5 | 9 | 0 | 0 | 13 | 68% |
+| FA-INTEL | 6 | 9 | 0 | 2 | 2 | 62% |
+| FA-PROGRESS | 18 | 8 | 0 | 0 | 3 | 85% |
+| FA-TERRAIN | 4 | 4 | 0 | 0 | 0 | 75% |
+| FA-AI | 6 | 4 | 0 | 0 | 2 | 80% |
+| FA-UI | 10 | 13 | 0 | 0 | 2 | 72% |
+| FA-PRESENT | 9 | 8 | 0 | 1 | 1 | 72% |
+| FA-PERSIST | 7 | 5 | 0 | 1 | 6 | 73% |
+| **Total** | **206** | **144** | **0** | **7** | **120** | **~78%** |
 
-Read it as: of 286 implementable claims, 142 are test-pinned and 88 more are
-half-pinned — the suite covers roughly 65% of the recovered retail contract after
-the 2026-09-18 player-perspective test wave (52 new TEST_CASEs in
-`tests/test_fa_*.cpp`, all green in the 1,878-case suite). The weakest rows remain
-the subsystems analyzed most recently (FA-PRESENT 34%, FA-AI 44%, FA-CONTENT 47%,
-FA-TERRAIN 50%, FA-LUA 53%): their specs landed the same day and implementation has
-not caught up. FA-MISSILES (90%), FA-FOUND (90%), FA-CMD (85%), FA-TRANSPORT (83%)
-are the strongest. Notable divergences the audit and test wave surfaced: our VFS is
-last-mount-wins where retail is first-wins (C-267, outcome-equivalent via mount
-ordering); transport cargo death has no 99% roll (C-197); ferry beacon is a position
-not a spawned unit (C-199); `AboveWater*`/`BelowWater*` weapon flags are unparsed
-(C-321/322); `AutoSurfaceMode` is absent (C-203); guard attack picks nearest prey,
-not retail's longest-range-capable weapon (C-350); attached cargo absorbs shots
-harmlessly for its carrier (C-196); omni identifies contacts
-where retail leaves them unidentified (C-280); cloak defeats radar/sonar where
-retail's is anti-vision only (C-277); ours uses temporal blip expiry where retail
-reaps by confirmed-dead/ally/last-reference (C-276, deliberate).
+Read it as: of ~370 claim-subsystem pairs, 206 are test-pinned and 144 more are
+half-pinned — the suite covers roughly 78% of the recovered retail contract after
+the 2026-09-19 gap-fill waves. The weakest rows are FA-FOUND (25% — nearly all
+claims are provenance artifacts), FA-INTEL (62%), FA-LAND (65%), FA-CONTENT and
+FA-DAMAGE (68%). The seven NOT_IMPL: `C-037` (LuaPlus thunk convention — internals),
+`C-065`/`C-139` (spatial-chain internals — accepted divergence), `C-078`/`C-276`
+(recon cadence / no temporal blip expiry — deliberate divergences), `C-152`
+(lockstep beat gating — no multiplayer), `C-267` (VFS first-mount-wins — divergence
+reproduced by mount order), `C-302` (animation-signal machinery — no skeleton).
 
 ## Starting Work
 
