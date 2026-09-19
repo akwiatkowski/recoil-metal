@@ -1870,6 +1870,11 @@ TEST_CASE("C-125/C-328: motion events carry retail's codes and fire only on chan
         rm::sim::tick(store.transforms(), store.motion(), terrain);
         collect();
     }
+    // The vert table: a grounded flyer ordered away climbs (Up 2), cruises
+    // (Top 0), descends (Down 3) and lands (Bottom 1) — retail's
+    // `EUnitMotionVertEvent` order, not our `AirState` order.
+    rm::sim::orderTo(store.motion()[plane.index], terrain,
+                     rm::test::fx(2000.0f), rm::test::fx(200.0f));
     std::vector<int> planeVert;
     for (int i = 0; i < 1000; ++i) {
         rm::sim::tick(store.transforms(), store.motion(), terrain);
