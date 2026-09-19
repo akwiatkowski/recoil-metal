@@ -289,6 +289,22 @@ public:
     [[nodiscard]] bool setProductionPaused(UnitId unit, bool paused) noexcept;
     [[nodiscard]] bool productionPaused(UnitId unit) const noexcept;
 
+    /// Per-slot mirror of `Army::cheatEnabled` (C-360), refreshed once a tick by
+    /// `syncCheatBuffs`. Retail's `CheatBuildRate` is a buff ON THE UNIT
+    /// (`aiutilities.lua:1776`, `Buff.ApplyBuff(unit, 'CheatBuildRate')`), and the
+    /// build-rate readers — `effectiveBuildPerTick` — see the store but not the
+    /// army list, so the buff's per-unit shape is kept here rather than threading
+    /// armies through a dozen signatures. Derived state: not saved, not hashed —
+    /// the first tick after a restore re-stamps it from the armies.
+    [[nodiscard]] bool cheatBuffedAt(UnitIndex slot) const noexcept {
+        return slot < cheatBuffed_.size() && cheatBuffed_[slot];
+    }
+
+    /// Re-stamps `cheatBuffed_` from the armies: every live unit of a cheating
+    /// army carries the buff, which is also `Unit.lua:209`'s OnCreate rule — a
+    /// unit spawned after the flag was set is buffed because its army is.
+    void syncCheatBuffs(std::span<const Army> armies) noexcept;
+
     /// Per-live-unit construction priority. The allocator serves High before Normal before
     /// Low out of whatever the tier above left; the flag is authoritative like
     /// `productionPaused`, so a stalled match under the same log allocates identically.
@@ -427,6 +443,9 @@ private:
     std::vector<std::uint16_t> scriptBitsDisabled_;
     /// `SetMaintenanceConsumption*` — last writer wins; defaults to active.
     std::vector<bool> maintenanceActive_;
+    /// `C-360`'s per-slot cheat-buff mirror — see `cheatBuffedAt`.
+    std::vector<bool> cheatBuffed_;
+
     std::vector<CommandQueue> orders_;
     std::vector<std::optional<UnitId>> parents_;
     std::vector<std::vector<UnitId>> children_;

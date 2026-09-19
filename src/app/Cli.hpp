@@ -197,6 +197,12 @@ orderArchivesForMount(std::vector<std::filesystem::path> archives);
 /// CLI personality name to the FAF base template it seats. Throws on unknown names.
 [[nodiscard]] std::string fafBaseTemplateFor(std::string_view name);
 
+/// Whether a personality name carries retail's AIx marker (C-360): `aibrain.lua:374`
+/// runs `string.find(AIPersonality, 'cheat')`, so 'easycheat' cheats and 'easy' does
+/// not. `fafBaseTemplateFor` strips the same substring the way retail's
+/// `string.sub(per, 1, cheatPos - 1)` does.
+[[nodiscard]] bool fafPersonalityCheats(std::string_view name) noexcept;
+
 /// `--ai-personalities easy,turtle,...`: raw personality names in seat order, cycled over
 /// more armies than names; a lone `--ai-personality` folds in as a one-seat list. Empty
 /// when neither flag is present; names are validated eagerly.

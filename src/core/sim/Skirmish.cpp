@@ -268,14 +268,29 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
         economy.storage.mass += Mag::fromInt(def->storageMass.floorToInt());
         economy.storage.energy += Mag::fromInt(def->storageEnergy.floorToInt());
 
+        // C-360's `CheatIncome` (`CheatBuffs.lua`: MassProduction/EnergyProduction
+        // Mult 2.0, Stacks='ALWAYS', Duration=-1 — `aiutilities.lua:1776`). The buff
+        // doubles what a unit PRODUCES and nothing else: upkeep, storage and the
+        // build drain are untouched, which is why the multiplier lands on the income
+        // lines alone. `owner` was bounds-checked against `economies` above; armies
+        // are the same list by construction, but the flag read stays defensive.
+        const bool cheats = static_cast<std::size_t>(owner) < match.armies.size()
+                            && match.armies[static_cast<std::size_t>(owner)].cheatEnabled;
+
         if (isCommanderId(def->name)) {
             // The commander is the trickle, OURS (see kCommanderTrickle*) — not its
             // blueprint's production fields, which the spawn does not read either.
             // Converted through the rate here rather than in the catalog because it
             // is not a property of any type: every commander gets the same trickle
-            // whatever its blueprint says.
+            // whatever its blueprint says. A cheating commander's trickle doubles
+            // like any other production — retail's buff multiplies the ACU's own
+            // `ProductionPerSecondMass`/`Energy`, which is what the trickle stands in.
             economy.incomePerTick.mass += trickle.mass;
             economy.incomePerTick.energy += trickle.energy;
+            if (cheats) {
+                economy.incomePerTick.mass += trickle.mass;
+                economy.incomePerTick.energy += trickle.energy;
+            }
         } else {
             // Production and upkeep through this unit's adjacency multipliers — one for
             // the unbuffed, which is everything that stands alone. A production-paused
@@ -287,11 +302,21 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
                 if (rates.coversDeficit && match.productionOverrides != nullptr) {
                     // `C-263`: the Paragon's `SetProductionPerSecond*` override
                     // REPLACES the static rate — the stored per-slot value,
-                    // recomputed below on retail's 0.5 s cadence.
+                    // recomputed below on retail's 0.5 s cadence. The cheat
+                    // multiplier applies to the override too: retail's buff
+                    // multiplies the unit's production fields, which the override
+                    // is standing in for.
                     economy.incomePerTick += (*match.productionOverrides)[slot];
+                    if (cheats) {
+                        economy.incomePerTick += (*match.productionOverrides)[slot];
+                    }
                 } else {
                     economy.incomePerTick.mass += rates.massPerTick * beside.massProduction;
                     economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction;
+                    if (cheats) {
+                        economy.incomePerTick.mass += rates.massPerTick * beside.massProduction;
+                        economy.incomePerTick.energy += rates.energyPerTick * beside.energyProduction;
+                    }
                 }
                 // `SetMaintenanceConsumption{Active,Inactive}` gates upkeep only —
                 // the script-bit toggles cut a unit's draw without touching what
@@ -598,6 +623,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 match.armies[static_cast<std::size_t>(owner)].unitCostTotal + def->capCost;
         }
     }
+
+    // C-360's cheat buffs, mirrored once a tick like the production pause below:
+    // `Army::cheatEnabled` is the authority, and `cheatBuffed_` is the per-unit
+    // shape `effectiveBuildPerTick` reads. Before the order queues so a unit
+    // spawned or captured since the last tick builds at this tick's honest rate —
+    // and so `Unit.lua:209`'s OnCreate rule (new units of a cheating army are
+    // buffed) holds without the spawn paths knowing the flag exists.
+    store.syncCheatBuffs(match.armies);
 
 
     // THE PRODUCTION PAUSE, mirrored once a tick. `UnitStore::productionPaused` is the one

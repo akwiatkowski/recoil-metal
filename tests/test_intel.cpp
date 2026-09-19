@@ -1280,3 +1280,57 @@ TEST_CASE("a jammer scatters false blips inside hostile radar, and only there") 
     rm::sim::contactsFor(0, far, catalog, armies, intel2, 0, contacts);
     CHECK(contacts.size() == 1);  // the watcher itself, and no ghosts
 }
+
+TEST_CASE("a cheating army's commander sees the whole map, and only the commander",
+          "[intel][cheat]") {
+    // C-360's `IntelCheat` (`CheatBuffs.lua`): `ApplyCheatBuffs` gives COMMAND units
+    // VisionRadius +10000 and OmniRadius +10000 — the AIx's map-wide sight. The buff is
+    // per unit, not per army: the cheating army's ordinary units keep their own radii.
+    rm::unitdef::UnitDef commander = seer(26.0f);  // the ACU's own sight radius
+    commander.name = "UEL0001";
+    commander.categories = {"COMMAND"};
+    rm::unitdef::UnitDef tank = seer(26.0f);
+    tank.name = "test_tank";
+    tank.categories = {"LAND"};
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex commanderType = catalog.add(&commander);
+    const rm::UnitTypeIndex tankType = catalog.add(&tank);
+
+    UnitStore store;
+    (void)place(store, commanderType, 0, 256.0f, 256.0f);
+    (void)place(store, tankType, 0, 256.0f, 300.0f);
+    std::vector<Army> armies = twoArmies(false);
+    armies[0].cheatEnabled = true;
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(512), Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(store, catalog, armies, nullptr);
+
+    // +10000 elmos of vision and omni covers a 512-elmo map corner to corner.
+    const Fx far = Fx::fromInt(500);
+    CHECK(intel.sees(0, IntelKind::Vision, far, far));
+    CHECK(intel.sees(0, IntelKind::Omni, far, far));
+
+    // The same commander on an honest army sees only its own radius: 500 elmos
+    // away is far past 26.
+    std::vector<Army> honest = twoArmies(false);
+    Intel intel2;
+    intel2.configure(2, Fx::fromInt(512), Fx::fromInt(512),
+                     rm::sim::VisionStyle::ForgedAlliance);
+    intel2.update(store, catalog, honest, nullptr);
+    CHECK_FALSE(intel2.sees(0, IntelKind::Vision, far, far));
+    CHECK_FALSE(intel2.sees(0, IntelKind::Omni, far, far));
+
+    // And the cheating army's TANK is not a commander: at 500 elmos out it sees
+    // nothing either — the buff names COMMAND, not the army.
+    UnitStore tankOnly;
+    (void)place(tankOnly, tankType, 0, 256.0f, 256.0f);
+    Intel intel3;
+    intel3.configure(2, Fx::fromInt(512), Fx::fromInt(512),
+                     rm::sim::VisionStyle::ForgedAlliance);
+    intel3.update(tankOnly, catalog, armies, nullptr);
+    CHECK_FALSE(intel3.sees(0, IntelKind::Vision, far, far));
+    CHECK_FALSE(intel3.sees(0, IntelKind::Omni, far, far));
+}

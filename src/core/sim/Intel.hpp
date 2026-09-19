@@ -408,6 +408,10 @@ private:
         /// changes what this slot emits without moving it, so the mask is part of
         /// the "did anything change" key alongside square and alliance.
         std::uint16_t scriptBits = 0;
+        /// Whether the stamp carried C-360's `IntelCheat` bonus (the owning army's
+        /// `cheatEnabled` plus the unit's COMMAND category). Part of the change key
+        /// like `scriptBits`: a flag flip re-stamps rather than keeping the old radius.
+        bool intelCheat = false;
     };
 
     void withdraw(UnitIndex slot);

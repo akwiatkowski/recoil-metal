@@ -574,10 +574,22 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
         const std::int32_t square = grid(alliance, IntelKind::Vision).squareAt(at.x, at.z);
         Placement& placement = placements_[slot];
         const std::uint16_t scriptBits = store.scriptBitsDisabledMaskAt(slot);
+
+        // C-360's `IntelCheat` (`CheatBuffs.lua`: VisionRadius +10000, OmniRadius
+        // +10000 — `aiutilities.lua:1771` applies it to COMMAND units only). The
+        // bonus is part of the "did anything change" key alongside square and
+        // script bits, so an army whose flag flips mid-match re-stamps rather
+        // than keeping the radius it was stamped with.
+        const unitdef::UnitDef* intelDef = catalog.def(store.typeAt(slot));
+        const bool intelCheat =
+            armies[static_cast<std::size_t>(army)].cheatEnabled
+            && intelDef != nullptr && intelDef->hasCategory("COMMAND");
         if (placement.square == square && placement.alliance == alliance
-            && placement.scriptBits == scriptBits && square != IntelGrid::kNoSquare) {
+            && placement.scriptBits == scriptBits && placement.intelCheat == intelCheat
+            && square != IntelGrid::kNoSquare) {
             continue;
         }
+        placement.intelCheat = intelCheat;
 
         withdraw(slot);
         if (square == IntelGrid::kNoSquare) {
@@ -585,8 +597,14 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
         }
 
         const UnitCatalog::IntelRadii& radii = catalog.intel(store.typeAt(slot));
-        const Fx byKind[kIntelKindCount] = {radii.vision, radii.radar, radii.sonar,
-                                            radii.omni};
+        Fx byKind[kIntelKindCount] = {radii.vision, radii.radar, radii.sonar,
+                                      radii.omni};
+        if (intelCheat) {
+            // `CheatBuffs.lua`'s IntelCheat, verbatim: Add 10000 to vision and
+            // omni, Mult 1.0 — the AIx commander's map-wide sight.
+            byKind[0] += Fx::fromInt(10000);
+            byKind[3] += Fx::fromInt(10000);
+        }
 
         // Script bits 3/5 (`RULEUTC_IntelToggle`/`RULEUTC_StealthToggle`) withdraw
         // the unit's senses and stealth fields — `DisableUnitIntel` in

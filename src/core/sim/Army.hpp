@@ -133,6 +133,17 @@ struct Army {
     /// fixed-point count: blueprint `CapCost` is fractional (0.1 sonars).
     Fx unitCap = Fx::fromInt(500);
 
+    /// `aibrain.lua:374`'s AIx flag (C-360): a personality whose name contains
+    /// 'cheat' calls `AIUtils.SetupCheat`, which sets `brain.CheatEnabled` and runs
+    /// `ApplyCheatBuffs` over the army — `CheatIncome` (MassProduction/
+    /// EnergyProduction Mult 2.0) and `CheatBuildRate` (BuildRate Mult 2.0) on every
+    /// unit, `IntelCheat` (VisionRadius/OmniRadius +10000) on COMMAND units
+    /// (`CheatBuffs.lua`, `aiutilities.lua:1763-1779`). Retail hangs the buffs on the
+    /// units; we keep the flag on the army and read it where the buffed values are
+    /// consumed — `Unit.lua:209`'s OnCreate re-application then comes free, because a
+    /// unit spawned later belongs to the same army.
+    bool cheatEnabled = false;
+
     /// `GetArmyUnitCostTotal` (`CArmyImpl` vfunc `0x4c`): the army's live
     /// `CapCost` sum, recomputed each tick from the store. Derived state —
     /// never saved, never hashed; the units it sums already are.

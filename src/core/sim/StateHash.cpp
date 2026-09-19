@@ -624,6 +624,14 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, army.unitCap.raw());
         }
     }
+    // `cheatEnabled` (C-360) joins the stream only once some army cheats, so a
+    // match with no AIx hashes exactly as before.
+    if (std::ranges::any_of(match.armies,
+                          [](const Army& army) { return army.cheatEnabled; })) {
+        for (const Army& army : match.armies) {
+            feed(h, army.cheatEnabled);
+        }
+    }
 
 
     if (match.pathService != nullptr) {

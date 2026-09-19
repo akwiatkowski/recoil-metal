@@ -41,13 +41,25 @@ class FafOpponent final : public Opponent {
 public:
     /// `sandbox` outlives the opponent and is shared by every FAF opponent in the match —
     /// one VM, one corpus, per-army brains inside it (see FafAi's one-per-match note).
-    FafOpponent(FafAi& sandbox, int army, std::string baseTemplate = "NormalMain");
+    /// `personality` is the raw seat name ('easy', 'easycheat', …) when the caller has
+    /// one — `aibrain.lua:374` reads the 'cheat' marker out of it (C-360); empty means
+    /// the default seat, which never cheats.
+    FafOpponent(FafAi& sandbox, int army, std::string baseTemplate = "NormalMain",
+                std::string personality = {});
 
     void observe(const World& world, std::span<const rm::sim::Event> events) override;
     void advance(rm::TickIndex tick) override;
     [[nodiscard]] std::span<const Decision> drain() const override { return decisions_; }
 
     [[nodiscard]] int army() const noexcept { return army_; }
+
+    /// Whether this seat's personality carries retail's AIx marker (C-360,
+    /// `aibrain.lua:374`'s `string.find(per, 'cheat')`). The caller sets
+    /// `Army::cheatEnabled` from it; the brain's own `CheatEnabled` is set in the
+    /// Lua bootstrap from the same string.
+    [[nodiscard]] bool cheats() const noexcept {
+        return personality_.find("cheat") != std::string::npos;
+    }
 
 private:
     /// One driver decision table (top of the Lua stack) into port Decisions.
@@ -60,6 +72,9 @@ private:
     int army_ = -1;
     std::string baseTemplate_;
     bool booted_ = false;
+    /// The raw seat personality ('easycheat', …) or empty for the default seat —
+    /// see the constructor and `cheats()`.
+    std::string personality_;
     /// Blueprint ids whose category sets the driver has been taught. Per opponent rather
     /// than per sandbox; re-teaching an id the sandbox knows is a cheap no-op there.
     std::set<std::string> sentTypes_;

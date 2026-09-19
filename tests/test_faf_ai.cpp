@@ -2711,3 +2711,49 @@ TEST_CASE("FAF enhancement plans read installed slots and emit validated native 
     scene.store.orders()[unit.index].clear();
 
 }
+
+TEST_CASE("a 'cheat' personality flags the brain and skips non-cheat builders",
+          "[faf][ai-personality][cheat]") {
+    // C-360, `aibrain.lua:374-378`: `string.find(AIPersonality, 'cheat')` calls
+    // `AIUtils.SetupCheat` — `brain.CheatEnabled = true` plus `ApplyCheatBuffs` on the
+    // army — and strips the suffix from the recorded personality. The flag is
+    // Lua-visible: `AIAddBuilderTable.lua:17` skips `NonCheatBuilders` for a cheating
+    // brain (a ×2 economy does not need scouts or counter-intel), and
+    // `MiscBuildConditions.lua`'s `GreaterThanGameTime` doubles the clock.
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        local function boot(personality, army)
+            __rm_faf_boot(army, { faction = 1, startX = 100, startZ = 100,
+                sizeX = 2048, sizeZ = 2048, armies = 2, base = 'NormalMain',
+                personality = personality, markers = {} })
+            return __rm_faf.brains[army]
+        end
+        local function has(brain, name)
+            for _, item in ipairs(brain.builders) do
+                if item.spec.BuilderName == name then return true end
+            end
+            return false
+        end
+        local honest = boot('easy', 0)
+        assert(honest.CheatEnabled == false, 'an honest personality does not cheat')
+        assert(ScenarioInfo.ArmySetup[honest.Name].AIPersonality == 'easy')
+        -- 'T1 Air Scout' is NormalMain's NonCheatBuilders group (AIIntelBuilders.lua).
+        assert(has(honest, 'T1 Air Scout'), 'honest brain keeps its scout builders')
+
+        local cheater = boot('easycheat', 1)
+        assert(cheater.CheatEnabled == true, 'a cheat personality flags the brain')
+        -- aibrain.lua:377 records the personality with the suffix stripped.
+        assert(ScenarioInfo.ArmySetup[cheater.Name].AIPersonality == 'easy')
+        -- AIAddBuilderTable.lua:17: a cheating brain skips NonCheatBuilders.
+        assert(not has(cheater, 'T1 Air Scout'), 'cheating brain skips non-cheat builders')
+        assert(has(cheater, 'T1 Land Factory Builder')
+            or #cheater.builders > 0, 'cheating brain keeps its ordinary builders')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}

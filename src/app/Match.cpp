@@ -1383,13 +1383,24 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                     // Per-seat personalities cycle like `--factions`; without the flag every
                     // seat keeps the single `--ai-personality` template. Names were validated
                     // at startup, so the mapping cannot throw here.
-                    const std::string seated =
+                    const std::string_view personality =
                         gFafPersonalityNames.empty()
-                            ? gFafBaseTemplate
-                            : fafBaseTemplateFor(gFafPersonalityNames[army
-                                                                     % gFafPersonalityNames.size()]);
-                    runner.scripts[army] = std::make_unique<rm::ai::FafOpponent>(
-                        *sandbox, static_cast<int>(army), seated);
+                            ? std::string_view{}
+                            : std::string_view{gFafPersonalityNames[army
+                                                                    % gFafPersonalityNames.size()]};
+                    const std::string seated = personality.empty()
+                        ? gFafBaseTemplate
+                        : fafBaseTemplateFor(personality);
+                    auto opponent = std::make_unique<rm::ai::FafOpponent>(
+                        *sandbox, static_cast<int>(army), seated,
+                        std::string{personality});
+                    // C-360: `aibrain.lua:374`'s 'cheat' personality — the sim-side
+                    // half of `SetupCheat` is this flag; the brain's own
+                    // `CheatEnabled` is set in the Lua bootstrap from the same name.
+                    if (opponent->cheats()) {
+                        runner.match.armies[army].cheatEnabled = true;
+                    }
+                    runner.scripts[army] = std::move(opponent);
                 }
                 runner.fafSandbox = std::move(sandbox);
                 std::printf("faf: %zu armies seated with FAF opponents (%s)\n",

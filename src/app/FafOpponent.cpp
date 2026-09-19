@@ -698,7 +698,11 @@ function __rm_faf_boot(army, info)
     brain.Nickname = brain.Name
 
     -- Flags the corpus reads off the brain. All false, all true statements about this
-    -- adapter: no cheat multipliers, no transports requested, no pre-built base.
+    -- adapter: no transports requested, no pre-built base. `CheatEnabled` is the one
+    -- that is not always false: `aibrain.lua:374-378` reads 'cheat' out of the seat's
+    -- AIPersonality and calls `AIUtils.SetupCheat` (C-360), which is what the parse
+    -- below mirrors — the sim-side buffs live on `Army::cheatEnabled`, set by the
+    -- caller from the same string.
     brain.CheatEnabled = false
     brain.TransportRequested = false
     brain.PreBuilt = false
@@ -922,6 +926,23 @@ function __rm_faf_boot(army, info)
     -- Filled below once the template is known — conditions read it off the location.
     setmetatable(brain, brainMeta)
 
+    -- C-360, `aibrain.lua:374-378`: the seat's AIPersonality is recorded on the
+    -- army's setup row, and a 'cheat' substring flags the brain and strips itself
+    -- from the record — 'easycheat' plays 'easy' with CheatEnabled set. The
+    -- sim-side half of SetupCheat (the ×2 buffs) is `Army::cheatEnabled`, which
+    -- the caller sets from the same string; this half is the Lua-visible flag
+    -- `MiscBuildConditions.lua:393` and `AIAddBuilderTable.lua:17` read.
+    ScenarioInfo.ArmySetup[brain.Name] = ScenarioInfo.ArmySetup[brain.Name] or {}
+    if info.personality then
+        ScenarioInfo.ArmySetup[brain.Name].AIPersonality = info.personality
+        local cheatPos = string.find(info.personality, 'cheat')
+        if cheatPos then
+            brain.CheatEnabled = true
+            ScenarioInfo.ArmySetup[brain.Name].AIPersonality =
+                string.sub(info.personality, 1, cheatPos - 1)
+        end
+    end
+
     -- FAF's own base description drives the list: template -> builder groups -> builders,
     -- flattened and sorted once. Priority first, name as the tiebreak, so the walk order is
     -- a fact about the data rather than about table iteration.
@@ -994,7 +1015,11 @@ function __rm_faf_boot(army, info)
     end
     if template then
         for _, groupName in ipairs(template.Builders or {}) do addGroup(groupName) end
-        for _, groupName in ipairs(template.NonCheatBuilders or {}) do addGroup(groupName) end
+        -- `AIAddBuilderTable.lua:17`: NonCheatBuilders are for brains that need the
+        -- help — a ×2 economy skips its scouts and counter-intel.
+        if not brain.CheatEnabled then
+            for _, groupName in ipairs(template.NonCheatBuilders or {}) do addGroup(groupName) end
+        end
     end
     if brain.hasNavalSite then
         -- Surface production and factory upgrades share the ordinary tier/build-tree
@@ -2186,8 +2211,10 @@ std::string formatFafConditionErrorReport(std::span<const std::string> errors) {
     return report;
 }
 
-FafOpponent::FafOpponent(FafAi& sandbox, int army, std::string baseTemplate)
-    : sandbox_(sandbox), army_(army), baseTemplate_(std::move(baseTemplate)) {}
+FafOpponent::FafOpponent(FafAi& sandbox, int army, std::string baseTemplate,
+                         std::string personality)
+    : sandbox_(sandbox), army_(army), baseTemplate_(std::move(baseTemplate)),
+      personality_(std::move(personality)) {}
 
 /// Teaches the driver this type's category set, once per blueprint id per opponent —
 /// `__rm_faf_type` is a no-op for a type the sandbox already knows.
@@ -2659,6 +2686,12 @@ void FafOpponent::advance(rm::TickIndex tick) {
             lua_pushnumber(lua, field.raw.empty() ? 0.0
                 : static_cast<double>(wet) / static_cast<double>(field.raw.size()));
             lua_setfield(lua, -2, "waterRatio");
+        }
+        // C-360: the raw seat personality, for `aibrain.lua:374`'s 'cheat' parse in
+        // the bootstrap. Empty for the default seat — no flag, no record.
+        if (!personality_.empty()) {
+            lua_pushstring(lua, personality_.c_str());
+            lua_setfield(lua, -2, "personality");
         }
         // Named templates or per-army adaptive/random scoring in the Lua bootstrap.
         lua_pushstring(lua, baseTemplate_.c_str());

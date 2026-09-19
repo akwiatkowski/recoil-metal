@@ -81,6 +81,9 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     // feature on, maintenance consuming — rather than fail the load.
     scriptBitsDisabled_.resize(transforms_.size(), 0);
     maintenanceActive_.resize(transforms_.size(), true);
+    // `C-360`'s mirror is derived: a restored store starts unbuffed and the first
+    // tick's `syncCheatBuffs` re-stamps it from the armies.
+    cheatBuffed_.resize(transforms_.size(), false);
     // Older snapshots carry no lifetime array: `kLifetimeUnset` re-arms every
     // slot from its blueprint on the next tick — a restored Othuy restarts its
     // `Lifetime` rather than failing to load (C-265).
@@ -163,6 +166,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         targetFocus_.emplace_back(TargetFocus::Default);
         scriptBitsDisabled_.emplace_back(0);
         maintenanceActive_.emplace_back(true);
+        cheatBuffed_.emplace_back(false);
         retreats_.emplace_back();
         doNotTarget_.emplace_back(false);
         orders_.emplace_back();
@@ -192,6 +196,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
     retreatThresholds_[slot] = RetreatThreshold::Off;
     targetFocus_[slot] = TargetFocus::Default;
     scriptBitsDisabled_[slot] = 0;
+    cheatBuffed_[slot] = false;
     maintenanceActive_[slot] = true;
     retreats_[slot] = {};
     doNotTarget_[slot] = false;
@@ -543,6 +548,17 @@ bool UnitStore::setProductionPaused(UnitId unit, bool paused) noexcept {
 
 bool UnitStore::productionPaused(UnitId unit) const noexcept {
     return alive(unit) && productionPaused_[unit.index];
+}
+
+void UnitStore::syncCheatBuffs(std::span<const Army> armies) noexcept {
+    cheatBuffed_.resize(motion_.size(), false);
+    for (UnitIndex slot = 0; slot < motion_.size(); ++slot) {
+        const int owner = motion_[slot].armyIndex;
+        cheatBuffed_[slot] = slotAlive(slot)
+                             && owner >= 0
+                             && static_cast<std::size_t>(owner) < armies.size()
+                             && armies[static_cast<std::size_t>(owner)].cheatEnabled;
+    }
 }
 
 bool UnitStore::setBuildPriority(UnitId unit, BuildPriority tier) noexcept {

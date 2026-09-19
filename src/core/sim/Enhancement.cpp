@@ -11,6 +11,13 @@ Mag effectiveBuildPerTick(const UnitStore& store, const UnitCatalog& catalog, Un
         const auto* effects = catalog.enhancementEffects(store.typeAt(slot), name);
         if (effects && effects->buildPerTick) result = *effects->buildPerTick;
     }
+    // C-360's `CheatBuildRate` (`CheatBuffs.lua`: BuildRate Mult 2.0, Stacks='ALWAYS',
+    // Duration=-1): retail's buff multiplies the unit's `GetBuildRate`, which is what
+    // every consumer of this figure — construction, assistance, reclaim, repair,
+    // capture, enhancement work — reads. Doubling HERE rather than at each call site is
+    // the buff's own shape: one multiplier on the unit, not a rule each consumer
+    // remembers to apply.
+    if (store.cheatBuffedAt(slot)) result += result;
     return result;
 }
 Mag enhancementHealthAdd(const UnitStore& store, const UnitCatalog& catalog, UnitIndex slot) noexcept {

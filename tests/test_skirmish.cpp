@@ -14,6 +14,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/sim/Skirmish.hpp"
+#include "core/sim/Enhancement.hpp"
 #include "core/sim/SaveState.hpp"
 #include "core/sim/StateHash.hpp"
 
@@ -895,4 +896,65 @@ TEST_CASE("a mid-flight save resumes the same shots", "[save-state][skirmish]") 
         INFO("tick " << i);
         CHECK(hashMatch(roster.store, live) == hashMatch(store2, resumed));
     }
+}
+
+TEST_CASE("a cheating army earns and builds at twice the rate, and so do its later units",
+          "[skirmish][cheat]") {
+    // C-360, retail's `AIUtils.SetupCheat` (`aiutilities.lua:1763-1779`): a brain whose
+    // personality names 'cheat' gets `CheatEnabled` and `ApplyCheatBuffs` on every unit —
+    // `CheatIncome` (MassProduction/EnergyProduction Mult 2.0) and `CheatBuildRate`
+    // (BuildRate Mult 2.0), both `Stacks='ALWAYS'`, `Duration=-1`. `Unit.lua:209` applies
+    // the same buffs in `OnCreate`, so units spawned after the flag is on are buffed too —
+    // which is why the flag lives on the army rather than on the units it had at setup.
+    const rm::HeightField field = flatField();
+
+    Roster roster;
+    UnitDef extractorDef;
+    extractorDef.name = "test_extractor";
+    extractorDef.producesMassPerSecond = 2.0f;
+    extractorDef.producesEnergyPerSecond = 4.0f;
+    extractorDef.buildRate = 10.0f;
+    const rm::UnitTypeIndex extractorType = roster.addType(extractorDef);
+    const rm::sim::UnitId honest = roster.add(extractorType, 0.0f, 0.0f, 0, 100.0f);
+    const rm::sim::UnitId cheater = roster.add(extractorType, 50.0f, 0.0f, 1, 100.0f);
+
+    std::vector<Army> armies = twoSides();
+    armies[1].cheatEnabled = true;  // `aibrain.lua:374`'s 'cheat' personality, seated
+    std::vector<Projectile> projectiles;
+    std::vector<Construction> building;
+    std::vector<Economy> economies(2);
+    const std::vector<int> commandersEver(2, 0);
+
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .building = &building,
+                .commandersEver = commandersEver};
+
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
+
+    // `CheatIncome`: production doubles, upkeep does not — the buff touches
+    // MassProduction/EnergyProduction, not MaintenanceConsumption.
+    CHECK(economies[1].incomePerTick.mass == economies[0].incomePerTick.mass
+                                        + economies[0].incomePerTick.mass);
+    CHECK(economies[1].incomePerTick.energy == economies[0].incomePerTick.energy
+                                          + economies[0].incomePerTick.energy);
+    CHECK(economies[1].incomePerTick.mass > rm::sim::Mag{});
+
+    // `CheatBuildRate`: the unit's effective build rate doubles — the same figure
+    // construction, assistance, reclaim and repair all read.
+    CHECK(rm::sim::effectiveBuildPerTick(roster.store, roster.catalog, cheater.index)
+          == rm::sim::effectiveBuildPerTick(roster.store, roster.catalog, honest.index)
+           + rm::sim::effectiveBuildPerTick(roster.store, roster.catalog, honest.index));
+
+    // `Unit.lua:209`'s half: a unit spawned AFTER the flag was set is buffed too,
+    // because the flag is the army's, not the unit's.
+    const rm::sim::UnitId late = roster.add(extractorType, 100.0f, 0.0f, 1, 100.0f);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, rm::sim::Terrain{field});
+    CHECK(rm::sim::effectiveBuildPerTick(roster.store, roster.catalog, late.index)
+          == rm::sim::effectiveBuildPerTick(roster.store, roster.catalog, cheater.index));
+    // Two extractors at ×2 each: four times the honest army's single extractor.
+    CHECK(economies[1].incomePerTick.mass
+          == economies[0].incomePerTick.mass + economies[0].incomePerTick.mass
+           + economies[0].incomePerTick.mass + economies[0].incomePerTick.mass);
 }

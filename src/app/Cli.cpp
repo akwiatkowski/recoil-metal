@@ -13,8 +13,20 @@
 
 namespace rm::app {
 
+bool fafPersonalityCheats(std::string_view name) noexcept {
+    // `aibrain.lua:374` is a substring test, not a suffix one: `string.find` hits
+    // 'cheat' anywhere in the personality name.
+    return name.find("cheat") != std::string_view::npos;
+}
+
 std::string fafBaseTemplateFor(std::string_view name) {
     constexpr auto choices = "easy, medium, tech, rushland, rushair, rushnaval, rushbalanced, turtle, adaptive, random";
+    // C-360: `aibrain.lua:377` records the personality with everything from 'cheat'
+    // onward stripped — 'easycheat' seats the 'easy' template and cheats. Strip the
+    // same way before matching so the AIx names resolve to their honest base.
+    if (const std::size_t cheat = name.find("cheat"); cheat != std::string_view::npos) {
+        name = name.substr(0, cheat);
+    }
     if (name == "easy") return "NormalMain";
     if (name == "tech") return "TechMain";
     if (name == "medium") return "ChallengeMain";
