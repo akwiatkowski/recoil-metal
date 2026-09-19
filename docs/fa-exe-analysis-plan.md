@@ -3010,6 +3010,55 @@ on the WP-17 residue list.
   authored-priority gate. All 19 subsystems remain ≥85% Retail-analyzed; the
   >80% goal stands met.
 
+### 2026-09-19 / Gap-fill wave (session 18 continued)
+
+Seven analysis-found implementation gaps closed against the claim contract,
+each with a failing headless test first and a commit:
+
+- `C-192` (`d2c0405`): sacrifice is a one-shot `min(sacMass, sacEnergy)`
+  progress grant — `builderBp.BuildCost* × Sacrifice*Mult` (0.6 on the four
+  Aeon units), 0.5 fallback per zero target cost, then the sacrificer dies.
+  `CommandKind::Sacrifice` through the semantic intake; no rate law.
+- `C-148`/`C-191` (`fce65d8`): `findRebuildBonus` reproduces
+  `LookForStructureRebuilder` — nearest live feature inside the new
+  structure's footprint, case-insensitive `AssociatedBP` ∈ `RebuildBonusIds`,
+  head start = wreck `reclaimFraction × 0.5` granted as progress (not a
+  refund); the wreck is consumed at rebuild start.
+- `C-286` (`2fbdd0d`): `Terrain::flattenRect` + `HeightField::setElevationRect`
+  write uniform elevation; structure placement flattens its skirt rect to the
+  placement height. No pathing/ogrid invalidation, matching retail.
+- `C-288` (`21e4592`): `kTerrainTypeBlocking` LUT (codes 9 and 230 from
+  `TerrainTypes.lua`) blocks ground pathing per cell through the same
+  walkable-count divisor as slope/depth.
+- `C-356`/`C-357` (`62acacb`): `sim::ThreatGrid` — per-army `float[14]`
+  `SThreat` cells, blip-keyed deposits, `tick % 30 == armyIndex` distribute
+  pass with decay, typed slots (Artillery/Air/Experimental/Commander/
+  StructuresNotMex/AntiSub/AntiAir/AntiSurface/Structures/Unknown), region
+  queries summing cells. `GetThreatsAroundPosition` returns `{x,z,threat}`
+  triples; untyped assigns land in `f[13]`.
+- `C-265`/`C-261` (`8dbf513`): `UnitDef::deathSpawn` (XSL0401→XSL0402) spawns
+  on death; `invulnerable` gates the single damage-landing point;
+  `lifetimeSeconds` self-destructs without a wreck; `economyBuildUnit` hatches
+  on construction completion (the crab eggs produce their named experimental
+  and destroy themselves).
+- Shared parse fields (`a3d36d0`): `SacrificeMassMult`/`SacrificeEnergyMult`,
+  `RebuildBonusIds`, `Economy.BuildUnit`, root `Lifetime`; script-only rules
+  keyed by blueprint id (XSL0401 death-spawn, XSL0402 invulnerable) where
+  retail keys by script class.
+
+Deferred to the kb ledger (not silently dropped): `C-264` attach-build
+pattern, `C-381` tractor claw, `C-051` adjacency buff families, mod/hook
+machinery (`C-268`–`C-270`, `C-311`–`C-314`, `C-220`), the native→Lua
+callback surface (`C-237`, `C-282`, `C-361`, `C-125`, `C-309`),
+platoons/cheats (`C-358`–`C-360`), presentation manipulators
+(`C-294`–`C-304`, `C-372`, `C-374`), and out-of-scope multiplayer/UI
+(`C-152`, `C-344`–`C-346`, `C-289`, `C-375`). Deliberate divergences kept:
+`C-267`, `C-276`, `C-078`, `C-139`/`C-065`, `C-037`.
+
+All 1,959 tests pass (4,266,587 assertions). Next exact action: the
+`CUnitCommand+0xa2` cancel-flag readers near `0x006f4730`/`0x006f4800`, or
+`IssueScript` command-data marshalling at `0x006fd240`.
+
 ## Confirmation gate
 
 A work package may move to **Confirmed with EXE analysis** only when all are true:

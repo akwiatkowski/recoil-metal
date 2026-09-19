@@ -41,6 +41,22 @@ spawn-layer fix landed with it: an EXPERIMENTAL air unit now spawns on the
 Land layer per `C-324`'s `0x631800` rule (`214dc84`) — `airborne` is the
 current layer, `canFly` the capability. CTest passes all 1,941 cases.
 
+**Update:** 2026-09-19 gap-fill wave — seven analysis-found gaps implemented
+against the claim contract, all headless-tested and committed: `C-192`
+sacrifice one-shot `min(mass,energy)` transfer (`d2c0405`), `C-148`/`C-191`
+rebuild-over-wreck head start (`fce65d8`), `C-286` build-site flatten
+(`2fbdd0d`), `C-288` terrain-type blocking LUT (`21e4592`), `C-356`/`C-357`
+per-army threat grid with 30-tick decay stagger (`62acacb`), `C-265` Ythotha
+death-spawn + Othuy invulnerability/lifetime and `C-261` crab-egg hatching
+(`8dbf513`), plus the shared blueprint fields (`a3d36d0`). Deferred to the
+kb ledger, not silently dropped: `C-264` attach-build pattern, `C-381`
+tractor claw, `C-051` adjacency buff families, the mod/hook machinery
+(`C-268`–`C-270`, `C-311`–`C-314`, `C-220`), the native→Lua callback surface
+(`C-237`, `C-282`, `C-361`, `C-125`, `C-309`), platoons/cheats
+(`C-358`–`C-360`), and the presentation manipulator set — each needs either
+a Lua callback surface or an architectural slice the sim doesn't have yet.
+CTest passes all 1,959 cases.
+
 **Snapshot:** 2026-09-14, main through `8fa09ae`. 116 commits since the last
 snapshot. The transport stack is complete and now retail-validated: cargo
 load/unload, the ferry loop and auto-embark (`fef1913`, `5e9fbba`), staging-pad
