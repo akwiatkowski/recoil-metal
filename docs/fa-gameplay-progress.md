@@ -309,10 +309,10 @@ count toward each subsystem they touch.
 | FA-LAND | 7 | 16 | 0 | 0 | 5 | 65% |
 | FA-AIR | 5 | 6 | 0 | 0 | 0 | 73% |
 | FA-NAVY | 13 | 6 | 0 | 0 | 1 | 84% |
-| FA-WEAPONS | 11 | 12 | 0 | 0 | 10 | 74% |
-| FA-TRANSPORT | 5 | 4 | 0 | 0 | 1 | 78% |
-| FA-MISSILES | 10 | 5 | 0 | 0 | 1 | 83% |
-| FA-DAMAGE | 5 | 9 | 0 | 0 | 13 | 68% |
+| FA-WEAPONS | 20 | 0 | 0 | 0 | 13 | 100% |
+| FA-TRANSPORT | 7 | 0 | 0 | 0 | 3 | 100% |
+| FA-MISSILES | 15 | 0 | 0 | 0 | 1 | 100% |
+| FA-DAMAGE | 11 | 0 | 0 | 0 | 17 | 100% |
 | FA-INTEL | 6 | 9 | 0 | 2 | 2 | 62% |
 | FA-PROGRESS | 18 | 8 | 0 | 0 | 3 | 85% |
 | FA-TERRAIN | 4 | 4 | 0 | 0 | 0 | 75% |
@@ -320,10 +320,10 @@ count toward each subsystem they touch.
 | FA-UI | 10 | 13 | 0 | 0 | 2 | 72% |
 | FA-PRESENT | 9 | 8 | 0 | 1 | 1 | 72% |
 | FA-PERSIST | 7 | 5 | 0 | 1 | 6 | 73% |
-| **Total** | **206** | **144** | **0** | **7** | **120** | **~78%** |
+| **Total** | **228** | **114** | **0** | **7** | **129** | **~82%** |
 
-Read it as: of ~370 claim-subsystem pairs, 206 are test-pinned and 144 more are
-half-pinned — the suite covers roughly 78% of the recovered retail contract after
+Read it as: of ~370 claim-subsystem pairs, 228 are test-pinned and 114 more are
+half-pinned — the suite covers roughly 82% of the recovered retail contract after
 the 2026-09-19 gap-fill waves. The weakest rows are FA-FOUND (25% — nearly all
 claims are provenance artifacts), FA-INTEL (62%), FA-LAND (65%), FA-CONTENT and
 FA-DAMAGE (68%). The seven NOT_IMPL: `C-037` (LuaPlus thunk convention — internals),
