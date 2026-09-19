@@ -286,7 +286,7 @@ void checkEngagement(const UnitDef& def) {
             continue;
         }
         Battle battle(flatField(layerNeedsDeepField(layer) ? kSeabed : 0.0f));
-        (void)battle.add(def, kCentre, kCentre, 0, 100000.0f);
+        const UnitId attackerId = battle.add(def, kCentre, kCentre, 0, 100000.0f);
         UnitDef prey;
         prey.name = "matrix_target";
         prey.categories = {"MOBILE", "ALLUNITS", "STRUCTURE"};
@@ -297,6 +297,22 @@ void checkEngagement(const UnitDef& def) {
         const UnitId preyId = addPrey(battle, prey, reach, layer);
 
         for (rm::TickIndex t = 0; t < 400 && !battle.damaged(preyId); ++t) {
+            if (reach.needToComputeBombDrop) {
+                // A bomb only leaves inside `BombDropThreshold` of the release
+                // point (`C-224`), and this harness has no orders to fly the
+                // approach — so it puts the bomber where the run would: half
+                // the threshold short of the led point, close enough to
+                // release and far enough for the round to fly.
+                const rm::TickCount lead = battle.roster.rate.ticks(
+                    rm::sim::seconds(def.airPredictAheadForBombDropSec));
+                const rm::sim::Transform& preyAt = battle.roster.transform(preyId);
+                const rm::sim::MoveState& preyMotion = battle.roster.motion(preyId);
+                rm::sim::Transform& at = battle.roster.transform(attackerId);
+                const rm::sim::Fx leadFx = rm::sim::Fx::fromInt(static_cast<std::int32_t>(lead));
+                at.x = preyAt.x + preyMotion.stepX * leadFx - reach.bombDropThreshold * rm::sim::Fx::fromRatio(1, 2);
+                at.z = preyAt.z + preyMotion.stepZ * leadFx;
+                battle.roster.reindex();
+            }
             battle.tick(t);
         }
         if (engage) {
@@ -573,6 +589,12 @@ void checkMovingTarget(const UnitDef& def) {
                                     })) {
             return false;
         }
+        if (w.needToComputeBombDrop) {
+            // A bomb-drop round is not a converging shot: it falls where the
+            // release point was, and an orbiting target is never there when it
+            // lands. `fires()` still proves the release contract.
+            return false;
+        }
         if (w.beam || w.projectileTraits.trackTarget
             || w.muzzleVelocityElmosPerSecond <= 0.0f) {
             return true;
@@ -583,7 +605,7 @@ void checkMovingTarget(const UnitDef& def) {
     const bool expectDamage = std::ranges::any_of(def.weapons, converges);
 
     Battle battle(flatField(layerNeedsDeepField(layer) ? kSeabed : 0.0f));
-    (void)battle.add(def, kCentre, kCentre, 0, 100000.0f);
+    const UnitId attackerId = battle.add(def, kCentre, kCentre, 0, 100000.0f);
     const UnitId prey = addPrey(battle, engage->target, weapon, layer);
 
     // The prey ORBITS the shooter at the weapon's mid-range — a straight runner would
@@ -620,6 +642,21 @@ void checkMovingTarget(const UnitDef& def) {
             motion.stepZ = rm::test::fx(nz) - transform.z;
             transform.x = rm::test::fx(nx);
             transform.z = rm::test::fx(nz);
+            battle.roster.reindex();
+        }
+        if (weapon.needToComputeBombDrop) {
+            // As in the layer case above: the bomb only leaves inside
+            // `BombDropThreshold` of the release point (`C-224`), and nothing
+            // here flies the approach — so the bomber is put half the threshold
+            // short of the led point.
+            const rm::TickCount lead = battle.roster.rate.ticks(
+                rm::sim::seconds(def.airPredictAheadForBombDropSec));
+            const rm::sim::Transform& preyAt = battle.roster.transform(prey);
+            const rm::sim::MoveState& preyMotion = battle.roster.motion(prey);
+            rm::sim::Transform& at = battle.roster.transform(attackerId);
+            const rm::sim::Fx leadFx = rm::sim::Fx::fromInt(static_cast<std::int32_t>(lead));
+            at.x = preyAt.x + preyMotion.stepX * leadFx - weapon.bombDropThreshold * rm::sim::Fx::fromRatio(1, 2);
+            at.z = preyAt.z + preyMotion.stepZ * leadFx;
             battle.roster.reindex();
         }
         battle.tick(t);

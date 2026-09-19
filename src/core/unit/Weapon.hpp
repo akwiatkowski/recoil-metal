@@ -566,6 +566,17 @@ struct Weapon {
     /// projectile acquisition reach. It is fixed-point at the content boundary; only projectile
     /// selection may use it, while every unit-targeting path keeps `maxRange`.
     sim::Fx trackingRadius = sim::Fx::fromInt(1);
+
+    /// `NeedToComputeBombDrop` (`C-224`, weapon element `+0x140`): this weapon
+    /// releases against the *release point* — target position led by the
+    /// firer's `Air.PredictAheadForBombDrop` seconds — rather than inside the
+    /// ordinary range/arc envelope. 12 blueprints state it, all bombers.
+    bool needToComputeBombDrop = false;
+
+    /// `BombDropThreshold` in elmos (weapon element `+0x144`): how close to the
+    /// release point the aircraft must be before the bomb leaves. Ogrids in the
+    /// file like every radius; authored values run 1.5–4.
+    sim::Fx bombDropThreshold{};
 };
 
 /// Reads a blueprint's `Weapon` array — a Lua array, so its entries are positional.

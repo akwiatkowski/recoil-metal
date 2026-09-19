@@ -237,6 +237,13 @@ struct UnitDef {
     /// behaviour — a silent default that changes nothing rather than a guess.
     float sizeYElmos = 0.0f;
 
+    /// `C-244`: `SizeX × SizeY × SizeZ × AverageDensity` — the mass the air
+    /// controller's cargo ratio divides into. `AverageDensity` is a root key
+    /// (default 0.49 t/m³, authored on 18 units, all transports); the sizes are
+    /// ogrids, so the product is in blueprint mass units whose absolute scale
+    /// cancels inside the `(own + cargo) / own` ratio.
+    float unitMass = 0.0f;
+
     /// The least water the unit needs under its keel, in elmos — `Footprint.MinWaterDepth`,
     /// stated by naval structures (48 of the corpus; XSB0203's 1.5 ogrids is 12 elmos).
     ///
@@ -416,6 +423,12 @@ struct UnitDef {
     bool airBreakOffNearTarget = false;
     float airMinSpeedElmosPerSecond = 0.0f;
     float airAttackElevationElmos = 0.0f;
+    /// `Air.PredictAheadForBombDrop` in seconds (`C-224`, `Air+0x8c`): the fixed
+    /// lead time a `NeedToComputeBombDrop` weapon applies to a moving ground
+    /// target — the release point is `target + velocity × this`, and the bomb
+    /// leaves when the aircraft is within `BombDropThreshold` of it. Zero when
+    /// unauthored; only 11 blueprints state it (2 or 3 seconds).
+    float airPredictAheadForBombDropSec = 0.0f;
     /// `Physics.Elevation` in elmos — also the hovercraft's clearance above land/water.
     /// The winged mover reads it
     /// (`C-221`): cruise height above the terrain reference, and the height a slow flyer

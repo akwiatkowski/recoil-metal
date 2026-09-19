@@ -288,10 +288,17 @@ void integrateAir(Transform& unit, MoveState& state, const Terrain& terrain) noe
     }
 
     // --- the controller (`C-244`) and the trapezoid (`C-221`) ---
+    // `C-244`: `KLift`/`KTurn`/`KRoll` — not `KMove` — are divided by
+    // `M = (own + Σ cargo) / own`, so a loaded transport climbs and turns
+    // heavier but keeps its horizontal authority. `1.0` when nothing is
+    // carried or the mass figure is absent.
+    const Fx invMass = state.unitMass > Fx{}
+        ? state.unitMass / (state.unitMass + state.carriedMass)
+        : Fx::fromInt(1);
     const Fx desiredLength = fxHypot(fxHypot(desiredX, desiredZ), lift);
     const Fx damp = airDampingFactor(state.airKMove, state.airKMoveDamping, desiredLength);
     const Fx ax = state.airKMove * desiredX - damp * old[0];
-    const Fx ay = state.airKLift * lift - state.airKLiftDamping * old[1];
+    const Fx ay = state.airKLift * invMass * lift - state.airKLiftDamping * old[1];
     const Fx az = state.airKMove * desiredZ - damp * old[2];
     state.velocity[0] += ax * kAirDt;
     state.velocity[1] += ay * kAirDt;
@@ -313,7 +320,8 @@ Fx airDampingFactor(Fx kMove, Fx kMoveDamping, Fx desiredLength) noexcept {
 
 void updateWingedAttack(MoveState& state, const Transform& aircraft, const Transform& target,
                         bool targetAirborne, Fx mapWidth, Fx mapDepth, TickIndex tick,
-                        RandomStream& random) {
+                        RandomStream& random, Fx targetStepX, Fx targetStepZ,
+                        TickCount bombLeadTicks) {
     using State = MoveState::AirCombatState;
     // C-224, 0x006c3a6c–0x006c4206. Random ranges use multiply-high, with an
     // exclusive upper bound; even a zero-width range consumes its draw.
@@ -367,8 +375,13 @@ void updateWingedAttack(MoveState& state, const Transform& aircraft, const Trans
     } else if (state.airCombatState == State::BreakOff || state.airCombatState == State::Recovery) {
         state.airSustainedTicks = 0;
     }
-    state.destinationX = target.x;
-    state.destinationZ = target.z;
+    // `C-224`: a bomb-drop run aims at the release point — where the target
+    // will be `PredictAheadForBombDrop` from now — not at the target itself.
+    const Fx lead = Fx::fromInt(static_cast<std::int32_t>(bombLeadTicks));
+    const Fx aimX = target.x + targetStepX * lead;
+    const Fx aimZ = target.z + targetStepZ * lead;
+    state.destinationX = aimX;
+    state.destinationZ = aimZ;
     if (state.airCombatState == State::BreakOff) {
         state.destinationX = aircraft.x + fxSin(aircraft.heading) * state.airMaxSpeedElmosPerSec;
         state.destinationZ = aircraft.z + fxCos(aircraft.heading) * state.airMaxSpeedElmosPerSec;
@@ -548,6 +561,13 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
         // which the function's argument order enforces rather than a comment.
         const Brad headingBefore = unit.heading;
         const std::int32_t error = shortestTurn(unit.heading, toTarget.bearing);
+        // `C-244`: `KLift`/`KTurn`/`KRoll` — not `KMove` — are divided by
+        // `M = (own + Σ cargo) / own`, so a loaded transport climbs and turns
+        // heavy but keeps its horizontal authority. `1.0` when nothing is
+        // carried or the mass figure is absent.
+        const Fx invMass = state.unitMass > Fx{}
+            ? state.unitMass / (state.unitMass + state.carriedMass)
+            : Fx::fromInt(1);
         if (state.canFly && state.airCombatState != MoveState::AirCombatState::None) {
             // ponytail: planar PD reduction of C-221/C-247; full quaternion pitch
             // and cargo inertia require the three-axis rigid-body solver.
@@ -563,7 +583,7 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
                 alignment *= alignment;
                 alignment *= alignment;
             }
-            Fx gain = state.airKTurn;
+            Fx gain = state.airKTurn * invMass;
             if (hard || state.airCombatState == MoveState::AirCombatState::HeadOn
                      || state.airCombatState == MoveState::AirCombatState::TailChase) {
                 gain += (hard ? state.airTightTurnMultiplier : kFxOne)
@@ -594,7 +614,7 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
             const Fx demand = state.airBankFactor * turned;
             const Fx rollNow =
                 Fx::fromRatio(static_cast<std::int32_t>(unit.roll), kBradFullTurn) * kTau;
-            const Fx step = state.airKRoll * kAirDt;
+            const Fx step = state.airKRoll * invMass * kAirDt;
             const Fx rolled = rollNow + std::clamp(demand - rollNow, -step, step);
             unit.roll = static_cast<Brad>(static_cast<std::int32_t>(
                 std::int64_t{rolled.raw()} * kBradFullTurn / kTau.raw()));

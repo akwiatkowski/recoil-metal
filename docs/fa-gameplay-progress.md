@@ -206,7 +206,7 @@ excluded from the headline.
 | [`FA-MATCH`](#fa-match---armies-setup-and-victory-rules) | Armies, setup, victory rules | `WP-10`-`11` | 80% | 40% | 85% | Scenario Options wired: `_scenario.lua` `Options` parsed verbatim, `Victory` drives `Match::victoryMode` through `victory.lua`'s own keys (unrecognized = never-ends, like retail's else), `FogOfWar='none'` leaves intel unconfigured. Remaining: allied victory, winner stability, delayed cleanup, unit caps. |
 | [`FA-ECON`](#fa-econ---economy-construction-and-engineering) | Economy, construction, engineering | `WP-15`-`19` | 85% | 65% | 90% | Capture now follows `C-250` end to end: footprint-edge gates (approach stops at 5 ogrids, work admits out to 10 — a closing captor banks progress on the way in), the concurrent-captor refcount, funded progress, transfer identity, cancellation, replay, save/load. Transfer parity extended (`C-240`/`SimUtils.lua:68-132`): the replacement keeps the whole Health record — shield state, reload/burst clocks, automatic targets, veterancy — and the match-side silo-ammo and in-flight enhancement records re-key onto it, so a captured silo keeps its stockpile. Remaining: transport-attachment rebuild on transfer, the two shared manipulator handles. |
 | [`FA-LAND`](#fa-land---land-navigation-formations-and-spatial-world) | Land navigation, formations, spatial world | `WP-20`, `21`, `26` | 95% | 35% | 95% | P10 run complete: deterministic threading, congestion yield/reroute, shared flow fields and the per-cell speed divisor (golden re-recorded for the intended route change). Formation rotation stays engine-native without a Lua source. |
-| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 55% | 95% | Retail winged controller (C-221/222/223/244–247) with states 1–7, banking and staging-pad refuel; a takeoff committed to a sub-tick hop no longer strands `Down` on the deck (`c538105`). Three-axis solver, cargo inertia, bomb prediction, carrier docking stay open. |
+| [`FA-AIR`](#fa-air---aircraft-flight-combat-and-staging) | Aircraft flight, combat, staging | `WP-22` | 65% | 60% | 95% | Retail winged controller (C-221/222/223/244–247) with states 1–7, banking, cargo mass ratio, bomb-drop prediction and staging-pad refuel; a takeoff committed to a sub-tick hop no longer strands `Down` on the deck (`c538105`). Three-axis solver, `Hover`, `POD` init, carrier docking stay open. |
 | [`FA-NAVY`](#fa-navy---surface-and-submerged-warfare) | Surface and submerged warfare | `WP-23`-`24` | 65% | 30% | 85% | **Analyzed 2026-09-18 (C-320-C-328):** `CalcMoveWater` is the shared `CalcMoveCommon` plus dive/surface stepper, `speed²>1e-6` orientation gate, and platform→water `OnLayerChange`; weapon water gating fully mapped (firer caps vs target layer, fire-only vs own `Elevation`, targets-only as Seabed-only bone test, `FlyInWater` hard reject); `AutoSurfaceMode` defaults OFF and only `CUnitAttackTargetTask` consumes it; spawn layer computed by `0x631800`; shoreline/waves render-side only; naval pathing is `CAiNavigatorLand` + `gpg::HaStar` on per-footprint-spec grids. |
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 99% | 85% | 90% | Universal leading in (`55c31de`, `06390d1`) — radar keeps its error; manual silo-launch orders landed under FA-MISSILES; the C-157 engineer reclaim/capture target exemption is wired (`IsTargetExempt` deferred). |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 87% | 47% | 95% | Full cargo stack in and retail-validated: capacity/attach-cost from shipped blueprints (UEA0107: 10 slots, class2=2, class3=4), load/unload, ferry, auto-embark, carrier-death (`c538105`). Attach-bone retail observation landed (`2c3e7f8`, C-198): cargo hangs from Attachpoint bones. Next is the unload beacon's exact retail semantics. |
@@ -497,12 +497,16 @@ Real UEA0102 turn/recovery checkpoints continue with matching per-tick
 hashes; the inspected app pursuit replay matches 900 ticks. See ADR-091 for the
 planar controller boundary and [unit evidence](unit-capability-matrix.md).
 
-**Largest gap:** the three-axis solver stays out — quaternion pitch, `KRollDamping`'s
-roll-rate state and the cargo mass ratio. Visual banking is in (planar reduction of
-`C-244`'s roll axis: `BankFactor` demand, `KRoll` approach, save v21, tested).
-Bomb-drop prediction for state 1, `Hover`,
+**Largest gap:** the three-axis solver stays out — quaternion pitch and `KRollDamping`'s
+roll-rate state. Visual banking is in (planar reduction of
+`C-244`'s roll axis: `BankFactor` demand, `KRoll` approach, save v21, tested), and the
+cargo mass ratio now divides `KLift`/`KTurn`/`KRoll` by `(own + Σ cargo) / own`
+(`unitMass`/`carriedMass` on `MoveState`, maintained by `UnitStore::attach`/`detach`).
+Bomb-drop prediction is in too: state 1 aims at the release point
+`target + velocity × PredictAheadForBombDrop` and the weapon releases inside
+`BombDropThreshold` (`C-224`). `Hover`,
 `POD`-only random initialization of the otherwise-zero `CUnitMotion+0x9c` elevation adjustment,
-staging and carrier docking (`C-225`) also remain.
+staging and carrier docking (`C-225`) remain.
 
 ```text
 /goal Finish the current air slice's retail-map and golden acceptance. Attribute the first

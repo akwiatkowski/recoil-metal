@@ -2094,6 +2094,18 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 catalog.weaponRates(store.typeAt(slot), w);
 
             const std::array<Fx, 3> to = [&] {
+                if (weapon.needToComputeBombDrop) {
+                    // `C-224`: the release point — the target's position led by
+                    // the firer's `PredictAheadForBombDrop` seconds. The
+                    // `BombDropThreshold` gate below, not the range/arc
+                    // envelope, decides when the bomb leaves.
+                    const std::array<Fx, 3> exact = positionOf(transforms[target->index]);
+                    const Fx lead = Fx::fromInt(static_cast<std::int32_t>(
+                        rate.ticks(seconds(def->airPredictAheadForBombDropSec))));
+                    return std::array<Fx, 3>{exact[0] + motions[target->index].stepX * lead,
+                                             exact[1],
+                                             exact[2] + motions[target->index].stepZ * lead};
+                }
                 if (!hasExplicitAttack && !weapon.beam) {
                     return automaticProjectileAimPosition(
                         *target, from, army, weapon, rates.muzzlePerTick, store, catalog,
@@ -2141,6 +2153,13 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                 }
                 if (!turretOnTarget(mount, transforms[slot], own, aimTo, weapon, rates,
                                     mount.dual && own.turretMuzzlePhase != 0)) {
+                    continue;
+                }
+            } else if (weapon.needToComputeBombDrop) {
+                // `C-224`: the bomb leaves when the aircraft is within
+                // `BombDropThreshold` of the release point — the range/arc
+                // envelope does not apply to a drop.
+                if (groundDistanceElmos(from, to) > weapon.bombDropThreshold) {
                     continue;
                 }
             } else if (!canFireAt(weapon, transforms[slot].heading, bearingTo(from, to))) {

@@ -1180,10 +1180,24 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     if (random == nullptr) {
                         throw std::logic_error("winged attacks require the match random stream");
                     }
+                    // `C-224`: a bomber leads its ground target by
+                    // `PredictAheadForBombDrop` seconds — the release point the
+                    // weapon's `BombDropThreshold` gate measures against. Air
+                    // targets and non-bomb aircraft chase the target itself.
+                    const MoveState& targetMotion = store.motion()[head->target().index];
+                    TickCount bombLeadTicks = 0;
+                    if (!targetMotion.airborne && def != nullptr
+                        && def->airPredictAheadForBombDropSec > 0.0f
+                        && std::ranges::any_of(def->weapons, [](const unitdef::Weapon& w) {
+                               return w.needToComputeBombDrop;
+                           })) {
+                        bombLeadTicks = rate.ticks(seconds(def->airPredictAheadForBombDropSec));
+                    }
                     updateWingedAttack(chase, mine, theirs,
-                        store.motion()[head->target().index].airborne,
+                        targetMotion.airborne,
                         Fx::fromInt(terrain.field().squaresX * kSquareSize),
-                        Fx::fromInt(terrain.field().squaresZ * kSquareSize), tick, *random);
+                        Fx::fromInt(terrain.field().squaresZ * kSquareSize), tick, *random,
+                        targetMotion.stepX, targetMotion.stepZ, bombLeadTicks);
                     if (QueuedCommand* mutableHead = orders[slot].activeMutable()) {
                         mutableHead->setTargetPosition(theirs.x, theirs.z);
                     }

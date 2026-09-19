@@ -227,6 +227,15 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         weapon.maxHeightDifference = sim::fxFromFloat(
             std::max(0.0f, numberOr(entry, "MaxHeightDiff", 0.0f)) * scmap::kElmosPerOgrid);
 
+        // `C-224`: the bomb-drop contract — release against the led point, not
+        // the range/arc envelope. Threshold is ogrids like every radius.
+        if (const lua::Value* bombDrop = entry.find("NeedToComputeBombDrop")) {
+            weapon.needToComputeBombDrop = bombDrop->asBoolean().value_or(false);
+        }
+        weapon.bombDropThreshold = sim::fxFromFloat(
+            std::max(0.0f, numberOr(entry, "BombDropThreshold", 0.0f))
+            * scmap::kElmosPerOgrid);
+
         // What it prefers to shoot, most-wanted first. **Absent means acquire nothing**
         // (`C-156`) — the list is left empty and the sim reads that as silence, which is
         // retail's behaviour and not a parse failure.

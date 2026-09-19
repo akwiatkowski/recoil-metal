@@ -264,6 +264,10 @@ bool UnitStore::attach(UnitId parent, UnitId child, AttachBones bones) {
     motion_[child.index].moving = false;
     motion_[child.index].attached = true;
     children_[parent.index].push_back(child);
+    // `C-244`: the carrier's air controller divides its `KLift`/`KTurn`/`KRoll`
+    // gains by `(own + Σ cargo) / own`, so the sum is maintained here — the one
+    // place every attachment (cargo, death detach, scripted) passes through.
+    motion_[parent.index].carriedMass += motion_[child.index].unitMass;
     return true;
 }
 
@@ -288,6 +292,10 @@ bool UnitStore::detach(UnitId child) {
     attachmentSelfRest_[child.index] = {};
     attachmentSelfRestHeights_[child.index] = {};
     motion_[child.index].attached = false;
+    // The mirror of `attach`'s `C-244` bookkeeping — clamped at zero so a
+    // double-detach or a zero-mass child cannot push the ratio negative.
+    motion_[parent.index].carriedMass =
+        std::max(Fx{}, motion_[parent.index].carriedMass - motion_[child.index].unitMass);
     return true;
 }
 

@@ -323,13 +323,22 @@ struct MoveState {
     /// Retail's `Air` controller gains (`C-244`), per SECOND as authored, applied against
     /// the 0.1 step inside the integrator. Horizontal acceleration is `KMove × desired −
     /// damp × v` with `damp` from `airDampingFactor`; vertical is `KLift × lift −
-    /// KLiftDamping × vy` with `lift` from the winged lift law. Retail divides both
-    /// proportional gains by the ratio of carried-plus-own mass to own mass (`C-244`),
-    /// which is 1 for anything that is not a loaded transport, so the ratio is not carried.
+    /// KLiftDamping × vy` with `lift` from the winged lift law. Retail divides the
+    /// `KLift`/`KTurn`/`KRoll` proportional gains by `M = (own + Σ cargo mass) / own`
+    /// (`C-244`), which is 1 for anything that is not a loaded transport — the mass
+    /// bookkeeping lives in `unitMass`/`carriedMass` below.
     Fx airKMove{};
     Fx airKMoveDamping{};
     Fx airKLift{};
     Fx airKLiftDamping{};
+
+    /// `C-244`: the unit's own mass, `SizeX × SizeY × SizeZ × AverageDensity` in
+    /// blueprint units (ogrid³ × t/m³ — the absolute scale cancels inside the
+    /// ratio). `carriedMass` is the sum over attached children, maintained by
+    /// `UnitStore::attach`/`detach`; the air controller divides its `KLift`/
+    /// `KTurn`/`KRoll` gains by `(unitMass + carriedMass) / unitMass`.
+    Fx unitMass{};
+    Fx carriedMass{};
 
     /// The climb authority (`Air.LiftFactor`, `C-221`) in elmos per SECOND, matching the
     /// velocity state above. Below half max airspeed the lift cap goes negative; what a
@@ -395,9 +404,18 @@ struct MoveState {
 };
 
 /// C-224 state/deadline transitions, owning the aircraft's next steering destination.
+///
+/// `targetStepX`/`targetStepZ` are the target's last-tick displacement (elmos/tick,
+/// `MoveState::stepX`/`stepZ`); `bombLeadTicks` is the firer's
+/// `Air.PredictAheadForBombDrop` converted to ticks — nonzero only when a
+/// `NeedToComputeBombDrop` weapon exists and the target is on the ground. The
+/// destination then becomes the release point `target + step × bombLeadTicks`
+/// instead of the target itself (`C-224`).
 void updateWingedAttack(MoveState& state, const Transform& aircraft, const Transform& target,
                         bool targetAirborne, Fx mapWidth, Fx mapDepth, TickIndex tick,
-                        RandomStream& random);
+                        RandomStream& random,
+                        Fx targetStepX = Fx{}, Fx targetStepZ = Fx{},
+                        TickCount bombLeadTicks = 0);
 
 /// `CalcAirMovementDampingFactor` (`0x006c3490`, `C-244`): the horizontal velocity damping
 /// a winged mover applies, from the length of its desired velocity. With `s = max(1,

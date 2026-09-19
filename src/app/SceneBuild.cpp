@@ -342,6 +342,10 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
             : rm::sim::Fx{};
         motion.fuelRatio = rm::sim::Fx::fromInt(1);
     }
+    // `C-244`: own mass for the air controller's cargo ratio — `carriedMass`
+    // accumulates on the children as `UnitStore::attach` runs. Set for every
+    // unit, not just flyers: the CHILD's mass is what the carrier's ratio reads.
+    motion.unitMass = rm::sim::fxFromFloat(def.unitMass);
     return motion;
 }
 

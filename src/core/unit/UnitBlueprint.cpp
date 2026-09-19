@@ -475,6 +475,11 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             numberOr(*physics, "AttackElevation", 0.0f) * scmap::kElmosPerOgrid;
         def.airAutoLandTimeSec = numberOr(*airBlock, "AutoLandTime", 0.0f);
         def.airFuelUseTimeSec = numberOr(*airBlock, "FuelUseTime", 0.0f);
+        // `C-224`, `Air+0x8c`: seconds of lead a bomb-drop weapon applies to a
+        // moving ground target. Seconds, not ogrids — the only Air key that is
+        // a duration rather than a length or a rate.
+        def.airPredictAheadForBombDropSec =
+            std::max(0.0f, numberOr(*airBlock, "PredictAheadForBombDrop", 0.0f));
     }
 
     // --- size --------------------------------------------------------------
@@ -485,6 +490,13 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // precision rather than being rounded into squares.
     const float sizeX = numberOr(*parsed, "SizeX", 0.0f);
     const float sizeZ = numberOr(*parsed, "SizeZ", 0.0f);
+    // `C-244`: the air controller's cargo ratio divides by `SizeX × SizeY ×
+    // SizeZ × AverageDensity` — the blueprint's mass figure. `AverageDensity`
+    // is a root key defaulting to 0.49 t/m³ (schema `0x0051942a`); only 18
+    // units author it, all transports. The product's absolute scale cancels
+    // inside the `(own + cargo) / own` ratio, so ogrid³ × t/m³ is kept as-is.
+    def.unitMass = sizeX * numberOr(*parsed, "SizeY", 0.0f) * sizeZ
+        * numberOr(*parsed, "AverageDensity", 0.49f);
     def.collisionRadiusElmos = 0.5f * std::max(sizeX, sizeZ) * scmap::kElmosPerOgrid;
     // The vertical axis the radius above throws away. Kept for sight: an eye is on top of the
     // unit and the sight model was reading the ground under it. See `UnitDef::sizeYElmos`.
