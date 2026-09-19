@@ -330,6 +330,10 @@ TEST_CASE("defeating the other alliance starts team-match winner confirmation") 
     armies[1].alliance = 0;
     armies[2].alliance = 1;
     armies[3].alliance = 1;
+    // `simInit.lua:200` (`C-346`): armies teamed at setup start with
+    // `requestingAlliedVictory` set — the allied-victory gate needs it.
+    armies[0].requestingAlliedVictory = true;
+    armies[1].requestingAlliedVictory = true;
     std::vector<Projectile> projectiles;
     std::vector<Construction> building;
     std::vector<Economy> economies(4);
