@@ -562,6 +562,12 @@ void Intel::withdraw(UnitIndex slot) {
         hiddenGrids_[index].remove(squares);
         squares.clear();
     }
+    // `C-284`: a withdrawn unit must re-stamp on recovery — leaving `square`
+    // set makes the change-key check above skip the re-stamp forever, so a
+    // browned-out unit would never see again. `placement.alliance` is still
+    // needed by the grid-index math inside this function, which is why only
+    // the square resets.
+    placement.square = IntelGrid::kNoSquare;
 }
 
 void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
