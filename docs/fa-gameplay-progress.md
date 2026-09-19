@@ -32,6 +32,15 @@ a toggle withdraws coverage without waiting for the emitter to move. Command
 log v7 records the bit. Weapon/generic/special stay present-but-unbacked, as
 in retail. CTest passes all 1,909 cases.
 
+**Update:** 2026-09-19 evening — `C-385` closes the `OnCaptured` Lua
+transfer contract (WP-17's last Lua read): the old unit fires `OnCaptured`
+callbacks, `TransferUnitsOwnership` snapshots kills/enhancements/health/
+fuel/silo ammo/shield and restores them on the replacement in a fixed order,
+and the UEF pod tower re-parents pods through `OnCapturedNewUnit`. A
+spawn-layer fix landed with it: an EXPERIMENTAL air unit now spawns on the
+Land layer per `C-324`'s `0x631800` rule (`214dc84`) — `airborne` is the
+current layer, `canFly` the capability. CTest passes all 1,941 cases.
+
 **Snapshot:** 2026-09-14, main through `8fa09ae`. 116 commits since the last
 snapshot. The transport stack is complete and now retail-validated: cargo
 load/unload, the ferry loop and auto-embark (`fef1913`, `5e9fbba`), staging-pad

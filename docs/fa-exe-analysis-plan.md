@@ -2975,6 +2975,41 @@ action: the `CUnitCommand+0xa2` cancel-flag readers near
 `0x006f4730`/`0x006f4800`, or `IssueScript` command-data marshalling at
 `0x006fd240`.
 
+### 2026-09-19 / Session 18
+
+**Artifact:** `ART-E001` (checksum re-verified this session)
+**Tool/project:** `tools/re/disasm_annotated.py`, `build/re-fa/corpus/`
+**Work packages:** `WP-17` (residue), `WP-24` (spawn-layer implementation)
+**Question:** Close the `OnCaptured` Lua transfer contract — the last Lua read
+on the WP-17 residue list.
+
+**Accomplished**
+- `C-385`: `OnCaptured` (`Unit.lua:555-619`) and `TransferUnitsOwnership`
+  (`SimUtils.lua:46-134`) read end to end — callback order, capturable/cargo
+  kill rules, campaign unit-cap wrap, the BEFORE/AFTER state snapshot and its
+  fixed restore order, and the UEF pod tower's `OnCapturedNewUnit` re-parent
+  override. `ChangeUnitArmy` resolves to `fa_session_ChangeUnitArmy`
+  `0x00762be0` → `Sim::TransferUnit`.
+- `C-324` implemented (`214dc84`): an EXPERIMENTAL air unit now spawns on the
+  Land layer per `0x631800` — `motion.airborne` is the current layer only,
+  `canFly` carries the capability, `airState` seeds `Bottom`, and the first
+  move order takes it off through the existing `C-245` lift law. New
+  `[fa-navy]` case covers spawn flags plus the takeoff beat.
+
+**Open, stated plainly**
+- `0x6de340`/`0x6de370` (WP-27 reject-step-10 collection): a `std::vector` at
+  `this+0x164`/`+0x168`, stride 12, `{entity-ref(+4 backptr), ?, countdown}` —
+  `0x6de340` membership-tests an entity, `0x6de370` decays each countdown and
+  erases on ≤0 or a failed `0x4f7550(obj+0xac, obj+0xc8)` validity call.
+  Owner class and `0x5de98e`'s per-army `0x34`-stride record bit (`>>4 & 1`,
+  likely the enemy/ally latch gating authored priorities) still unnamed.
+
+**Next exact action**
+- Name the owner of the `this+0x164` tracking vector (callers of
+  `0x6de340`/`0x6de370`) and the `0x5de98e` army-record bit — the WP-27
+  authored-priority gate. All 19 subsystems remain ≥85% Retail-analyzed; the
+  >80% goal stands met.
+
 ## Confirmation gate
 
 A work package may move to **Confirmed with EXE analysis** only when all are true:
