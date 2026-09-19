@@ -7,7 +7,10 @@
 // mechanisms behind them — SupComDataPath.lua, the schook hook, Lua blueprint
 // merge — are documented divergences and are not what these tests pin.
 #include "app/Cli.hpp"
+#include "core/blueprint/BlueprintMesh.hpp"
 #include "core/map/HeightField.hpp"
+#include "core/map/TerrainType.hpp"
+#include "core/sim/Terrain.hpp"
 #include "core/map/ScenarioSave.hpp"
 #include "core/scene/UnitPlacement.hpp"
 #include "core/vfs/Vfs.hpp"
@@ -109,6 +112,52 @@ Scenario = {
     },
 })";
 
+// The Armies half of a _save.lua: GROUP-wrapped unit trees, the way
+// SCMP_039's WRECKAGE group nests them.
+constexpr const char* kSaveWithUnits = R"(
+Scenario = {
+    Armies = {
+        ['ARMY_1'] = {
+            personality = '',
+            ['Units'] = GROUP {
+                orders = '',
+                Units = {
+                    ['INITIAL'] = GROUP {
+                        orders = '',
+                        Units = {
+                            ['UNIT_1'] = {
+                                type = 'ueb5101',
+                                orders = '',
+                                Position = { 100.0, 10.0, 200.0 },
+                                Orientation = { 0.0, 1.5707963, 0.0 },
+                            },
+                        },
+                    },
+                    ['WRECKAGE'] = GROUP {
+                        orders = '',
+                        Units = {
+                            ['UNIT_2'] = {
+                                type = 'uec1101',
+                                Position = { 50.0, 10.0, 60.0 },
+                                Orientation = { 0.0, 0.0, 0.0 },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        ['ARMY_2'] = {
+            ['Units'] = GROUP {
+                Units = {
+                    ['INITIAL'] = GROUP {
+                        Units = {},
+                    },
+                },
+            },
+        },
+    },
+})";
+
 } // namespace
 
 TEST_CASE("C-266: the mount order makes lua.scd shadow mohodata.scd",
@@ -119,6 +168,7 @@ TEST_CASE("C-266: the mount order makes lua.scd shadow mohodata.scd",
     // override archives last (the mechanism divergence is documented in the
     // coverage audit — the observable shadow is what this pins).
     const Scratch guard;
+
     writeArchive(scratch() / "gamedata/mohodata.scd",
                  {{"lua/sim/unit.lua", "engine stub"}});
     writeArchive(scratch() / "gamedata/lua.scd",
@@ -139,6 +189,85 @@ TEST_CASE("C-266: the mount order makes lua.scd shadow mohodata.scd",
 
     CHECK(asText(*vfs.read("/lua/sim/unit.lua")) == "game lua");
     CHECK(asText(*vfs.read("/units/x/x_unit.bp")) == "unit data");
+}
+
+TEST_CASE("C-273: the _save.lua unit tree yields pre-placed units per army",
+          "[fa-content]") {
+    // Retail's `ArmyInitializePrebuiltUnits` walks Scenario.Armies.<army>.Units
+    // and spawns every leaf. The observable half this pins: the tree parse —
+    // nested GROUPs flatten to (army, type, position) rows in elmos.
+    const auto units = rm::scenario::loadArmyUnits(kSaveWithUnits);
+    REQUIRE(units.has_value());
+    REQUIRE(units->size() == 2);
+
+    CHECK((*units)[0].army == "ARMY_1");
+    CHECK((*units)[0].type == "ueb5101");
+    CHECK((*units)[0].position[0] == Approx(100.0f * rm::scmap::kElmosPerOgrid));
+    CHECK((*units)[0].position[2] == Approx(200.0f * rm::scmap::kElmosPerOgrid));
+    CHECK((*units)[0].orientation[1] == Approx(1.5707963f));
+
+    CHECK((*units)[1].type == "uec1101");
+    CHECK((*units)[1].position[0] == Approx(50.0f * rm::scmap::kElmosPerOgrid));
+
+    // An empty INITIAL group yields nothing — stock skirmish maps are all
+    // empty trees, so absence is ordinary rather than an error.
+    const auto empty = rm::scenario::loadArmyUnits(R"(
+Scenario = { Armies = { ['ARMY_1'] = { ['Units'] = GROUP { Units = {} } } } })");
+    REQUIRE(empty.has_value());
+    CHECK(empty->empty());
+}
+
+TEST_CASE("C-275: TerrainTypes.lua parses to the blocking LUT the walk loop reads",
+          "[fa-content]") {
+    // Retail's `STIMap::LoadTerrainTypes` runs /lua/TerrainTypes.lua and writes
+    // each entry's Blocking flag into a 256-entry LUT. Ours is the same LUT
+    // built at compile time — this pins that the shipped file parses to
+    // exactly the codes the LUT marks.
+    const auto defs = rm::loadTerrainTypes(R"(
+TerrainTypes = {
+    {
+        Name = 'Default',
+        TypeCode = 1,
+        Blocking = false,
+    },
+    {
+        Name = 'Dirt09',
+        TypeCode = 9,
+        Blocking = true,
+    },
+    {
+        Name = 'Lava01',
+        TypeCode = 230,
+        Blocking = true,
+    },
+})");
+    REQUIRE(defs.size() == 3);
+    CHECK(defs[0].typeCode == 1);
+    CHECK_FALSE(defs[0].blocking);
+    CHECK(defs[1].typeCode == 9);
+    CHECK(defs[1].blocking);
+    CHECK(defs[2].typeCode == 230);
+    CHECK(defs[2].blocking);
+
+    // The shipped file, when the corpus is mounted: every Blocking=true entry
+    // must land on a code the LUT marks, and vice versa.
+    const std::filesystem::path shipped =
+        "re-fa/corpus/lua/lua/TerrainTypes.lua";
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(shipped, ec)) {
+        std::ifstream in{shipped, std::ios::binary};
+        const std::string text{std::istreambuf_iterator<char>{in},
+                               std::istreambuf_iterator<char>{}};
+        const auto real = rm::loadTerrainTypes(text);
+        // 59 entries — the 60th "TypeCode" in the file is a string literal in
+        // a key list, not an assignment.
+        REQUIRE(real.size() == 59);
+        for (const rm::TerrainTypeDef& def : real) {
+            INFO("TypeCode " << def.typeCode);
+            CHECK(rm::kTerrainTypeBlocking[static_cast<std::size_t>(def.typeCode)]
+                  == def.blocking);
+        }
+    }
 }
 
 TEST_CASE("C-273/C-274: a map's army markers become one spawn each, on the terrain",
@@ -220,4 +349,44 @@ TEST_CASE("C-019: IsPlayable answers inside the declared rect, true without one"
     CHECK(terrain.isPlayable(rm::sim::fxFromFloat(100.0f), rm::sim::fxFromFloat(500.0f)));
     CHECK_FALSE(terrain.isPlayable(rm::sim::fxFromFloat(50.0f), rm::sim::fxFromFloat(300.0f)));
     CHECK_FALSE(terrain.isPlayable(rm::sim::fxFromFloat(300.0f), rm::sim::fxFromFloat(600.0f)));
+}
+
+// --- C-271: the bp→script binding chain ---------------------------------------
+//
+// `ScriptModule`/`ScriptClass` when authored; else the `_script.lua`/`TypeClass`
+// convention; else the `/lua/sim/*.lua` default.
+
+TEST_CASE("C-271: the script binding falls back module then class",
+          "[fa-content]") {
+
+    using rm::blueprint::scriptBindingFor;
+    using rm::blueprint::ScriptBinding;
+    const auto unit = scriptBindingFor("/units/UEL0201/UEL0201_unit.bp", "", "",
+                                       "/lua/sim/unit.lua", "Unit");
+    CHECK(unit.module == "/units/UEL0201/UEL0201_script.lua");
+    CHECK(unit.className == "TypeClass");
+
+    // Same convention for props and projectiles.
+    CHECK(scriptBindingFor("/env/Evergreen/props/Tree01_prop.bp", "", "",
+                           "/lua/sim/prop.lua", "Prop")
+              .module
+          == "/env/Evergreen/props/Tree01_script.lua");
+    CHECK(scriptBindingFor("/projectiles/TDFGauss01/TDFGauss01_proj.bp", "", "",
+                           "/lua/sim/projectile.lua", "Projectile")
+              .module
+          == "/projectiles/TDFGauss01/TDFGauss01_script.lua");
+
+    // Authored keys win outright.
+    const auto authored = scriptBindingFor("/units/X/X_unit.bp",
+                                           "/lua/custom/module.lua", "MyClass",
+                                           "/lua/sim/unit.lua", "Unit");
+    CHECK(authored.module == "/lua/custom/module.lua");
+    CHECK(authored.className == "MyClass");
+
+    // A blueprint whose stem carries no suffix has no conventional script —
+    // the import-failure default answers instead.
+    const auto bare = scriptBindingFor("/units/X/X.bp", "", "",
+                                       "/lua/sim/unit.lua", "Unit");
+    CHECK(bare.module == "/lua/sim/unit.lua");
+    CHECK(bare.className == "TypeClass");
 }

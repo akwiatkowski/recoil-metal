@@ -98,6 +98,13 @@ struct Blueprint {
     /// big, which reads as a units bug in the mesh loader.
     float uniformScale = 1.0f;
 
+    /// `C-271`: the authored script binding keys — `ScriptModule` names the
+    /// Lua module to import, `ScriptClass` the class inside it. Both empty
+    /// when absent, which is the common case: the `_script.lua`/`TypeClass`
+    /// convention covers nearly everything shipped.
+    std::string scriptModule;
+    std::string scriptClass;
+
     /// Beyond this distance the prop is not drawn at all: the coarsest level's
     /// cutoff, which is the same thing said from the other end.
     [[nodiscard]] float drawDistanceElmos() const noexcept {

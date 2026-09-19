@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace rm {
@@ -62,5 +63,22 @@ inline constexpr std::array<bool, 256> kTerrainTypeBlocking = [] {
     blocking[230] = true;  // Lava01  — TerrainTypes.lua:2141
     return blocking;
 }();
+
+/// One entry of `/lua/TerrainTypes.lua` — `C-275`'s loadable half.
+///
+/// The file is not a data table: it carries `#--` comments and `..`
+/// concatenations, so `lua::parseTable` cannot read it. What the engine needs
+/// from it is small — each entry's `TypeCode` and `Blocking` flag — so this
+/// scans for those keys in order rather than parsing Lua.
+struct TerrainTypeDef {
+    int typeCode = 0;
+    bool blocking = false;
+};
+
+/// Every `TypeCode`/`Blocking` pair a TerrainTypes.lua declares, in file
+/// order. An entry with no `Blocking` key reads as not blocking — the shipped
+/// file writes the flag on every entry, so absence is the caller's problem,
+/// not a silent default.
+[[nodiscard]] std::vector<TerrainTypeDef> loadTerrainTypes(std::string_view lua);
 
 } // namespace rm

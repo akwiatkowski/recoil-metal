@@ -185,6 +185,87 @@ std::expected<std::vector<mapinfo::StartPosition>, lua::ParseError> loadStartPos
     return loadStartPositions(contents);
 }
 
+namespace {
+
+/// Walks one `Units` group table, collecting the unit leaves under it.
+/// A leaf is a table with a `type` string; a group is a table with a nested
+/// `Units` table. Anything else is skipped — the tree also carries `orders`,
+/// `platoon` and builder metadata this reader does not need.
+void collectUnits(const lua::Value& group, const std::string& army,
+                  std::vector<SavedUnit>& out) {
+    const lua::Value* units = group.find("Units");
+    if (units == nullptr || !units->isTable()) {
+        return;
+    }
+    for (const lua::Field& entry : units->fields) {
+        const lua::Value& node = entry.value;
+        if (!node.isTable()) {
+            continue;
+        }
+        if (const std::optional<std::string_view> type = node.stringAt("type")) {
+            const lua::Value* position = node.find("Position");
+            if (position == nullptr || !position->isTable()
+                || position->items.size() < 3) {
+                continue;  // a unit with no position is not placeable
+            }
+            const std::optional<double> x = position->items[0].asNumber();
+            const std::optional<double> y = position->items[1].asNumber();
+            const std::optional<double> z = position->items[2].asNumber();
+            if (!x || !y || !z) {
+                continue;
+            }
+            SavedUnit unit;
+            unit.army = army;
+            unit.type = *type;
+            unit.position = {static_cast<float>(*x) * scmap::kElmosPerOgrid,
+                             static_cast<float>(*y) * scmap::kElmosPerOgrid,
+                             static_cast<float>(*z) * scmap::kElmosPerOgrid};
+            if (const lua::Value* orientation = node.find("Orientation");
+                orientation != nullptr && orientation->isTable()
+                && orientation->items.size() >= 3) {
+                for (std::size_t i = 0; i < 3; ++i) {
+                    unit.orientation[i] =
+                        static_cast<float>(
+                            orientation->items[i].asNumber().value_or(0.0));
+                }
+            }
+            out.push_back(std::move(unit));
+        } else {
+            // A named GROUP — recurse into its own Units table.
+            collectUnits(node, army, out);
+        }
+    }
+}
+
+} // namespace
+
+std::expected<std::vector<SavedUnit>, lua::ParseError> loadArmyUnits(
+    std::string_view lua) {
+    const auto root = rm::lua::parseTable(lua);
+    if (!root) {
+        return std::unexpected(root.error());
+    }
+
+    // Scenario = { Armies = { ['ARMY_1'] = { ['Units'] = GROUP { Units = {
+    //   ['INITIAL'] = GROUP { Units = { ['UNIT_1'] = { type=..., Position=... } } } } } } }
+    const Value* armies = root->find("Armies");
+    if (armies == nullptr || !armies->isTable()) {
+        return fail("no Scenario.Armies table: this does not look like a "
+                    "Supreme Commander _save.lua");
+    }
+
+    std::vector<SavedUnit> found;
+    for (const lua::Field& army : armies->fields) {
+        if (!armyNumber(army.key).has_value()) {
+            continue;  // next_army_id and friends share this table
+        }
+        if (const Value* units = army.value.find("Units")) {
+            collectUnits(*units, army.key, found);
+        }
+    }
+    return found;
+}
+
 std::optional<std::filesystem::path> findSaveBesideMap(const std::filesystem::path& scmapPath) {
     std::error_code ec;
 

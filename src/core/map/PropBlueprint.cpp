@@ -37,7 +37,8 @@ namespace {
 /// The name, because nothing else identifies it. `HelpText` says the same thing in
 /// prose and is display text — localised in principle, and "Small lava steam steam"
 /// in practice, which is not something to parse. `ScriptClass` and `ScriptModule`
-/// name Lua this project does not run. The asset's own name is the stable handle.
+/// are read for `C-271`'s binding chain, but the asset's own name is the stable
+/// handle for the effect.
 [[nodiscard]] Effect effectFromName(std::string_view path) {
     std::string lowered{path};
     std::transform(lowered.begin(), lowered.end(), lowered.begin(),
@@ -80,6 +81,15 @@ template <typename Exists, typename FromGamePath>
                                                 ? table->path("Display")->numberAt("UniformScale")
                                                 : std::nullopt) {
         blueprint.uniformScale = static_cast<float>(*scale);
+    }
+
+    // `C-271`'s authored binding keys — read so `scriptBindingFor` can prefer
+    // them over the `_script.lua`/`TypeClass` convention.
+    if (const std::optional<std::string_view> module = table->stringAt("ScriptModule")) {
+        blueprint.scriptModule = *module;
+    }
+    if (const std::optional<std::string_view> cls = table->stringAt("ScriptClass")) {
+        blueprint.scriptClass = *cls;
     }
 
     // The LOD table decides how many levels there are, what each is painted with,

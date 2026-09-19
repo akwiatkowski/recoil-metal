@@ -86,6 +86,27 @@ loadStartPositionsFile(const std::filesystem::path& path);
 [[nodiscard]] std::optional<std::filesystem::path> findSaveBesideMap(
     const std::filesystem::path& scmapPath);
 
+/// One unit a `_save.lua` pre-places — `C-273`'s unit-tree spawn input.
+/// `Scenario.Armies.<ARMY_n>.Units` is a tree of `GROUP` tables whose leaves
+/// carry `type` (a blueprint id like 'ueb5101') and `Position` (a 3-vector in
+/// ogrids). The tree is walked recursively; groups are structure, not units.
+struct SavedUnit {
+    std::string army;                 ///< the ARMY_<n> key it belongs to
+    std::string type;                 ///< blueprint id, lowercase as authored
+    std::array<float, 3> position{};  ///< elmos, converted from ogrids
+    std::array<float, 3> orientation{};
+};
+
+/// Every pre-placed unit a `_save.lua` declares, across every army.
+///
+/// Stock skirmish maps ship empty `Units` trees — the armies exist, the
+/// `INITIAL` group is empty — so an empty result is ordinary, not an error.
+/// A malformed tree (a unit entry without a type or position) fails loudly:
+/// silently dropping a pre-placed army is the bug this reader exists to
+/// prevent.
+[[nodiscard]] std::expected<std::vector<SavedUnit>, lua::ParseError>
+loadArmyUnits(std::string_view lua);
+
 /// The `ScenarioInfo.Options` table of a `<map>_scenario.lua`, verbatim.
 ///
 /// WHY A MAP AND NOT A STRUCT. The table is open-ended: the engine itself reads

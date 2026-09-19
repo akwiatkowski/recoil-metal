@@ -39,4 +39,50 @@ std::filesystem::path meshBeside(const std::filesystem::path& blueprintPath,
     return blueprintPath.parent_path() / (base + "_lod" + std::to_string(level) + ".scm");
 }
 
+ScriptBinding scriptBindingFor(std::string_view blueprintPath,
+                               std::string_view authoredModule,
+                               std::string_view authoredClass,
+                               std::string_view fallbackModule,
+                               std::string_view fallbackClass) {
+    ScriptBinding out;
+
+    // `C-271`: `ScriptModule` wins when authored; else the blueprint's own
+    // suffix convention — `X_unit.bp`/`X_prop.bp`/`X_proj.bp` → `X_script.lua`
+    // beside it. A stem without the suffix has no conventional script, so the
+    // module falls straight to the caller's `/lua/sim/*.lua` default.
+    if (!authoredModule.empty()) {
+        out.module = authoredModule;
+    } else {
+        const std::string_view stem = blueprintPath.substr(
+            blueprintPath.find_last_of('/') == std::string_view::npos
+                ? 0
+                : blueprintPath.find_last_of('/') + 1);
+        const std::string_view dir = blueprintPath.substr(
+            0, blueprintPath.size() - stem.size());
+        for (std::string_view suffix : {kUnitSuffix, kPropSuffix, kProjectileSuffix}) {
+            const std::string_view ext = ".bp";
+            if (stem.size() > suffix.size() + ext.size()
+                && stem.substr(stem.size() - ext.size()) == ext
+                && endsWithNoCase(stem.substr(0, stem.size() - ext.size()), suffix)) {
+                const std::string_view base =
+                    stem.substr(0, stem.size() - ext.size() - suffix.size());
+                out.module = std::string{dir} + std::string{base} + "_script.lua";
+                break;
+            }
+        }
+        if (out.module.empty()) {
+            out.module = fallbackModule;
+        }
+    }
+
+    // `ScriptClass` wins when authored; else `TypeClass`. A module that lacks
+    // the class falls back to the class NAME inside the module — which is the
+    // same name the caller already has, so the binding itself is unchanged.
+    out.className = authoredClass.empty() ? "TypeClass" : std::string{authoredClass};
+    if (out.className.empty()) {
+        out.className = fallbackClass;
+    }
+    return out;
+}
+
 } // namespace rm::blueprint

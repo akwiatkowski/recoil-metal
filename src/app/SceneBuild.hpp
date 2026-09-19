@@ -197,6 +197,18 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                                                        std::array<float, 3> position,
                                                        const rm::sim::Army& army, rm::Brad yaw);
 
+/// `C-273`'s `_save.lua` unit-tree spawn: every pre-placed unit the save
+/// declares, spawned through the same `spawnUnit` path the commanders take.
+/// `units` comes from `rm::scenario::loadArmyUnits`; the army name maps to an
+/// index the way `loadStartPositions` maps it — `ARMY_1` is army 0. Units
+/// whose army has no seat are skipped, matching retail's
+/// `ArmyInitializePrebuiltUnits` walking only the armies the session created.
+/// Returns how many units spawned.
+[[nodiscard]] std::size_t spawnSavedUnits(UnitScene& scene,
+                                          const rm::HeightField& field,
+                                          std::span<const rm::scenario::SavedUnit> units,
+                                          const rm::vfs::Vfs& content);
+
 /// Face the map centre along the nearest cardinal direction so buildings align with
 /// their axis-aligned foundations. Preview, construction and completion share this rule.
 /// Fixed-point rounding keeps the saved heading deterministic; exact ties turn clockwise.

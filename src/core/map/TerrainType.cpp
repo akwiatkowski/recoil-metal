@@ -79,4 +79,56 @@ ColourImage colourTerrainTypes(std::span<const std::uint8_t> types, int width, i
     return image;
 }
 
+
+std::vector<TerrainTypeDef> loadTerrainTypes(std::string_view lua) {
+    // `C-275`: TerrainTypes.lua is code, not a data table — `#--` comments and
+    // `EmitterBasePath ..` concatenations defeat `lua::parseTable`. What the
+    // engine reads from it is two keys per entry, so this scans for
+    // `TypeCode =` / `Blocking =` assignments in order. `Blocking` appears on
+    // only the entries that set it — the shipped file writes it three times —
+    // so every `TypeCode` yields a def, blocking only when a `Blocking = true`
+    // follows before the next `TypeCode`.
+    std::vector<TerrainTypeDef> out;
+    std::size_t at = 0;
+    while (at < lua.size()) {
+        const std::size_t lineEnd = lua.find('\n', at);
+        const std::string_view line =
+            lua.substr(at, lineEnd == std::string_view::npos
+                             ? std::string_view::npos
+                             : lineEnd - at);
+        at = lineEnd == std::string_view::npos ? lua.size() : lineEnd + 1;
+
+        const auto valueAfter = [&](std::string_view key) -> std::string_view {
+            const std::size_t keyAt = line.find(key);
+            if (keyAt == std::string_view::npos) {
+                return {};
+            }
+            std::size_t eq = line.find('=', keyAt + key.size());
+            if (eq == std::string_view::npos) {
+                return {};
+            }
+            ++eq;
+            while (eq < line.size() && (line[eq] == ' ' || line[eq] == '\t')) {
+                ++eq;
+            }
+            std::size_t end = eq;
+            while (end < line.size() && line[end] != ',' && line[end] != ' '
+                   && line[end] != '\t' && line[end] != '}') {
+                ++end;
+            }
+            return line.substr(eq, end - eq);
+        };
+
+        if (const std::string_view code = valueAfter("TypeCode"); !code.empty()) {
+            out.push_back(TerrainTypeDef{.typeCode = std::atoi(std::string{code}.c_str())});
+            continue;
+        }
+        if (const std::string_view blocking = valueAfter("Blocking");
+            !blocking.empty() && !out.empty()) {
+            out.back().blocking = blocking.starts_with('t');
+        }
+    }
+    return out;
+}
+
 } // namespace rm

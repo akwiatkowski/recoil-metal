@@ -2118,4 +2118,40 @@ void loadProjectileMeshes(UnitScene& scene, const rm::vfs::Vfs& content) {
     }
 }
 
+
+std::size_t spawnSavedUnits(UnitScene& scene, const rm::HeightField& field,
+                            std::span<const rm::scenario::SavedUnit> units,
+                            const rm::vfs::Vfs& content) {
+    std::size_t spawned = 0;
+    for (const rm::scenario::SavedUnit& unit : units) {
+        // ARMY_<n> -> seat n-1, the same mapping `loadStartPositions` uses for
+        // its markers. A unit whose army the session did not seat is skipped
+        // rather than rehomed — retail's `ArmyInitializePrebuiltUnits` walks
+        // the armies it created, not every army the save names.
+        const auto armyNumber = [&]() -> std::optional<int> {
+            if (unit.army.size() <= 5 || unit.army.rfind("ARMY_", 0) != 0) {
+                return std::nullopt;
+            }
+            try {
+                return std::stoi(unit.army.substr(5));
+            } catch (...) {
+                return std::nullopt;
+            }
+        }();
+        if (!armyNumber || *armyNumber < 1
+            || static_cast<std::size_t>(*armyNumber) > scene.armies.size()) {
+            continue;
+        }
+        const rm::sim::Army& army = scene.armies[static_cast<std::size_t>(*armyNumber - 1)];
+
+        // The saved `type` is a blueprint id ('ueb5101'); the drawable path is
+        // the same convention `resolveUnits` uses for --units arguments.
+        const std::string path = "/units/" + unit.type + "/" + unit.type + "_unit.bp";
+        const rm::Brad yaw = rm::sim::bradFromRadians(unit.orientation[1]);
+        if (spawnUnit(scene, content, field, path, unit.position, army, yaw)) {
+            ++spawned;
+        }
+    }
+    return spawned;
+}
 } // namespace rm::app
