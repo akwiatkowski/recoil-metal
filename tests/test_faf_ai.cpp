@@ -3203,9 +3203,12 @@ TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
         function meta:OnCaptured(captor)
             __rm_faf.calls[#__rm_faf.calls + 1] = 'captured'
         end
+        function brain:OnBrainUnitVeterancyLevel(unit, level)
+            __rm_faf.calls[#__rm_faf.calls + 1] = 'veteran:' .. tostring(level)
+        end
     )"));
 
-    const std::array<rm::sim::Event, 6> events{{
+    const std::array<rm::sim::Event, 7> events{{
         {.kind = rm::sim::EventKind::IntelChanged, .unit = enemy, .army = 0,
          .intelType = static_cast<std::uint8_t>(rm::sim::IntelType::Radar),
          .intelValue = true},
@@ -3217,6 +3220,8 @@ TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
         {.kind = rm::sim::EventKind::ArmyStatTriggered, .army = 0,
          .statName = "Economy_Ratio"},
         {.kind = rm::sim::EventKind::UnitCapLimitReached, .army = 0},
+        {.kind = rm::sim::EventKind::UnitVeteranPromoted, .unit = own, .army = 0,
+         .amount = rm::sim::magFromFloat(2)},
     }};
     opponent.observe(world, events);
 
@@ -3229,6 +3234,7 @@ TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
         assert(c[4] == 'captured', 'OnCaptured on the target')
         assert(c[5] == 'stats:Economy_Ratio', 'OnStatsTrigger with the registered name')
         assert(c[6] == 'cap', 'OnUnitCapLimitReached')
+        assert(c[7] == 'veteran:2', 'OnBrainUnitVeterancyLevel with the new level')
         assert(__rm_faf.lastBlip ~= nil, 'the blip reached Lua')
         assert(__rm_faf.lastBlip:GetSource() == __rm_faf.lastBlip, 'blip:GetSource()')
     )"));

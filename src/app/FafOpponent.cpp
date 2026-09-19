@@ -3207,6 +3207,17 @@ void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> ev
             if (event.army != army_) break;
             callBrain("OnUnitCapLimitReached", 0, [] {});
             break;
+        case rm::sim::EventKind::UnitVeteranPromoted:
+            // `C-257` -> `brain:OnBrainUnitVeterancyLevel(unit, level)`: the
+            // promotion notifies the owning brain, which walks its
+            // `VeterancyTriggerList` for scenario triggers.
+            if (event.army != army_) break;
+            callBrain("OnBrainUnitVeterancyLevel", 2, [&] {
+                unitFor(event.unit);
+                lua_pushinteger(lua, static_cast<lua_Integer>(
+                                       rm::sim::magToFloat(event.amount)));
+            });
+            break;
         case rm::sim::EventKind::PingSpawned: {
             // `C-346` -> `brain:DoPingCallbacks(data)`: `SimPing.lua:55` calls
             // every ALLIED brain but the owner's own. The ping data table is
