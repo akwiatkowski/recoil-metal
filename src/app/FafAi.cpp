@@ -893,12 +893,24 @@ local methods = ...
 --
 -- The stub closures are shared deliberately: the call counter lives in the closure's upvalue, so
 -- one report still covers every family.
+--
+-- THE METATABLE IS LOAD-BEARING, and it is not about methods. class.lua's
+-- `IsSimpleClass` decides `Class(base)` vs `Class({specs})` by asking
+-- `getmetatable(base) == getmetatable({})` — nil for a plain table. Moho's
+-- method tables are engine OBJECTS, so the check fails there and
+-- `Class(moho.platoon_methods)` takes the bases path, returning a real class.
+-- A plain table here took the simple-class path instead: the method table
+-- itself became the "class", `Platoon = Class(moho.platoon_methods) {...}`
+-- instantiated it, and the corpus's Platoon was an empty instance — no
+-- OnCreate, no plan thread, nothing. Any metatable marks the table as an
+-- engine object; one shared, empty one is enough.
+local engineObjectMeta = {}
 local function methodTable()
     local copy = {}
     for name, stub in pairs(methods) do
         copy[name] = stub
     end
-    return copy
+    return setmetatable(copy, engineObjectMeta)
 end
 
 moho = {

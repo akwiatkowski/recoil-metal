@@ -676,6 +676,123 @@ TEST_CASE("the FAF driver boots a brain and the corpus's own builders decide", "
     REQUIRE(ok);
 }
 
+TEST_CASE("the ArmyPool is a real corpus Platoon whose plan runs as a thread",
+          "[faf][ai][platoon]") {
+    // C-358: retail's `CPlatoon` is `vector<Squad*>` plus four name strings
+    // (`0x593d9a`–`0x593db8`, `0x72c230`). C-359: `Platoon.OnCreate` does
+    // `self.AIThread = self:ForkThread(self[plan])` (platoon.lua:86) — a platoon's
+    // plan is a Lua thread on the same scheduler every other fork uses.
+    const std::filesystem::path root = corpusRoot();
+    if (root.empty()) {
+        SKIP("no vendored corpus; run `make ai`");
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+
+    // C-359, observable: boot forks the pool's BaseManagersDistressAI watch
+    // (base-ai.lua:395-396), a live thread on the scheduler. Corpus modules fork
+    // their own housekeeping threads at load, so the claim is the DELTA: one
+    // more live thread after boot than the entry points left behind.
+    const std::size_t beforeBoot = ai.threadsAlive();
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 100, startZ = 100,
+            sizeX = 512, sizeZ = 512, armies = 2, base = 'NormalMain', markers = {} })
+        local brain = __rm_faf.brains[0]
+        local PlatoonClass = import('/lua/platoon.lua').Platoon
+        assert(type(PlatoonClass) == 'table', 'the corpus Platoon class must load')
+
+        -- The pool is a corpus Platoon, not an adapter table: its metatable IS the
+        -- class, and the four retail name strings are readable back.
+        local pool = brain:GetPlatoonUniquelyNamed('ArmyPool')
+        assert(pool ~= nil, 'a booted brain owns an ArmyPool')
+        assert(getmetatable(pool) == PlatoonClass, 'the pool is a real Platoon instance')
+        assert(pool == brain.pool and pool == brain.ArmyPool)
+        assert(pool:GetPlatoonUniqueName() == 'ArmyPool')
+        assert(pool:GetBrain() == brain)
+        assert(pool:GetAIPlan() == 'PoolAI')
+        assert(pool.ArmyPool == true)
+        -- Retail's InitializeSkirmishSystems (base-ai.lua:364-368) turns the pool's
+        -- own AI off — PoolAI ran once at creation and was retired.
+        assert(pool.PoolAIOn == false and pool.AIThread == nil)
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+    CHECK(ai.threadsAlive() == beforeBoot + 1);
+
+    // The watch's first pass runs corpus code: it reads the brain's BaseMonitor,
+    // walks BuilderManagers, and yields on PoolReactionTime. No thread errors.
+    CHECK(ai.pump(0) >= 1);
+    CHECK(ai.threadErrors().empty());
+
+    // Sounding a base alert is what makes the plan's body observable: the corpus's
+    // own BaseMonitorDistressLocation finds the commander distress, the watch sets
+    // the location's DistressCall and forks the 15-second unlock thread
+    // (platoon.lua:1573-1574). WaitSeconds(15) is WaitTicks(150), and retail's
+    // counter quirk (C-305) resumes it 149 beats after the yield.
+    REQUIRE(ai.eval(R"(
+        local brain = __rm_faf.brains[0]
+        brain.BaseMonitor.CDRDistress = { 110, 0, 110 }
+        brain.BaseMonitor.CDRThreatLevel = 50
+    )"));
+    CHECK(ai.pump(69) >= 2);  // the watch wakes and forks the unlock thread
+    REQUIRE(ai.eval(R"(
+        local brain = __rm_faf.brains[0]
+        assert(brain.BuilderManagers.MAIN.DistressCall == true,
+               'the distress plan flagged MAIN')
+    )"));
+    CHECK(ai.threadErrors().empty());
+
+    // The unlock thread clears the flag on schedule — corpus timing, not ours.
+    (void)ai.pump(217);
+    REQUIRE(ai.eval(R"(
+        assert(__rm_faf.brains[0].BuilderManagers.MAIN.DistressCall == true,
+               'the unlock has not fired yet')
+    )"));
+    (void)ai.pump(218);
+    REQUIRE(ai.eval(R"(
+        assert(__rm_faf.brains[0].BuilderManagers.MAIN.DistressCall == false,
+               'the unlock thread cleared the flag')
+    )"));
+    CHECK(ai.threadErrors().empty());
+    REQUIRE(ai.eval(R"(
+        local brain = __rm_faf.brains[0]
+        local pool = brain:GetPlatoonUniquelyNamed('ArmyPool')
+        __rm_faf_type('UEL0201', { 'MOBILE', 'LAND', 'TECH1', 'DIRECTFIRE' })
+        local tank = { bp = 'UEL0201', h = __rm_faf_handle(7, 1), x = 100, z = 100,
+                       __cats = __rm_faf.cats.UEL0201 }
+        setmetatable(tank, __rm_faf.unitMeta)
+        brain.snap = { units = { tank } }
+        local units = pool:GetPlatoonUnits()
+        assert(#units == 1 and units[1] == tank, 'the pool holds the army unit')
+        assert(#pool:GetSquadUnits('Unassigned') == 1)
+        assert(#pool:GetSquadUnits('Attack') == 0)
+        assert(tank.PlatoonHandle == pool)
+        assert(pool:GetPlatoonPosition()[1] == 100)
+
+        -- A second platoon, made the retail way: MakePlatoon runs OnCreate, which
+        -- forks the plan as a thread. 'none' names no method, so no thread.
+        local platoon = brain:MakePlatoon('Raiders', 'none')
+        assert(getmetatable(platoon) == import('/lua/platoon.lua').Platoon)
+        assert(platoon:GetPlatoonUniqueName() == 'Raiders')
+        assert(brain:GetPlatoonUniquelyNamed('Raiders') == platoon)
+        assert(brain:PlatoonExists(platoon))
+        brain:AssignUnitsToPlatoon(platoon, { tank }, 'Attack', 'GrowthFormation')
+        assert(#platoon:GetSquadUnits('Attack') == 1)
+        assert(platoon:GetSquadUnits('Attack')[1] == tank)
+        assert(tank.PlatoonHandle == platoon)
+        -- The pool derives its roster from the snapshot minus assigned units.
+        assert(#pool:GetPlatoonUnits() == 0, 'assigned units leave the pool')
+        assert(brain:PlatoonExists(pool))
+        brain:DisbandPlatoon(platoon)
+        assert(not brain:PlatoonExists(platoon))
+        assert(brain:GetPlatoonUniquelyNamed('Raiders') == nil)
+        assert(#pool:GetPlatoonUnits() == 1, 'a disbanded platoon returns its units')
+    )"));
+    INFO(ai.lastError());
+}
+
 TEST_CASE("FAF factory upgrades reserve production until the current product finishes",
           "[faf][ai][factory-upgrade]") {
     const auto root = corpusRoot();

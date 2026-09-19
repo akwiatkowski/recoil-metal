@@ -174,6 +174,11 @@ __rm_faf.unitMeta = {
             if state == 'Enhancing' then return u.enhancing == true end
             return false
         end,
+        -- Retail's `Entity:IsPaused`/`SetPaused`, read by `Platoon:PlatoonDisband`
+        -- (platoon.lua:322-324) when it releases a platoon's units. Snapshot units
+        -- are never paused; the flag is per-table so a pause survives the pass.
+        IsPaused = function(u) return u.__paused == true end,
+        SetPaused = function(u, paused) u.__paused = paused == true end,
         -- `C-283`'s `Entity::EnableIntel`/`DisableIntel`/`IsIntelEnabled`
         -- (`0x00694B60`/`0x00694C56`): the enabled byte of the per-type
         -- (enabled, active) pair. FAF's `Unit.lua` calls the
@@ -262,6 +267,271 @@ local brainMeta = {
 
 local methods = {}
 function methods:GetArmyIndex() return self.army + 1 end
+)lua"} + R"lua(
+-- --- Platoons: the native CPlatoon half (C-358/C-359) -------------------------------------
+--
+-- Retail splits the object the way the corpus assumes: `CPlatoon` is a native
+-- script object holding `vector<Squad*>` at `+0x40` — each squad a
+-- `vector<Unit*>` plus a SQUADCLASS id (0 Unassigned, 1 Attack, 2 Artillery,
+-- 3 Guard, 4 Support, 5 Scout; `0x593d9a`–`0x593db8`, `0x72c230`) — and four
+-- `std::string` at `+0x70/+0x8c/+0xa8/+0xc4` (unique name, AI plan, formation
+-- override, plan name). `platoon.lua`'s `Platoon = Class(moho.platoon_methods)`
+-- is the Lua half: `OnCreate` forks the plan as a thread (C-359,
+-- platoon.lua:86). So the natives below live on `moho.platoon_methods` — the
+-- class inherits them at import, exactly where retail's engine methods sit —
+-- and the per-platoon state they read is the squad/name fields the retail
+-- layout documents. The driver installs BEFORE the corpus loads, so the class
+-- copies these, not the counted stubs.
+
+-- The SQUADCLASS ids, canonical spellings. The corpus passes every case
+-- ('attack', 'support', 'Unassigned'); retail's enum lookup is case-insensitive.
+local squadClasses = { 'Unassigned', 'Attack', 'Artillery', 'Guard', 'Support', 'Scout' }
+local squadCanonical = {}
+for _, name in ipairs(squadClasses) do squadCanonical[string.lower(name)] = name end
+local function canonicalSquad(name)
+    return squadCanonical[string.lower(tostring(name or ''))] or tostring(name)
+end
+
+-- A squad's live roster: dead units drop out on read, which is the honest
+-- answer to "is this unit still in the platoon" — retail's squads are rebuilt
+-- from the entity DB, and our snapshot tables die with their units.
+local function liveSquad(list)
+    local out = {}
+    for _, u in ipairs(list or {}) do
+        if not u.Dead and not (u.BeenDestroyed and u:BeenDestroyed()) then
+            out[#out + 1] = u
+        end
+    end
+    return out
+end
+
+-- Every unit handle owned by a live platoon, mapped to that platoon — the
+-- pool's roster is the army minus this set.
+local function platoonOwnership(brain)
+    local owned = {}
+    for platoon in pairs(brain.__platoons or {}) do
+        if platoon ~= brain.pool and not platoon.__dead then
+            for _, list in pairs(platoon.__squads) do
+                for _, u in ipairs(list) do
+                    if u.h then owned[u.h] = platoon end
+                end
+            end
+        end
+    end
+    return owned
+end
+
+-- The ArmyPool's roster is derived, not stored: every unmanaged unit in the
+-- army is in the pool (FAF keeps all unassigned units there), which is the
+-- snapshot minus units a live platoon owns. Snapshot tables are rebuilt each
+-- pass, so membership travels by handle, not by table identity.
+local function poolUnits(pool)
+    local brain = pool.__brain
+    local owned = platoonOwnership(brain)
+    local out = {}
+    for _, u in ipairs((brain.snap and brain.snap.units) or {}) do
+        if not owned[u.h] then
+            out[#out + 1] = u
+            u.PlatoonHandle = pool
+        end
+    end
+    return out
+end
+
+local function platoonUnits(self)
+    if self.ArmyPool then return poolUnits(self) end
+    local out = {}
+    -- Flatten in SQUADCLASS order: retail's vector order is assignment order,
+    -- and a fixed order keeps the answer deterministic for lockstep.
+    for _, name in ipairs(squadClasses) do
+        for _, u in ipairs(liveSquad(self.__squads[name])) do
+            out[#out + 1] = u
+        end
+    end
+    for name, list in pairs(self.__squads) do
+        if not squadCanonical[string.lower(name)] then
+            for _, u in ipairs(liveSquad(list)) do out[#out + 1] = u end
+        end
+    end
+    return out
+end
+
+local function removeFromSquads(platoon, unit)
+    for _, list in pairs(platoon.__squads) do
+        for i, u in ipairs(list) do
+            if u == unit then table.remove(list, i) break end
+        end
+    end
+end
+
+-- The engine's `CAiBrain:MakePlatoon` (`0x5941c0`): construct the CPlatoon,
+-- run its `OnCreate` — which is what forks the plan thread (C-359) — then
+-- register it on the brain. `platoon.lua` must be loaded; entry points import
+-- it, and an absent corpus fails loudly rather than faking a platoon.
+local function makePlatoon(brain, plan)
+    local cls = import('/lua/platoon.lua').Platoon
+    assert(type(cls) == 'table', 'platoon.lua did not export the Platoon class')
+    local platoon = cls()
+    platoon.__brain = brain
+    platoon.__squads = {}
+    platoon.__aiPlan = plan        -- CPlatoon+0x8c: the AI plan string
+    brain.__platoonSerial = (brain.__platoonSerial or 0) + 1
+    platoon.__serial = brain.__platoonSerial
+    brain.__platoons[platoon] = true
+    platoon:OnCreate(plan)
+    -- The pool's own AI flag (platoon.lua:276-289): set when the plan that ran
+    -- at creation was PoolAI, so TurnOffPoolAI has a thread to retire.
+    if plan == 'PoolAI' then platoon.PoolAIOn = platoon.AIThread ~= nil end
+    return platoon
+end
+
+moho.platoon_methods.GetBrain = function(self) return self.__brain end
+moho.platoon_methods.GetFactionIndex = function(self)
+    return self.__brain and self.__brain:GetFactionIndex()
+end
+-- `GetPlatoonUnits` flattens every squad (`0x72c230`); `GetSquadUnits` filters
+-- by the SQUADCLASS id.
+moho.platoon_methods.GetPlatoonUnits = platoonUnits
+moho.platoon_methods.GetSquadUnits = function(self, squad)
+    if self.ArmyPool then
+        return canonicalSquad(squad) == 'Unassigned' and poolUnits(self) or {}
+    end
+    return liveSquad(self.__squads[canonicalSquad(squad)])
+end
+moho.platoon_methods.GetPlatoonSize = function(self) return #platoonUnits(self) end
+-- The centroid of the live units; an empty platoon has no position.
+moho.platoon_methods.GetPlatoonPosition = function(self)
+    local units = platoonUnits(self)
+    if #units == 0 then return nil end
+    local x, z = 0, 0
+    for _, u in ipairs(units) do x = x + (u.x or 0) z = z + (u.z or 0) end
+    return { x / #units, 0, z / #units }
+end
+-- The four name strings (C-358 `+0x70/+0x8c/+0xa8/+0xc4`). `PlanName` itself is
+-- the corpus's own field (platoon.lua:238); the natives cover the other three.
+moho.platoon_methods.GetPlatoonUniqueName = function(self) return self.__uniqueName end
+moho.platoon_methods.UniquelyNamePlatoon = function(self, name)
+    local brain = self.__brain
+    if self.__uniqueName and brain.__platoonNames[self.__uniqueName] == self then
+        brain.__platoonNames[self.__uniqueName] = nil
+    end
+    self.__uniqueName = name
+    if name and name ~= '' then brain.__platoonNames[name] = self end
+end
+moho.platoon_methods.GetAIPlan = function(self) return self.__aiPlan end
+moho.platoon_methods.SetPlatoonFormationOverride = function(self, formation)
+    self.__formation = formation
+end
+-- Category counts and threat sums over the platoon's own units — what the
+-- corpus's `GetNumCategoryUnits`/`GetPlatoonThreat` (platoon.lua:355,394)
+-- delegate to. Public radii are authored ogrids; positions are elmos.
+moho.platoon_methods.PlatoonCategoryCount = function(self, category)
+    return EntityCategoryCount(category, platoonUnits(self))
+end
+moho.platoon_methods.PlatoonCategoryCountAroundPosition = function(self, category, position, radius)
+    local n = 0
+    for _, u in ipairs(platoonUnits(self)) do
+        if EntityCategoryContains(category, u)
+            and VDist2(u.x, u.z, position[1], position[3]) <= radius * 8 then
+            n = n + 1
+        end
+    end
+    return n
+end
+moho.platoon_methods.CalculatePlatoonThreat = function(self, threatType, category)
+    local total = 0
+    for _, u in ipairs(platoonUnits(self)) do
+        if EntityCategoryContains(category, u) then
+            total = total + __rm_faf_threat(u, threatType)
+        end
+    end
+    return total
+end
+moho.platoon_methods.CalculatePlatoonThreatAroundPosition = function(self, threatType, category, position, radius)
+    local total = 0
+    for _, u in ipairs(platoonUnits(self)) do
+        if EntityCategoryContains(category, u)
+            and VDist2(u.x, u.z, position[1], position[3]) <= radius * 8 then
+            total = total + __rm_faf_threat(u, threatType)
+        end
+    end
+    return total
+end
+-- `FindClosestUnit(squad, alliance, needToBeIdle, category)`: the nearest
+-- matching unit to the platoon's centroid. 'Enemy' reads the observed-foe
+-- snapshot — the same set every other enemy query sees.
+moho.platoon_methods.FindClosestUnit = function(self, squad, alliance, needToBeIdle, category)
+    local origin = self:GetPlatoonPosition()
+    local candidates
+    if alliance == 'Enemy' then
+        candidates = self.__brain.snap.enemies or {}
+    else
+        candidates = self:GetSquadUnits(squad)
+    end
+    local best, bestDist
+    for _, u in ipairs(candidates) do
+        if EntityCategoryContains(category or categories.ALLUNITS, u)
+            and (not needToBeIdle or u.idle ~= false) then
+            local dist = origin and VDist2(u.x, u.z, origin[1], origin[3]) or 0
+            if not bestDist or dist < bestDist then best, bestDist = u, dist end
+        end
+    end
+    return best
+end
+-- `Destroy` is the native teardown: the corpus's `PlatoonDisband` calls
+-- `aiBrain:DisbandPlatoon`, which lands here through the brain method below.
+moho.platoon_methods.Destroy = function(self)
+    if self.__dead then return end
+    self.__dead = true
+    self:OnDestroy()
+end
+
+-- `FormPlatoon`/`CanFormPlatoon` (`0x593c10` family): gather matching pool
+-- units per template squad row {category, min, max, squadName, formation}.
+-- `count` scales the authored minimums; the radius is authored ogrids.
+local function formGather(self, template, count, location, radius)
+    local squads = template.GlobalSquads
+        or (template.FactionSquads
+            and template.FactionSquads[factionNames[self.__brain:GetFactionIndex()]])
+    if not squads then return nil end
+    local scale = count or 1
+    local reach = (radius or 0) * 8
+    local available = platoonUnits(self)
+    local picked, gathered = {}, {}
+    for _, row in ipairs(squads) do
+        local want = math.max(1, math.floor((row[2] or 1) * scale))
+        local cap = row[3] or want
+        local squadName = canonicalSquad(row[4])
+        local chosen = 0
+        for _, u in ipairs(available) do
+            if chosen >= cap then break end
+            if not picked[u] and EntityCategoryContains(row[1], u)
+                and (not location or not radius
+                     or VDist2(u.x, u.z, location[1], location[3]) <= reach) then
+                picked[u] = true
+                gathered[#gathered + 1] = { unit = u, squad = squadName,
+                                            formation = row[5] }
+                chosen = chosen + 1
+            end
+        end
+        if chosen < want then return nil end
+    end
+    return gathered
+end
+moho.platoon_methods.CanFormPlatoon = function(self, template, count, location, radius)
+    return formGather(self, template, count, location, radius) ~= nil
+end
+moho.platoon_methods.FormPlatoon = function(self, template, count, location, radius)
+    local gathered = formGather(self, template, count, location, radius)
+    if not gathered then return nil end
+    local brain = self.__brain
+    local platoon = makePlatoon(brain, template.Plan)
+    for _, entry in ipairs(gathered) do
+        brain:AssignUnitsToPlatoon(platoon, { entry.unit }, entry.squad, entry.formation)
+    end
+    return platoon
+end
+
 function methods:GetFactionIndex() return self.faction end
 function methods:GetArmyStartPos() return self.startX, self.startZ end
 function methods:IsDefeated() return self.defeated == true end
@@ -611,13 +881,73 @@ function methods:GetEngineerManagerUnitsBeingBuilt(category)
     return EntityCategoryCount(category, self.snap.underway or {})
 end
 function methods:GetEngineersWantingAssistance() return 0 end
-function methods:GetManagerCount() return 1 end
--- FAF keeps every unmanaged unit in the 'ArmyPool' platoon, and the unit-count conditions
--- reach units THROUGH it. This adapter assigns no platoons, so the pool is simply the army —
--- which is the honest answer, not a shortcut.
+-- FAF keeps every unmanaged unit in the 'ArmyPool' platoon, and the unit-count
+-- conditions reach units THROUGH it. The pool is a real corpus Platoon now
+-- (C-358/C-359): created at boot with the PoolAI plan, registered under its
+-- unique name the way `MakePlatoon` registers it in retail (`0x594291`).
 function methods:GetPlatoonUniquelyNamed(name)
-    if name == 'ArmyPool' then return self.pool end
+    -- `__platoonNames` is nil on foreign-army views, which never own platoons.
+    local platoon = self.__platoonNames and self.__platoonNames[name]
+    if platoon and not platoon.__dead then return platoon end
     return nil
+end
+function methods:MakePlatoon(name, plan)
+    local platoon = makePlatoon(self, plan)
+    if name and name ~= '' then platoon:UniquelyNamePlatoon(name) end
+    return platoon
+end
+-- `PlatoonExists` answers against the brain's own platoon list — a foreign or
+-- disbanded platoon is not this brain's to command.
+function methods:PlatoonExists(platoon)
+    return platoon ~= nil and self.__platoons ~= nil
+        and self.__platoons[platoon] == true and not platoon.__dead
+end
+function methods:GetPlatoonsList()
+    local out = {}
+    for platoon in pairs(self.__platoons or {}) do
+        if not platoon.__dead then out[#out + 1] = platoon end
+    end
+    table.sort(out, function(a, b) return a.__serial < b.__serial end)
+    return out
+end
+-- `AssignUnitsToPlatoon(brain, platoon, units, squad, formation)` (`0x5947b0`):
+-- a unit belongs to exactly one platoon — leaving the old squad is part of the
+-- assignment, and the pool's roster is derived so it needs no removal.
+function methods:AssignUnitsToPlatoon(platoon, units, squad, formation)
+    local squadName = canonicalSquad(squad)
+    local list = platoon.__squads[squadName]
+    if not list then list = {} platoon.__squads[squadName] = list end
+    if formation and formation ~= '' and formation ~= 'None' then
+        platoon.__formation = formation  -- CPlatoon+0xa8: the formation override
+    end
+    for _, u in ipairs(units or {}) do
+        local old = u.PlatoonHandle
+        if old and old ~= platoon and not old.ArmyPool and old.__squads then
+            removeFromSquads(old, u)
+        end
+        list[#list + 1] = u
+        u.PlatoonHandle = platoon
+    end
+    platoon:OnUnitsAddedToPlatoon()
+end
+-- Native teardown: the corpus's `Platoon:PlatoonDisband` does the unit-side
+-- cleanup and ends here (platoon.lua:346). Mark dead, drop the name, release
+-- the squads, and run the destroy chain — which kills the plan thread through
+-- the TrashBag (C-359's other half).
+function methods:DisbandPlatoon(platoon)
+    if not platoon or platoon.__dead then return end
+    platoon.__dead = true
+    if platoon.__uniqueName then
+        self.__platoonNames[platoon.__uniqueName] = nil
+    end
+    self.__platoons[platoon] = nil
+    for _, list in pairs(platoon.__squads) do
+        for _, u in ipairs(list) do
+            if u.PlatoonHandle == platoon then u.PlatoonHandle = nil end
+        end
+    end
+    platoon.__squads = {}
+    platoon:OnDestroy()
 end
 
 local function buildingIdFor(brain, structureName)
@@ -796,39 +1126,43 @@ function __rm_faf_boot(army, info)
     brain.countMemo = { snap = false }
     brain.GridReclaim = setmetatable({ brain = brain }, GridReclaimView)
 
-    -- The pool platoon (see GetPlatoonUniquelyNamed): counts over the army's own units.
-    -- Pool-at-location and SeaAttackCondition pass manager radii in authored ogrids;
-    -- both observed unit positions and manager coordinates are already in elmos.
-    brain.pool = {
-        GetNumCategoryUnits = function(pool, category, coords, radius)
-            local n = 0
-            for _, u in ipairs(brain.snap.units) do
-                if EntityCategoryContains(category, u)
-                    and (not coords or not radius
-                         or VDist2(u.x, u.z, coords[1], coords[3]) <= radius*8) then
-                    n = n + 1
-                end
-            end
-            return n
-        end,
-        GetPlatoonUnits = function(pool)
-            return brain.snap.units
-        end,
-        -- Real threat now: the blueprints' own Defense.*ThreatLevel estimates, summed
-        -- over the matching units — the number the corpus's wave thresholds were
-        -- authored against.
-        GetPlatoonThreat = function(pool, threatType, category, position, radius)
-            local total = 0
-            for _, u in ipairs(brain.snap.units) do
-                if EntityCategoryContains(category, u)
-                    and (not position or not radius
-                         or VDist2(u.x, u.z, position[1], position[3]) <= radius*8) then
-                    total = total + __rm_faf_threat(u, threatType)
-                end
-            end
-            return total
-        end,
+    -- The platoon registries: the brain's live platoons (a set, for
+    -- `PlatoonExists`) and the unique-name index `GetPlatoonUniquelyNamed`
+    -- reads — retail's `MakePlatoon` registers 'ArmyPool' under the same
+    -- mechanism (`0x594291`).
+    brain.__platoons = {}
+    brain.__platoonNames = {}
+
+    -- The pool platoon, a real corpus Platoon (C-358/C-359): `OnCreate` runs
+    -- the PoolAI plan as a thread, then retail's InitializeSkirmishSystems
+    -- (base-ai.lua:364-368) turns it off and flags the platoon ArmyPool.
+    -- `aiBrain.ArmyPool` is the field Transportutilities and friends read.
+    brain.pool = brain:MakePlatoon('ArmyPool', 'PoolAI')
+    brain.pool.ArmyPool = true
+    brain.pool:TurnOffPoolAI()
+    brain.ArmyPool = brain.pool
+
+    -- The BaseMonitor fields the pool's distress watch reads
+    -- (base-ai.lua:BaseMonitorInitialization defaults), and the corpus's own
+    -- distress-location query grafted onto the brain — the watch calls it as
+    -- `aiBrain:BaseMonitorDistressLocation` (platoon.lua:1558).
+    brain.BaseMonitor = {
+        PoolDistressRange = 75,
+        PoolReactionTime = 7,
+        PoolDistressThreshold = 1,
+        BaseMonitorTime = 11,
+        AlertSounded = false,
+        AlertsTable = {},
+        PlatoonDistressTable = {},
+        PlatoonAlertSounded = false,
     }
+    local baseAi = import('/lua/aibrains/base-ai.lua')
+    if baseAi and baseAi.AIBrain then
+        brain.BaseMonitorDistressLocation = baseAi.AIBrain.BaseMonitorDistressLocation
+    end
+    -- base-ai.lua:395-396: the pool's standing watch, a second thread on the
+    -- same scheduler — the plan thread that proves platoons run (C-359).
+    brain.pool:ForkThread(brain.pool.BaseManagersDistressAI)
 
     -- The manager stand-ins: enough shape for conditions that navigate
     -- `BuilderManagers[locationType]`, honest about being location MAIN and nothing else.
@@ -1194,7 +1528,7 @@ local function walkPriority(brain, kindName, visit)
     end
 end
 
-)lua"} + R"lua(
+)lua" + R"lua(
 -- CommanderInitialBOAI, platoon.lua:4549–5015. Keep its resource-dependent phases
 -- across observations; the native command queue owns construction and approach work.
 -- All coordinates are elmos, so the authored squared-ogrid thresholds multiply by 64.
@@ -1492,7 +1826,14 @@ function __rm_faf_decide(army, snap)
         brain.CanPathToEnemy[ownIndex] = brain.CanPathToEnemy[ownIndex] or {}
         brain.CanPathToEnemy[ownIndex][enemyIndex] = { MAIN = snap.enemyPath }
     end
-    for _, u in ipairs(snap.units) do u.__brain = brain end
+    -- Units join the pool's roster through the platoon's own unit list: every
+    -- snapshot unit carries its owning platoon's handle — the pool for the
+    -- unmanaged, the formed platoon for the assigned (C-358).
+    local owned = platoonOwnership(brain)
+    for _, u in ipairs(snap.units) do
+        u.__brain = brain
+        u.PlatoonHandle = owned[u.h] or brain.pool
+    end
     local naval = brain.BuilderManagers.NAVAL
     if naval then
         for _, u in ipairs(snap.units) do
