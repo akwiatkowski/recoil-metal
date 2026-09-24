@@ -94,7 +94,7 @@ FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 .PHONY: help build configure test verify golden play play-from watch run run-fa run-bar \
         skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar \
         check-ai ai ai-play ai-report ai-sanity ai-matrix ai-matrix-report shot-ui \
-        shot-engineer demo
+        shot-engineer demo all-units
 
 help:
 	@echo 'recoil-metal — make targets'
@@ -108,6 +108,7 @@ help:
 	@echo
 	@echo '  PLAY IT'
 	@echo '  play            a duel you drive — army 0 is yours (ARMIES=8 for a free-for-all)'
+	@echo '  all-units       manual 1v1: every mobile unit, opposing fleets in one ocean, Paragons'
 	@echo '  play-from       the same, joining SECONDS in, so a base already stands'
 	@echo '  watch           every side scripted, nothing selectable (and no fog)'
 	@echo '  ai-play         bots vs bots, with the FAF AI sandbox report on the console'
@@ -269,6 +270,13 @@ play: build check-fa
 	@echo
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies $(ARMIES) $(ALLIANCE_FLAG) $(FACTION_FLAG) \
 	  $(FAF_AI_FLAG) $(VISION_FLAG) $(UI_FLAG)
+
+# A sandbox for manually selecting and ordering every mobile blueprint of each faction.
+# Army 0 is yours; army 1 stays idle until its units auto-engage. Opposing fleets
+# share one connected side-map ocean and have room to manoeuvre. No fog.
+all-units: build check-fa
+	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 $(FACTION_FLAG) \
+	  --all-units $(UI_FLAG)
 
 # The same match with the first SECONDS already played out, so you arrive at a base rather
 # than at two commanders on empty ground. 60 is about when the factory is up; 320 is just

@@ -259,6 +259,7 @@ add_library(rm_app STATIC
     src/app/FafAi.cpp
     src/app/ScriptHost.cpp
     src/app/WeaponVisualLoader.cpp
+    src/app/AllUnits.cpp
     src/app/FafOpponent.cpp
     src/app/Match.cpp
     src/app/Interface.cpp

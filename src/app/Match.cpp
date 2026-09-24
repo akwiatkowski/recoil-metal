@@ -1602,7 +1602,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
     // `sim::SlowUpdate` whether each army's turn is this tick (§7 P3.6). The modulo that used
     // to be on this line was the hand-rolled version of that mechanism, and it could only ever
     // ask the question for all armies at once.
-    if (!scene.armies.empty() && !runner.matchOver) {
+    if (!scene.armies.empty() && !runner.matchOver && !scene.allUnitsShowcase) {
         runOpponents(scene, runner.content, runner.field, runner.starts, runner.markers,
                        runner.scripts, now,
                        static_cast<rm::TickIndex>(tickIndex), runner.match.playableRect);

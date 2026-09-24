@@ -64,6 +64,7 @@ Roster Roster::build(std::span<const unitdef::UnitDef> units, std::span<const st
             .role = unitdef::roleOf(units[i]),
             .faction = *faction,
             .tech = unitdef::techOf(units[i]),
+            .mobile = units[i].isMobile(),
             .costMass = units[i].buildCostMass,
             .costEnergy = units[i].buildCostEnergy,
             .buildTime = units[i].buildTime,

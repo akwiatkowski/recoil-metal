@@ -117,6 +117,12 @@ struct TurretRig {
 /// slews nothing: the turret tests must call this, not just set `turretAim`.
 void publishTurretMount(UnitScene& scene, rm::UnitTypeIndex type, float meshToElmos);
 
+/// Stages every mobile blueprint of each seated faction near its own start,
+/// ships at its nearest navigable shore, and one Paragon per army on the edge.
+void stageAllUnits(UnitScene& scene, const rm::HeightField& field,
+                   std::span<const rm::mapinfo::StartPosition> starts,
+                   const rm::vfs::Vfs& content, PassabilitySet& passability);
+
 /// A unit trial: the named blueprint for the first army at the middle of the
 /// starts, enemy T1 scouts and engineers a gap away. See the definition.
 void stageTrial(UnitScene& scene, const rm::HeightField& field,

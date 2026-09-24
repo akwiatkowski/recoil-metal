@@ -209,10 +209,19 @@ version:
 ```sh
 make run      # procedural terrain — no game content needed at all
 make play     # a duel you drive: army 0 is yours, army 1 is scripted
+make all-units FACTIONS=uef,cybran  # manual 1v1 with every mobile unit and no fog
 make watch    # every side scripted, nothing selectable, no fog
 make demo     # a live 4v4 of FAF tech brains, random factions, no fog, real speed
 make verify   # replay 7000 ticks against the golden hash log (currently diverges at tick 0)
 ```
+
+`make all-units` seats a controllable first faction and a stationary opposing faction
+(`FACTIONS=uef,cybran`, or the default UEF/Aeon). Every mobile blueprint is staged
+with clearance near its army's start; aircraft park nearby. Both fleets face
+each other across one connected, draft-safe side-map ocean for naval battles.
+Each army gets an Aeon Paragon at its map edge for resource income. The whole
+map is visible, and the opposing army issues no build or attack orders; its
+units still defend themselves. Use a map with a navigable ocean.
 
 Anything is overridable: `make play ARMIES=8 ALLIANCES=2 FACTIONS=uef,seraphim`.
 Add `FAF=1` to `play` or `watch` when Forged Alliance's AI should drive the

@@ -588,6 +588,8 @@ struct UnitScene {
     /// Kept as a field because it is read in the frame loop and deriving it per frame would be
     /// a search for a value that cannot change mid-match.
     int playerArmy = rm::sim::kNoArmy;
+    /// Manual all-unit showcase: the opposing army stays idle until attacked.
+    bool allUnitsShowcase = false;
 
     /// The definitions themselves, owned here so the catalog's pointers stay valid.
     std::deque<rm::unitdef::UnitDef> definitions;

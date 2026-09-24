@@ -54,6 +54,8 @@ struct RosterEntry {
     unitdef::Role role = unitdef::Role::Unknown;
     sim::Faction faction = sim::Faction::Uef;
     int tech = 0;
+    /// Parsed movement, not a category guess: excludes buildings even if tagged as units.
+    bool mobile = false;
 
     /// Whether this entry satisfies a `BuildableCategory` expression — any one term, all of
     /// its tags, or a lowercase id reference naming this entry. The factory menu's whole
@@ -129,6 +131,7 @@ public:
     [[nodiscard]] std::optional<RosterEntry> byId(std::string_view id) const;
 
     [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
+    [[nodiscard]] std::span<const RosterEntry> entries() const noexcept { return entries_; }
 
 private:
     /// Sorted by (faction, role, tech, cost, id), which is what makes every lookup a range and

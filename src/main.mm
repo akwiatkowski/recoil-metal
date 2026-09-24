@@ -219,6 +219,10 @@ int main(int argc, const char* argv[]) {
             }
         }
 
+        const bool allUnitsShowcase = hasFlag(argc, argv, "--all-units");
+        if (allUnitsShowcase && !hasFlag(argc, argv, "--skirmish")) {
+            throw std::invalid_argument{"--all-units requires --skirmish"};
+        }
         if (hasFlag(argc, argv, "--skirmish")) {
             // `--factions uef,seraphim,...` picks each seat's faction, cycled; absent keeps
             // the round-robin. Parsed here and passed down, because which model a seat needs
@@ -226,6 +230,7 @@ int main(int argc, const char* argv[]) {
             const std::vector<rm::sim::Faction> factions = parseFactions(argc, argv);
             spawnCommanders(units, map->field, starts, content,
                             hasFlag(argc, argv, "--observer"), factions);
+            units.allUnitsShowcase = allUnitsShowcase;
             if (const std::size_t alliances = parseCount(argc, argv, "--alliances");
                 alliances > 1 && alliances < units.armies.size()) {
                 for (rm::sim::Army& army : units.armies) {
@@ -249,7 +254,7 @@ int main(int argc, const char* argv[]) {
             // for the wrong count would leave a side with nowhere to see. A map whose
             // scenario options say `FogOfWar='none'` gets no grids at all — retail's
             // `reconDB+0xA8` flag off, which is what an unconfigured Intel already means.
-            if (!map->scenarioOptions.is("FogOfWar", "none")) {
+            if (!allUnitsShowcase && !map->scenarioOptions.is("FogOfWar", "none")) {
                 configureIntel(units, map->field, parseVisionStyle(argc, argv));
             }
             // Structures snap to the build grid unless `--placement free` asks otherwise.
@@ -264,6 +269,9 @@ int main(int argc, const char* argv[]) {
                 std::printf("skirmish: %zu ownerless unit(s) adopted by army %d\n", adopted,
                             units.playerArmy);
             }
+            if (allUnitsShowcase) {
+                stageAllUnits(units, map->field, starts, content, passability);
+            }
             // A unit trial stages after adoption so the middle is computed over the
             // map's own starts: the named unit for the seated army, enemy T1 scouts
             // and engineers a gap away, commanders untouched in their corners.
@@ -275,7 +283,9 @@ int main(int argc, const char* argv[]) {
                            count > 0 ? count : 1, foes > 0 ? foes : 6,
                            gapSigned != 0.0 ? static_cast<float>(gapSigned) : 120.0f);
             }
-            orderFirstExtractors(units, map->markers, content, map->field, passability);
+            if (!allUnitsShowcase) {
+                orderFirstExtractors(units, map->markers, content, map->field, passability);
+            }
             // `--priority <high|low>` stages a non-Normal tier on every producer the
             // player owns, so a `--screenshot` capture can show the production
             // panel's lit cell without a keypress to script.
