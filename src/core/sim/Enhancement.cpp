@@ -661,11 +661,14 @@ Fx weaponMaxRangeFor(const UnitStore& store, const UnitCatalog& catalog,
     return weapon.maxRange;
 }
 
-float weaponRateOfFireFor(const UnitStore& store, const UnitCatalog& catalog,
-                          UnitIndex slot, const unitdef::Weapon& weapon) noexcept {
+Fx weaponRateOfFireFor(const UnitStore& store, const UnitCatalog& catalog,
+                       UnitIndex slot, const unitdef::Weapon& weapon) noexcept {
+    // The blueprint's `rateOfFire` is authored as a float (shots per second);
+    // it crosses into fixed point HERE, at the sim boundary, so the reload
+    // arithmetic in Combat.cpp stays float-free (tools/check_no_sim_floats.sh).
     if (statLabelled(store, slot, weapon.label,
                      &EnhancementScriptEffects::rateOfFireLabels)) {
-        float result = weapon.rateOfFire;
+        Fx result = fxFromFloat(weapon.rateOfFire);
         for (const auto& [position, installed] : store.enhancements()[slot]) {
             const EnhancementScriptEffects script =
                 enhancementScriptEffects(installed);
@@ -673,12 +676,12 @@ float weaponRateOfFireFor(const UnitStore& store, const UnitCatalog& catalog,
             if (const auto* effects =
                     catalog.enhancementEffects(store.typeAt(slot), installed);
                 effects != nullptr && effects->rateOfFire > 0.0f) {
-                result = effects->rateOfFire;
+                result = fxFromFloat(effects->rateOfFire);
             }
         }
         return result;
     }
-    return weapon.rateOfFire;
+    return fxFromFloat(weapon.rateOfFire);
 }
 
 Mag weaponDamageModFor(const UnitStore& store, const UnitCatalog& catalog,

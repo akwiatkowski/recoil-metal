@@ -83,6 +83,15 @@ struct Manipulator {
     /// lifecycle toggles the builder arm through this.
     bool enabled = true;
 
+    // --- BuilderArm ----------------------------------------------------------
+    /// Index of the rig a `BuilderArm` record tracks within its unit's pair
+    /// (`C-249`'s Seraphim half): 0 for the primary `General.BuildBones`, 1 for
+    /// the parallel `General.BuildBones_2`. Other kinds leave it at the default
+    /// — `syncBuilderArms` writes it on insertion and matches on read, so a unit
+    /// with both rigs owns two records and never confuses them. Zero outside
+    /// BuilderArm is honest: a one-kind list has never needed a discriminator.
+    std::int32_t rigIndex = 0;
+
     // --- StorageSlide ---------------------------------------------------------
     /// Which resource drives the slide: 0 = mass, 1 = energy — the
     /// `U4EconResource` selector retail stores at `manip+0xa8`.

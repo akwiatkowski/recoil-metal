@@ -196,3 +196,31 @@ TEST_CASE("a water hull's draft is its authored elevation; a naval structure's i
     CHECK(yardMove.usesSurfaceWaterGrid);
     CHECK(yardMove.minWaterDepthElmos == 12.0f);
 }
+
+TEST_CASE("C-218 (3): explicit zero MaxSpeed yields an immobile unit indistinguishable from no MaxSpeed") {
+    // `C-218`'s explicit-0-vs-absent third site: `Physics.MaxSpeed`. The loader MUST
+    // turn `MaxSpeed = 0` AND a missing `MaxSpeed` into the SAME zero `speedElmosPerSecond`
+    // — any other answer (e.g. a 1.0 minimum, or a non-zero sentinel) would silently
+    // make a structure "slightly mobile" and let it receive move orders nobody wanted it
+    // to have. `UnitDef::isMobile()` runs `speedElmosPerSecond > 0`, so zero in either
+    // case pins immobile.
+    UnitDef explicitZero;
+    explicitZero.name = "explicit_zero";
+    explicitZero.motion = MotionType::Land;
+    explicitZero.speedElmosPerSecond = 0.0f;  // written by the loader for `MaxSpeed = 0`
+    CHECK_FALSE(explicitZero.isMobile());
+
+    UnitDef absentField;
+    absentField.name = "absent_field";
+    absentField.motion = MotionType::Land;
+    absentField.speedElmosPerSecond = 0.0f;  // same: `numberOr(..., 0.0f)`
+    CHECK_FALSE(absentField.isMobile());
+
+    // AND a positive speed reads as a positive speed — the value the corpus ships in the
+    // hundreds of moving units.
+    UnitDef tank;
+    tank.name = "real_tank";
+    tank.motion = MotionType::Land;
+    tank.speedElmosPerSecond = 3.4f * 8.0f;  // 3.4 ogrids × 8 = 27.2 elmos/s
+    CHECK(tank.isMobile());
+}

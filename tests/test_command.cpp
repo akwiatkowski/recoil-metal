@@ -664,7 +664,7 @@ TEST_CASE("a structure on the corridor redirects a later move around it") {
     const std::vector<std::array<rm::sim::Fx, 2>>& path = fix.roster.motion(fix.mine).path;
     REQUIRE_FALSE(path.empty());
     const std::vector<std::uint8_t> blocked =
-        rm::sim::blockingCells(fix.roster.store, fix.grid);
+        rm::sim::blockingCells(fix.roster.store, fix.grid, nullptr);
     for (const auto& point : path) {
         const int cell = fix.grid.cellAtWorld(point[1]) * fix.grid.cellsX
                        + fix.grid.cellAtWorld(point[0]);

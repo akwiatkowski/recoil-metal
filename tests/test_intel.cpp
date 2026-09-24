@@ -1625,3 +1625,96 @@ TEST_CASE("C-282: a dying unit's blip falls bit by bit", "[intel]") {
     }
     CHECK(falses == 1);  // only Radar was set for army 0
 }
+
+TEST_CASE("C-283: OnIntelChange fires on enable/disable, OnDetectedBy fires on first sight",
+          "[intel]") {
+    // The Lua-event half of C-283: a (disabled, enabled) toggle on a unit's intel
+    // emits one `IntelChanged(blip, type, val)` per edge through the same path
+    // (`emitIntelDiff` at `Intel.cpp:886-895`) that records a contact walking in
+    // and out of range, and the first sight of an unknown unit is a single
+    // `DetectedBy(army)`. C-361's dispatch test (test_faf_ai.cpp:3126) covers the
+    // brain/unit callback wiring with synthetic events; this case exercises the
+    // SIM-side source of those events for the C-283 transitions (enable/disable a
+    // radar unit; an unknown unit appearing in radar coverage).
+    const rm::unitdef::UnitDef watcherDef = seer(0.0f, 400.0f);  // radar only
+    const rm::unitdef::UnitDef quietDef = seer(0.0f);             // nothing
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watcherDef);
+    const rm::UnitTypeIndex quiet = catalog.add(&quietDef);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(512), Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    const rm::sim::UnitId dish = place(store, watcher, 0, 256.0f, 256.0f);
+    // The enemy is outside vision (80 elmos) but inside radar (400 elmos). Vision
+    // never lights, so the only IntelChanged edge for it is the radar one.
+    const rm::sim::UnitId enemy = place(store, quiet, 1, 500.0f, 256.0f);
+    std::vector<Army> armies = twoArmies(false);
+    rm::sim::EventQueue events;
+
+    const auto countEnemyIntelChanged = [&](rm::sim::IntelType type, bool value) {
+        std::size_t n = 0;
+        for (const rm::sim::Event& event : events.all()) {
+            if (event.kind == rm::sim::EventKind::IntelChanged
+                && event.unit == enemy && event.army == 0
+                && event.intelType == static_cast<std::uint8_t>(type)
+                && event.intelValue == value) {
+                ++n;
+            }
+        }
+        return n;
+    };
+    const auto enemyDetected = [&] {
+        std::size_t n = 0;
+        for (const rm::sim::Event& event : events.all()) {
+            if (event.kind == rm::sim::EventKind::DetectedBy
+                && event.unit == enemy && event.army == 0) {
+                ++n;
+            }
+        }
+        return n;
+    };
+
+    // Frame 0: first sight — the enemy appears in the dish's radar coverage.
+    events.beginFrame(0);
+    intel.update(store, catalog, armies, nullptr, rm::sim::TickRate{}, {}, &events);
+    CHECK(enemyDetected() == 1);
+    CHECK(countEnemyIntelChanged(rm::sim::IntelType::Radar, true) == 1);
+
+    // Frame 1: steady state with nothing changed emits nothing — the toggle hasn't
+    // happened yet and the contacts are at their baseline.
+    events.beginFrame(1);
+    intel.update(store, catalog, armies, nullptr, rm::sim::TickRate{}, {}, &events);
+    CHECK(events.empty());
+
+    // Frame 2: DisableIntel('Radar') on the dish. The placement's intelMask changes
+    // (Intel.cpp:742, 797), the radar grid is re-stamped without the dish's
+    // contribution, and `reconBitsForUnit` reads `intelActive`-guarded bits
+    // (`Intel.cpp:553-555`) — the radar bit falls, the diff emits one
+    // `IntelChanged(Radar, false)` for the enemy.
+    events.beginFrame(2);
+    REQUIRE(store.setIntelEnabled(dish, rm::sim::IntelType::Radar, false));
+    intel.update(store, catalog, armies, nullptr, rm::sim::TickRate{}, {}, &events);
+    CHECK(countEnemyIntelChanged(rm::sim::IntelType::Radar, false) == 1);
+    CHECK_FALSE(intel.sees(0, IntelKind::Radar, Fx::fromInt(500), Fx::fromInt(256)));
+
+    // Frame 3: steady state with the radar still off — no diff, no events.
+    events.beginFrame(3);
+    intel.update(store, catalog, armies, nullptr, rm::sim::TickRate{}, {}, &events);
+    CHECK(events.empty());
+
+    // Frame 4: EnableIntel('Radar') on the dish. The dish's coverage returns, the
+    // enemy reappears in the radar grid, and the rising edge emits one
+    // `IntelChanged(Radar, true)`. No second `DetectedBy` — the prior blip's
+    // `record.unit` slot is preserved, so the diff stays a 0→nonzero transition
+    // only when `record.bits` was zero, which it isn't after frame 2 (reconPrimed_
+    // is set).
+    events.beginFrame(4);
+    REQUIRE(store.setIntelEnabled(dish, rm::sim::IntelType::Radar, true));
+    intel.update(store, catalog, armies, nullptr, rm::sim::TickRate{}, {}, &events);
+    CHECK(countEnemyIntelChanged(rm::sim::IntelType::Radar, true) == 1);
+    CHECK(intel.sees(0, IntelKind::Radar, Fx::fromInt(500), Fx::fromInt(256)));
+    CHECK(enemyDetected() == 1);  // still one — no fresh blip birth
+}

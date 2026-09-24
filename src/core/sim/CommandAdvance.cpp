@@ -230,6 +230,10 @@ struct ScriptDispatchResult {
     ScriptTaskState& state = command->scriptState();
     bool created = false;
     if (!state.created) {
+        // `C-318`: `OnPreCreate` runs first so the script can pre-populate state.opaque
+        // (or anything else `OnCreate` expects to find) before native setup touches it.
+        host.onPreCreate(command->unit(), command->payload().scriptTask,
+                         command->payload().scriptData, state);
         state.created = true;
         host.onCreate(command->unit(), command->payload().scriptTask,
                       command->payload().scriptData, state);
@@ -306,10 +310,13 @@ bool publishPathResult(const PathResult& result, UnitStore& store,
 /// sacrifice grant or a heavily assisted tick that jumps two quarters reports
 /// both, in order.
 void emitProgressCrossings(const Construction& work, Fx before, EventQueue* events) {
-    static constexpr std::array<float, 3> kQuarters{0.25f, 0.5f, 0.75f};
+    // Quarter boundaries as fixed point from the start — a `float` constant
+    // here would trip tools/check_no_sim_floats.sh, and fromRatio(1,4) is
+    // exact in Q18.14 anyway (4096 raw), so nothing is lost.
+    static constexpr std::array kQuarters{Fx::fromRatio(1, 4), Fx::fromRatio(1, 2),
+                                          Fx::fromRatio(3, 4)};
     const Fx after = work.fraction();
-    for (const float quarter : kQuarters) {
-        const Fx boundary = fxFromFloat(quarter);
+    for (const Fx boundary : kQuarters) {
         if (before < boundary && after >= boundary) {
             emit(events, Event{.kind = EventKind::ConstructionProgress,
                                .instigator = work.builder,

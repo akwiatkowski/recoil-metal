@@ -100,6 +100,18 @@ struct Feature {
     /// the thing that stood here was a tank or a crashed gunship. False for air,
     /// submerged, seabed and attached deaths — and for map props, which never mark.
     bool marksGround = false;
+
+    /// `C-287`: the prop's authored footprint in ogrids. Zero for a wreck — a wreck has
+    /// no `Footprint` block (`DefaultWreckage_prop.bp` is footprint-less) and inherits no
+    /// blocking from what died; its scorch record sits where the unit's centre was, and
+    /// the ground there stays walkable. A prop that DOES state a footprint claims its
+    /// cells for pathing until it is reclaimed (`blockingCells` reads both axes and marks
+    /// the rectangle, with `radiusElmos` standing in for an axis that the author left at
+    /// zero so a single-ogrid prop is a disk). Both fields travel through the save and the
+    /// state hash the same way the rest of the feature does, so a prop that survives a
+    /// round-trip keeps blocking the cells the placement claimed.
+    int footprintSquaresX = 0;
+    int footprintSquaresZ = 0;
 };
 
 /// Everything on the map that is not a unit.

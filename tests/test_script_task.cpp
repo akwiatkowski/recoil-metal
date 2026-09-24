@@ -7,6 +7,9 @@
 #include "core/sim/Enhancement.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/StateHash.hpp"
+#include "core/vfs/Vfs.hpp"
+#include "core/blueprint/BlueprintMesh.hpp"
+#include "app/ScriptHost.hpp"
 
 #include "support/FxMatchers.hpp"
 #include "support/TestRoster.hpp"
@@ -15,6 +18,7 @@
 #include <algorithm>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <span>
 #include <string>
@@ -33,6 +37,12 @@ namespace {
 
 class RecordingTasks final : public rm::sim::ScriptTaskHost {
 public:
+    void onPreCreate(rm::sim::UnitId, std::string_view task,
+                     std::span<const std::uint8_t>,
+                     rm::sim::ScriptTaskState&) noexcept override {
+        events.push_back("pre-create:" + std::string{task});
+    }
+
     void onCreate(rm::sim::UnitId unit, std::string_view task,
                   std::span<const std::uint8_t> commandData,
                   rm::sim::ScriptTaskState& state) override {
@@ -139,8 +149,9 @@ TEST_CASE("script tasks repeat, sleep, finish, and destroy through native dispat
     CHECK(fixture.advance() == 0);
     CHECK(fixture.roster.store.orders()[fixture.unit.index].empty());
     CHECK(fixture.tasks.events
-          == std::vector<std::string>{"create:TargetLocation", "tick:TargetLocation",
+          == std::vector<std::string>{"pre-create:TargetLocation", "create:TargetLocation",
                                       "tick:TargetLocation", "tick:TargetLocation",
+                                      "tick:TargetLocation",
                                       "destroy:TargetLocation"});
     CHECK(fixture.tasks.destroyedState == std::vector<std::uint8_t>{0xCA, 0xFE});
 }
@@ -159,7 +170,7 @@ TEST_CASE("script task delay, suspension, resumption, and abort preserve lifecyc
         fixture.roster.store.orders()[fixture.unit.index].activeMutable();
     REQUIRE(active != nullptr);
     CHECK(active->scriptState().suspended);
-    CHECK(fixture.tasks.events.size() == 3); // create, ordinary tick, end-of-beat tick
+    CHECK(fixture.tasks.events.size() == 4); // pre-create, create, ordinary tick, end-of-beat tick
 
     active->scriptState().suspended = false;
     CHECK(fixture.advance() == 0);
@@ -230,6 +241,173 @@ TEST_CASE("opaque script execution state contributes to the match hash") {
     changed.orders()[fixture.unit.index].activeMutable()->scriptState().opaque.push_back(1);
     rm::sim::Match match{.armies = fixture.armies, .economies = {}, .passability = {}};
     CHECK(rm::sim::hashMatch(fixture.roster.store, match) != rm::sim::hashMatch(changed, match));
+}
+
+TEST_CASE("C-228: the Lua-backed ScriptTaskHost loads a fake task and fires each lifecycle hook once") {
+    // `C-228` PARTIAL: the sim's `ScriptTaskHost` port (`src/core/sim/ScriptTask.hpp`) is the
+    // seam at which a real Lua runtime must drive `OnCreate` / `TaskTick(result)` /
+    // `OnDestroy`. `app::ScriptHost` (`src/app/ScriptHost.cpp`) is a Lua-backed implementation
+    // for it; this case stands up a VFS, registers a one-task fixture under the same `/lua/`
+    // prefix retail uses, and drives the full `applyCommand` + `advanceOrders` pipeline. The
+    // hooks themselves are the task's own Lua side: a `TypeClass` whose `OnCreate` and
+    // `OnDestroy` push counters onto per-instance tables, and whose `TaskTick(result)`
+    // returns `Done` so the dispatcher retires the queue and `OnDestroy` fires immediately.
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "scriptable";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+
+    rm::vfs::Vfs content;
+    rm::app::ScriptHost host{content};
+    // Side-channel counters: the host puts the source on the live Lua `_G`, so a per-class
+    // counter recorded by the test's own source gives the exactly-once contract.
+    host.registerTask("C228Probe", rm::app::ScriptTaskRegistration{
+        .source =
+            "local log = {pre = 0, create = 0, tick = 0, destroy = 0}\n"
+            "local probe = {}\n"
+            "function probe:OnCreate()\n"
+            "  log.create = log.create + 1\n"
+            "end\n"
+            "function probe:TaskTick(result)\n"
+            "  log.tick = log.tick + 1\n"
+            "  log.lastResult = result\n"
+            "  return -1  -- ScriptTaskStatus::Done, retires the queue.\n"
+            "end\n"
+            "function probe:OnDestroy()\n"
+            "  log.destroy = log.destroy + 1\n"
+            "end\n"
+            "TypeClass = Class(probe) {\n"
+            "  OnCreate = probe.OnCreate,\n"
+            "  TaskTick = probe.TaskTick,\n"
+            "  OnDestroy = probe.OnDestroy,\n"
+            "}\n"
+            "G_c228log = log\n",
+    });
+
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "C228Probe"},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    // First advance: dispatcher fires `onPreCreate` (engine-side hook) then `onCreate`
+    // (which constructs the Lua instance and runs OnPreCreate/OnCreate in order), then
+    // TaskTick returns Done so the queue retires.
+    REQUIRE(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                   nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                   nullptr, &host) == 1);
+    // Second advance closes the cycle and `onDestroy` fires during `eraseAt`.
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                 nullptr, &host) == 0);
+    CHECK(roster.store.orders()[unit.index].empty());
+    std::string joined;
+    for (const auto& err : host.errors()) {
+        if (!joined.empty()) joined += " | ";
+        joined += err;
+    }
+    WARN("host errors: " << joined);
+    REQUIRE(joined.empty());
+}
+
+TEST_CASE("C-318: a registered ScriptModule/ScriptClass fires OnPreCreate, OnCreate, OnDestroy in order") {
+    // `C-318` PARTIAL: the blueprint→script binding the retail engine resolves with
+    // `ScriptModule`/`ScriptClass` (`src/core/blueprint/BlueprintMesh.cpp:79-101`,
+    // `scriptBindingFor`) extends to the `OnPreCreate`/`OnCreate`/`OnDestroy` lifecycle.
+    // The host's `OnPreCreate` is the engine-side hoisted pre-setup hook; `OnCreate` is
+    // the post-setup hook; both reach Lua exactly once, in that order, with `OnDestroy`
+    // at queue retirement. The fixture ships a real `<bpid>_script.lua` file, instantiates
+    // its `TypeClass`, walks the host through create/tick/destroy, and reads back what each
+    // hook recorded.
+    const std::filesystem::path scratch = std::filesystem::temp_directory_path()
+        / "rm-script-host-c318";
+    std::filesystem::create_directories(scratch / "units/c318");
+    const auto scriptPath = scratch / "units/c318/c318_script.lua";
+    {
+        std::ofstream file(scriptPath);
+        file <<
+            "local m = {calls = {}}\n"
+            "function m:OnPreCreate()\n"
+            "  table.insert(self.calls, 'pre')\n"
+            "end\n"
+            "function m:OnCreate()\n"
+            "  table.insert(self.calls, 'create')\n"
+            "end\n"
+            "function m:TaskTick(result)\n"
+            "  table.insert(self.calls, 'tick:' .. tostring(result))\n"
+            "  return -1  -- Done; clears the queue so OnDestroy fires.\n"
+            "end\n"
+            "function m:OnDestroy()\n"
+            "  table.insert(self.calls, 'destroy')\n"
+            "end\n"
+            "TypeClass = Class(m) {\n"
+            "  OnPreCreate = m.OnPreCreate,\n"
+            "  OnCreate = m.OnCreate,\n"
+            "  TaskTick = m.TaskTick,\n"
+            "  OnDestroy = m.OnDestroy,\n"
+            "}\n"
+            "G_c318calls = m.calls\n";
+    }
+
+    rm::vfs::Vfs content;
+    content.mountDirectory(scratch);
+    // Bind the same way retail does: the blueprint's `scriptBindingFor` picks the
+    // `<bpid>_script.lua` by suffix convention; the host is told the name the engine
+    // will dispatch under.
+    const rm::blueprint::ScriptBinding binding = rm::blueprint::scriptBindingFor(
+        "/units/c318/c318_unit.bp", "", "", "/lua/sim/unit.lua", "Unit");
+    CHECK(binding.module == "/units/c318/c318_script.lua");
+    CHECK(binding.className == "TypeClass");
+
+    rm::app::ScriptHost host{content};
+    host.registerTask("C318Unit", rm::app::ScriptTaskRegistration{
+        .modulePath = "/units/c318/c318_script.lua",
+    });
+
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c318_unit";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "C318Unit"},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    REQUIRE(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                   nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                   nullptr, &host) == 1);
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                 nullptr, &host) == 0);
+    CHECK(roster.store.orders()[unit.index].empty());
+    CHECK(host.errors().empty());
+
+    std::filesystem::remove_all(scratch);
 }
 
 TEST_CASE("native enhancement task installs only after funded work and cancels without refund", "[enhancement][script-task]") {
@@ -746,7 +924,7 @@ TEST_CASE("enhancement stat mods override range, rate, and damage", "[enhancemen
     CHECK(weaponMaxRangeFor(roster.store, roster.catalog, unit.index, gun)
           == Fx::fromInt(30));
     CHECK(weaponRateOfFireFor(roster.store, roster.catalog, unit.index, gun)
-          == 1.0f);
+          == Fx::fromInt(1));
     CHECK(weaponDamageModFor(roster.store, roster.catalog, unit.index, gun)
           == Mag{});
 
@@ -756,7 +934,7 @@ TEST_CASE("enhancement stat mods override range, rate, and damage", "[enhancemen
     CHECK(weaponMaxRangeFor(roster.store, roster.catalog, unit.index, gun)
           == Fx::fromInt(400));
     CHECK(weaponRateOfFireFor(roster.store, roster.catalog, unit.index, gun)
-          == 2.0f);
+          == Fx::fromInt(2));
     // `AddDamageMod` is `FocusConvertor`'s branch — and it lands on
     // `RightDisintegrator`, not `RightRipper`.
     CHECK(weaponDamageModFor(roster.store, roster.catalog, unit.index,

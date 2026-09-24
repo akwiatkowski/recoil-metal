@@ -30,6 +30,21 @@ TickCount TickRate::ticks(Seconds duration) const noexcept {
     return rounded == 0 ? TickCount{1} : rounded;
 }
 
+TickCount TickRate::ticksForRate(Fx perSecond) const noexcept {
+    if (perSecond <= Fx{}) {
+        return 1;  // a zero/negative rate is the slowest possible weapon, not a division
+    }
+    // ticks = ticksPerSecond / rate, in Q18.14 the whole way — the fixed-point
+    // twin of `ticks(seconds(1.0f / rate))`, for rates that only exist as Fx
+    // (enhancement overrides, C-255). Same round-to-nearest-then-floor-at-one
+    // contract as `ticks(Seconds)`: a rate of 10 shots/s at 10 Hz is one tick,
+    // and anything faster must not round down to zero.
+    const Fx period = Fx::fromInt(static_cast<std::int32_t>(ticksPerSecond_)) / perSecond;
+    const auto rounded = static_cast<TickCount>(
+        roundShift(FxWide{period.raw()}, kFxFractionalBits));
+    return rounded == 0 ? TickCount{1} : rounded;
+}
+
 Fx TickRate::perTick(float perSecond) const noexcept {
     return fxFromFloat(perSecond / static_cast<float>(ticksPerSecond_));
 }

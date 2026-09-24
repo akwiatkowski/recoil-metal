@@ -344,6 +344,13 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     def.meshHeightElmos = numberOr(*physics, "MeshExtentsY", 0.0f) * scmap::kElmosPerOgrid;
     def.meshExtentsXElmos = numberOr(*physics, "MeshExtentsX", 0.0f) * scmap::kElmosPerOgrid;
     def.meshExtentsZElmos = numberOr(*physics, "MeshExtentsZ", 0.0f) * scmap::kElmosPerOgrid;
+    // `C-218`: `Physics.InertiaTensorX/Y/Z` (entity schema `EntityBlueprint.lua:22-27`)
+    // — the diagonal of the rigid-body inertia tensor, in mass × ogrid². No shipped
+    // unit author them; reading the absent key as zero is the safe-degenerate default
+    // (a sphere whose every axis agrees), which is what a body without a tensor IS.
+    def.inertiaTensorX = numberOr(*physics, "InertiaTensorX", 0.0f);
+    def.inertiaTensorY = numberOr(*physics, "InertiaTensorY", 0.0f);
+    def.inertiaTensorZ = numberOr(*physics, "InertiaTensorZ", 0.0f);
 
     // Where a builder's construction effect leaves from. Read for every unit — 143 build, and
     // the rest simply have no block — because the effect asks by name and a missing list is
@@ -367,6 +374,26 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             .pitchMinDegrees = numberOr(*buildBones, "PitchMin", -90.0f),
             .pitchMaxDegrees = numberOr(*buildBones, "PitchMax", 90.0f),
             .pitchSlewDegreesPerSecond = numberOr(*buildBones, "PitchSlew", 360.0f),
+        };
+    }
+
+    // Seraphim's parallel `General.BuildBones_2` (`C-249`'s second rig): a handful of
+    // blueprints — the Seraphim ACU, the Kolhozy queen — name two `BuildBones` tables
+    // and get two `CBuilderArmManipulator` records, each tracking its own yaw/pitch
+    // subtree. Read it the same way as the primary; absent reads as a default-constructed
+    // `BuilderArmSpec` whose `.exists()` is false, so the lifecycle that adds the
+    // manipulator record treats the slot as empty.
+    if (const lua::Value* secondBuildBones = parsed->path("General", "BuildBones_2")) {
+        def.builderArm2 = unitdef::BuilderArmSpec{
+            .yawBone = boneRef(*secondBuildBones, "YawBone"),
+            .pitchBone = boneRef(*secondBuildBones, "PitchBone"),
+            .aimBone = boneRef(*secondBuildBones, "AimBone"),
+            .yawMinDegrees = numberOr(*secondBuildBones, "YawMin", -180.0f),
+            .yawMaxDegrees = numberOr(*secondBuildBones, "YawMax", 180.0f),
+            .yawSlewDegreesPerSecond = numberOr(*secondBuildBones, "YawSlew", 360.0f),
+            .pitchMinDegrees = numberOr(*secondBuildBones, "PitchMin", -90.0f),
+            .pitchMaxDegrees = numberOr(*secondBuildBones, "PitchMax", 90.0f),
+            .pitchSlewDegreesPerSecond = numberOr(*secondBuildBones, "PitchSlew", 360.0f),
         };
     }
 
@@ -486,9 +513,19 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
                      numberOr(*airBlock, "MaxAirspeed", numberOr(*physics, "MaxSpeed", 0.0f)))
             * scmap::kElmosPerOgrid;
         // Ogrids to elmos, like every other length in this file (`C-221` reads it from
-        // `Physics`, but only a flyer consults it, so it rides with the block).
+        // `Physics`, but only a flyer consults it, so it rides with the block). `C-218`:
+        // `AttackElevation` falls back to `Elevation` when the file omits the first. A
+        // unit that states only its cruise height is a unit whose attack altitude IS its
+        // cruise altitude; the combat state machine would otherwise guess zero.
         def.airAttackElevationElmos =
-            numberOr(*physics, "AttackElevation", 0.0f) * scmap::kElmosPerOgrid;
+            numberOr(*physics, "AttackElevation",
+                     numberOr(*physics, "Elevation", 0.0f))
+            * scmap::kElmosPerOgrid;
+        // `C-218`: `Air.StartTurnDistance` (changelog 2026-02-14-3830 and the dozen units
+        // around it at `Air.StartTurnDistance = 5`/10/15). Read as authored; ogrids the
+        // same as `AttackElevation`, kept here in raw form so the field's ogrid-ness is
+        // a property of the loader, not a hidden conversion.
+        def.startTurnDistance = numberOr(*airBlock, "StartTurnDistance", 0.0f);
         def.airAutoLandTimeSec = numberOr(*airBlock, "AutoLandTime", 0.0f);
         def.airFuelUseTimeSec = numberOr(*airBlock, "FuelUseTime", 0.0f);
         // `C-224`, `Air+0x8c`: seconds of lead a bomb-drop weapon applies to a
@@ -497,6 +534,11 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.airPredictAheadForBombDropSec =
             std::max(0.0f, numberOr(*airBlock, "PredictAheadForBombDrop", 0.0f));
     }
+    // `C-218`: `Physics.CatchUpAcc` (`UnitBlueprint.lua:1112-1113`) — elmos-per-tick² a
+    // lagging mover applies to close a drifting target. Lives on `Physics`, NOT on `Air`,
+    // so it is read once for the whole blueprint whether or not a flyer is present —
+    // a naval chase uses the same field the way an aerial one does.
+    def.catchUpAcc = numberOr(*physics, "CatchUpAcc", 0.0f);
 
     // --- size --------------------------------------------------------------
     //
@@ -549,6 +591,33 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     if (footprint != nullptr) {
         def.minWaterDepthElmos =
             numberOr(*footprint, "MinWaterDepth", 0.0f) * scmap::kElmosPerOgrid;
+        // `C-218`: `Footprint.OccupancyCaps` (entity schema `EntityBlueprint.lua:87`).
+        // A layer mask retail's `ComputeDerivedQuantities` would overwrite its derived cap with
+        // when the file states one. The prop corpus sets `OccupancyCaps = 3`
+        // (Land | Air) on rocks and 0 on crystals that occupy nothing at all — a 0
+        // here is a "no layer" answer, NOT a missing key. The `-1` sentinel marks the
+        // absent case so a content-driven sim can distinguish "no idea" from
+        // "explicitly nowhere".
+        if (const std::optional<double> caps = footprint->numberAt("OccupancyCaps")) {
+            def.occupancyCaps = static_cast<int>(*caps);
+        }
+    }
+    // `C-218`: `AltFootprint` (entity schema `EntityBlueprint.lua:5`,
+    // `Sim/Unit.lua:128-131`, `Unit:ForceAltFootprint(state)`). Same shape as the
+    // regular `Footprint`. The five fields are read into their own struct, never
+    // merged into `Footprint`, because the swap is a runtime toggle and silently
+    // merging would deny the caller the choice. `hasAltFootprint` is the only
+    // signal anything cares about; the values are verbatim from the file.
+    if (const lua::Value* altFootprint = parsed->path("AltFootprint")) {
+        def.hasAltFootprint = true;
+        def.altFootprint.squaresX = squaresFrom(numberOr(*altFootprint, "SizeX", 0.0f));
+        def.altFootprint.squaresZ = squaresFrom(numberOr(*altFootprint, "SizeZ", 0.0f));
+        def.altFootprint.maxSlopeDegrees = numberOr(*altFootprint, "MaxSlope", 0.0f);
+        def.altFootprint.minWaterDepthElmos =
+            numberOr(*altFootprint, "MinWaterDepth", 0.0f) * scmap::kElmosPerOgrid;
+        if (const std::optional<double> caps = altFootprint->numberAt("OccupancyCaps")) {
+            def.altFootprint.occupancyCaps = static_cast<int>(*caps);
+        }
     }
 
     // Retail then raises an omitted or undersized skirt to the footprint and turns its

@@ -168,39 +168,52 @@ void syncBuilderArms(UnitStore& store, const UnitCatalog& catalog,
             continue;
         }
         std::vector<Manipulator>& list = lists[slot];
-        auto arm = std::ranges::find_if(list, [](const Manipulator& manip) {
-            return manip.kind == ManipulatorKind::BuilderArm;
-        });
-        if (!def->builderArm.exists()) {
-            // `C-249`'s creation gate, read the other way: retail's
-            // `SetupBuildBones` creates the manipulator only when all three
-            // `General.BuildBones` references exist, so a unit whose blueprint
-            // lacks any of them never carries the record at all.
-            if (arm != list.end()) {
-                list.erase(arm);
-            }
-            continue;
-        }
-        if (arm == list.end()) {
-            (void)store.addManipulator(
-                store.idAt(slot),
-                Manipulator{.kind = ManipulatorKind::BuilderArm,
-                            .precedence = 5,   // retail's authored precedence
-                            .enabled = false}); // parked until the bay opens
-            arm = std::ranges::find_if(list, [](const Manipulator& manip) {
-                return manip.kind == ManipulatorKind::BuilderArm;
+        // Seraphim second-rig half (`C-249`): a unit with two rigs keeps two
+        // `BuilderArm` records. Each is named by its index in the per-unit pair —
+        // the primary at 0, the second at 1 — and `addManipulator`'s
+        // `upper_bound` keeps registration order across equal precedences, so the
+        // registration below matches the loader's order. The per-pair helper
+        // carries both specs through the same create / enable / erase gates the
+        // primary has always had.
+        const unitdef::BuilderArmSpec specs[2] = {def->builderArm, def->builderArm2};
+        for (std::size_t rigIndex = 0; rigIndex < 2; ++rigIndex) {
+            const unitdef::BuilderArmSpec& spec = specs[rigIndex];
+            auto arm = std::ranges::find_if(list, [rigIndex](const Manipulator& manip) {
+                return manip.kind == ManipulatorKind::BuilderArm
+                       && manip.rigIndex == static_cast<std::int32_t>(rigIndex);
             });
+            if (!spec.exists()) {
+                if (arm != list.end()) {
+                    list.erase(arm);
+                }
+                continue;
+            }
+            if (arm == list.end()) {
+                (void)store.addManipulator(
+                    store.idAt(slot),
+                    Manipulator{.kind = ManipulatorKind::BuilderArm,
+                                .precedence = 5,   // retail's authored precedence
+                                .enabled = false,  // parked until the bay opens
+                                .rigIndex = static_cast<std::int32_t>(rigIndex)});
+                arm = std::ranges::find_if(list, [rigIndex](const Manipulator& manip) {
+                    return manip.kind == ManipulatorKind::BuilderArm
+                           && manip.rigIndex == static_cast<std::int32_t>(rigIndex);
+                });
+            }
+            // The build-open lifecycle without a skeleton: retail disables the arm
+            // while `AnimationBuild` opens the bay and re-enables it when the arm
+            // may aim (`defaultunits.lua:1609-1645`). The sim's honest proxy for
+            // "the bay is open" is live construction work naming this unit as its
+            // builder — an idle factory's arm stays parked. Both arms gate on the
+            // same construction: in retail each rig tracks its own bay on a shared
+            // unit, so a single `AtWork` covers both, just like the `enabled` byte
+            // lives on the per-rig record.
+            const UnitId self = store.idAt(slot);
+            const bool atWork = std::ranges::any_of(building, [&](const Construction& work) {
+                return !work.finished() && work.builder == self;
+            });
+            arm->enabled = atWork;
         }
-        // The build-open lifecycle without a skeleton: retail disables the arm
-        // while `AnimationBuild` opens the bay and re-enables it when the arm
-        // may aim (`defaultunits.lua:1609-1645`). The sim's honest proxy for
-        // "the bay is open" is live construction work naming this unit as its
-        // builder — an idle factory's arm stays parked.
-        const UnitId self = store.idAt(slot);
-        const bool atWork = std::ranges::any_of(building, [&](const Construction& work) {
-            return !work.finished() && work.builder == self;
-        });
-        arm->enabled = atWork;
     }
 }
 

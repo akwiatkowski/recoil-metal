@@ -101,6 +101,15 @@ public:
     /// The same, for a magnitude — income, build rate, upkeep.
     [[nodiscard]] Mag magPerTick(float perSecond) const noexcept;
 
+    /// The period of a per-second rate, in ticks — `ticks(seconds(1 / r))` without the float.
+    ///
+    /// Enhancement overrides (`ChangeRateOfFire`, `C-255`) rewrite a weapon's rate of fire
+    /// mid-match, after the load-time `Weapon::reloadTicks` conversion has already run, so the
+    /// firing pass needs the same conversion from a fixed-point rate. Rounds to nearest with a
+    /// floor of ONE tick, the same contract as `ticks(Seconds)` — a rate whose period rounds to
+    /// zero would fire every tick.
+    [[nodiscard]] TickCount ticksForRate(Fx perSecond) const noexcept;
+
     /// A per-second angular rate, as binary radians per tick.
     [[nodiscard]] std::int32_t bradPerTick(float radiansPerSecond) const noexcept;
 

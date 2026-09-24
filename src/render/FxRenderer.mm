@@ -232,7 +232,8 @@ void Renderer::encodeShadowPass(MTL::CommandBuffer* commandBuffer) noexcept {
             const simd_float3 offset = centre - lightCentre_;
             const simd_float3 along = kSunDirection * simd_dot(offset, kSunDirection);
             return simd_length(offset - along) <= lightExtent_ + radius;
-        }, lightCentre_, /*varyDetail=*/false);
+        }, lightCentre_, static_cast<float>(kShadowResolution), camera_.fovY,
+        /*lodScale=*/1.0f, /*varyDetail=*/false);
     }
 
     encoder->setRenderPipelineState(unitShadowPipeline_);

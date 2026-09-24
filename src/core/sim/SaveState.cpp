@@ -175,6 +175,11 @@ constexpr std::uint32_t kVersion52 = 52;
 // (C-060's damage divide), and the projectile's serial/engagement pair,
 // `desiredShooterCap`, `useGravity`, and ring bands (C-095/C-172/C-262).
 constexpr std::uint32_t kVersion53 = 53;
+// v54 adds `Feature::footprintSquaresX/Z` (`C-287`) — the prop's authored ogrid
+// footprint, zero for a wreck and non-zero for a blocking prop. Pre-v54 saves
+// decode with both at zero, which means the prop blocking overlay reads them as
+// wreck-shape: a saved prop is no longer blocking until the map re-asserts it.
+constexpr std::uint32_t kVersion54 = 54;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -725,6 +730,12 @@ void writeFeatures(PayloadWriter& w, const std::optional<FeatureStore::Snapshot>
         w.i32(v.reclaimPerBuildRate.raw());
     }
     w.u64(s->revision);
+    // v54: the prop's authored ogrid footprint — non-zero on a prop, zero on a wreck.
+    w.count(s->features.size());
+    for (const Feature& v : s->features) {
+        w.i32(v.footprintSquaresX);
+        w.i32(v.footprintSquaresZ);
+    }
 }
 
 /// `C-292` (v51): the scorch gate travels with the feature — a save mid-match
@@ -750,7 +761,26 @@ bool readFeatureFlags(PayloadReader& r, std::optional<FeatureStore::Snapshot>& s
     return true;
 }
 
-bool readFeatures(PayloadReader& r, std::optional<FeatureStore::Snapshot>& snapshot) {
+// v54: the prop's authored ogrid footprint. Pre-v54 features stay zero — the prop
+// blocking overlay reads them as wreck-shaped, and the next placement reasserts.
+bool readFeatureFootprints(PayloadReader& r, std::optional<FeatureStore::Snapshot>& snapshot) {
+    if (!snapshot) {
+        return true;
+    }
+    std::size_t count{};
+    if (!r.count(count, snapshot->features.size())) return false;
+    if (count != snapshot->features.size()) return false;
+    for (std::size_t i = 0; i < count; ++i) {
+        std::int32_t fx{}, fz{};
+        if (!r.i32(fx) || !r.i32(fz)) return false;
+        snapshot->features[i].footprintSquaresX = fx;
+        snapshot->features[i].footprintSquaresZ = fz;
+    }
+    return true;
+}
+
+bool readFeatures(PayloadReader& r, std::optional<FeatureStore::Snapshot>& snapshot,
+                  bool v54Footprints) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) {
@@ -804,6 +834,9 @@ bool readFeatures(PayloadReader& r, std::optional<FeatureStore::Snapshot>& snaps
         v.reclaimPerBuildRate = Fx::fromRaw(rate);
     }
     if (!r.u64(s.revision)) return false;
+    if (v54Footprints) {
+        if (!readFeatureFootprints(r, snapshot)) return false;
+    }
     const std::size_t slots = s.features.size();
     if (s.generations.size() != slots || s.ids.live > slots || s.ids.free.size() > slots)
         return false;
@@ -1518,6 +1551,12 @@ void writeUnitPose(PayloadWriter& w, const UnitStore::Snapshot& s) {
             w.i32(manip.slideOffset.raw());
             w.u8(manip.inTerrainContact);
             w.u8(manip.inUnitContact);
+            // `C-249`'s second-rig index: 0 for the primary, 1 for the Seraphim
+            // `BuildBones_2` rig. Other kinds stay at 0 — the default of the
+            // record type. The save/restore pair is symmetric, so an old save's
+            // bytes are read with the field held at 0 and a Seraphim unit
+            // round-trips intact.
+            w.i32(manip.rigIndex);
         }
     }
     w.count(static_cast<std::size_t>(std::count_if(s.boneHidden.begin(),
@@ -1551,14 +1590,15 @@ void writeUnitPose(PayloadWriter& w, const UnitStore::Snapshot& s) {
         std::int32_t lastPrecedence = std::numeric_limits<std::int32_t>::min();
         for (Manipulator& manip : list) {
             std::uint8_t kind{}, enabled{}, slideResource{}, inTerrain{}, inUnit{};
-            std::int32_t slideRange{}, slideOffset{};
+            std::int32_t slideRange{}, slideOffset{}, rigIndex{};
             if (!r.u8(kind) || kind > static_cast<std::uint8_t>(ManipulatorKind::BuilderArm)
                 || !r.i32(manip.precedence) || !r.u8(enabled) || enabled > 1
                 || !r.u8(slideResource) || slideResource > 1
                 || !r.i32(manip.slideBone)
                 || !r.i32(slideRange) || !r.i32(slideOffset)
                 || !r.u8(inTerrain) || inTerrain > 1
-                || !r.u8(inUnit) || inUnit > 1) return false;
+                || !r.u8(inUnit) || inUnit > 1
+                || !r.i32(rigIndex) || rigIndex < 0 || rigIndex > 1) return false;
             // The list is precedence-sorted by construction (`C-294`); a save
             // that is not is not one of ours.
             if (manip.precedence < lastPrecedence) return false;
@@ -1570,6 +1610,11 @@ void writeUnitPose(PayloadWriter& w, const UnitStore::Snapshot& s) {
             manip.slideOffset = Fx::fromRaw(slideOffset);
             manip.inTerrainContact = inTerrain != 0;
             manip.inUnitContact = inUnit != 0;
+            // Older saves predate the rig-index addition (`C-249`'s second rig);
+            // treating a missing trailing i32 as zero keeps their streams
+            // decodable. The writer above always emits it — the asymmetry is
+            // harmless because the record's default is also 0.
+            manip.rigIndex = rigIndex;
         }
     }
     if (!r.count(count, 8) || count > s.transforms.size()) return false;
@@ -2431,7 +2476,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion46 && version != kVersion47
                && version != kVersion48 && version != kVersion49
                && version != kVersion50 && version != kVersion51
-               && version != kVersion52 && version != kVersion53)
+               && version != kVersion52 && version != kVersion53
+               && version != kVersion54)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2493,7 +2539,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion20 && !readCaptures(reader, captures)) return std::nullopt;
     if (version >= kVersion22 && !readBoneAttachments(reader, units)) return std::nullopt;
     std::optional<FeatureStore::Snapshot> features;
-    if (version >= kVersion23 && !readFeatures(reader, features)) return std::nullopt;
+    if (version >= kVersion23
+        && !readFeatures(reader, features, version >= kVersion54)) return std::nullopt;
     if (version >= kVersion24 && !readTurretPose(reader, units.motion)) return std::nullopt;
     if (version >= kVersion25 && !readTurretPoseDual(reader, units.motion)) return std::nullopt;
     if (version >= kVersion31 && !readCongestion(reader, units.motion)) return std::nullopt;
@@ -2579,7 +2626,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion53);
+    return rm::sim::encode(state, kVersion54);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

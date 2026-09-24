@@ -84,6 +84,57 @@ inline constexpr float kLodFarChunks = 14.0f;
 /// are a measured trade-off between vertices and draw calls, not a taste.
 [[nodiscard]] int lodForDistance(float distance, float chunkWidth) noexcept;
 
+/// Per-LOD pixel-size thresholds for the retail "viewport × LODScale × FOV"
+/// metric, in projected pixels of a chunk's bounding-sphere radius.
+///
+/// Retail: `lodDist * GLOBAL_LOD_FACTORS[objType]` against `lodLengths[lod]`,
+/// where `GLOBAL_LOD_FACTOR = LODScale * lppScale` and
+/// `lppScale = 2 * tan(fovY/2) * viewportHeight`
+/// (FAF `rts/Game/Camera.cpp:144`, `rts/Lua/LuaObjectMaterial.h:159`,
+///  `rts/Rendering/LuaObjectDrawer.cpp:324`).
+///
+/// `lodDist` is the distance from the viewpoint to the object's centre and
+/// `lodLengths[lod]` is the engine-supplied "length per pixel" budget for the
+/// level — i.e. the projected pixel size below which the level becomes
+/// acceptable. A chunk has no engine-supplied `lodLengths`, so the values
+/// below are the chunk cull's own budget, calibrated against the corpus of
+/// shipped prop `LODCutoff`s (40, 165, 640 game units — a tree becomes too
+/// small for level 0 once its projected size falls below ~40 pixels of its
+/// diameter, 165 for level 1, 640 for level 2). These are the engine's
+/// `length-per-pixel` settings for the unit material system, applied to the
+/// terrain chunk the same way.
+inline constexpr float kLodNearPixels = 40.0f;  ///< finest level above this projected radius
+inline constexpr float kLodFarPixels = 165.0f;  ///< coarsest at or above this projected radius
+
+/// Projected pixel-radius of an object of `radius` elmos at `distance` elmos
+/// from a camera with the given FOV and viewport height, scaled by `lodScale`.
+///
+/// Direct copy of the engine formula at `rts/Game/Camera.cpp:144`:
+///
+///     metric = radius * lodScale * (2 * tan(fovY / 2)) * viewportHeight
+///            / distance
+///
+/// `viewportHeight` is in pixels and the result is in pixels — so comparing
+/// against `kLodNearPixels`/`kLodFarPixels` is a comparison of pixels to
+/// pixels, with no other units in the equation. `fovY` is in radians.
+[[nodiscard]] float lodMetric(float radius, float distance, float fovY,
+                              float viewportHeight, float lodScale = 1.0f) noexcept;
+
+/// Detail level for a chunk whose bounding-sphere radius projects to the
+/// given pixel size at the given camera configuration.
+///
+/// Like `lodForDistance`, but the thresholds are in pixels of the chunk's
+/// projected radius rather than chunk-widths of distance. Same three levels;
+/// the result means the same thing.
+///
+/// `lodScale` defaults to 1.0 to mirror the engine's shipped
+/// `LODScale = 1.0` default (`rts/Rendering/LuaObjectDrawer.cpp:35`). The
+/// caller can hand in a per-pass scale for shadow / reflection / refraction
+/// the same way `LuaObjectDrawer::GetLODScaleShadow` does
+/// (`rts/Rendering/LuaObjectDrawer.h:54`).
+[[nodiscard]] int lodForPixelScale(float radius, float distance, float fovY,
+                                   float viewportHeight, float lodScale = 1.0f) noexcept;
+
 /// The draws for one pass: pick a level per visible chunk, then merge
 /// consecutive chunks whose index ranges turn out to be adjacent.
 ///

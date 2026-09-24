@@ -197,10 +197,11 @@ TEST_CASE("a personal bubble shelters its owner but not a bystander", "[shield]"
     CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(60.0f));
     CHECK(rm::test::asFloat(roster.health(bystander).current) == Approx(60.0f));
 }
-TEST_CASE("a transport shield parses and behaves as an ordinary bubble", "[shield]") {
-    // TransportShield has no retail source either; it parses (rather than dropping
-    // the shield as before) and covers by position like an ordinary bubble until
-    // cargo rules are evidenced. This pins the current behavior, not the final one.
+TEST_CASE("a transport shield denies damage to carrier and cargo, shelters nobody", "[shield]") {
+    // Retail's `TransportShield` (`lua/shield.lua:1165-1237`) routes no damage:
+    // while up it sets `CanTakeDamage = false` on the transport and every cargo
+    // unit. It is NOT an absorbing bubble — a bystander under the blast takes
+    // full damage, and the shield pool pays only for blasts that reach it.
     rm::test::Roster roster;
     rm::unitdef::UnitDef transport = shieldDef();
     transport.name = "transport_shield";
@@ -208,15 +209,43 @@ TEST_CASE("a transport shield parses and behaves as an ordinary bubble", "[shiel
     const rm::UnitTypeIndex shieldType = roster.addType(transport);
     const rm::UnitTypeIndex targetType = roster.addType(plainDef());
     const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
-    const rm::sim::UnitId protectedUnit = roster.add(targetType, 20.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId cargo = roster.add(targetType, 2.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId bystander = roster.add(targetType, 20.0f, 0.0f, 1, 100.0f);
+    REQUIRE(roster.store.attach(generator, cargo));
     const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
 
+    // A blast centred on the carrier: the centre is INSIDE the dome, so the
+    // shield is bypassed entirely (C-143a) — yet carrier and cargo still take
+    // nothing because the flag denies them, while the bystander under the same
+    // dome takes full damage (a transport shield shelters nobody).
     (void)rm::sim::damageArea(
-        rm::test::at(20, 0, 0), rm::sim::Fx{}, rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40)),
+        rm::test::at(0, 0, 0), rm::test::fx(30.0f),
+        rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40)),
         0, roster.store, armies, &roster.catalog, {});
 
-    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(60.0f));
-    CHECK(rm::test::asFloat(roster.health(protectedUnit).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(cargo).current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(bystander).current) == Approx(60.0f));
+
+    // Blasts from OUTSIDE the dome still charge the shield pool — the shield
+    // entity itself takes damage in retail. Two hits collapse it.
+    for (int i = 0; i < 2; ++i) {
+        (void)rm::sim::damageArea(
+            rm::test::at(100, 0, 0), rm::test::fx(30.0f),
+            rm::unitdef::flatDamage(rm::sim::Mag::fromInt(80)),
+            0, roster.store, armies, &roster.catalog, {});
+    }
+    CHECK(roster.health(generator).shield.current <= rm::sim::Mag{});
+
+    // The denial lives behind `active()`: while the collapsed shield recharges,
+    // the same carrier-centred blast lands on carrier and cargo.
+    (void)rm::sim::damageArea(
+        rm::test::at(0, 0, 0), rm::test::fx(30.0f),
+        rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40)),
+        0, roster.store, armies, &roster.catalog, {});
+    CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(cargo).current) == Approx(60.0f));
 }
 
 TEST_CASE("a personal shield contains by its box instead of its nominal sphere") {

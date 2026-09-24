@@ -199,6 +199,110 @@ TEST_CASE("FAF enemy and blueprint queries read the observed match and retail co
     REQUIRE(ok);
 }
 
+TEST_CASE("C-362: SetCurrentEnemy negative preserves the Lua override",
+          "[faf][ai][brain-query][c362]") {
+    const auto root = corpusRoot();
+    const char* home = std::getenv("HOME");
+    const auto contentRoot = home ? std::filesystem::path{home} / "projects/llm/input/faf"
+                                  : std::filesystem::path{};
+    if (root.empty() || !std::filesystem::exists(contentRoot / "units/UEL0001/UEL0001_unit.bp")) {
+        SKIP("requires the vendored FAF corpus and extracted retail unit blueprints");
+    }
+    rm::vfs::Vfs content;
+    content.mountDirectory(contentRoot);
+    auto scene = std::make_unique<rm::app::UnitScene>();
+    scene->armies = {{.index = 0, .alliance = 0}, {.index = 1, .alliance = 0},
+                     {.index = 2, .alliance = 2}, {.index = 3, .alliance = 3}};
+    scene->economies.resize(scene->armies.size());
+    auto commander = rm::unitbp::loadFile(contentRoot / "units/UEL0001/UEL0001_unit.bp");
+    REQUIRE(commander);
+    scene->definitions.push_back(*commander);
+    const auto type = scene->catalog.add(&scene->definitions.back(), rm::sim::TickRate{});
+    for (int army = 1; army < 4; ++army) {
+        (void)scene->store.spawn({
+            .type = type,
+            .transform = {.x = rm::sim::fxFromFloat(static_cast<float>(army * 50)),
+                          .z = rm::sim::fxFromFloat(100)},
+            .motion = {.armyIndex = army},
+            .health = {.current = rm::sim::magFromFloat(100),
+                       .maximum = rm::sim::magFromFloat(100)},
+        });
+    }
+    rm::HeightField field{.squaresX = 64, .squaresZ = 64};
+    field.raw.resize(field.sampleCount());
+    const std::array<rm::mapinfo::StartPosition, 4> starts{{
+        {.x = 0, .z = 100}, {.x = 50, .z = 100},
+        {.x = 100, .z = 100}, {.x = 150, .z = 100},
+    }};
+    const rm::ai::World world{.scene = *scene, .content = content, .field = field,
+                              .starts = starts, .markers = {}};
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    rm::ai::FafOpponent opponent(ai, 0);
+    opponent.observe(world, {});
+    opponent.advance(0);
+
+    // Three-step assertion of C-362's contract:
+    //   (1) `SetCurrentEnemy(positive)` pins `GetCurrentEnemy` to the named
+    //       army even when the sim-default nearest would pick another;
+    //   (2) `SetCurrentEnemy(-1)` clears the pin and `GetCurrentEnemy` falls
+    //       through to the sim-default nearest hostile;
+    //   (3) defeating the overridden commander makes `GetCurrentEnemy` fall
+    //       through to the nearest living hostile once the pinned army is gone.
+    // Retail Lua Setter accepts a one-based army index; the `armyBrains[0]`
+    // brain's `GetArmyIndex()` returns `army + 1` (1-based), so army 3 is
+    // index 4 in Lua. Sim-default nearest is army 2 (Lua index 3).
+    bool ok = ai.eval(R"(
+        local brain = __rm_faf.brains[0]
+        assert(brain:GetCurrentEnemy():GetArmyIndex() == 3,
+            'baseline: sim-default nearest hostile is army 2 (1-based 3)')
+
+        -- (1) Pin the override to army 3 (1-based 4) — the FARTHER hostile.
+        brain:SetCurrentEnemy(4)
+        assert(brain.__currentEnemyOverride == 4,
+            'positive setter records the override')
+        assert(brain:GetCurrentEnemy():GetArmyIndex() == 4,
+            'positive override returns the set army, not the sim-default nearest')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+
+    ok = ai.eval(R"(
+        local brain = __rm_faf.brains[0]
+
+        -- (2) Negative index clears the pin; GetCurrentEnemy falls through.
+        brain:SetCurrentEnemy(-1)
+        assert(brain.__currentEnemyOverride == -1,
+            '-1 setter clears the override slot back to the sentinel')
+        assert(brain:GetCurrentEnemy():GetArmyIndex() == 3,
+            'after -1, sim-default nearest (army 2) is the answer')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+
+    // (3) Re-pin to army 3, then defeat that commander. The next read must
+    // fall through to the surviving nearest hostile (still army 2 here).
+    ok = ai.eval(R"(
+        local brain = __rm_faf.brains[0]
+        brain:SetCurrentEnemy(4)
+        assert(brain:GetCurrentEnemy():GetArmyIndex() == 4)
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+    scene->armies[3].defeated = true;
+    opponent.advance(30);
+    ok = ai.eval(R"(
+        local brain = __rm_faf.brains[0]
+        assert(brain.__currentEnemyOverride == 4,
+            'override persists across an advance once pinned')
+        assert(brain:GetCurrentEnemy():GetArmyIndex() == 3,
+            'after defeating the pinned commander, GetCurrentEnemy falls through to the nearest living')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
 TEST_CASE("the FAF sandbox binds every name before any AI runs", "[faf][ai]") {
     const std::filesystem::path root = corpusRoot();
     if (root.empty()) {

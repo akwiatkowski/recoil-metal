@@ -792,9 +792,25 @@ private:
     /// not a nicety — without it culling replaces one draw of the terrain with
     /// one per chunk, and whenever the camera keeps them all that is slower than
     /// not culling at all.
+    ///
+    /// `varyDetail = false` keeps every visible chunk at level 0, which is what
+    /// the shadow pass wants — a coarser surface would shift by a chunk's worth
+    /// of chord error and the shadow map would no longer match the visible
+    /// terrain. When detail IS varied, the level is the retail
+    /// `viewport × LODScale × FOV` pixel-scale metric (`ChunkDraws::lodForPixelScale`),
+    /// not a chunk-width distance ratio. The pixel metric is a projection, so
+    /// the same chunk at the same distance picks the same level regardless of
+    /// the map's chunk size — one pair of pixel thresholds holds every map.
+    ///
+    /// `viewportHeightPixels` and `fovY` are the camera's vertical viewport
+    /// size and field of view; `lodScale` is the engine's per-pass factor
+    /// (`LODScale` / `LODScaleShadow` / etc., defaulting to 1.0). They feed the
+    /// retail metric verbatim.
     template <typename Predicate>
     void drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate keep,
-                           simd_float3 detailFrom, bool varyDetail = true) noexcept;
+                           simd_float3 detailFrom, float viewportHeightPixels,
+                           float fovY, float lodScale = 1.0f,
+                           bool varyDetail = true) noexcept;
 
     /// Scratch space for the above, reused between frames and passes so that
     /// planning the terrain costs no allocation once the capacity has settled.

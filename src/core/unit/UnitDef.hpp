@@ -244,6 +244,16 @@ struct UnitDef {
     /// cancels inside the `(own + cargo) / own` ratio.
     float unitMass = 0.0f;
 
+    /// `C-218`: `Physics.InertiaTensorX/Y/Z` (engine/Core/Blueprints/EntityBlueprint.lua:22-27)
+    /// — the diagonal of the rigid body's inertia tensor, in (mass × ogrid²) before
+    /// sim-side scaling. No shipped unit author them, and a body without one is treated
+    /// as if the matrix were a sphere — the safest degenerate shape, where every axis
+    /// agrees. The three are read in ogrids and kept as floats; nothing reads them yet,
+    /// which is the honest fallback noted in the FA-AIR/NAVY ledger.
+    float inertiaTensorX = 0.0f;
+    float inertiaTensorY = 0.0f;
+    float inertiaTensorZ = 0.0f;
+
     /// The least water the unit needs under its keel, in elmos — `Footprint.MinWaterDepth`,
     /// stated by naval structures (48 of the corpus; XSB0203's 1.5 ogrids is 12 elmos).
     ///
@@ -251,6 +261,32 @@ struct UnitDef {
     /// STRUCTURE's way to state the same constraint, and `moveDefFor` takes the larger of
     /// the two when building a surface-water MoveDef. Zero means "any water at all".
     float minWaterDepthElmos = 0.0f;
+
+    /// `C-218`: `Footprint.OccupancyCaps` (engine/Core/Blueprints/EntityBlueprint.lua:87)
+    /// — a layer mask retail's `ComputeDerivedQuantities` overwrites a derived cap with
+    /// when the file states one. Prop blueprints ship `OccupancyCaps = 3` (Land|Air);
+    /// a structure that states `0` says "no layer at all" rather than "I forgot".
+    /// Recorded verbatim; -1 is the absent key, the only place `-1` is the answer the
+    /// parser owes its caller instead of a coercion. Other shape fields follow their
+    /// respective derivations; this one is left as-authored.
+    int occupancyCaps = -1;
+
+    /// `C-218`: `AltFootprint` (engine/Core/Blueprints/EntityBlueprint.lua:5,
+    /// `engine/Sim/Unit.lua:128-131` — `Unit:ForceAltFootprint(state)`) — an alternate
+    /// `FootprintBlueprint` table the unit builds with when forced. The same five fields
+    /// as the regular `Footprint` (SizeX, SizeZ, MaxSlope, MinWaterDepth, OccupancyCaps)
+    /// are present, kept in their own struct so the regular footprint is not retrofitted
+    /// to play both roles. `hasAltFootprint` is the only signal a caller needs; the
+    /// fields are read for whoever reads them next, not silently merged.
+    struct AltFootprintSpec {
+        int squaresX = 0;
+        int squaresZ = 0;
+        float maxSlopeDegrees = 0.0f;
+        float minWaterDepthElmos = 0.0f;
+        int occupancyCaps = -1;
+    };
+    AltFootprintSpec altFootprint;
+    bool hasAltFootprint = false;
 
     /// How tall the unit LOOKS, in elmos — `Physics.MeshExtentsY`, or the collision height when
     /// the blueprint states no extents.
@@ -280,6 +316,14 @@ struct UnitDef {
     /// `General.BuildBones`' retail `BuilderArmManipulator` contract. Empty when any of the
     /// three required bone references is absent; callers then leave the model's pose alone.
     BuilderArmSpec builderArm;
+
+    /// Seraphim's second construction arm (`C-249`'s second-rig half). Authored by a parallel
+    /// `General.BuildBones_2` table and stored as a second `BuilderArmSpec` so each rig
+    /// carries its own yaw/pitch triple, arcs and slew rates. Empty (`.exists() == false`)
+    /// on every non-Seraphim blueprint: the lifecycle that creates the
+    /// `CBuilderArmManipulator` only fires when its own three bones all resolve, just like
+    /// the primary, so an absent `BuildBones_2` reads as no second rig.
+    BuilderArmSpec builderArm2;
 
     /// What this unit moves through. See MotionType: for the Supreme Commander
     /// family it is read from the file, for BAR it is inferred from the fields
@@ -423,6 +467,16 @@ struct UnitDef {
     bool airBreakOffNearTarget = false;
     float airMinSpeedElmosPerSecond = 0.0f;
     float airAttackElevationElmos = 0.0f;
+    /// `C-218`: `Air.StartTurnDistance` (engine/Core/Blueprints/UnitBlueprint.lua:254-255)
+    /// — the ogrids from a moving target at which a flyer begins to align with it.
+    /// FA changelogs tune it freely (e.g. UAA0102: 10 → 5); zero when unauthored, and
+    /// the combat state machine falls back to its proportional close-rate.
+    float startTurnDistance = 0.0f;
+    /// `C-218`: `Physics.CatchUpAcc` (engine/Core/Blueprints/UnitBlueprint.lua:1112-1113)
+    /// — the elmos-per-tick² a lagging mover applies to close a drifting target. A
+    /// bomber loitering gains nothing from it; a fast fighter on chase uses it every
+    /// beat. Zero when unauthored, no other field steals its meaning.
+    float catchUpAcc = 0.0f;
     /// `Air.PredictAheadForBombDrop` in seconds (`C-224`, `Air+0x8c`): the fixed
     /// lead time a `NeedToComputeBombDrop` weapon applies to a moving ground
     /// target — the release point is `target + velocity × this`, and the bomb

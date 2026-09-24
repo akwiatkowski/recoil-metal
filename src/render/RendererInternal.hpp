@@ -34,6 +34,7 @@
 #include <simd/simd.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -620,12 +621,14 @@ using namespace render_detail;  // NOLINT(google-build-using-namespace)
 
 template <typename Predicate>
 void Renderer::drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate keep,
-                                 simd_float3 detailFrom, bool varyDetail) noexcept {
+                                 simd_float3 detailFrom, float viewportHeightPixels,
+                                 float fovY, float lodScale, bool varyDetail) noexcept {
     // Which ranges to draw is arithmetic over the chunk bounds, and lives in
     // core/ where a draw count is a test rather than something nothing can see.
     chunkDraws_.clear();
     appendChunkDraws(chunkDraws_, terrainChunks_, keep,
-                     [detailFrom, varyDetail](const TerrainChunk& chunk) {
+                     [detailFrom, varyDetail, viewportHeightPixels, fovY, lodScale](
+                         const TerrainChunk& chunk) {
                          if (!varyDetail) {
                              return 0;  // the shadow pass: shade needs no detail
                          }
@@ -633,8 +636,24 @@ void Renderer::drawTerrainChunks(MTL::RenderCommandEncoder* encoder, Predicate k
                              simd_make_float3((chunk.minX + chunk.maxX) * 0.5f,
                                               (chunk.minY + chunk.maxY) * 0.5f,
                                               (chunk.minZ + chunk.maxZ) * 0.5f);
-                         return lodForDistance(simd_distance(centre, detailFrom),
-                                               chunk.maxX - chunk.minX);
+                         // Bounding-sphere radius of the chunk's AABB: the
+                         // half-diagonal. Equal to (chunkWidth/2)*sqrt(3) when
+                         // the chunk's height range matches its horizontal
+                         // span, but in practice the Y span is much smaller
+                         // than the X/Z span, so the horizontal half-diagonal
+                         // `chunkWidth/2 * sqrt(2)` is the conservative bound.
+                         // Either way the metric scales linearly with the
+                         // radius — the level thresholds in pixels are tuned
+                         // against this convention, not retuned per chunk.
+                         const float widthX = chunk.maxX - chunk.minX;
+                         const float widthZ = chunk.maxZ - chunk.minZ;
+                         const float widthY = chunk.maxY - chunk.minY;
+                         const float radius = 0.5f * std::sqrt(widthX * widthX +
+                                                                widthY * widthY +
+                                                                widthZ * widthZ);
+                         return lodForPixelScale(radius,
+                                                 simd_distance(centre, detailFrom),
+                                                 fovY, viewportHeightPixels, lodScale);
                      });
 
     for (const ChunkDraw& draw : chunkDraws_) {

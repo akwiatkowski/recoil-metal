@@ -1075,6 +1075,12 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, wreck.damageRatio);
             feed(h, wreck.maximumReclaimPerBuildRate);
             feed(h, wreck.reclaimPerBuildRate);
+            // `C-287`: a prop's blocking footprint is part of its identity — two
+            // matches that differ only in a prop's ogrid size must hash apart on
+            // the tick the prop was authored, not the tick the path overlay
+            // noticed.
+            feed(h, static_cast<std::size_t>(wreck.footprintSquaresX));
+            feed(h, static_cast<std::size_t>(wreck.footprintSquaresZ));
             feed(h, match.features->slotAlive(slot));
             feed(h, static_cast<std::size_t>(match.features->idAt(slot).generation));
         }

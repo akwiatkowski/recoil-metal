@@ -556,15 +556,38 @@ function methods:GetFactionIndex() return self.faction end
 function methods:GetArmyStartPos() return self.startX, self.startZ end
 function methods:IsDefeated() return self.defeated == true end
 function methods:GetUnitBlueprint(id) return unitBlueprint(id) end
--- The API comment calls this a number; actual callers require the brain object
--- (base-ai.lua:1125, platoon.lua:2799). Selection follows our existing attack-wave target.
+-- C-362: `GetCurrentEnemy` honours a Lua-set override before the sim-default
+-- nearest path. `__currentEnemyOverride` is the one-based army index the
+-- Lua Setter passed in (matching retail's `aibrain.lua:1541` contract, where
+-- callers hand `GetArmyIndex()` right back), `-1` for the Lua sticky path.
+-- A positive override returns that army's commander view, but only while the
+-- commander is alive; once defeated, the next read falls through to the
+-- sim-default nearest living enemy. The override is sticky until cleared.
 function methods:GetCurrentEnemy()
+    local override = self.__currentEnemyOverride
+    if type(override) == 'number' and override > 0 then
+        local view = __rm_faf.armyViews[override - 1]
+        if view and not view:IsDefeated() then
+            return view
+        end
+    end
     return __rm_faf.armyViews[self.snap.currentEnemy]
+end
+-- C-362: `SetCurrentEnemy(brain, index)` — `index <= 0` keeps the Lua sticky
+-- path (the override clears, so subsequent reads use the sim-default nearest);
+-- `index >= 1` is the one-based army number the corpus hands in. The override
+-- is keyed per brain and survives across passes.
+function methods:SetCurrentEnemy(index)
+    if type(index) == 'number' and index >= 1 then
+        self.__currentEnemyOverride = index
+    else
+        self.__currentEnemyOverride = -1
+    end
 end
 function __rm_faf_army(army, x, z, faction, defeated, alliance)
     local view = __rm_faf.armyViews[army]
     if not view then
-        view = { army = army }
+        view = { army = army, __currentEnemyOverride = -1 }
         for name, fn in pairs(methods) do view[name] = fn end
         setmetatable(view, brainMeta)
         __rm_faf.armyViews[army] = view
@@ -1059,6 +1082,11 @@ function __rm_faf_boot(army, info)
         startX = info.startX,
         startZ = info.startZ,
         snap = { units = {}, occupied = {} },
+        -- C-362: the per-brain Lua override for `GetCurrentEnemy`. `-1` keeps
+        -- the sim-default nearest hostile (preserves the value when the
+        -- corpus calls `SetCurrentEnemy` with a negative index); a non-
+        -- negative value (one-based army index) sticks until cleared.
+        __currentEnemyOverride = -1,
         CanPathToEnemy = {},
         hasNavalSite = info.hasNavalSite == true,
         Name = 'rm-faf-' .. tostring(army),

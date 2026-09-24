@@ -182,7 +182,7 @@ TEST_CASE("C-177: a parked unit does not block the route through it", "[fa-land]
     fix.run(CommandLog{}, 1);  // let the tick's blocking layer see the world
     const int parkedCell = fix.grid.cellAtWorld(rm::test::fx(200.0f)) * fix.grid.cellsX
                            + fix.grid.cellAtWorld(rm::test::fx(512.0f));
-    CHECK(rm::sim::blockingCells(fix.roster.store, fix.grid)[
+    CHECK(rm::sim::blockingCells(fix.roster.store, fix.grid, nullptr)[
               static_cast<std::size_t>(parkedCell)]
           == 0);
 

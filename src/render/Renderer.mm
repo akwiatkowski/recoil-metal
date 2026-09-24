@@ -1308,7 +1308,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         drawTerrainChunks(encoder, [&frustum](const TerrainChunk& chunk) {
             return frustum.intersectsBox(simd_make_float3(chunk.minX, chunk.minY, chunk.minZ),
                                          simd_make_float3(chunk.maxX, chunk.maxY, chunk.maxZ));
-        }, camera_.eye());
+        }, camera_.eye(), static_cast<float>(height), camera_.fovY);
     }
 
     // --- Selection outlines ------------------------------------------------

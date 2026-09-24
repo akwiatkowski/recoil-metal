@@ -179,7 +179,7 @@ struct EnhancementScriptEffects {
 [[nodiscard]] Fx weaponMaxRangeFor(
     const UnitStore& store, const UnitCatalog& catalog, UnitIndex slot,
     const unitdef::Weapon& weapon) noexcept;
-[[nodiscard]] float weaponRateOfFireFor(
+[[nodiscard]] Fx weaponRateOfFireFor(
     const UnitStore& store, const UnitCatalog& catalog, UnitIndex slot,
     const unitdef::Weapon& weapon) noexcept;
 [[nodiscard]] Mag weaponDamageModFor(

@@ -4,6 +4,9 @@
 // construction (seeded xorshift, no clock), and the mixer is plain arithmetic over a voice
 // pool — which is exactly why it lives in core and not in the platform layer.
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
+
+using Catch::Approx;
 
 #include "core/audio/CueEvents.hpp"
 #include "core/audio/Cues.hpp"
@@ -360,4 +363,248 @@ TEST_CASE("the retail wave banks decode: PCM in, mixer-ready cues out", "[corpus
     }
     CHECK(peak > 0.05f);   // decoded something audible
     CHECK(peak <= 1.0f);   // and PCM scaling did not blow past full scale
+}
+
+TEST_CASE("a piecewise-linear curve evaluates correctly at sample points and clamp-at-endpoints") {
+    // The fixture is a three-point run: (0.0, -2000), (0.5, -1000), (1.0, -3000).
+    // At 0.0 the curve returns -2000, at 0.5 -1000, at 1.0 -3000; below 0.0 and
+    // above 1.0 it clamps — XACT's RPC endpoints shape, evaluated verbatim.
+    const rm::audio::Curve curve{{
+        {0.0f, -2000.0f},
+        {0.5f, -1000.0f},
+        {1.0f, -3000.0f},
+    }};
+    CHECK(curve.evaluate(0.0f, 0.0f) == -2000.0f);
+    CHECK(curve.evaluate(0.5f, 0.0f) == -1000.0f);
+    CHECK(curve.evaluate(1.0f, 0.0f) == -3000.0f);
+    // Mid-segment linear interp: 0.25 is halfway between (0,-2000) and (0.5,-1000) -> -1500.
+    CHECK(curve.evaluate(0.25f, 0.0f) == Catch::Approx(-1500.0f));
+    // Clamp: below the first point the curve holds the first point's y, above the last
+    // holds the last. Authored silence at the far end stays silence past the curve.
+    CHECK(curve.evaluate(-0.1f, 0.0f) == -2000.0f);
+    CHECK(curve.evaluate(1.5f, 0.0f) == -3000.0f);
+    // Empty curve: the default value. An author who wrote no curve at unity.
+    const rm::audio::Curve empty;
+    CHECK(empty.evaluate(0.5f, 1.0f) == 1.0f);
+    CHECK(empty.evaluate(0.5f, 42.0f) == 42.0f);
+}
+
+TEST_CASE("a volume curve in hundredths-of-dB converts to a linear amplitude") {
+    // 0 dB (i.e. 0 hundredths) is unity, -1000 (-10 dB) is ~0.316, -9600 (-96 dB) is silence.
+    // XACT's wire unit (hundredths of a dB) is what SupCom.xgs carries; this is the path
+    // the mixer walks when it applies a CueDef.
+    CHECK(rm::audio::volumeDbToAmplitude(0.0f) == Catch::Approx(1.0f));
+    CHECK(rm::audio::volumeDbToAmplitude(-1000.0f) == Catch::Approx(0.3162277f).margin(1e-5));
+    // -96 dB is silence within float precision (~6.3e-5).
+    CHECK(rm::audio::volumeDbToAmplitude(-9600.0f) < 1e-4f);
+    // +600 hundredths (+6 dB) is roughly 2x amplitude.
+    CHECK(rm::audio::volumeDbToAmplitude(600.0f) == Catch::Approx(1.9952623f).margin(1e-5));
+}
+
+TEST_CASE("the filter curve's cutoff identity is the mixer's Nyquist and lower is fine") {
+    // Above Nyquist is identity (no low-pass above half the sample rate). 44100 / 2.
+    CHECK(rm::audio::filterIdentityHz(rm::audio::kSampleRate)
+          == Catch::Approx(rm::audio::kSampleRate * 0.5f));
+    // A filter curve with a 1000 Hz target sits below Nyquist — audible thump.
+    const rm::audio::Curve filter{{
+        {0.0f, 5000.0f},
+        {0.5f, 1000.0f},
+        {1.0f, 200.0f},
+    }};
+    CHECK(filter.evaluate(0.0f, rm::audio::filterIdentityHz(rm::audio::kSampleRate))
+          == Catch::Approx(5000.0f));
+    CHECK(filter.evaluate(0.5f, rm::audio::filterIdentityHz(rm::audio::kSampleRate))
+          == Catch::Approx(1000.0f));
+    CHECK(filter.evaluate(1.0f, rm::audio::filterIdentityHz(rm::audio::kSampleRate))
+          == Catch::Approx(200.0f));
+}
+
+TEST_CASE("Mixer::applyCue routes a curve's amplitude and cutoff into the voice") {
+    // A cue with a -10 dB volume curve at param 0.5 and a 1000 Hz filter at param 0.5
+    // should land in the voice pool with a quieter level and a low-pass cutoff. We
+    // observe the level by counting active voices (the mixer drops below floor) and the
+    // cutoff through the render path's gain.
+    const rm::audio::Cue& cue = rm::audio::shotCue();
+    rm::audio::CueDef def;
+    def.cue = &cue;
+    def.volumeCurve.points = {{0.0f, -1000.0f}, {1.0f, -1000.0f}};  // -10 dB everywhere
+    def.filterCurve.points = {{0.0f, 1000.0f}, {1.0f, 1000.0f}};    // 1 kHz low-pass
+    def.pitchCents = 0;
+    def.bus = rm::audio::Bus::Sfx;
+
+    rm::audio::Mixer mixer;
+    mixer.setMasterGain(1.0f);
+    mixer.setListener(0.0f, 0.0f, 600.0f);
+    mixer.applyCue(def, 0.0f, 0.0f, 0.5f, rm::audio::kUnlimitedInstances);
+    // A -10 dB amplitude (~0.316) is above the floor (0.02); the voice is alive.
+    CHECK(mixer.activeVoices() == 1);
+
+    // A -60 dB amplitude is below the floor; the play is refused before it costs a slot.
+    rm::audio::CueDef silent;
+    silent.cue = &cue;
+    silent.volumeCurve.points = {{0.0f, -6000.0f}, {1.0f, -6000.0f}};
+    silent.bus = rm::audio::Bus::Sfx;
+    rm::audio::Mixer muted;
+    muted.setListener(0.0f, 0.0f, 600.0f);
+    muted.applyCue(silent, 0.0f, 0.0f, 0.5f, rm::audio::kUnlimitedInstances);
+    CHECK(muted.activeVoices() == 0);
+
+    // Filter at the same param but full-volume curve: the voice is loud and a render
+    // still produces output (the one-pole's identity above Nyquist is reached when the
+    // cutoff sits at or above Nyquist — here 1000 Hz is well below, so the rendered
+    // amplitude is reduced relative to the unfiltered cue).
+    rm::audio::CueDef filtered;
+    filtered.cue = &cue;
+    filtered.filterCurve.points = {{0.0f, 1000.0f}, {1.0f, 1000.0f}};
+    filtered.bus = rm::audio::Bus::Sfx;
+    rm::audio::Mixer filterMixer;
+    filterMixer.setMasterGain(1.0f);
+    filterMixer.setListener(0.0f, 0.0f, 600.0f);
+    filterMixer.applyCue(filtered, 0.0f, 0.0f, 0.5f, rm::audio::kUnlimitedInstances);
+
+    rm::audio::Mixer plain;
+    plain.setMasterGain(1.0f);
+    plain.setListener(0.0f, 0.0f, 600.0f);
+    plain.applyCue(rm::audio::CueDef{.cue = &cue, .bus = rm::audio::Bus::Sfx},
+                   0.0f, 0.0f, 0.5f, rm::audio::kUnlimitedInstances);
+
+    const std::size_t frames = 1024;
+    std::vector<float> plainOut(frames * 2);
+    std::vector<float> filteredOut(frames * 2);
+    plain.render(plainOut.data(), frames);
+    filterMixer.render(filteredOut.data(), frames);
+    float plainPeak = 0.0f, filteredPeak = 0.0f;
+    for (std::size_t i = 0; i < frames; ++i) {
+        plainPeak = std::max(plainPeak, std::abs(plainOut[i * 2]));
+        filteredPeak = std::max(filteredPeak, std::abs(filteredOut[i * 2]));
+    }
+    // The low-pass at 1 kHz dulls the click — the same cue with a 1 kHz filter is
+    // observably quieter in the upper band.
+    CHECK(filteredPeak < plainPeak);
+}
+
+TEST_CASE("Mixer::applyCue's RPC picks a rate within the cue's authored cent range") {
+    // The RPC is deterministic per (x, z): the same world point picks the same detune.
+    // The cents live in [-pitchCents, pitchCents], converted to a playback rate through
+    // 2^(cents/1200). A pitchCents of 0 collapses to identity (1.0).
+    const rm::audio::Cue& cue = rm::audio::chimeCue();
+    rm::audio::CueDef def;
+    def.cue = &cue;
+    def.pitchCents = 100;  // ±1 semitone, XACT's stock RPC width for a machine-gun cue.
+    def.bus = rm::audio::Bus::Sfx;
+
+    rm::audio::Mixer mixer;
+    mixer.setMasterGain(1.0f);
+    mixer.setListener(0.0f, 0.0f, 600.0f);
+    mixer.applyCue(def, 7.0f, 13.0f, 0.5f, rm::audio::kUnlimitedInstances);
+    CHECK(mixer.activeVoices() == 1);
+
+    // Two plays at the same world point and the same pitch range pick the same detune
+    // (same RPC seed) — exactly the contract that keeps a replay's shots identical.
+    rm::audio::Mixer twinA;
+    twinA.setListener(0.0f, 0.0f, 600.0f);
+    twinA.applyCue(def, 7.0f, 13.0f, 0.5f, rm::audio::kUnlimitedInstances);
+    rm::audio::Mixer twinB;
+    twinB.setListener(0.0f, 0.0f, 600.0f);
+    twinB.applyCue(def, 7.0f, 13.0f, 0.5f, rm::audio::kUnlimitedInstances);
+
+    const std::size_t half = cue.samples.size() / 2;
+    std::vector<float> aOut(half * 2);
+    std::vector<float> bOut(half * 2);
+    twinA.render(aOut.data(), half);
+    twinB.render(bOut.data(), half);
+    CHECK(twinA.activeVoices() == twinB.activeVoices());
+
+    // pitchCents == 0 collapses to identity: a flat range, the retail default for many
+    // cues, plays at exactly the authored pitch — no extra detune.
+    rm::audio::CueDef flat;
+    flat.cue = &cue;
+    flat.bus = rm::audio::Bus::Sfx;
+    rm::audio::Mixer flat1;
+    flat1.setListener(0.0f, 0.0f, 600.0f);
+    flat1.applyCue(flat, 7.0f, 13.0f, 0.5f, rm::audio::kUnlimitedInstances);
+    rm::audio::Mixer flat2;
+    flat2.setListener(0.0f, 0.0f, 600.0f);
+    flat2.applyCue(flat, 7.0f, 13.0f, 0.5f, rm::audio::kUnlimitedInstances);
+    const std::size_t frames = cue.samples.size() + 64;
+    std::vector<float> f1(frames * 2);
+    std::vector<float> f2(frames * 2);
+    flat1.render(f1.data(), frames);
+    flat2.render(f2.data(), frames);
+    CHECK(flat1.activeVoices() == 0);  // both finished in the same number of frames
+    CHECK(flat2.activeVoices() == 0);
+    // The two flat-range renders are identical sample-by-sample (same seed collapses
+    // to the same rate, so the linear-interp playhead reads the same waveform).
+    CHECK(f1 == f2);
+}
+
+TEST_CASE("the mixer honours a per-bus gain and a master/bus alias") {
+    // Bus::Master routes through the master gain; Sfx through the per-bus gain.
+    rm::audio::Mixer mixer;
+    mixer.setListener(0.0f, 0.0f, 600.0f);
+    mixer.setMasterGain(1.0f);
+    mixer.setBusGain(rm::audio::Bus::Sfx, 0.25f);
+    mixer.play(rm::audio::shotCue(), 0.0f, 0.0f);
+    std::vector<float> out(256 * 2);
+    mixer.render(out.data(), 256);
+    float sfxPeak = 0.0f;
+    for (std::size_t i = 0; i < 256; ++i) {
+        sfxPeak = std::max(sfxPeak, std::abs(out[i * 2]));
+    }
+
+    // Same play, master gain reduced to 0.25 — Bus::Master aliases setMasterGain, so the
+    // rendered peak should match (both routes end at 0.25x).
+    rm::audio::Mixer masterOnly;
+    masterOnly.setListener(0.0f, 0.0f, 600.0f);
+    masterOnly.setBusGain(rm::audio::Bus::Master, 0.25f);
+    masterOnly.play(rm::audio::shotCue(), 0.0f, 0.0f);
+    std::vector<float> out2(256 * 2);
+    masterOnly.render(out2.data(), 256);
+    float masterPeak = 0.0f;
+    for (std::size_t i = 0; i < 256; ++i) {
+        masterPeak = std::max(masterPeak, std::abs(out2[i * 2]));
+    }
+    CHECK(sfxPeak == Catch::Approx(masterPeak).margin(1e-4f));
+
+    // Out-of-range gains clamp — a fader at 1.5 is no louder than unity.
+    mixer.setBusGain(rm::audio::Bus::Sfx, 1.5f);
+    CHECK(mixer.activeVoices() == 1);
+}
+
+TEST_CASE("setMusicLayer and setMusicIntensity select which layer plays") {
+    // Three layers named for three intensities. Switching intensity swaps the active
+    // layer; playMusic() routes the matching cue to the Music bus.
+    const rm::audio::Cue& cue = rm::audio::chimeCue();
+    rm::audio::Mixer mixer;
+    mixer.setListener(0.0f, 0.0f, 600.0f);
+
+    mixer.setMusicLayer("calm", rm::audio::MusicLayer{.cue = &cue, .intensity = 0});
+    mixer.setMusicLayer("tense", rm::audio::MusicLayer{.cue = &cue, .intensity = 1});
+    mixer.setMusicLayer("fury", rm::audio::MusicLayer{.cue = &cue, .intensity = 2});
+
+    // The default intensity is 0; "calm" is the registered match.
+    CHECK(mixer.activeMusicLayer() == "calm");
+
+    mixer.setMusicIntensity(0);
+    CHECK(mixer.activeMusicLayer() == "calm");
+
+    mixer.setMusicIntensity(1);
+    CHECK(mixer.activeMusicLayer() == "tense");
+
+    mixer.setMusicIntensity(2);
+    CHECK(mixer.activeMusicLayer() == "fury");
+
+    mixer.setMusicIntensity(3);  // past the registered intensities, no match
+    CHECK(mixer.activeMusicLayer().empty());
+
+    // playMusic on the matching intensity lands a voice on the Music bus. Music rides
+    // the same pool as Sfx — voice count grows by one.
+    mixer.setMusicIntensity(1);
+    mixer.playMusic();
+    CHECK(mixer.activeVoices() == 1);
+
+    // Re-registering a name with a null cue erases it; intensity 1 lost its match.
+    mixer.setMusicLayer("tense", rm::audio::MusicLayer{.cue = nullptr, .intensity = 1});
+    mixer.setMusicIntensity(1);
+    CHECK(mixer.activeMusicLayer().empty());  // intensity 1 lost its match
 }

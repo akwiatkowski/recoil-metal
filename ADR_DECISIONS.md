@@ -4109,3 +4109,99 @@ ceiling on wide structures, so scrolling back does nothing for several notches.
 frame at the widest drag; the cap still bounds a full-map swipe. Tests pin the
 ceiling per pitch, the collapsed clamp, the cap, and a retail power-generator row
 packing one footprint apart with every site founded by the sim.
+
+## ADR-131 — Mixer shape: voice pool with steal, five buses, XACT-style curves
+
+**Context.** The mixer (Mixer.hpp:1) already had a 64-voice pool with quietest-steal
+(Mixer.cpp:99-108), a master gain, a single attenuation curve, and an XACT category
+instance-limit table. The retail `.xsb`/`SupCom.xgs` model carries more than that:
+per-bus routing, distance→volume curves, low-pass filter curves (the muffled thump of a
+cannon heard through a wall), and the RPC curve that randomises the take's pitch by a
+semitone either side of the authored centre. Music, which the engine also owes a player
+even if no bank yet ships with it, is a layer cake: a quiet pad that swells into a
+drums-and-lead version at intensity 3, picked by the sim from the battlefield's heat.
+
+The previous slice (ADR-106) wired `Audio.Fire` through the banks but treated every cue
+as a plain waveform at the master gain — playable, not authored. The progress doc says it
+plain: "Audio still omits some filter/RPC curves and dynamic music"
+(docs/fa-gameplay-progress.md:1055). This ADR is the shape those omissions take.
+
+**Decision.** The mixer grows five things, each pinned by a test:
+
+1. **Voice pool:** unchanged — 64 voices, steal-the-quietest on overflow
+   (Mixer.cpp:99-108). Why 64: an `AVAudioPlayerNode`-per-shot churn would have to be
+   re-introduced first, and it allocates per shot; the fixed pool costs nothing when silent
+   and only on overflow does a stealing pass touch every voice. The pool is sized for a
+   large battle's transient pile-up; a louder battle steals the inaudible.
+
+2. **FX bus layout.** Five buses, all summed into master: `Master`, `Sfx`, `Ui`, `Voice`,
+   `Music`. Master is the final gain the platform layer multiplies by `setMasterGain`
+   (Mixer.hpp:104). The four input buses each carry their own gain so the engine can duck
+   music under a UI blip or voice over a cutscene. Why four and not fewer: the `.xsb`
+   category table already names `Default`, `Music`, `Voice`, `Weapons`, `UI`
+   (Xgs.hpp:14-23) — four input buses are the categories a retail bank actually uses, and
+   `Master` is the synthesised sink. Why not per-category: the bank's categories number
+   39 in SupCom.xgs (Xgs.hpp:14); four buses are the engineerable subset, and a future
+   finer split can land without breaking the wire.
+
+3. **Channel layout / sample rate:** 44.1 kHz stereo, interleaved. Why 44.1 and not the
+   already-defined 48 kHz (Mixer.hpp:38): retail `.xwb` entries are mostly 32 kHz mono
+   PCM (Xwb.hpp:6-9), so the mixer asks for 44.1 kHz and lets Core Audio resample both
+   directions — a 44.1 kHz bus is the iOS Audio Queue standard and matches the platform
+   layer's `AVAudioSession`'s preferred sample rate on Apple silicon
+   (Apple's `AVAudioSession` docs, "Setting the Sample Rate"). The bus constant is the
+   source of truth, the device rate is whatever the OS picked.
+
+4. **Cue shape.** A `CueDef` is a `Cue` plus its three authored curves:
+   `volumeCurve(param 0..1)` (linear-in-dB piecewise, XACT's stock shape — defined in
+   `core/audio/Curve.hpp`), `filterCurve(param 0..1)` (low-pass cutoff Hz vs param, also
+   piecewise-linear), and `rpc` (a cent range around the take's authored pitch, the
+   same `pitchMin`/`pitchMax` pair the bank already carries — Xsb.hpp:46-48). `Mixer::
+   applyCue(def, param)` evaluates all three, multiplies them into the voice's gain and
+   detune, and applies the cutoff to a one-pole state-variable filter on the voice's
+   sample pull. The attenuation: inverse-square clamped at the listener's `halfWidth`,
+   `gain / (1 + (d/refD)^2)` — the inverse-square law Core Audio's `kAudioUnitSubType_
+   Mixer` uses for its 3D mixer when no HRTF is selected, with the clamp keeping a nearby
+   shot from blowing the mix.
+
+5. **Dynamic music.** `Mixer::setMusicLayer(name)` registers a layer (a bank + cue name
+   + its `CueDef`) and `Mixer::setMusicIntensity(int 0..3)` selects which of four layers
+   the next music play call resolves to. The layer registration is keyed by name so
+   battle scripts can write `mixer.setMusicLayer("battle_calm")` /
+   `mixer.setMusicLayer("battle_fury")` without owning the bus. The intensity switch is
+   in-process and bus-keyed (Music bus); the next play reads the current intensity and
+   picks the matching layer.
+
+**Alternatives considered.**
+
+- One bus per XACT category (39 buses) — rejected as a knob wall for content that
+  retail ships with four named buses. Categories stay as instance-limit keys (Mixer.hpp:
+  60-72); bus routing is a coarser axis.
+- Compressor on master instead of tanh — Core Audio's dynamics processors need an audio
+  unit per channel and a state machine; the `tanh` already in `Mixer::render`
+  (Mixer.cpp:148-150) is the soft knee the engine has today, and it keeps the audio
+  thread's critical section free of state.
+- A separate music voice pool — rejected: music's audibility budget is the same as any
+  other voice, and a second pool doubles the stealer pass. Music rides the same pool on
+  the Music bus, with its own gain so it can be ducked.
+- Real-time filter via Biquad — overkill for a one-pole state-variable filter that runs
+  once per voice per render frame. The DSP cookbook's one-pole is 5 multiplies per
+  sample, well below the 512-frame buffer's deadline.
+
+**Corroboration.** The shape follows what `AVAudioEngine` exposes on Apple silicon: a
+`mainMixerNode` plus optional `AVAudioMixerNode`s per bus (Apple, "AVAudioEngine
+Programming Guide"), with bus volumes in `[0, 1]` and a master volume. The XACT curve
+shape — piecewise linear in dB against a 0..1 parameter — is XACT2's RPC curve format
+(measured on the retail bytes: `SupCom.xgs` carries runs of `(distance, hundredths_of_dB)`
+points where the far end is -9600). The `setMusicLayer`/`setMusicIntensity` pair
+mirrors Recoil's `moho.resource_manager:SetMusicSound`/`SetMusicEffect` (Lua API), which
+the BAR engine exposes as a layered-strategy model: one bank, four intensity layers.
+
+**Consequences.** The mixer API gains `applyCue`, `setMusicLayer`, `setMusicIntensity`,
+plus `busGain(Bus, float)` and `activeMusicLayer()`. The bus layout is observable in
+tests by reading back `activeMusicLayer()` after `setMusicIntensity`. The `Curve` type
+is pure data and lives in `core/audio/Curve.hpp` so the synthesised cues (Cues.cpp)
+and the bank's authored curves share one evaluator. XACT volume curves are still
+measured flat across retail weapon banks (Xsb.hpp:14-19), so the new wiring degrades to
+identity on real content — the shape is there when authored curves arrive.
+

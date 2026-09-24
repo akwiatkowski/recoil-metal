@@ -392,9 +392,15 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
 /// fields constantly for nothing — dynamic unit blockage is the congestion
 /// pass's job.
 ///
+/// `C-287` adds the prop side: a feature whose authored ogrid footprint is
+/// non-zero (a non-wreck prop on the map) claims its cells through the same
+/// overlay; a wreck stays at the default zero and the loop walks past it, so
+/// the wreck's existence in the store is independent of whether it blocks.
+///
 /// Exposed so a test can assert a published route avoids exactly the cells this
 /// reports, rather than re-deriving the rule.
 [[nodiscard]] std::vector<std::uint8_t> blockingCells(const UnitStore& store,
-                                                    const PassabilityGrid& grid);
+                                                    const PassabilityGrid& grid,
+                                                    const FeatureStore* features);
 
 } // namespace rm::sim

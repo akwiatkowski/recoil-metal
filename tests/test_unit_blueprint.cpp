@@ -1147,3 +1147,233 @@ TEST_CASE("a unit with no staging block is not a pad", "[unitbp][airstaging]") {
     CHECK_FALSE(def->isAirStagingPad());
     CHECK(def->refuelingMultiplier == 0.0f);
 }
+
+TEST_CASE("C-218 (1): the inertia tensor reads its three diagonal components") {
+    // `C-218`'s first explicit-0-vs-absent site: no shipped unit authors `InertiaTensor{X,Y,Z}`
+    // (entity schema `Engine/Core/Blueprints/EntityBlueprint.lua:22-27`), and the absent
+    // default has to read the same as the explicit-zero default — both leave the unit on
+    // a spherical degenerate tensor (every axis zero), which is what a body without a
+    // declared inertia IS. The test fixes the authored and the absent case both.
+    const Blueprint absent{"XXB0401_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto bare = rm::unitbp::loadFile(absent.path());
+    REQUIRE(bare.has_value());
+    CHECK(bare->inertiaTensorX == 0.0f);
+    CHECK(bare->inertiaTensorY == 0.0f);
+    CHECK(bare->inertiaTensorZ == 0.0f);
+
+    // An explicit authored triple is read verbatim from `Physics` (the loader calls
+    // `numberOr` per axis; an explicit-0 axis IS distinguishable here, because a unit
+    // can declare one axis while leaving another absent, and they do not have to agree).
+    const Blueprint explicitUnit{"XXB0402_unit.bp", R"(
+        UnitBlueprint {
+            Physics = {
+                MotionType = 'RULEUMT_Land', MaxSpeed = 1,
+                InertiaTensorX = 0, InertiaTensorY = 4, InertiaTensorZ = 9,
+            },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(explicitUnit.path());
+    REQUIRE(def.has_value());
+    CHECK(def->inertiaTensorX == 0.0f);    // explicit zero, NOT absent
+    CHECK(def->inertiaTensorY == 4.0f);
+    CHECK(def->inertiaTensorZ == 9.0f);
+}
+
+TEST_CASE("C-218 (2): an AltFootprint is parsed into its own struct and never merged") {
+    // `C-218`'s second explicit-0-vs-absent site: `Engine/Core/Blueprints/EntityBlueprint.lua:5`
+    // declares `AltFootprint? FootprintBlueprint`, and `Sim/Unit.lua:128-131` exposes it
+    // via `Unit:ForceAltFootprint(state)`. The two footprints carry the same five fields
+    // (SizeX/Z, MaxSlope, MinWaterDepth, OccupancyCaps); the read MUST land in their own
+    // struct, because silent merging with the regular footprint would deny the runtime
+    // toggle its choice.
+    const Blueprint named{"XXB0501_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_None' },
+            Footprint = { SizeX = 5, SizeZ = 5 },
+            AltFootprint = {
+                SizeX = 8, SizeZ = 6, MaxSlope = 0.25,
+                MinWaterDepth = 1.5, OccupancyCaps = 3,
+            },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(named.path());
+    REQUIRE(def.has_value());
+    CHECK(def->hasAltFootprint);
+
+    // 8 and 6 ogrids read as a ceil-rounded integer square count.
+    CHECK(def->altFootprint.squaresX == 8);
+    CHECK(def->altFootprint.squaresZ == 6);
+    CHECK(def->altFootprint.maxSlopeDegrees == 0.25f);
+    CHECK(def->altFootprint.minWaterDepthElmos == 12.0f);     // 1.5 × 8
+    CHECK(def->altFootprint.occupancyCaps == 3);
+
+    // And critically, the REGULAR footprint is NOT overwritten. The two are siblings,
+    // not a merge; this is what makes the runtime toggle work.
+    CHECK(def->footprintSquaresX == 5);
+    CHECK(def->footprintSquaresZ == 5);
+    CHECK(def->occupancyCaps == -1);  // absent on the regular footprint
+}
+
+TEST_CASE("C-218 (2): a blueprint with no AltFootprint keeps `hasAltFootprint` false") {
+    const Blueprint bp{"XXB0502_unit.bp", R"(
+        UnitBlueprint {
+            Footprint = { SizeX = 5, SizeZ = 5 },
+            Physics = { MotionType = 'RULEUMT_None' },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    CHECK_FALSE(def->hasAltFootprint);
+    // The struct stays at its constructor defaults — never silently filled from elsewhere.
+    CHECK(def->altFootprint.squaresX == 0);
+    CHECK(def->altFootprint.squaresZ == 0);
+    CHECK(def->altFootprint.occupancyCaps == -1);
+}
+
+TEST_CASE("C-218 (4): OccupancyCaps is read verbatim and a 0 is distinguishable from absent") {
+    // `C-218`'s fourth explicit-0-vs-absent site: `Footprint.OccupancyCaps` is a layer mask
+    // (entity schema `EntityBlueprint.lua:87`); a rock props file ships `OccupancyCaps = 3`
+    // (Land|Air), a crystal ships `= 0` ("occupies no layer"), and a structure that states
+    // no `Footprint` block keeps the absent sentinel. The `-1` sentinel is the only thing
+    // that lets a downstream caller tell "explicitly nowhere" from "I forgot to write it".
+    const Blueprint propLike{"XXB0601_unit.bp", R"(
+        UnitBlueprint {
+            Footprint = { SizeX = 1, SizeZ = 1, OccupancyCaps = 3 },
+            Physics = { MotionType = 'RULEUMT_None' },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto landAir = rm::unitbp::loadFile(propLike.path());
+    REQUIRE(landAir.has_value());
+    CHECK(landAir->occupancyCaps == 3);
+
+    // An explicit zero is read as zero — the crystal case: a feature that occupies NO
+    // layer is meaningful input, and reading it as "absent" would silently overwrite it
+    // with the layer-derived default, which is a foot-gun.
+    const Blueprint crystalLike{"XXB0602_unit.bp", R"(
+        UnitBlueprint {
+            Footprint = { SizeX = 1, SizeZ = 1, OccupancyCaps = 0 },
+            Physics = { MotionType = 'RULEUMT_None' },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto explicitZero = rm::unitbp::loadFile(crystalLike.path());
+    REQUIRE(explicitZero.has_value());
+    CHECK(explicitZero->occupancyCaps == 0);
+    CHECK(explicitZero->occupancyCaps != -1);  // explicit zero, NOT the absent sentinel
+
+    // And absence stays absent, never silently defaulted to something else.
+    const Blueprint withNoFootprint{"XXB0603_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_None' },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto absent = rm::unitbp::loadFile(withNoFootprint.path());
+    REQUIRE(absent.has_value());
+    CHECK(absent->occupancyCaps == -1);
+}
+
+TEST_CASE("C-218 (6): AttackElevation falls back to Elevation when the file states neither") {
+    // `C-218`'s third explicit-0-vs-absent site chain: retail derives `AttackElevation`
+    // from `Physics.Elevation` when the file states no `AttackElevation`. The previous
+    // loader left both fields read independently, and a fighter that authors only its
+    // cruise height was getting an attack altitude of 0 — the worst answer because 0 is
+    // also "occupy the runway".
+    SECTION("AttackElevation stated: wins") {
+        const Blueprint bp{"XXB0701_unit.bp", R"(
+            UnitBlueprint {
+                Physics = {
+                    MotionType = 'RULEUMT_Air',
+                    Elevation = 18, AttackElevation = 4,
+                },
+                Air = { MaxAirspeed = 12, Winged = true },
+            }
+        )"};
+        const auto def = rm::unitbp::loadFile(bp.path());
+        REQUIRE(def.has_value());
+        CHECK(def->airAttackElevationElmos == 32.0f);  // 4 × 8 (AttackElevation wins)
+        CHECK(def->elevationElmos == 144.0f);          // 18 × 8
+    }
+    SECTION("AttackElevation absent: chain to Elevation") {
+        const Blueprint bp{"XXB0702_unit.bp", R"(
+            UnitBlueprint {
+                Physics = { MotionType = 'RULEUMT_Air', Elevation = 18 },
+                Air = { MaxAirspeed = 12, Winged = true },
+            }
+        )"};
+        const auto def = rm::unitbp::loadFile(bp.path());
+        REQUIRE(def.has_value());
+        // Chain: missing AttackElevation → fall back to Elevation.
+        CHECK(def->airAttackElevationElmos == 144.0f);   // 18 × 8
+        CHECK(def->elevationElmos == 144.0f);
+    }
+    SECTION("both absent: zero, the runway altitude") {
+        const Blueprint bp{"XXB0703_unit.bp", R"(
+            UnitBlueprint {
+                Physics = { MotionType = 'RULEUMT_Air' },
+                Air = { MaxAirspeed = 12, Winged = true },
+            }
+        )"};
+        const auto def = rm::unitbp::loadFile(bp.path());
+        REQUIRE(def.has_value());
+        CHECK(def->airAttackElevationElmos == 0.0f);
+        CHECK(def->elevationElmos == 0.0f);
+    }
+}
+
+TEST_CASE("C-218 (6): CatchUpAcc is read from Physics verbatim, zero when unauthored") {
+    // `C-218`'s fourth explicit-0-vs-absent site: `Physics.CatchUpAcc`
+    // (`UnitBlueprint.lua:1112-1113`) — the elmos-per-tick² a lagging mover applies.
+    // An authored value is read verbatim; absence and explicit zero both stay zero,
+    // which is what the mover falls back to proportional close-rate when.
+    const Blueprint authored{"XXB0704_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', CatchUpAcc = 10, MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true },
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(authored.path());
+    REQUIRE(def.has_value());
+    CHECK(def->catchUpAcc == Catch::Approx(10.0f));
+
+    const Blueprint bare{"XXB0705_unit.bp", kMediumTank};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->catchUpAcc == 0.0f);
+}
+
+TEST_CASE("C-218 (6): StartTurnDistance is read from Air verbatim, zero when unauthored") {
+    // `C-218`'s fifth explicit-0-vs-absent site: `Air.StartTurnDistance`
+    // (`UnitBlueprint.lua:254-255`) — the ogrids from a moving target at which a
+    // flyer begins to align. Changelog 2026-02-14-3830 tunes it freely
+    // (UAA0102: 10 → 5); we keep the file value verbatim so a combat-state change
+    // can read it later without needing a separate ogrid-to-elmo conversion.
+    const Blueprint authored{"XXB0706_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true, StartTurnDistance = 5 },
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(authored.path());
+    REQUIRE(def.has_value());
+    CHECK(def->startTurnDistance == Catch::Approx(5.0f));
+
+    const Blueprint bare{"XXB0707_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true },
+        }
+    )"};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->startTurnDistance == 0.0f);
+}

@@ -195,6 +195,7 @@ add_library(rm_core STATIC
     src/core/sim/BuildOrder.cpp
     src/core/audio/Cues.cpp
     src/core/audio/CueEvents.cpp
+    src/core/audio/Curve.cpp
     src/core/audio/Mixer.cpp
     src/core/audio/Xgs.cpp
     src/core/audio/Xwb.cpp
@@ -256,6 +257,7 @@ add_library(rm_app STATIC
     src/app/SceneBuild.cpp
     src/app/Cli.cpp
     src/app/FafAi.cpp
+    src/app/ScriptHost.cpp
     src/app/WeaponVisualLoader.cpp
     src/app/FafOpponent.cpp
     src/app/Match.cpp

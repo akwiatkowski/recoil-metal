@@ -623,7 +623,8 @@ std::vector<int> countCommanders(const UnitStore& store, const UnitCatalog& cata
 }
 
 std::vector<std::uint8_t> blockingCells(const UnitStore& store,
-                                      const PassabilityGrid& grid) {
+                                      const PassabilityGrid& grid,
+                                      const FeatureStore* features) {
     std::vector<std::uint8_t> cells(
         static_cast<std::size_t>(grid.cellsX) * static_cast<std::size_t>(grid.cellsZ), 0);
     if (grid.cellsX <= 0 || grid.cellsZ <= 0) {
@@ -654,6 +655,43 @@ std::vector<std::uint8_t> blockingCells(const UnitStore& store,
                 if (fxHypot(dx, dz) <= reach) {
                     cells[static_cast<std::size_t>(z) * static_cast<std::size_t>(grid.cellsX)
                           + static_cast<std::size_t>(x)] = 1;
+                }
+            }
+        }
+    }
+    // `C-287`: a footprinted prop — a non-wreck feature with at least one
+    // authored ogrid side > 1 — claims the cells under its footprint rectangle
+    // for the duration of its stay. A wreck stays at `footprintSquares == 0`
+    // (the default), so this loop ignores it exactly like the unit side does
+    // once the unit dies; a prop is added through the map placement path with
+    // the prop's authored dimensions, and the rectangle is computed in ogrids
+    // then converted to cells. A radius-only prop (single ogrid each side,
+    // which retail encodes as `SizeX == SizeZ == 1`) falls through to the
+    // radius path so a footprint-less prop still blocks its centre.
+    if (features != nullptr) {
+        for (const Feature& prop : features->all()) {
+            if (prop.footprintSquaresX <= 0 && prop.footprintSquaresZ <= 0) {
+                continue;  // wrecks and radius-only shapes are read below
+            }
+            // Axis-aligned footprint in cells: half-extents in ogrids ×
+            // `kSquareSize` (= 8 elmos per ogrid) gives half-side in elmos.
+            const int halfX = std::max(1, prop.footprintSquaresX) * kSquareSize / 2;
+            const int halfZ = std::max(1, prop.footprintSquaresZ) * kSquareSize / 2;
+            const Fx reachX = Fx::fromInt(halfX) + halfCell;
+            const Fx reachZ = Fx::fromInt(halfZ) + halfCell;
+            const int x0 = grid.cellAtWorld(prop.at[0] - reachX);
+            const int x1 = grid.cellAtWorld(prop.at[0] + reachX);
+            const int z0 = grid.cellAtWorld(prop.at[2] - reachZ);
+            const int z1 = grid.cellAtWorld(prop.at[2] + reachZ);
+            for (int z = z0; z <= z1; ++z) {
+                for (int x = x0; x <= x1; ++x) {
+                    const Fx dx = grid.worldAtCellCentre(x) - prop.at[0];
+                    const Fx dz = grid.worldAtCellCentre(z) - prop.at[2];
+                    if (fxHypot(dx, dz) <= std::max(reachX, reachZ)) {
+                        cells[static_cast<std::size_t>(z)
+                              * static_cast<std::size_t>(grid.cellsX)
+                              + static_cast<std::size_t>(x)] = 1;
+                    }
                 }
             }
         }
@@ -799,7 +837,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         // where units ENDED last tick, like the sight stamp below.
         for (const PassabilityGrid* grid : match.passability) {
             if (grid != nullptr) {
-                match.pathService->setBlocking(*grid, blockingCells(store, *grid));
+                match.pathService->setBlocking(*grid, blockingCells(store, *grid, match.features));
             }
         }
         for (const PathResult& result : match.pathService->service()) {

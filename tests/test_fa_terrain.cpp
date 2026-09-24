@@ -75,14 +75,23 @@ namespace {
     return nullptr;
 }
 
+/// An empty roster for tests that consult `blockingCells` for the prop side only.
+/// `UnitStore` has a default-constructed empty state — no spawn, no reindex, the
+/// store reports slot 0 as not alive — which is the `blockingCells` input the
+/// footprinted-prop test wants when it has no units to claim the grid.
+[[nodiscard]] rm::test::Roster rosterEmpty() {
+    return rm::test::Roster{};
+}
+
 } // namespace
 
 TEST_CASE("C-287: a wreck does not block the ground it died on", "[fa-terrain]") {
     // Retail's wrecks are footprint-less props: `DefaultWreckage_prop.bp`
     // carries no Footprint, so a death writes nothing to the occupancy grid.
-    // Ours reaches the same outcome by omission — `blockingCells` reads the
-    // unit store only — and this pins it at the observable seam: the blocking
-    // layer the path service is handed.
+    // Ours reaches the same outcome by omission — a wreck is created with
+    // `footprintSquaresX == 0 && footprintSquaresZ == 0`, and `blockingCells`
+    // skips a feature whose footprint axes are both zero — and this pins it at
+    // the observable seam: the blocking layer the path service is handed.
     const rm::HeightField field = flatField(128, 0.0f);
     const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
 
@@ -110,7 +119,7 @@ TEST_CASE("C-287: a wreck does not block the ground it died on", "[fa-terrain]")
     // blocking behaviour the wreck must NOT inherit.
     (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
     const int site = cellOf(grid, 512.0f, 200.0f);
-    REQUIRE(rm::sim::blockingCells(roster.store, grid)[static_cast<std::size_t>(site)]
+    REQUIRE(rm::sim::blockingCells(roster.store, grid, nullptr)[static_cast<std::size_t>(site)]
             == 1);
 
     // It dies. The wreck feature exists — reclaim and the scorch decal both
@@ -120,7 +129,7 @@ TEST_CASE("C-287: a wreck does not block the ground it died on", "[fa-terrain]")
     REQUIRE(features.size() == 1);
 
     const std::vector<std::uint8_t> blocked =
-        rm::sim::blockingCells(roster.store, grid);
+        rm::sim::blockingCells(roster.store, grid, &features);
     CHECK(std::ranges::none_of(blocked, [](std::uint8_t cell) { return cell != 0; }));
 
     // And a route asked for across the corpse's cell goes THROUGH it: the
@@ -440,4 +449,121 @@ TEST_CASE("C-289: a tarmac structure stamps its pad and the stamp dies with it",
     // answers true. The pad's unwalkable-again is `divisorAt != 1`: not
     // pristine, which is the same bar `sitePlaceable` holds a footprint to.
     CHECK(passability.gridFor(17.0f, 12.0f).divisorAt(0, 0) != 1);
+}
+
+TEST_CASE("C-287: a footprinted prop blocks the cells under its footprint",
+          "[fa-terrain]") {
+    // Retail's map-placed props (trees, rocks, wrecks) take the prop's authored
+    // `Footprint.SizeX/Z` and register it on the COGrid so a unit walks around
+    // the prop rather than through it. A wreck has no `Footprint` block, so it
+    // writes nothing — pinned by the sibling case above. This is the
+    // footprinted half: a non-wreck feature whose authored footprint is > 1
+    // ogrid, claimed through `blockingCells` and read by `findPath` as a hard
+    // obstacle. Removed from the store, the same ground is routeable again.
+    //
+    // The fixture is a flat 128-square field with no units; the prop is the
+    // only thing on the map. Two scenarios, both in the same grid: with the
+    // prop the route detours; without, it goes straight through.
+    const rm::HeightField field = flatField(128, 0.0f);
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    REQUIRE(grid.cellsX > 0);
+    REQUIRE(grid.cellsZ > 0);
+
+    // A 2x2-ogrid prop (a tree, say) at the field centre, on the cell grid's
+    // axis so the assertion is on whole cells rather than crossings. The
+    // authored size is in ogrids — eight elmos each — so half-extents in
+    // elmos are `2 * 8 / 2 = 8`. Centred on a cell boundary means cells 7
+    // and 8 each way are claimed.
+    constexpr float kPropCentreX = 480.0f;  // cell 7's centre is at 480 elmos
+    constexpr float kPropCentreZ = 480.0f;
+    constexpr int kHalfXElmos = 8;
+    constexpr int kHalfZElmos = 8;
+
+    rm::sim::FeatureStore features;
+    (void)features.add(rm::sim::Feature{
+        .at = {rm::test::fx(kPropCentreX), rm::test::fx(0.0f),
+               rm::test::fx(kPropCentreZ)},
+        .radiusElmos = rm::test::fx(8.0f),
+        .footprintSquaresX = 2,
+        .footprintSquaresZ = 2,
+    });
+    REQUIRE(features.size() == 1);
+
+    // The prop's cells must all read as blocked — both halves of the axis,
+    // because the footprint is rectangular and the test does not assume which
+    // half of the rectangle a cell sits in.
+    const int site00 = cellOf(grid, kPropCentreX - kHalfXElmos,
+                              kPropCentreZ - kHalfZElmos);
+    const int site10 = cellOf(grid, kPropCentreX + kHalfXElmos,
+                              kPropCentreZ - kHalfZElmos);
+    const int site01 = cellOf(grid, kPropCentreX - kHalfXElmos,
+                              kPropCentreZ + kHalfZElmos);
+    const int site11 = cellOf(grid, kPropCentreX + kHalfXElmos,
+                              kPropCentreZ + kHalfZElmos);
+    const std::vector<std::uint8_t> blocked =
+        rm::sim::blockingCells(rosterEmpty().store, grid, &features);
+    REQUIRE(blocked[static_cast<std::size_t>(site00)] == 1);
+    REQUIRE(blocked[static_cast<std::size_t>(site10)] == 1);
+    REQUIRE(blocked[static_cast<std::size_t>(site01)] == 1);
+    REQUIRE(blocked[static_cast<std::size_t>(site11)] == 1);
+
+    // A route across the prop's footprint detours around it. The straight
+    // corridor would visit every prop cell; the detour walks one row south
+    // (or north) and avoids them all.
+    const auto shared = std::make_shared<rm::sim::PassabilityGrid>(grid);
+    // Goal is past the prop, well past the prop's footprint along x.
+    rm::sim::FlowField flow(shared, grid.cellAtWorld(rm::test::fx(kPropCentreX + 256.0f)),
+                            grid.cellAtWorld(rm::test::fx(kPropCentreZ)), blocked);
+    const int start = cellOf(grid, kPropCentreX - 256.0f, kPropCentreZ);
+    const int starts[]{start};
+    for (int i = 0; i < 64 && flow.reach(start) == rm::sim::FlowField::Reach::Pending;
+         ++i) {
+        flow.stepUntil(starts, 1000);
+    }
+    REQUIRE(flow.reach(start) == rm::sim::FlowField::Reach::Reached);
+    const auto route = flow.route(rm::test::fx(kPropCentreX - 256.0f),
+                                  rm::test::fx(kPropCentreZ),
+                                  rm::test::fx(kPropCentreX + 256.0f),
+                                  rm::test::fx(kPropCentreZ));
+    REQUIRE_FALSE(route.empty());
+    const bool anyThroughProp = std::ranges::any_of(route, [&](const auto& point) {
+        const int cell = cellOf(grid, rm::test::asFloat(point[0]),
+                                rm::test::asFloat(point[1]));
+        return cell == site00 || cell == site10 || cell == site01 || cell == site11;
+    });
+    CHECK_FALSE(anyThroughProp);
+
+    // Remove the prop — same grid, empty store — and the route is straight
+    // through. The "with prop" overlay has been retired and the field is
+    // free again, which is the path-side analogue of the wreck case
+    // (reclaiming a wreck does the same for a unit-spawned feature).
+    rm::sim::FeatureStore cleared;
+    const std::vector<std::uint8_t> unblocked =
+        rm::sim::blockingCells(rosterEmpty().store, grid, &cleared);
+    CHECK(std::ranges::none_of(unblocked,
+                               [](std::uint8_t cell) { return cell != 0; }));
+
+    const auto sharedOpen = std::make_shared<rm::sim::PassabilityGrid>(grid);
+    rm::sim::FlowField flowOpen(sharedOpen,
+                                grid.cellAtWorld(rm::test::fx(kPropCentreX + 256.0f)),
+                                grid.cellAtWorld(rm::test::fx(kPropCentreZ)),
+                                unblocked);
+    const int startsOpen[]{start};
+    for (int i = 0; i < 64
+         && flowOpen.reach(start) == rm::sim::FlowField::Reach::Pending;
+         ++i) {
+        flowOpen.stepUntil(startsOpen, 1000);
+    }
+    REQUIRE(flowOpen.reach(start) == rm::sim::FlowField::Reach::Reached);
+    const auto routeOpen = flowOpen.route(rm::test::fx(kPropCentreX - 256.0f),
+                                          rm::test::fx(kPropCentreZ),
+                                          rm::test::fx(kPropCentreX + 256.0f),
+                                          rm::test::fx(kPropCentreZ));
+    REQUIRE_FALSE(routeOpen.empty());
+    const bool throughOpen = std::ranges::any_of(routeOpen, [&](const auto& point) {
+        const int cell = cellOf(grid, rm::test::asFloat(point[0]),
+                                rm::test::asFloat(point[1]));
+        return cell == site00 || cell == site10 || cell == site01 || cell == site11;
+    });
+    CHECK(throughOpen);
 }

@@ -1,8 +1,12 @@
 #include "core/mesh/ChunkDraws.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <vector>
+
+using Catch::Approx;
 
 namespace {
 
@@ -156,6 +160,109 @@ TEST_CASE("detail halves at each threshold, measured in chunk widths") {
 
 TEST_CASE("a chunk with no width takes the finest level rather than dividing by zero") {
     CHECK(rm::lodForDistance(10000.0f, 0.0f) == 0);
+}
+
+// --- Retail pixel-scale metric (C-370) ---------------------------------------
+// The claim: LODMetric = viewport × LODScale × FOV pixel scale. Source: FAF
+// `rts/Game/Camera.cpp:144` (`lppScale = (2 * tanHalfFov) * globalRendering->pixelY`)
+// and `rts/Rendering/LuaObjectDrawer.cpp:324`
+// (`SetGlobalLODFactor(objType, GetLODScale(objType) * camera->GetLPPScale())`)
+// combined at `rts/Lua/LuaObjectMaterial.h:159`
+// (`lpp = std::max(0.0f, lodDist * GLOBAL_LOD_FACTORS[objType])`).
+//
+// Reformulated in elmos / pixels / radians:
+//   metric = radius * LODScale * (2 * tan(fovY/2)) * viewportHeight / distance
+//
+// All four camera configs below are known distances from a chunk of known
+// bounding-sphere radius. The expected metric is hand-computed and asserted
+// to a tolerance that catches any sign error or factor-of-two slip without
+// being so tight that a roundtrip through std::tan trips it.
+
+TEST_CASE("C-370: lodMetric returns the retail viewport×LODScale×FOV pixel scale") {
+    // Camera A — 1080p, 60° vfov, chunk radius 256 elmos, 1000 elmos out, scale 1.
+    //   metric = 256 * 1.0 * 2 * tan(pi/6) * 1080 / 1000 ≈ 319.25 px
+    constexpr float kFovA = 1.0471975511965976f;  // pi/3 rad == 60°
+    const float gotA = rm::lodMetric(256.0f, 1000.0f, kFovA, 1080.0f, 1.0f);
+    CHECK(gotA == Approx(319.25f).margin(0.05f));
+    // Same value computed via std::tan — the only place a tan(pi/6) lives in
+    // the implementation, so it is the only honest source of truth.
+    CHECK(gotA == Approx(256.0f * 2.0f * std::tan(kFovA * 0.5f) * 1080.0f / 1000.0f)
+                  .margin(1e-4));
+
+    // Camera B — 1440p, 45° vfov, chunk radius 360 elmos, 800 elmos out, scale 1.
+    //   metric = 360 * 1.0 * 2 * tan(pi/8) * 1440 / 800 ≈ 536.82 px
+    constexpr float kFovB = 0.7853981633974483f;  // pi/4 rad == 45°
+    const float gotB = rm::lodMetric(360.0f, 800.0f, kFovB, 1440.0f, 1.0f);
+    CHECK(gotB == Approx(536.82f).margin(0.05f));
+    CHECK(gotB == Approx(360.0f * 2.0f * std::tan(kFovB * 0.5f) * 1440.0f / 800.0f)
+                  .margin(1e-4));
+
+    // Camera C — 1080p, 60° vfov, same chunk as A, but the camera stands 4× as far.
+    // Halving the elmo distance quadruples the metric, which is the property that
+    // makes the formula projection-preserving rather than distance-preserving.
+    const float gotC = rm::lodMetric(256.0f, 4000.0f, kFovA, 1080.0f, 1.0f);
+    CHECK(gotC == Approx(gotA / 4.0f).margin(1e-4));
+
+    // Camera D — 1080p, 60° vfov, scale 0.5 (the engine's `LODScaleShadow` style
+    // half). Halving the scale halves the metric at every distance.
+    const float gotD = rm::lodMetric(256.0f, 1000.0f, kFovA, 1080.0f, 0.5f);
+    CHECK(gotD == Approx(gotA * 0.5f).margin(1e-4));
+
+    // Camera E — 2160p, 60° vfov, scale 1. Doubling the viewport height doubles the
+    // metric — the same chunk projects to twice as many pixels on a 4K screen.
+    const float gotE = rm::lodMetric(256.0f, 1000.0f, kFovA, 2160.0f, 1.0f);
+    CHECK(gotE == Approx(gotA * 2.0f).margin(1e-4));
+
+    // Camera F — 1080p, 60° vfov, scale 1, chunk 4× the radius. The metric is
+    // linear in radius, which is the property that lets one set of thresholds
+    // cover chunks of every size on the map.
+    const float gotF = rm::lodMetric(1024.0f, 1000.0f, kFovA, 1080.0f, 1.0f);
+    CHECK(gotF == Approx(gotA * 4.0f).margin(1e-4));
+}
+
+TEST_CASE("C-370: lodForPixelScale picks the level whose pixel threshold the chunk clears") {
+    // Camera 1080p, 60° vfov, scale 1.0 — gives the cleanest round numbers.
+    constexpr float fovY = 1.0471975511965976f;  // pi/3 rad
+    constexpr float viewportHeight = 1080.0f;
+
+    // Chunk projects well above kLodFarPixels (165): level 0.
+    //   radius=256 elmos, distance=500 elmos → metric ≈ 638 px
+    CHECK(rm::lodForPixelScale(256.0f, 500.0f, fovY, viewportHeight) == 0);
+
+    // Chunk projects between the two thresholds: level 1.
+    //   radius=256 elmos, distance=2000 elmos → metric ≈ 159.5 px
+    CHECK(rm::lodForPixelScale(256.0f, 2000.0f, fovY, viewportHeight) == 1);
+
+    // Chunk projects below kLodNearPixels (40): level 2.
+    //   radius=256 elmos, distance=8000 elmos → metric ≈ 39.9 px
+    CHECK(rm::lodForPixelScale(256.0f, 8000.0f, fovY, viewportHeight) == 2);
+
+    // Boundaries. A pixel value of exactly kLodFarPixels (or above) is the
+    // finest level — the boundary is inclusive on the coarse side, mirroring
+    // `lodForDistance`'s `<` near / `<` far convention by inverting the
+    // direction (smaller metric == farther away == coarser level).
+    CHECK(rm::lodForPixelScale(165.0f, 2000.0f, fovY, viewportHeight) == 1);
+    // Walking the radius down until the metric falls below kLodNearPixels
+    // (40): at radius=40, distance=2000 the metric is ≈24.9 px → level 2.
+    CHECK(rm::lodForPixelScale(40.0f, 2000.0f, fovY, viewportHeight) == 2);
+
+    // lodScale halves the budget: a shadow pass with LODScaleShadow=0.5 picks a
+    // level one step coarser for the same chunk at the same distance.
+    CHECK(rm::lodForPixelScale(256.0f, 1000.0f, fovY, viewportHeight, 0.5f) ==
+          rm::lodForPixelScale(256.0f, 2000.0f, fovY, viewportHeight, 1.0f));
+}
+
+TEST_CASE("C-370: lodMetric is finite at degenerate camera configurations") {
+    // Camera sitting on the chunk — metric is infinite, level is finest.
+    CHECK(rm::lodForPixelScale(256.0f, 0.0f, 1.0471975511965976f, 1080.0f) == 0);
+
+    // Zero-radius chunk: the formula degenerates to 0/r = 0, which is below the
+    // coarsest threshold. A point has no projected extent and no detail to lose.
+    CHECK(rm::lodForPixelScale(0.0f, 1000.0f, 1.0471975511965976f, 1080.0f) == 2);
+
+    // Zero viewport height — bad config, but never NaN.
+    const float got = rm::lodMetric(256.0f, 1000.0f, 1.0471975511965976f, 0.0f);
+    CHECK(std::isfinite(got));
 }
 
 // --- What the thresholds are FOR ---------------------------------------------

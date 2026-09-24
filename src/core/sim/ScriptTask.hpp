@@ -37,9 +37,20 @@ struct ScriptTaskState {
 /// The host must outlive every CommandQueue it is bound to. `state` is the complete mutable
 /// task object for save/load purposes; the host must not retain a pointer to it because deque
 /// edits may move the owning command.
+///
+/// `C-318`: retail calls `OnPreCreate` before any native setup (the script may prepare
+/// fields the constructor expects to find) and `OnCreate` after; `OnDestroy` arrives at the
+/// tail of `Entity::OnDestroy`. The default `onPreCreate` is a no-op so existing hosts keep
+/// working — only the dispatcher that wants the new ordering needs to override it.
 class ScriptTaskHost {
 public:
     virtual ~ScriptTaskHost() = default;
+
+    /// Optional pre-creation hook (`C-318`). Fires once, just before `onCreate`, and is the
+    /// last chance the script has to shape state before native setup. Default no-op.
+    virtual void onPreCreate(UnitId, std::string_view,
+                             std::span<const std::uint8_t>,
+                             ScriptTaskState&) noexcept {}
 
     virtual void onCreate(UnitId unit, std::string_view task,
                           std::span<const std::uint8_t> commandData,

@@ -2556,11 +2556,8 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             // would depend on which shooter's projectile resolved first.
             // `ChangeRateOfFire` rewrites the reload, not the burst gap
             // (`C-255`): the burst delay is authored per-shot cadence.
-            const float effectiveRate = weaponRateOfFireFor(store, catalog, slot, weapon);
-            const TickCount effectiveReload =
-                effectiveRate > 0.0f
-                    ? rate.ticks(sim::seconds(1.0f / effectiveRate))
-                    : TickCount{1};
+            const Fx effectiveRate = weaponRateOfFireFor(store, catalog, slot, weapon);
+            const TickCount effectiveReload = rate.ticksForRate(effectiveRate);
             if (weapon.bursts()) {
                 if (health.burstRemaining[w] == 0) {
                     health.burstRemaining[w] = rates.burstSize;
@@ -2685,11 +2682,9 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                                                             motions[slot], false)}
                            : std::nullopt));
             projectiles.back().serial = projectileSerial(tick, pushIndex);
-            const float effectiveRate = weaponRateOfFireFor(store, catalog, slot, weapon);
-            healths[slot].reloadRemaining[w] = static_cast<int>(
-                effectiveRate > 0.0f
-                    ? static_cast<int>(rate.ticks(sim::seconds(1.0f / effectiveRate)))
-                    : 1);
+            const Fx effectiveRate = weaponRateOfFireFor(store, catalog, slot, weapon);
+            healths[slot].reloadRemaining[w] =
+                static_cast<int>(rate.ticksForRate(effectiveRate));
             emit(events, Event{
                              .kind = EventKind::WeaponFired,
                              .unit = store.idAt(slot),
@@ -2826,11 +2821,9 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
             missile.innerRingRadiusElmos = weapon.innerRingRadius;
             missile.outerRingRadiusElmos = weapon.outerRingRadius;
             consumeSiloAmmo(store.idAt(slot), weapon, siloAmmo);
-            const float effectiveRate = weaponRateOfFireFor(store, catalog, slot, weapon);
-            healths[slot].reloadRemaining[w] = static_cast<int>(
-                effectiveRate > 0.0f
-                    ? static_cast<int>(rate.ticks(sim::seconds(1.0f / effectiveRate)))
-                    : 1);
+            const Fx effectiveRate = weaponRateOfFireFor(store, catalog, slot, weapon);
+            healths[slot].reloadRemaining[w] =
+                static_cast<int>(rate.ticksForRate(effectiveRate));
             emit(events, Event{
                              .kind = EventKind::WeaponFired,
                              .unit = store.idAt(slot),
@@ -3165,7 +3158,12 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
             // A personal bubble shelters only its generator: nearby friendlies
             // under the same blast take it unsheltered. The bubble itself still
             // intercepts as a swept primitive and still charges when admitted.
-            if (bubble.geometry.personalBubble && bubble.slot != target) {
+            // `TransportShield` shelters nobody either — retail's version routes
+            // no damage at all and instead denies damage to carrier and cargo
+            // inside `damageOne` (`lua/shield.lua:1190-1203`); it stays in the
+            // list so an intersecting blast still charges the shield pool.
+            if ((bubble.geometry.personalBubble && bubble.slot != target)
+                || bubble.geometry.transportShield) {
                 continue;
             }
             if (!shieldContains(bubble.geometry, bubble.centre, at)) {
@@ -3205,6 +3203,29 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
             if (radiusElmos > Fx{} && targetDef != nullptr
                 && targetDef->hasCategory("NOSPLASHDAMAGE")) {
                 return;
+            }
+            // `TransportShield` (`lua/shield.lua:1165-1237`) routes no damage at
+            // all: while the shield is up it sets `CanTakeDamage = false` on the
+            // transport AND every cargo unit. Denial, not absorption — a blast
+            // inside the bubble still lands nothing on carrier or cargo, and
+            // the shield pool is charged only by blasts/sweeps that reach the
+            // shield itself. `active()` covers the recharge window, so a
+            // collapsed transport shield exposes the rack again.
+            const auto shieldedByTransport = [&](UnitIndex s) {
+                const UnitCatalog::ShieldInfo& sh = shieldFor(store, *catalog, s);
+                return sh.transportShield && healths[s].shield.active()
+                       && !store.scriptBitDisabledAt(s, 0);
+            };
+            if (shieldedByTransport(slot)) {
+                return;
+            }
+            if (motion[slot].attached) {
+                if (const std::optional<UnitId> parent =
+                        store.parentOf(store.idAt(slot));
+                    parent && parent->index < healths.size()
+                    && shieldedByTransport(parent->index)) {
+                    return;
+                }
             }
         }
         if (slot >= motion.size()
