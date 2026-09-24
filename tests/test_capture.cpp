@@ -129,9 +129,33 @@ TEST_CASE("capture budgeting follows the retail progress contract", "[capture]")
     CHECK(rm::sim::captureWorkTicks(rm::sim::magFromFloat(100.0f),
                                     rm::sim::magFromFloat(1.0f), 10)
           == 50);
+    // Retail Lua's `or 10` keeps an explicitly authored zero (URA0001); the
+    // native `max(1, seconds * 10)` makes that a one-beat capture.
+    CHECK(rm::sim::captureWorkTicks(rm::sim::Mag{},
+                                    rm::sim::magFromFloat(1.0f), 10) == 1);
     CHECK(rm::sim::captureDemand(rm::sim::magFromFloat(200.0f), 50).energy
           == rm::sim::magFromFloat(4.0f));
     CHECK(rm::sim::captureDemand(rm::sim::magFromFloat(200.0f), 50).mass == rm::sim::Mag{});
+}
+
+TEST_CASE("capture distinguishes absent and authored zero BuildTime", "[capture]") {
+    // `C-236`: URA0001 states BuildTime=0; Lua's `or 10` applies only when absent.
+    for (const bool authored : {false, true}) {
+        Fixture f;
+        rm::unitdef::UnitDef targetDef = *f.roster.catalog.def(f.structureType);
+        targetDef.buildTime = {};
+        targetDef.buildTimeSpecified = authored;
+        const auto type = f.roster.addType(targetDef);
+        const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+        const UnitId target = f.roster.add(type, 206.0f, 200.0f, 1, 100.0f);
+        REQUIRE(f.capture(captor, target));
+        f.tick();
+        CHECK(f.roster.store.alive(target) == !authored);
+        if (!authored) {
+            f.tick(4);
+            CHECK_FALSE(f.roster.store.alive(target));
+        }
+    }
 }
 
 TEST_CASE("an engineer captures an enemy structure and the army changes", "[capture]") {

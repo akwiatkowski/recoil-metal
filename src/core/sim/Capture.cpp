@@ -10,6 +10,8 @@
 namespace rm::sim {
 namespace {
 
+// `ART-S007` lua/sim/Unit.lua:2734-2744: missing BuildTime defaults to 10 work units.
+constexpr int kMissingCaptureBuildTime = 10;
 // Mirrors validReclaimUnit's alliance reading: hostile, never own or allied, with the
 // same no-alliance-state compatibility seam for direct dispatch.
 [[nodiscard]] bool hostilePair(UnitIndex captor, UnitId target, const UnitStore& store,
@@ -63,12 +65,12 @@ int captureWorkTicks(Mag targetBuildTime, Mag ratePerTick,
         return 1;
     }
     // The retail progress contract in fixed point: seconds is the target's build
-    // time (or 10 when it states none) over the captor's per-second rate, halved;
-    // the budget is that many seconds of ticks, at least one.
-    const Mag effectiveTime = targetBuildTime > Mag{} ? targetBuildTime : Mag::fromInt(10);
+    // time over the captor's per-second rate, halved (missing-value default
+    // supplied by the caller). The budget is that many seconds of ticks,
+    // at least one.
     const Mag ratePerSecond = ratePerTick * Fx::fromInt(static_cast<std::int32_t>(ticksPerSecond));
     const Mag seconds =
-        proportionalWork(effectiveTime, Mag::fromInt(1), ratePerSecond + ratePerSecond);
+        proportionalWork(targetBuildTime, Mag::fromInt(1), ratePerSecond + ratePerSecond);
     const int ticks =
         (seconds.toFx() * Fx::fromInt(static_cast<std::int32_t>(ticksPerSecond))).floorToInt();
     return std::max(1, ticks);
@@ -229,7 +231,10 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
         // Retargeting starts over rather than inheriting progress.
         const Mag ratePerTick = effectiveBuildPerTick(store, catalog, captor);
         const int budget = targetDef != nullptr
-            ? captureWorkTicks(targetDef->buildTime, ratePerTick, ticksPerSecond)
+            ? captureWorkTicks(targetDef->buildTime == Mag{} && !targetDef->buildTimeSpecified
+                                   ? Mag::fromInt(kMissingCaptureBuildTime)
+                                   : targetDef->buildTime,
+                               ratePerTick, ticksPerSecond)
             : 1;
         const Resources demand = funded && targetDef != nullptr
             ? captureDemand(targetDef->buildCostEnergy, budget)

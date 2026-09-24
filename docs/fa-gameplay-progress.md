@@ -9,7 +9,53 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
-**Snapshot:** 2026-09-19, main through `267ca2d` + coverage-audit fixups. The
+**Accuracy review (2026-09-23, `b845a1a`):** `ART-E001` still hashes to
+`c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`.
+The current 16 local `build/re-fa/coverage/FA-*.md` files report 298 TESTED,
+17 PARTIAL, 163 NA_INTERNAL claim/subsystem rows (315 implementable rows;
+weighted test coverage 306.5/315 = 97.3%). These are **implementation test
+classifications, not a retail accuracy score**: some TESTED rows explicitly pin
+opposite behavior (`C-276`'s 10-second blip expiry, `C-267`'s last-mount-wins VFS).
+
+**Decision:** adequate as a tested, bounded gameplay approximation, **not** as
+full retail parity or a bit-identical simulator. `WP-15` alone passes the
+eight-part EXE confirmation gate (1/45); the 20-subsystem estimates below remain
+~70% implemented / ~40% retail-validated / ~88% analyzed, not measurements.
+Direct spot checks: `C-233`/`C-234` economy allocation and carry-forward
+(`Economy.cpp`, `tests/test_economy.cpp`), `C-236`/`C-243` capture funding and
+active-captor count (`Capture.cpp`, `tests/test_capture.cpp`,
+`tests/test_fa_econ.cpp`), and `C-266` VFS archive shadowing
+(`Cli.cpp`, `tests/test_fa_content.cpp`) have matching bounded tests.
+
+One confirmed `C-236` error was corrected: authored `BuildTime=0`
+(`URA0001_unit.bp`) previously took five capture beats at build rate 10/s,
+because the parser conflated zero with absence. The failing 5-vs-1 test and
+the subsequent one-beat/absent-ten-work integration check are in
+`tests/test_capture.cpp`; `UnitDef::buildTimeSpecified` retains the distinction.
+
+URA0001 is an Air unit, and `C-250` rejects an Air-layer target; an ordinary
+retail match exposing this edge is **not** established by the synthetic test.
+
+**Material limits:** retail `C-250` validates Capture on every task tick,
+whereas `CommandApply.cpp` also refuses inadmissible orders at intake; attached
+targets and part of transfer state remain outside `C-239`/`C-240`. `C-267` is
+only tested for the `lua.scd`/`mohodata.scd` collision, not arbitrary archive
+overrides; `C-276` intentionally expires contacts where retail does not.
+`tools/re/moho_contract_coverage.py` currently reports 9 Known, 1 Guessed and
+244 Stub fidelity labels across 254 FAF-demanded names (561/4,652 matched
+call sites Known). This is a **binding-fidelity diagnostic**, not a percentage
+of gameplay implemented. These gaps preclude a general "EXE-accurate" claim.
+
+**Current checks:** `[capture]` passes (119 assertions, 17 cases); the sampled
+capture/economy/content/intel/adjacency set passes (340 assertions, 51 cases).
+CTest passes 2,085/2,086 cases: its fixed-point guard fails on existing
+`Enhancement.hpp/.cpp`, `Combat.cpp` and `CommandAdvance.cpp` float arithmetic.
+The 7,000-tick retail-map `make verify` run completes the match but reports
+`DIVERGED at tick 0` (`7a236a375cf03442` recorded versus `e0ff943433587651`
+current). Neither the arithmetic invariant nor golden replay is green; do
+not claim deterministic parity or re-record the baseline without attribution.
+
+**Historical snapshot (2026-09-19):** main through `267ca2d` + coverage-audit fixups. The
 2026-09-18 analysis wave closed the retail-analyzed goal — every gameplay
 subsystem reads ≥85% (`C-251`–`C-381` across ten subsystem passes). A
 re-audit of `build/re-fa/coverage/FA-*.md` (TESTED + 0.5×PARTIAL over
@@ -233,18 +279,14 @@ The independent evidence-state count is **40 of 45 WPs at `Analyzed`**. That 89%
 and the 88% equal-subsystem estimate answer different questions and are shown together to keep the
 headline honest.
 
-**Current implementation critical path:**
-the stated goal is a recorded full vivid AI skirmish end-to-end — every piece that makes
-one worth recording landed this week (transports, flow fields, universal leading,
-post-processing). The remaining [`FA-CMD`](#fa-cmd---commands-controls-and-factories)
-implementation gaps are closed: the `C-183` ferry rung (a transport guarding a
-`FERRYBEACON` flies its route) and multi-weapon guard arbitration (the longest-range
-envelope owns the hold) are implemented and tested.
-**Current EXE-analysis action:**
-the >80% retail-analyzed goal is met (every row ≥85%). Residual unknowns, in
-implementation-impact order: the `CUnitCommand+0xa2` cancel-flag readers near
-`0x006f4730`/`0x006f4800`, and `IssueScript` command-data marshalling at
-`0x006fd240`.
+**Current implementation critical path:** attribute the tick-0 golden hash
+divergence before changing the baseline; remove the sim floats flagged by
+`tools/check_no_sim_floats.sh` so the registered invariant passes. Then resume
+retail comparison on the remaining non-confirmed work packages.
+
+**Current EXE-analysis action:** trace the `CUnitCommand+0xa2` cancel-flag
+readers near `0x006f4730`/`0x006f4800`. The >80% retail-analyzed goal is met;
+`IssueScript` command-data marshalling at `0x006fd240` is a separate residue.
 
 ## Reading The Scores
 
@@ -291,7 +333,10 @@ excluded from the headline.
 | [`FA-PERSIST`](#fa-persist---replay-hashing-and-saveresume) | Replay, hashing, save/resume | `WP-43`-`44` | 80% | 30% | 90% | Wreck pool in save v23, in-flight projectiles in v35, and now the path service's queues, cached flow fields and intel recon history in v37 — a mid-order save resumes to an identical hash stream for 300 ticks (tested). SaveState v36 adds the script-bit mask, upkeep flag and shield `rechargeRestoresFull`; command log v7 records the toggle bit. Next: remaining intel grids and emitter state. |
 
 
-## Claim-level test coverage (2026-09-19 re-audit)
+## Historical claim-level test coverage (2026-09-19, superseded)
+
+The table below is retained as a historical audit, **not the current score**;
+the 2026-09-23 classification and denominator are at the top of this document.
 
 Every claim in the ledger was re-classified against the test suite (2,030 tests)
 after the three gap-fill waves; per-claim detail lives in
@@ -979,6 +1024,15 @@ trails draw the original TrailBlueprints over each shot's recorded path; origina
 projectile meshes draw through the unit pipeline, pointed along the shot's velocity
 (ADR-096 to ADR-103, [weapon visuals acceptance](weapon-visuals-acceptance.md)).
 
+**Visual comparison 2026-09-24:** `.scmap`'s `<default>` environment path now
+loads all six DDS cube faces; the unit shader samples its reflected view vector
+instead of the old flat sky. SCMP_009 supplies `envcube_evergreen01a.dds`.
+`Projectile.lua`'s second impact channel now reads `TerrainTypes.lua` by live
+terrain code: the Striker's Gauss hit gains its authored `Medium02` ground emitter
+at blueprint scale 0.4 in addition to `FxImpactLand`. Fixed-camera before/after
+captures are under ignored `build/striker-*`; they show a subtle material change
+and the additional ground burst, not retail screenshot equivalence.
+
 Weapon fire now plays the blueprint's own `Audio.Fire` cue: the companion `.xsb` sound bank
 resolves the cue name to wave-bank entries and `WeaponSounds` picks one take per shot by
 the shooter's handle (ADR-106). The retail UEF weapon bank's Gauss cue resolves to entries
@@ -988,24 +1042,24 @@ per-category instance limits, and refused beyond the median world-scale silence 
 as the `LodCutoff`; volume bytes measured flat across the weapon banks, so takes play at
 the mixer's gain.
 
-**Current slice:** weapon manipulator specs parse for the deferred effect host —
-turret yaw/pitch bones with slew rates, first-rack recoil/telescope bones with mesh-unit
-distances, reload/charge/unpack animation paths with unpack rate and precedence
-(`defaultweapons.lua` rack sequences; recoil law recovered: kick to `RackRecoilDistance`
-at speed -1, return after one tick at `RackRecoilReturnSpeed`). Batch poses bake at upload
-with no per-frame CPU path, so nothing poses bones yet. Corpus-pinned (Striker turret and
-recoil, XSL0111 reload anim, UAB4201 unpack, UEB2302 telescope).
+**Current slice:** turret yaw/pitch and recoil/telescope bones now pose per
+instance in the unit shader, using interpolated sim turret angles; authored walk
+and one-shot unpack clips are baked once and selected at draw time. The Striker
+has no `.sca` walk clip, so a six-frame trial revealed no baked-pose transition
+to smooth. Reload/charge animation and retail's full manipulator host remain
+separate gaps (Striker turret/recoil, XSL0111 reload, UAB4201 unpack,
+UEB2302 telescope are the corpus probes).
 
-**Largest gap:** posing the specs (turret aim, recoil slides, charge/unpack anims) and the
-effect host; weapon cues ignore the volume/filter range bytes, RPC curves beyond the
-cutoff median, and dynamic music. Mesh blueprints' LOD tables are honoured (100 retail
-projectile meshes load); only blueprints whose mesh blueprint is absent from the archives
-keep their strips. The gallery verifies this renderer, not pixel parity with retail.
+**Largest gap:** remaining reload/charge animation, faction-specific build
+effects, and native emitter flags (resistance, alignment and water gating).
+Audio still omits some filter/RPC curves and dynamic music. Projectile mesh
+blueprint LODs are loaded; absent retail mesh assets retain their strips.
+The gallery verifies our renderer, not pixel parity with the retail game.
 
 ```text
-/goal Advance FA-PRESENT by posing parsed manipulator specs (recoil slides first: 206
-weapons author them), then dynamic music; leave broad effect hosting as an explicit later
-slice. Write tests on the retail corpus, run make test, update WP-41 and FA-PRESENT.
+/goal Advance FA-PRESENT with one authored non-UEF construction effect or
+one native-emitter flag evidenced in a shipped blueprint. Match a fixed-camera
+offscreen capture, preserve the sim hash, and update WP-41 and FA-PRESENT.
 ```
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume

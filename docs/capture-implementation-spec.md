@@ -1,12 +1,18 @@
 # Minimum retail Capture implementation
 
-Status: minimum slice implemented 2026-09-09 (`core/sim/Capture.hpp`, `CommandKind::Capture`,
-`CaptureWork` with save v20). One engineer captures one completed, unattached ordinary
-enemy land unit or structure with funded progress and replacement-entity transfer, under
-the progress contract below. Approach and admission were read from the executable
-2026-09-17 (`C-250`, "Approach and admission" below). General transfer parity
-(attachments, enhancements, fuel, ammo, shields) remains open, as do concurrent-captor
-races beyond one bar each.
+Status: the bounded single-target Capture slice is implemented (`core/sim/Capture.cpp`,
+`CommandKind::Capture`, saved `CaptureWork`), with funded progress, concurrent-captor
+count, callback event order and replacement-entity transfer tested in
+`tests/test_capture.cpp` and `tests/test_fa_econ.cpp`. `C-250` established
+approach/admission on 2026-09-17; `C-385` subsequently read `OnCaptured` and
+`TransferUnitsOwnership` end to end. This is **not full `WP-17` parity**:
+attached-target cost/transfer, custom name/manipulator handles and the unnamed
+approach helpers remain open. Unlike retail's per-tick-only legality gate,
+`CommandApply.cpp` also validates capture at order intake.
+
+`C-236` now also preserves an explicitly authored `BuildTime=0` (URA0001):
+Lua's `or 10` is applied only for an absent key, then the native minimum gives
+one funded beat. An earlier five-beat result is fixed and regression-tested.
 
 ## Source identity and corrections
 
@@ -190,7 +196,7 @@ The native health copy disproves the earlier broad negative in C-240. The two
 unnamed shared handles and conditional destruction flag also prevent calling
 the entire native copy/reset inventory closed.
 
-## Implementation boundary
+## Historical first-slice implementation boundary (written before implementation)
 
 Build one semantic, queueable Capture command using the existing entity-command
 dispatch and replay path. Use a normal engineer with authored capture capability,
@@ -218,15 +224,15 @@ Approach and admission are now read (section above, claim `C-250`): the capture
 task approaches within the edge-distance gates and admits once inside 10 elmos,
 ending with status 2 — not waiting — when the target stays out of reach; the
 command dispatcher's re-issue is retail's retry. Implement the gate and the
-legality preamble, not a repair-style range hysteresis. Remaining open reads
-before full parity claims: `OnCaptured`'s Lua body and `Sim::TransferUnit`'s
-unnamed details, plus the approach helpers (`0x006AE090`, `0x00632250`,
+legality preamble, not a repair-style range hysteresis. `C-385` subsequently
+closed the `OnCaptured`/`TransferUnitsOwnership` Lua read; still open are
+`Sim::TransferUnit`'s conditional-notify/attachment details and approach helpers
+(`0x006AE090`, `0x00632250`,
 `0x00511B10`, `Unit+0x68B`/`+0x554`) whose semantics are inferred rather than
-named. General gifting, mixed captors, transport cargo and rich-unit transfers
-remain later work. They must not block specifying or testing the single-captor
-formula.
+named. Gifting and two-captor progress have since landed; heterogeneous
+captor scheduling, transport cargo and full rich-unit transfers remain open.
 
-## Headless acceptance contract
+## Historical first-slice acceptance contract
 
 Write these behavior checks before the implementation; use real retail engineer
 and target blueprints for the integration case. No headed test is required for
@@ -256,7 +262,8 @@ fuel, shield and ammo restoration in Lua order, and transport partial failure.
 A multi-captor suite must distinguish independent per-task budgets from the
 shared target counter, including mixed BuildRates and partial funding.
 
-Verification performed for this specification: executable checksum, exact Lua
-archive-member comparisons, disassembly of the cited paths, vtable resolution,
-and cross-checks against the existing field/serializer exports. No implementation,
-retail observation, simulation test run or visual acceptance is claimed here.
+**Original specification verification (2026-09-17):** executable checksum,
+Lua archive-member comparisons, cited disassembly and vtable resolution.
+This pre-implementation checklist is not a claim that every case above now
+passes. The current implementation/test status and remaining transfer gaps
+are stated at the top of this file and in `fa-gameplay-progress.md`.

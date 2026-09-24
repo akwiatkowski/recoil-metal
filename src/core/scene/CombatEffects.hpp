@@ -87,10 +87,13 @@ enum class ShotClass : std::uint8_t {
 /// `shotClass` answers a WeaponFired's class for the fallback flash — the caller
 /// resolves the event's `UNIT:LABEL` visual id back to its weapon. Absent, every
 /// fallback shot reads as a shell: the flash still appears, just unparticular.
+/// `terrainTypeAt` samples the current map's one-ogrid type under a ground
+/// impact, so Projectile.lua's separate TerrainTypes.lua effects can join FxImpactLand.
 void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> events,
                        const WeaponVisuals* visuals = nullptr,
                        CombatEffectState* state = nullptr, float seconds = 0.1f,
                        std::function<float(sim::UnitId)> unitRadius = {},
-                       std::function<ShotClass(sim::UnitId, std::string_view)> shotClass = {});
+                       std::function<ShotClass(sim::UnitId, std::string_view)> shotClass = {},
+                       std::function<std::uint8_t(sim::Fx, sim::Fx)> terrainTypeAt = {});
 
 } // namespace rm

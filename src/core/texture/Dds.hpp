@@ -60,8 +60,10 @@ struct Texture {
     int height = 0;
     int mipLevels = 0;
     Format format = Format::Bc1;
+    /// DDSCAPS2_CUBEMAP stores six complete mip chains, face-major; ordinary DDS has one.
+    int faces = 1;
 
-    /// All mip levels concatenated, level 0 first.
+    /// Mips concatenated per face; six face chains for a cube, one for a 2D image.
     std::vector<std::byte> data;
 
     [[nodiscard]] int mipWidth(int level) const noexcept;
@@ -72,7 +74,7 @@ struct Texture {
     [[nodiscard]] std::size_t mipBytes(int level) const noexcept;
     [[nodiscard]] std::size_t mipOffset(int level) const noexcept;
 
-    [[nodiscard]] std::span<const std::byte> mip(int level) const noexcept;
+    [[nodiscard]] std::span<const std::byte> mip(int level, int face = 0) const noexcept;
 };
 
 /// `"DDS "` magic, then a 124-byte DDS_HEADER.
@@ -80,12 +82,10 @@ inline constexpr std::size_t kMagicSize = 4;
 inline constexpr std::size_t kHeaderSize = 124;
 inline constexpr std::size_t kDataOffset = kMagicSize + kHeaderSize;  // 128
 
-// Parses a block-compressed .dds.
-//
-// Only DXT1/DXT3/DXT5 are accepted. Uncompressed and DX10-extended-header files
-// are rejected with a specific message rather than guessed at — BAR's unit
-// textures are 110 DXT5, 29 DXT3 and ~10 DXT1 by survey, so the uncovered cases
-// are genuinely rare and silently mishandling them would be worse than failing.
+// Parses DXT1/DXT3/DXT5 and 32-bit BGRA8, including legacy six-face cubes.
+// A cube must carry every face and its full mip chain; partial face-major
+// payloads cannot safely locate the next face. DX10 and unknown channel layouts
+// are refused rather than silently reinterpreted.
 [[nodiscard]] std::expected<Texture, MapError> load(std::span<const std::byte> bytes);
 
 [[nodiscard]] std::expected<Texture, MapError> loadFile(const std::filesystem::path& path);

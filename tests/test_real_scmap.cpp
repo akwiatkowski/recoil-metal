@@ -872,6 +872,16 @@ TEST_CASE("every stock map's sky block reads as plausible colours") {
     CHECK(distinctCirrus > 5);
 }
 
+TEST_CASE("SCMP_009 names the unit reflection cubemap", "[real-map]") {
+    const auto path = std::filesystem::path{kCorpusRoot} / "SCMP_009/SCMP_009.scmap";
+    if (!std::filesystem::exists(path)) {
+        SKIP("retail SCMP_009 not mounted");
+    }
+    const auto map = rm::scmap::loadFile(path);
+    REQUIRE(map.has_value());
+    CHECK(map->environmentCubePath == "/textures/environment/envcube_evergreen01a.dds");
+}
+
 TEST_CASE("every stock map annotates itself with mass deposits", "[corpus]") {
     // What milestone 19's economy stands on, and the reason the whole marker table is
     // read rather than only the spawns. Asserted across the corpus because the counts

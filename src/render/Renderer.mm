@@ -404,6 +404,22 @@ Renderer::Renderer(CA::MetalLayer* layer)
     }
     groundTexture_->replaceRegion(MTL::Region::Make2D(0, 0, 4, 4), 0, kFallbackBlock,
                                   sizeof(kFallbackBlock));
+
+    // A real cube, even without a map: Metal cannot bind a 2D fallback to a
+    // texturecube parameter. Six identical sky-coloured faces preserve the old look.
+    MTL::TextureDescriptor* cube = MTL::TextureDescriptor::texture2DDescriptor(
+        MTL::PixelFormat::PixelFormatBGRA8Unorm, 1, 1, /*mipmapped=*/false);
+    cube->setTextureType(MTL::TextureType::TextureTypeCube);
+    cube->setUsage(MTL::TextureUsageShaderRead);
+    environmentCube_ = device_->newTexture(cube);
+    if (environmentCube_ == nullptr) {
+        throw RendererError{"failed to allocate fallback environment cube"};
+    }
+    for (NS::UInteger face = 0; face < kCubeFaceCount; ++face) {
+        environmentCube_->replaceRegion(MTL::Region::Make2D(0, 0, 1, 1),
+            0, face, kFallbackEnvironmentPixel.data(), kFallbackEnvironmentPixel.size(),
+            kFallbackEnvironmentPixel.size());
+    }
 }
 
 Renderer::~Renderer() {
@@ -487,6 +503,7 @@ Renderer::~Renderer() {
     if (constructionInstanceBuffer_ != nullptr) constructionInstanceBuffer_->release();
     releaseSplat();
     if (groundTexture_ != nullptr) groundTexture_->release();
+    if (environmentCube_ != nullptr) environmentCube_->release();
     if (fogTexture_ != nullptr) fogTexture_->release();
     groundSampler_->release();
     if (splatSampler_ != nullptr) splatSampler_->release();
@@ -567,6 +584,9 @@ MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* w
     MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::texture2DDescriptor(
         format, static_cast<NS::UInteger>(texture.width),
         static_cast<NS::UInteger>(texture.height), /*mipmapped=*/false);
+    if (texture.faces == 6) {
+        descriptor->setTextureType(MTL::TextureType::TextureTypeCube);
+    }
     descriptor->setMipmapLevelCount(static_cast<NS::UInteger>(texture.mipLevels));
     descriptor->setUsage(MTL::TextureUsageShaderRead);
     descriptor->setStorageMode(MTL::StorageModeShared);
@@ -576,16 +596,25 @@ MTL::Texture* Renderer::uploadTexture(const dds::Texture& texture, const char* w
         throw RendererError{std::string{"failed to allocate the "} + what + " texture"};
     }
 
-    for (int level = 0; level < texture.mipLevels; ++level) {
-        const std::span<const std::byte> mip = texture.mip(level);
-        if (mip.empty()) {
-            continue;
+    for (int face = 0; face < texture.faces; ++face) {
+        for (int level = 0; level < texture.mipLevels; ++level) {
+            const std::span<const std::byte> mip = texture.mip(level, face);
+            if (mip.empty()) {
+                continue;
+            }
+            const MTL::Region region = MTL::Region::Make2D(
+                0, 0, static_cast<NS::UInteger>(texture.mipWidth(level)),
+                static_cast<NS::UInteger>(texture.mipHeight(level)));
+            if (texture.faces == 6) {
+                created->replaceRegion(region, static_cast<NS::UInteger>(level),
+                    static_cast<NS::UInteger>(face), mip.data(),
+                    static_cast<NS::UInteger>(texture.mipBytesPerRow(level)),
+                    static_cast<NS::UInteger>(mip.size()));
+            } else {
+                created->replaceRegion(region, static_cast<NS::UInteger>(level), mip.data(),
+                    static_cast<NS::UInteger>(texture.mipBytesPerRow(level)));
+            }
         }
-        created->replaceRegion(
-            MTL::Region::Make2D(0, 0, static_cast<NS::UInteger>(texture.mipWidth(level)),
-                                static_cast<NS::UInteger>(texture.mipHeight(level))),
-            static_cast<NS::UInteger>(level), mip.data(),
-            static_cast<NS::UInteger>(texture.mipBytesPerRow(level)));
     }
 
     return created;
@@ -1351,6 +1380,10 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     // Deliberately NOT nested inside the terrain branch: a model should be
     // viewable with no map loaded, and the first version of this got that wrong
     // in a way that silently drew nothing at all.
+    if (!unitBatches_.empty() || (!propGroups_.empty() && propsVisible_)) {
+        encoder->setFragmentTexture(environmentCube_, kUnitEnvironmentTextureIndex);
+    }
+
     if (!unitBatches_.empty()) {
         encoder->setRenderPipelineState(unitPipeline_);
         encoder->setDepthStencilState(depthState_);

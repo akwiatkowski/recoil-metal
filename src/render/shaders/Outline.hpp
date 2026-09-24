@@ -300,6 +300,7 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
                              texture2d<float> diffuse [[texture(0)]],
                              texture2d<float> shading [[texture(1)]],
                              texture2d<float> normals [[texture(2)]],
+                             texturecube<float> environment [[texture(3)]],
                              depth2d<float> shadowMap [[texture(13)]],
                              sampler texSampler [[sampler(0)]],
                              sampler shadowSampler [[sampler(2)]]) {
@@ -423,7 +424,8 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
         // to the camera — the two negations cancel.
         const float phongAmount = saturate(dot(reflect(-L, N), V));
         const float3 phongAdditive = kSupComPhongCoeff * pow(phongAmount, 2.0) * tex2.g;
-        const float3 phongMultiplicative = 2.0 * kEnvironment * tex2.r;
+        const float3 phongMultiplicative =
+            2.0 * environment.sample(texSampler, reflect(-V, N)).rgb * tex2.r;
         const float emissive = kSupComGlowMultiplier * tex2.b;
         // Fresnel rim — our addition, not retail's: at grazing incidence the hull
         // picks up the environment, which is what separates an edge from whatever
@@ -468,7 +470,7 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
         blast += u.blastColour[blastB].rgb * u.blastColour[blastB].a
             * blastAtten * blastAtten;
     }
-    light = mix(light, kEnvironment, shininess);  // reflection
+    light = mix(light, kRecoilEnvironment, shininess);  // Recoil's flat sky
     light += float3(selfIllum);                   // self-illum
     return float4(albedo * light + specular + blast, 1.0);
 }

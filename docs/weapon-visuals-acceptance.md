@@ -5,12 +5,17 @@ faction classes, `EffectTemplates.lua`, and `defaultcollisionbeams.lua`. No weap
 name table selects effects in production. A separate Lua state runs declarations;
 gameplay callbacks and native engine instances are not executed.
 
-Including muzzle and impact lists, the retail corpus resolves 3,817 visual
-definitions using 1,328 emitter materials (empty authored lists are retained).
-SIFInainoStrategicMissileEffect01 reports unsupported content because it has no
-TypeClass. The electron-bolter emitter correctly starts at zero size and grows.
-These counts describe
-resolution, not complete reproduction of every emitter's behaviour.
+With `Projectile.lua`'s ground-impact `GetTerrainEffects` channel, the retail
+corpus resolves 3,987 visual definitions using 1,432 emitter materials (empty
+authored lists are retained). `TerrainTypes.lua` selects by the current ogrid's
+type and the projectile blueprint's `Display.ImpactEffects.Type`, with its
+`Scale` applied separately from `FxImpactLand`. The Striker's `TDFGauss01`
+therefore adds the Dirt02 `Medium02` dust emitter at 0.4 scale when it hits
+that ground. SIFInainoStrategicMissileEffect01 remains unsupported because
+its script has no TypeClass. Resolution is not full native emitter parity.
+
+Other target-type terrain effects remain unhosted; the ground hit path is the
+bounded slice demonstrated here.
 
 The selected examples are UEF Gauss, Aeon Disruptor, Cybran heavy laser, Seraphim
 Oh cannon, Cybran particle cannon, and Cybran microwave beam. The production
@@ -35,7 +40,21 @@ recreated; no documentation depends on temporary files or bundled game assets.
 Simulation validation compares a full skirmish's per-tick hashes against the
 pre-visual-change run. This checks our simulation invariance, not retail parity.
 
-Validated on 2026-09-06: CTest reported 1,463 passed and two skipped tests out of
+On 2026-09-24 the focused `[weapon-visuals],[effects]` run passed 319
+assertions in 22 cases; the final build including cubemap and map-path checks
+passed 329 assertions in 24 cases. The real SCMP_009 Striker capture now loads
+`envcube_evergreen01a.dds` rather than reflecting a flat colour; the Gauss
+impact gallery adds terrain-specific dust selected from the live type grid.
+Fixed-camera A/B captures and a six-frame Striker trial are reproducible under
+ignored `build/striker-*`. The Striker has no `.sca` walk clip; its turret angle
+already interpolates between simulation snapshots, so this slice made no
+speculative pose change. These captures are not a retail pixel comparison.
+
+Full CTest passes 2,087/2,088; the sole failure is the existing fixed-point
+guard in `Enhancement`, `Combat` and `CommandAdvance`, unrelated to these
+presentation paths. No golden hash was re-recorded.
+
+Earlier, on 2026-09-06, CTest reported 1,463 passed and two skipped tests out of
 1,465 entries. The offscreen gallery rendered all six sample groups; some bolt
 heads remain faint at this scale. The 1,800-second FAF skirmish matched all 18,000
 ticks in the pre-visual-change hash log. No interactive window testing was used.

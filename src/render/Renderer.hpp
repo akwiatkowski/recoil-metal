@@ -183,6 +183,8 @@ public:
     };
 
     void setEnvironment(const Environment& environment) noexcept;
+    /// Map-authored six-face DDS used by retail `mesh.fx` for unit reflections.
+    void setEnvironmentCube(const dds::Texture& cube);
 
     /// The map's wave-normal texture (`waves.dds` on the stock maps), sampled scrolled by
     /// the Environment's wave layers. Without it the water keeps its analytic ripple —
@@ -742,6 +744,7 @@ private:
     bool splatEnabled_ = false;
 
     void releaseSplat() noexcept;
+    MTL::Texture* environmentCube_ = nullptr;  // owned; flat fallback until map upload
 
     MTL::RenderPipelineState* unitPipeline_ = nullptr;  // owned
 

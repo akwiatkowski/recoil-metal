@@ -458,6 +458,9 @@ struct UnitDef {
     float airFuelUseTimeSec = 0.0f;
     sim::Mag buildCostEnergy{};
     sim::Mag buildTime{};
+    /// `C-236`: Lua's `BuildTime or 10` defaults an absent/false value, not an
+    /// explicitly authored zero (URA0001). Capture needs that distinction.
+    bool buildTimeSpecified = false;
 
     /// `General.CapCost` — what one of these counts toward the army's unit cap
     /// (`RUnitBlueprintGeneral+0x7c`, read by the retail creation gate at

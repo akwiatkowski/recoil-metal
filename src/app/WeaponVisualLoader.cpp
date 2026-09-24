@@ -1,6 +1,7 @@
 #include "core/scene/WeaponVisuals.hpp"
 #include "app/FafAi.hpp"
 #include "core/unit/UnitBlueprint.hpp"
+#include "core/lua/LuaTable.hpp"
 
 extern "C" {
 #include "lua.h"
@@ -126,6 +127,16 @@ function visualEmitters(path, label, effect)
     end
     return out, scale
 end
+function terrainImpactEntries()
+    local out = {}
+    for _, terrain in ipairs(import('/lua/TerrainTypes.lua').TerrainTypes) do
+        local impacts = terrain.FXImpact and terrain.FXImpact.Terrain or {}
+        for kind, emitters in pairs(impacts) do
+            out[#out+1] = {terrain.TypeCode, kind, emitters}
+        end
+    end
+    return out
+end
 )lua";
 }
 
@@ -183,6 +194,17 @@ WeaponVisuals loadWeaponVisuals(const vfs::Vfs& content) {
     };
     for (const auto& path : content.list("/projectiles", "_script.lua")) {
         const auto key = path.substr(0, path.size()-11) + "_proj.bp";
+        if (const auto bytes = content.read(key)) {
+            const auto bp = lua::parseTable(
+                {reinterpret_cast<const char*>(bytes->data()), bytes->size()});
+            const auto* impact = bp ? bp->path("Display", "ImpactEffects") : nullptr;
+            if (impact != nullptr) {
+                if (const auto kind = impact->stringAt("Type")) {
+                    result.terrainImpact[foldedVisualKey(key)] = {
+                        std::string{*kind}, static_cast<float>(impact->numberAt("Scale").value_or(1))};
+                }
+            }
+        }
         resolve(path,key,nullptr);
         for (const auto* effect : {"FxImpactLand", "FxImpactWater", "FxImpactNone",
              "FxImpactUnderWater", "FxImpactProjectile", "FxImpactProjectileUnderWater",
@@ -207,6 +229,41 @@ WeaponVisuals loadWeaponVisuals(const vfs::Vfs& content) {
             resolve(script, key + "#FxMuzzleFlash", weapon.label.c_str(), "FxMuzzleFlash");
         }
     }
+    // Projectile.lua:347-349 adds terrain-table FX after the projectile class's
+    // FxImpact list, scaling only this extra channel by bp.Display.ImpactEffects.Scale.
+    host.fuel = 20000;
+    lua_getglobal(lua, "terrainImpactEntries");
+    if (lua_pcall(lua, 0, 1, 0) != LUA_OK) {
+        result.unavailable.push_back(std::string{"TerrainTypes.lua: "}
+                                     + luaL_tolstring(lua, -1, nullptr));
+        lua_pop(lua, 2);
+        return result;
+    }
+    const std::size_t count = lua_rawlen(lua, -1);
+    for (std::size_t i = 1; i <= count; ++i) {
+        lua_rawgeti(lua, -1, static_cast<lua_Integer>(i));
+        lua_rawgeti(lua, -1, 1);
+        const int code = static_cast<int>(lua_tointeger(lua, -1));
+        lua_pop(lua, 1);
+        lua_rawgeti(lua, -1, 2);
+        const char* kind = lua_tostring(lua, -1);
+        const std::string key = kind != nullptr
+            ? "terrain:" + std::string{kind} + ":" + std::to_string(code) : "";
+        lua_pop(lua, 1);
+        lua_rawgeti(lua, -1, 3);
+        if (!key.empty() && code >= 0 && code <= 255) {
+            std::vector<std::string> emitters;
+            for (std::size_t j = 1, n = lua_rawlen(lua, -1); j <= n; ++j) {
+                lua_rawgeti(lua, -1, static_cast<lua_Integer>(j));
+                if (const char* path = lua_tostring(lua, -1)) emitters.emplace_back(path);
+                lua_pop(lua, 1);
+            }
+            result.definitions.try_emplace(foldedVisualKey(key));
+            loadWeaponMaterials(result, content, key, emitters);
+        }
+        lua_pop(lua, 2);  // emitter table, then terrain row
+    }
+    lua_pop(lua, 1);  // flattened table
     return result;
 }
 } // namespace rm

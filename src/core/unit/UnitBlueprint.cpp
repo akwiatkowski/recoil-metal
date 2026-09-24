@@ -568,6 +568,7 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.buildCostMass = sim::magFromFloat(numberOr(*economy, "BuildCostMass", 0.0f));
         def.buildCostEnergy = sim::magFromFloat(numberOr(*economy, "BuildCostEnergy", 0.0f));
         def.buildTime = sim::magFromFloat(numberOr(*economy, "BuildTime", 0.0f));
+        def.buildTimeSpecified = economy->numberAt("BuildTime").has_value();
         def.buildRate = numberOr(*economy, "BuildRate", 0.0f);
         def.producesMassPerSecond = numberOr(*economy, "ProductionPerSecondMass", 0.0f);
         def.producesEnergyPerSecond = numberOr(*economy, "ProductionPerSecondEnergy", 0.0f);

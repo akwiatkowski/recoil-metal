@@ -24,6 +24,9 @@ constexpr std::size_t kOffRgbBitCount  = 88;
 constexpr std::size_t kOffRedMask      = 92;
 constexpr std::size_t kOffGreenMask    = 96;
 constexpr std::size_t kOffBlueMask     = 100;
+constexpr std::size_t kOffCaps2 = 112;  ///< DDS_HEADER.dwCaps2.
+constexpr std::uint32_t kCubemap = 0x00000200u;  ///< DDSCAPS2_CUBEMAP.
+constexpr std::uint32_t kCompleteCubemap = 0x0000FE00u;  ///< cube + all six face bits.
 
 /// DDSD_MIPMAPCOUNT — whether dwMipMapCount is meaningful.
 constexpr std::uint32_t kFlagMipMapCount = 0x00020000u;
@@ -83,11 +86,12 @@ std::size_t Texture::mipOffset(int level) const noexcept {
     return offset;
 }
 
-std::span<const std::byte> Texture::mip(int level) const noexcept {
-    if (level < 0 || level >= mipLevels) {
+std::span<const std::byte> Texture::mip(int level, int face) const noexcept {
+    if (level < 0 || level >= mipLevels || face < 0 || face >= faces) {
         return {};
     }
-    const std::size_t offset = mipOffset(level);
+    const std::size_t offset = static_cast<std::size_t>(face) * mipOffset(mipLevels)
+                             + mipOffset(level);
     const std::size_t length = mipBytes(level);
     if (offset + length > data.size()) {
         return {};
@@ -159,11 +163,21 @@ std::expected<Texture, MapError> load(std::span<const std::byte> bytes) {
             MapError::Code::BadGeometry,
             "DDS is " + std::to_string(width) + "x" + std::to_string(height)});
     }
+    const std::uint32_t caps2 = readU32(bytes, kOffCaps2);
+    if ((caps2 & kCubemap) != 0 && (caps2 & kCompleteCubemap) != kCompleteCubemap) {
+        return std::unexpected(MapError{MapError::Code::BadHeader,
+                                        "cubemap DDS must contain all six faces"});
+    }
+    if ((caps2 & kCubemap) != 0 && width != height) {
+        return std::unexpected(MapError{MapError::Code::BadGeometry,
+                                        "cubemap DDS faces must be square"});
+    }
 
     Texture texture;
     texture.width = width;
     texture.height = height;
     texture.format = format;
+    texture.faces = (caps2 & kCubemap) != 0 ? 6 : 1;
 
     // dwMipMapCount is only meaningful when its flag is set; a file with no mips
     // still has its base level.
@@ -199,9 +213,16 @@ std::expected<Texture, MapError> load(std::span<const std::byte> bytes) {
                 + std::to_string(width) + "x" + std::to_string(height) + " "
                 + formatName(format) + " image"});
     }
+    // DDS cube payloads are face-major. Dropping a mip would shift every later
+    // face's start, so unlike a 2D texture a partial chain cannot be recovered.
+    if (texture.faces == 6 && (usableMips != declaredMips || needed > available / 6)) {
+        return std::unexpected(MapError{MapError::Code::Truncated,
+                                        "cubemap DDS has an incomplete face mip chain"});
+    }
 
     texture.data.assign(bytes.begin() + static_cast<std::ptrdiff_t>(kDataOffset),
-                        bytes.begin() + static_cast<std::ptrdiff_t>(kDataOffset + needed));
+                        bytes.begin() + static_cast<std::ptrdiff_t>(
+                            kDataOffset + needed * static_cast<std::size_t>(texture.faces)));
 
     return texture;
 }

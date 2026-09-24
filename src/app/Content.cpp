@@ -302,6 +302,16 @@ namespace rm::app {
         map->water.waveLayers[1].movement[0], map->water.waveLayers[1].movement[1],
         map->water.waveLayers[2].movement[0], map->water.waveLayers[2].movement[1]};
     loaded.environment = environment;
+    if (!map->environmentCubePath.empty()) {
+        if (const auto bytes = content.read(map->environmentCubePath)) {
+            if (auto cube = rm::dds::load(*bytes); cube && cube->faces == 6) {
+                loaded.environmentCube = std::move(*cube);
+                std::printf("  unit environment cube: %s (%dx%d, %d mips)\n",
+                            map->environmentCubePath.c_str(), loaded.environmentCube.width,
+                            loaded.environmentCube.height, loaded.environmentCube.mipLevels);
+            }
+        }
+    }
 
     // The wave-normal texture itself, from the mounted archives ('/textures/engine/waves.dds'
     // on every stock map). A miss keeps the analytic stand-in.

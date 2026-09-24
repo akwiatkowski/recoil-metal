@@ -238,6 +238,21 @@ TerrainTypeGrid::TerrainTypeGrid(std::span<const std::uint8_t> base, int squares
     effective_ = base_;
 }
 
+std::uint8_t TerrainTypeGrid::at(Fx xElmos, Fx zElmos) const noexcept {
+    constexpr std::uint8_t kDefaultCode = 1;  // TerrainTypes.lua: Default.TypeCode.
+    if (effective_.empty() || xElmos < Fx{} || zElmos < Fx{}) {
+        return kDefaultCode;
+    }
+    const std::int64_t pitch = Fx::fromInt(kSquareSize).raw();
+    const std::int64_t x = xElmos.raw() / pitch;
+    const std::int64_t z = zElmos.raw() / pitch;
+    if (x >= squaresX_ || z >= squaresZ_) {
+        return kDefaultCode;
+    }
+    return effective_[static_cast<std::size_t>(z) * static_cast<std::size_t>(squaresX_)
+                      + static_cast<std::size_t>(x)];
+}
+
 bool TerrainTypeGrid::cellRect(Fx x0Elmos, Fx z0Elmos, Fx x1Elmos, Fx z1Elmos,
                                TerrainStamp& out) const noexcept {
     // Elmos to cells: `floor` on the near edge, `ceil` on the far — the same

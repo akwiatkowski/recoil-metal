@@ -50,6 +50,10 @@ TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[co
     REQUIRE_FALSE(visuals.find("/projectiles/TDFGauss01/TDFGauss01_proj.bp#FxImpactLand").empty());
     REQUIRE_FALSE(visuals.find("/projectiles/TDFGauss01/TDFGauss01_proj.bp#FxImpactUnit").empty());
     CHECK(visuals.scale("/projectiles/TDFGauss01/TDFGauss01_proj.bp#FxImpactUnderWater") == Catch::Approx(0.25));
+    // Projectile.lua adds terrain-specific FX from TerrainTypes.lua AFTER FxImpactLand.
+    CHECK(std::ranges::find(visuals.materials,
+        "/effects/emitters/tti_dirt02_medium02_01_emit.bp",
+        &rm::WeaponMaterial::emitter) != visuals.materials.end());
     rm::CombatEffectState effects;
     std::vector<rm::Particle> flashes;
     const rm::sim::Event fired{.kind=rm::sim::EventKind::WeaponFired,
@@ -73,6 +77,31 @@ TEST_CASE("retail weapons resolve distinct textured bolts and beam strips", "[co
     rm::emitCombatEffects(hits, {}, &visuals, &impactEffects);
     CHECK(hits.size() >= before);
     for (const auto& hit : hits) CHECK(hit.material != UINT32_MAX);
+    const auto dirt = visuals.find("terrain:Medium02:3");  // Dirt02 in TerrainTypes.lua.
+    REQUIRE(dirt.size() == 1);
+    rm::CombatEffectState groundEffects;
+    std::vector<rm::Particle> groundHits;
+    constexpr int kGridSquares = 16;  // Contains the hit at x=50 elmos (one ogrid=8).
+    std::vector<std::uint8_t> codes(kGridSquares * kGridSquares, std::uint8_t{3});
+    rm::sim::TerrainTypeGrid ground{codes, kGridSquares, kGridSquares};
+    rm::emitCombatEffects(groundHits, std::array{impact}, &visuals, &groundEffects,
+        rm::app::gAppTickRate.secondsPerTick(), {}, {},
+        [&ground](rm::sim::Fx x, rm::sim::Fx z) { return ground.at(x, z); });
+    CHECK(std::ranges::any_of(groundHits,
+        [id = dirt.front()](const rm::Particle& p) { return p.material == id; }));
+    CHECK(std::ranges::any_of(groundEffects.bursts,
+        [id = dirt.front()](const rm::CombatEffectBurst& burst) {
+            return burst.material == id && burst.scale == Catch::Approx(0.4f);
+        }));
+    const auto edge = rm::sim::Fx::fromInt(kGridSquares * rm::kSquareSize);
+    ground.setRect({}, {}, edge, edge, std::uint8_t{1});  // Default has no Medium02 dust.
+    rm::CombatEffectState changedGround;
+    std::vector<rm::Particle> changedHits;
+    rm::emitCombatEffects(changedHits, std::array{impact}, &visuals, &changedGround,
+        rm::app::gAppTickRate.secondsPerTick(), {}, {},
+        [&ground](rm::sim::Fx x, rm::sim::Fx z) { return ground.at(x, z); });
+    CHECK(std::ranges::none_of(changedHits,
+        [id = dirt.front()](const rm::Particle& p) { return p.material == id; }));
     const auto emitter = [&](std::string_view path) -> const rm::WeaponMaterial& {
         const auto it = std::ranges::find(visuals.materials, path, &rm::WeaponMaterial::emitter);
         REQUIRE(it != visuals.materials.end());

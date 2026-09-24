@@ -167,6 +167,9 @@ struct Prop {
 // Everything else here is what SMF has no counterpart for.
 struct Map {
     HeightField field;
+    /// The `<default>` environment-cube path in the map's shader block. Retail's
+    /// `mesh.fx` samples this in unit reflections; faction overrides remain separate.
+    std::string environmentCubePath;
 
     // --- ground shading ----------------------------------------------------
     //

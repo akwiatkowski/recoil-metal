@@ -167,6 +167,28 @@ TEST_CASE("the mip chain slices at the right offsets") {
     REQUIRE(texture->mip(5).empty());
 }
 
+TEST_CASE("a retail cubemap retains all six face mip chains") {
+    DdsSpec spec;
+    spec.width = 4;
+    spec.height = 4;
+    spec.mipCount = 2;
+    auto bytes = writeDds(spec);
+    putU32(bytes, 112, 0x0000FE00u);  // DDSCAPS2_CUBEMAP and all six face bits.
+    const std::size_t faceBytes = bytes.size() - rm::dds::kDataOffset;
+    for (int face = 1; face < 6; ++face) {
+        bytes.insert(bytes.end(), faceBytes, static_cast<std::byte>(face));
+    }
+    const auto texture = rm::dds::load(bytes);
+    REQUIRE(texture.has_value());
+    CHECK(texture->data.size() == faceBytes * 6);
+    REQUIRE(texture->faces == 6);
+    CHECK(texture->mip(0, 5).front() == std::byte{5});
+    CHECK(texture->mip(1, 5).size() == 8);
+    CHECK(texture->mip(0, 6).empty());
+    bytes.resize(bytes.size() - 8);
+    CHECK_FALSE(rm::dds::load(bytes).has_value());  // Incomplete sixth face is invalid.
+}
+
 TEST_CASE("non-power-of-two dimensions round up to whole blocks") {
     DdsSpec spec;
     spec.width = 10;  // 3 blocks across

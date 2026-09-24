@@ -2397,6 +2397,9 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             &scene.combatEffectState, kTickSeconds, corpseRadius,
             [&scene](rm::sim::UnitId id, std::string_view key) {
                 return rm::app::shotClassOf(scene, id, key);
+            },
+            [&scene](rm::sim::Fx x, rm::sim::Fx z) {
+                return scene.terrainTypeGrid.at(x, z);
             });
         rm::emitProjectileTrails(dust, scene.projectiles, &scene.weaponVisuals, kTickSeconds);
         scene.projectileTrails.update(scene.projectiles, scene.weaponVisuals, kTickSeconds,

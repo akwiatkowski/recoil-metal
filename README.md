@@ -183,7 +183,7 @@ Then build and test. Catch2 is fetched by CMake at configure time:
 ```sh
  make build
  make test
- #   100% tests passed, 0 tests failed out of 1610
+ #   2026-09-23 audit: 2085/2086 pass; fixed-point guard fails (details below).
 ```
 
 Or without the Makefile:
@@ -211,7 +211,7 @@ make run      # procedural terrain — no game content needed at all
 make play     # a duel you drive: army 0 is yours, army 1 is scripted
 make watch    # every side scripted, nothing selectable, no fog
 make demo     # a live 4v4 of FAF tech brains, random factions, no fog, real speed
-make verify   # replay the golden match — prints "determinism: MATCH"
+make verify   # replay 7000 ticks against the golden hash log (currently diverges at tick 0)
 ```
 
 Anything is overridable: `make play ARMIES=8 ALLIANCES=2 FACTIONS=uef,seraphim`.
@@ -312,12 +312,15 @@ FA="/path/to/Supreme Commander Forged Alliance"
     --screenshot /tmp/the-fight.png 1280 720
 ```
 
-The stage times above are what the match does *now*, and they have moved once:
-the attack wave used to be a hardcoded 20 tanks going in at 335s, and now that it
-sizes itself from the unit it is made of it is 29 tanks at 432s, with the banner
-at 594.2s rather than 502.2s. `make verify` is the guard that the movement was
-intended — it replays 7000 ticks against `docs/golden-p1.log` and prints
-`determinism: MATCH`.
+The stage times above describe the milestone-20 reference run, not a current
+hash baseline. In the 2026-09-23 700-second run, army 0 lost its commander at
+593.9s and team 1 won at 608.8s. `make verify` replays 7000 ticks against
+`docs/golden-p1.log` but diverged at tick 0 on that run;
+do not re-record the baseline without attributing that difference. The full
+CTest run also fails `the sim's arithmetic is fixed point` on float use in
+`Enhancement.hpp/.cpp`, `Combat.cpp` and `CommandAdvance.cpp` (2085/2086 pass).
+The scoped EXE-versus-implementation assessment is in
+[`docs/fa-gameplay-progress.md`](docs/fa-gameplay-progress.md).
 
 `--play <seconds>` is `--march` without the blanket move order — the sim runs
 and the scripted armies decide their own movement. `--armies N` takes the first

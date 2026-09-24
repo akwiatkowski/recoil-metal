@@ -18,9 +18,9 @@ them. The owned, hash-identified installation (Steam app `9420`) is preserved an
 Ghidra 12.1.2 holds an analyzed project whose database now carries **2,979 named functions** after
 the recovered knowledge was written back into it. The Lua API is fully recovered — **1,182
 callables** with signatures, documentation and native addresses (`C-032`), 549 of them
-machine-verified against the engine's own arity checks. **Thirty-six work packages are at
-`Analyzed`**, and the object-layout table holds about 500 offsets across 51 classes, each naming
-its base pointer.
+machine-verified against the engine's own arity checks. The current work-package table has
+**40 fully `Analyzed` packages, one partially analyzed (`WP-17`), and four `Anchored`**;
+the object-layout table holds about 500 offsets across 51 classes, each naming its base pointer.
 
 Two accelerators from session 02 still underpin everything: the executable ships **complete MSVC
 RTTI** (2,728 `Moho::` descriptors, 471 concrete classes), and `MohoEngine.dll` carries 4,875
@@ -31,11 +31,13 @@ behaviour.
 
 An authoritative Steam depot manifest is still needed to prove the exact retail build.
 
-**Next exact EXE-analysis action:** the `OnCaptured` Lua body's
-queue/state-retention contract is now read (`C-385`). Remaining `WP-17` reads:
+**Next exact EXE-analysis action:** trace the `CUnitCommand+0xa2` cancel-flag
+readers at `0x006f4730`/`0x006f4800`.
+
+**Separate `WP-17` residue:** the `OnCaptured` Lua body is read (`C-385`), but
 the `Sim::TransferUnit` conditional-notify and attachment-recursion details
-still unnamed under `C-240`,
-and the capture task's unnamed approach helpers (`0x006AE090`, `0x00632250`,
+remain unnamed under `C-240`, as do the capture task's approach helpers
+(`0x006AE090`, `0x00632250`,
 `0x00511B10`, `captor Unit+0x68B`/`+0x554`) — all logged open in
 [capture-implementation-spec.md](capture-implementation-spec.md).
 The target's `Unit+0x690` is now identified as its active capture count; attached-child
@@ -51,7 +53,7 @@ still unnamed.
 | **Ready but not confirmed** | 22 | Recoil Metal has a tested implementation, but native retail semantics have not been confirmed from the executable. |
 | **Confirmed with EXE analysis** | 1 | The implementation is ready and the relevant retail native behavior has been traced, recorded, and compared. |
 
-Counts as of session 15, recounted from the work-package table rather than carried forward.
+Readiness counts rechecked against the current 45 work-package rows on 2026-09-23.
 `WP-15` is the one package through the gate. Every other package still fails one or more readiness,
 evidence, implementation, or comparison requirements; the table below states the package-specific
 blocker.
@@ -329,20 +331,23 @@ and `tools/re/pe_reader.py`, which read the file directly and take no lock. All 
 tables (`moho.methods.tsv`, `callgraph.tsv`, the RTTI list) exist precisely so that parallel
 analysts never need the project at all.
 
-### Moho contract coverage: what the AI surface implements (measured 2026-09-10)
+### Moho contract coverage: what the AI surface implements (rechecked 2026-09-23)
 
 Regenerate: `mise exec -- python3 tools/re/moho_contract_coverage.py`. Supply is
 `moho.methods.annotated.tsv` (1,182 registration rows, 1,168 distinct scope+name);
-demand is `src/app/FafApi.inc` (256 names: 83 globals, 141 methods, 32 shims, 5,597
+demand is `src/app/FafApi.inc` (254 names: 83 globals, 141 methods, 30 shims, 5,594
 corpus sites); fidelity is `FafAi.cpp`'s `fidelityFor` (absent names are Stub, exactly
 like the lambda's default). Method names match any class scope and count everywhere
 they could bind, so ambiguous names appear in several subsystem rows.
 
-Name match: 189/256 demanded names exist in the recovery. Fidelity: 9 Known, 1 Guessed
-(`lazyimport`, eager where Moho defers), 246 Stub. Call-weighted: 561 of 4,652 matched
-sites are Known (12.1% of matched demand). The 67 unmatched names are Lua builtins
+Name match: 189/254 demanded names exist in the recovery. Fidelity: 9 Known, 1 Guessed
+(`lazyimport`, eager where Moho defers), 244 Stub. Call-weighted: 561 of 4,652 matched
+sites are Known (12.1% of matched demand). The 65 unmatched names are Lua builtins
 (`import`), our own sim-command surface (`IssueMove` and friends, implemented through
 `CommandIssue`, not moho registrations), and our own shims — all expected absent.
+
+This measures declared `fidelityFor` labels for the FAF AI adapter, not executable
+parity, tested gameplay behavior or the number of callable shim implementations.
 
 | Subsystem | Recovered | Demanded names | Known | Corpus sites |
 |---|---:|---:|---:|---:|
@@ -758,7 +763,7 @@ exercises Guard targeting followed by Stop. Refuel/staging and ferry remain outs
 | `WP-16` | Construction, upgrades, assist, build progress | Ready but not confirmed | High | **Analyzed** | `PE-12`, `PE-13` | P1 | `C-098`–`C-102` plus **`C-187`–`C-192`, which read every build task end to end.** **There is no assister enumeration** — each builder owns its own helper and task thread, and clamping happens per call inside `Materialize` (`0x006b09d0`, correcting `C-098`'s address). **Progress uses the clamped delta but health uses the UNCLAMPED one**, so a late assister on the completing beat adds health and no progress. Completion is an exact `== 1.0f`. The task-thread return contract is recovered (`C-188`), the factory roll-off handshake closed (`C-189`), and sacrifice found to be a one-shot transfer with a `0.5` fallback (`C-192`). **`C-232` closes the timing question and `C-248` closes the approach gate**: state transitions rerun in the same beat, while a mobile builder materialises work only once centre distance minus its smaller footprint and the target's larger skirt reaches `Economy.MaxBuildDistance`. Recoil Metal now derives that geometry in `UnitCatalog`, keeps Build active while routing, and creates the construction at the exact boundary; factory production and upgrades keep their sibling-task behavior. `C-249` replaces the temporary whole-hull presentation turn with per-instance authored yaw/pitch bone-subtree aiming. |
 | `WP-17` | Explicit repair, guard, capture, gifting, ownership transfer | Not ready | High | **Analyzed (repair, guard, capture contract)** | `PE-13` | P1 | `C-008`: the four tasks are separate native state machines. **`C-182`: repair reuses the construction helper verbatim** — same rate law, same one-beat-stale ratio, **the target's full build-cost rate regardless of damage**, no progress callbacks, and a range hysteresis of `MaxBuildDistance` to start and `2×` to abort. **Current implementation:** a semantic, replayable Repair command accepts builders and damaged allied buildable targets, reaches initial build range before starting, retains established contact to `2×` range, and retires on full/dead/unaligned/out-of-range targets so queued followers run. Its full target-cost demand shares the army allocator with construction and healing uses that awarded funding; the rack exposes FA slot 9 and right-clicking a damaged ally issues Repair. Focused tests cover legality, approach, hysteresis, allocation competition, live/replay parity, and UI availability. The implementation applies the current tick's allocation rather than retail's one-beat-stale repair ratio, while command queues and economy/construction state now round-trip in SaveState v16. **`C-183`: guard is a nine-step priority ladder in which ATTACK outranks every form of assist**, with `GuardScanRadius` as its acquisition radius and a transitive guard-chain walk with cycle detection. `GuardReturnRadius` is not the leash: retail never reads it. Recoil Metal now uses the recovered 3D return threshold, resolves active work anchors, copies guardee reclaim targets, and scans/ranks repair targets after build assist. **Capture specification:** [minimum retail slice](capture-implementation-spec.md). `GetCaptureCosts` belongs to the captor; attached target children add cost/work, while target `+0x690` counts active capture tasks. Each funded beat adds that count. Transfer creates a replacement and natively copies transform, layer, health, custom name and two shared manipulator handles; Lua restores selected richer state. **`C-250` closes approach/admission**: a five-state task machine with a per-tick legality preamble (dead target, `IsCapturable`, army, not `LAYER_Air`, not self/ally, `BeingCaptured`+10 elmos), an edge-distance approach gate at 5 elmos and admission limit at 10, and a dispatcher-level retry via the `cmd+0x2C` status cell — no in-task wait. Unnamed transfer details remain open. |
 | `WP-18` | Wreck creation, damage, collision, rebuild, reclaim value | Not ready | Medium | **Analyzed** | `PE-18`, `PE-23` | P2 | **Answered by `C-146`–`C-148`.** Reclaim values are Lua table fields (which is why no native sweep could find them), scaled by `GetFractionComplete()` on mass and energy but never on the `Max` baseline. The task advances one materialisation fraction, scales both resource credits by the actual applied/planned progress ratio, and credits both the economy and reclaimed-resource statistics. Wreck damage re-derives current value and time multipliers from health/max health; lethal damage destroys the wreck. Rebuild matches `prop.AssociatedBP` against `RebuildBonusIds` on the nearest `RECLAIMABLE` prop, and the bonus is a **build-progress head start** (hardcoded `0.5`), not a mass refund. Recoil Metal implements the shared progress/credit path, damage scaling and lethal removal. Ordinary projectile-area, beam-area and death-blast paths now damage live wrecks, with MatchRunner artillery/replay tests. Point targets and ordinary projectile sweeps remain unit-only per the recovered masks. Wreck geometry is an upright box approximation; exact authored offsets/orientation, independent Lua death timing and rebuild remain (ADR-090). |
-| `WP-19` | Adjacency geometry and economy effects | Ready but not confirmed | High | Anchored | `PE-11` | P2 | Retail is fully specified by `C-048`–`C-052`, and Recoil Metal now implements the tables, lifecycle and off-centre skirt geometry from `C-109`. Remaining divergences: only production/upkeep effect families exist, inferred SIZE categories make 174 retail-inert structures participate, modifiers clamp at zero, and the geometry allows a four-elmo gap/overlap where retail requires exact edge contact. |
+| `WP-19` | Adjacency geometry and economy effects | Ready but not confirmed | High | Anchored | `PE-11` | P2 | Retail's `C-048`–`C-052` specify count-stacked modifiers, authored SIZE receiver gates and under-construction lifecycle. Recoil Metal now implements the production/upkeep, mass/energy build, RateOfFire and EnergyWeapon families, the authored SIZE gate, unclamped negative totals and the off-centre skirt geometry (`Adjacency.cpp`, `UnitCatalog.cpp`, `tests/test_adjacency.cpp`, `tests/test_fa_econ.cpp`). Remaining deliberate geometry divergence (`C-074`): free placement allows a four-elmo gap/overlap, whereas retail adjacency requires exact skirt-edge contact. Whole-package EXE confirmation is still open. |
 | `WP-20` | Ground movement, motion classes, ordinary pathing | Ready but not confirmed | High | **Analyzed** | `PE-04`, `PE-06` | P1 | **`C-174`–`C-177`, `C-179`.** It is **HPA\*** — `.\hastar\` — with one `ClusterMap` per footprint, two levels (8×8 and 32×32), an all-pairs triangular matrix per cluster, built once in `Sim::Create` and **rebuilt incrementally every beat** under `path_BackgroundBudget` = 1000. Servicing is per army, FIFO, **one search in flight**, integer step budget `path_ArmyBudget` = 1000, resumed across beats. **The planner sees a stale abstraction and is blind to unit reservations** (`C-177`). **This is the one package where the honest verdict is a bounded redesign** — per-unit A\* in a unit's tick cannot reproduce retail's latency shape. |
 | `WP-21` | Formations, coordinated movement, congestion, dynamic blockage | Not ready | Medium | **Analyzed** | `PE-05`, `PE-06` | P1 | **`C-176`, `C-177`, `C-178`.** Replanning is **event-driven with a 10-beat backoff and a 3-strike give-up**, with expensive checks staggered on deterministic **mod-7 and mod-13** phases — retail's third such stagger. Blockage is **wait-then-repath, never push**. Retail ships **two** formation scripts and **no arrival re-forming** (`PickBestFinalFormationIndex` returns −1 unconditionally), with the shape in Lua and slot matching, the persistent instance and the handshake all native. |
 | `WP-22` | Aircraft flight, bombing runs, fuel, staging, landing | Not ready | Medium | **Analyzed** | `PE-08` | P1 | **`C-221`–`C-225`, `C-244`–`C-247`.** The air mover is a disjoint `Air.CanFly` path with the projectile's trapezoidal integrator, an eight-state combat machine, takeoff/landing events, fuel and bone-based staging. The supposedly open constructor defaults are now recovered by `C-218`. **Recoil Metal runs the winged mover foundation and a planar reduction of all eight combat states (ADR-091)**: explicit per-second velocity, the retail 0.1-step trapezoid, authored move/lift gains and damping, vertical lift-off to half `Physics.Elevation`, terrain look-ahead, two-stage landing, `AutoLandTime` and `FuelUseTime`. `C-224` states 1/2 are fly-through runs; 3/4/5 sustain turns, 6 breaks off and 7 returns from off-map. Authored timers and match-owned RNG select transitions; SaveState v16 and the hash preserve dynamic state, tuning and the random sequence. Real-interceptor continuation tests and a 900-tick app pursuit replay pass. **Implemented since:** bomb-drop prediction (release point = target + velocity × `PredictAheadForBombDrop`, release inside `BombDropThreshold`) and the cargo mass ratio (`unitMass`/`carriedMass` on `MoveState`, maintained by `UnitStore::attach`/`detach`, dividing `KLift`/`KTurn`/`KRoll`). **Implemented since:** the carrier storage pool (`C-225`) — `StorageSlots` is parsed, a `CARRIER`/`NAVALCARRIER` stores its air build products at its origin instead of rolling them off, `(stored + reserved) < StorageSlots` gates capacity, stored aircraft are hidden from intel, and `UnloadTransport` on a carrier launches the hold airborne. **Still absent:** full three-axis orientation/banking torque, `Hover`, `POD` initialization, and bone-keyed air staging (`C-225`'s pad half). Readiness stays Not ready because the WP scope is materially incomplete. |
@@ -1174,7 +1179,7 @@ claim changes: mark it superseded and add the replacement.
 | `C-234` | `WP-15` | **`WP-15` closes: the three enumerated divergences are implemented and the package passes the gate.** **Storage capacity truncates PER STRUCTURE** (`C-104`(e), `C-069`) — retail adds each contribution through a truncating conversion, so three structures offering 105.6 contribute 315 and not 316.8; truncating the sum instead agrees for whole-numbered blueprints and diverges for every other, which is the case that decides it. **Allied overflow is a PROGRESSIVE split** (`C-104`(c), `C-163`) — the remaining excess divided by the remaining recipient count, each share capped by that ally's headroom and subtracted from the pool, so an ally with no room passes its share along and the last recipient can receive far more than an equal split; and it is **credited to income, not storage**, so a gift arrives a beat late and cannot push anyone over cap. **The per-unit consumed ratio** (`C-104`(d), `C-071`) is recovered from a consumer's demand shape rather than by keeping per-unit requests, which is exact because the allocator is linear in the bucket sums. | [RM] `src/core/sim/Economy.{hpp,cpp}`, `Skirmish.cpp`, `StateHash.cpp`; [EXE] `C-159`, `C-163`, `C-069` | High | **Implemented** | **A subtlety that cost a wrong test before it cost a wrong implementation: which BUCKET a request is summed into and which RATIO it is granted at are different questions.** Retail buckets by how many resources are outstanding but grants at `r1` whenever the request is outstanding **on the binding resource** — so an energy-only consumer, when energy binds, takes `r1` alongside consumers wanting both, while a mass-only consumer takes `r2` and is funded in full. The first version of the test asserted energy-only → `singleResourceFunded` and failed; the implementation had it right. A single global ratio cannot express that distinction at all, which is the concrete reason `C-103` mattered. |
 | `C-233` | `WP-15` | **`WP-15` implemented to retail's shape, and the determinism gate revealed that the golden match never stalls.** The single global throttle is replaced by `C-159`'s two-bucket allocator — requests bucketed by how many resources are still **outstanding**, `r1` over the combined total with energy winning an exact tie, `r2` over what the multi-resource bucket left — with upkeep as a request rather than a lump (`C-161`), the grant/consume split that produces the carry-forward residue (`C-162`), and construction advancing on the **previous** tick's ratio. **A design note worth keeping: the two-bucket allocator is LINEAR IN THE BUCKET SUMS**, so aggregating same-bucket consumers is lossless — ten energy-only radar and one radar drawing ten times as much produce identical ratios. That is why two sums suffice where retail keeps a per-unit request list; per-request identity only matters for the carry-forward. | [RM] `src/core/sim/Economy.{hpp,cpp}`, `StateHash.cpp`, `tests/test_economy.cpp`; [EXE] `C-159`–`C-164` | High | **Implemented** | **The gate result is the interesting part.** With the new allocator and the old hash inputs, `make verify` reported **MATCH — 7000 ticks identical**. That is not a null result: it is evidence that **the golden match never browns out**, so the determinism gate has never exercised economic scarcity at all. Worth knowing before trusting it as cover for economy work. The golden was then re-recorded for a *different* reason — `Construction::allocated`, `fundedLastTick` and the new `Economy` fields are live sim state that decides next tick's progress, and they were outside the hash. Adding them diverges at **tick 0**, which is the signature of a hash-input change rather than a behaviour change, and the preceding MATCH is the proof. |
 | `C-236` | `WP-17` | **The captor's `GetCaptureCosts(target)` supplies time, energy and mass.** Time is `(target.BuildTime / captor.BuildRate) / 2 × CaptureTimeMultiplier`; energy is target build energy, mass zero. The task requires exactly three returns and owns a `CEconRequest`. | [EXE] `ART-E001` `0x0060B3BC–0x0060B71B`; [LUA-R] **ART-S007** `lua/sim/Unit.lua:2734-2744` | High | Analyzed | Corrected receiver and archive identity. Defaults, truncation and the minimum single-captor slice are in [the specification](capture-implementation-spec.md). |
-| `C-237` | `WP-17` | **Capture callback order: target `OnStartBeingCaptured` → captor `OnStartCapture`; on completion captor `OnStopCapture` → target `OnStopBeingCaptured` → target `OnCaptured`.** `OnCaptured` then enters the Lua-owned transfer. | [EXE] `ART-E001` `0x0060b8e0`–`0x0060b96d`, `0x0060b822`–`0x0060b870` `CUnitCaptureTask::{OnEvent,TaskTick}`; [LUA-R] `ART-S007` `lua/sim/Unit.lua:471-514` | High | Open | Callback order is confirmed; the Lua bodies that run inside it are only partially read. |
+| `C-237` | `WP-17` | **Capture callback order: target `OnStartBeingCaptured` → captor `OnStartCapture`; on completion captor `OnStopCapture` → target `OnStopBeingCaptured` → target `OnCaptured`.** `OnCaptured` then enters the Lua-owned transfer. | [EXE] `ART-E001` `0x0060b8e0`–`0x0060b96d`, `0x0060b822`–`0x0060b870` `CUnitCaptureTask::{OnEvent,TaskTick}`; [LUA-R] `ART-S007` `lua/sim/Unit.lua:471-514,555-619` | High | Analyzed | Callback order confirmed; `C-385` later closed the `OnCaptured` Lua body. Native transfer attachment/failure details remain under `C-240`. |
 | `C-238` | `WP-17` | **Ownership transfer returns a REPLACEMENT unit.** Capture calls it from `OnCaptured` via `TransferUnitsOwnership` → `ChangeUnitArmy`; gifting uses the same `ChangeUnitArmy` primitive directly with NO capture callbacks, and Lua restores selected state on the new unit: kills, enhancements, health, fuel, silo ammo, shield state. `Sim::TransferUnit` (`0x0074dc40`–`0x0074e4d6`) rejects dead/invalid units, processes transport attachments, creates/returns the transferred unit, and can dispatch `OnTransportAttach`. | [EXE] `ART-E001` `0x0074dc40`–`0x0074e4d6` `Sim::TransferUnit`; [LUA-R] `ART-S007` `lua/sim/Unit.lua:555-619`, `lua/SimUtils.lua:46-134` | Medium-High | Open | C-240 now identifies native transform, layer, health, name and two shared handles. Their precise semantics and general transfer edge cases remain open; the minimum ordinary-target boundary is specified in capture-implementation-spec.md. |
 | `C-239` | `WP-17` | **Capture truncates `max(1, seconds × 10)` to a work budget and advances only on fully funded beats. The cost loop adds the target's attached live units, not other captors.** Entity vtable `+0x58` resolves to the attached-entities getter `0x005C46E0`; each child uses the same captor's cost method. Costs divide by the combined budget. | [EXE] `ART-E001` `0x0060B4A8–0x0060B6AA`, `0x0060B759–0x0060B801`, `0x005C46E0` | High | Analyzed | Corrects the prior multi-captor aggregation claim. Progress uses the target's active capture count (`C-243`); heterogeneous concurrent-task scheduling remains outside the initial slice. |
 | `C-240` | `WP-17` | **Transfer creates a replacement, copying transform, current layer, health, custom name and two shared manipulator-state handles natively.** It rebuilds transport attachments, destroys the old entity on success, and conditionally notifies creation failure. Lua additionally restores kills, enhancements, clamped health, fuel, ammo and shield state. | [EXE] `ART-E001` `0x0074E022–0x0074E448`, `0x006B2620`; [LUA-R] **ART-S007** `lua/SimUtils.lua:68-132` | High for identified fields | Analyzed in part | This corrects the previous claim that native gameplay-state preservation was unevidenced. The two handles' precise meaning and old-unit `+0x560` cleanup remain unnamed; see the [field inventory](capture-implementation-spec.md#completion-and-transfer-inventory). |
@@ -3091,6 +3096,37 @@ in FA-CMD: the gate exists in retail but has no live-unit analog in this sim.
 All 2,073 tests pass (4,265,845 assertions). Next exact action: the
 `CUnitCommand+0xa2` cancel-flag readers near `0x006f4730`/`0x006f4800`, or
 `IssueScript` command-data marshalling at `0x006fd240`.
+
+### 2026-09-23 / Implementation accuracy spot-check
+
+`ART-E001` SHA-256 rechecked against the ledger. `C-236`'s Lua `BuildTime or 10`
+distinguishes absent from explicit zero (`URA0001_unit.bp:69`); our parser had
+collapsed them and `captureWorkTicks(0, 1, 10)` returned five beats instead of
+the native one-beat minimum. A failing `[capture]` assertion reproduced 5 != 1;
+`UnitDef::buildTimeSpecified` now preserves the authored zero and the focused
+capture tests pass. This corrects one bounded cost-law defect, **not** `WP-17`.
+
+In the 568 extracted retail unit blueprints, 16 omit `BuildTime` and one
+(`URA0001`) explicitly states zero; the distinction is present in shipped
+content, not just a synthetic edge case.
+
+URA0001 is Air-layer under ordinary spawn rules and cannot be captured there;
+the correction pins the analyzed cost law, not observed match impact.
+
+Spot-checked `WP-15` economy, `WP-17` capture, `WP-05` VFS, `WP-19` adjacency,
+and `WP-33` intel against source and claim-level tests. The coverage audit's
+298 TESTED + 17 PARTIAL rows measure **tests**, not EXE equivalence: `C-267`
+and `C-276` deliberately test behavior different from retail. No other WP
+has passed the gate; see the dated verdict in `fa-gameplay-progress.md`.
+
+Current verification: `[capture]` and the 51-case sampled gameplay set pass.
+CTest is 2,085/2,086 (existing fixed-point arithmetic guard fails); the
+7,000-tick golden match runs but its hash diverges at tick 0. Neither result
+is evidence of bit-identical retail behavior; the dashboard records details.
+
+**Next exact EXE-analysis action:** name the `CUnitCommand+0xa2` cancel-flag
+readers at `0x006f4730`/`0x006f4800`. `IssueScript` marshalling at
+`0x006fd240` remains a separate follow-on; test coverage does not resolve it.
 
 ## Confirmation gate
 

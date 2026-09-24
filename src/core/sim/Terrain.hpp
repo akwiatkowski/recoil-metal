@@ -243,6 +243,9 @@ public:
     [[nodiscard]] int squaresX() const noexcept { return squaresX_; }
     [[nodiscard]] int squaresZ() const noexcept { return squaresZ_; }
     [[nodiscard]] bool empty() const noexcept { return effective_.empty(); }
+    /// GetTerrainType(x,z) samples the current (possibly tarmac-stamped) ogrid.
+    /// Outside a map, retail returns TerrainTypes.lua's Default (code 1).
+    [[nodiscard]] std::uint8_t at(Fx xElmos, Fx zElmos) const noexcept;
 
     /// The effective type grid — what `buildPassability` and the blocking LUT
     /// read. Empty only when the grid has no geometry at all.

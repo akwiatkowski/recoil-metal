@@ -356,6 +356,8 @@ constexpr NS::UInteger kShadingTextureIndex = 1;
 /// Supreme Commander's optional `_NormalsTS` map. The terrain pipeline also uses slot 2,
 /// but these bindings are replaced before each pipeline draws.
 constexpr NS::UInteger kUnitNormalsTextureIndex = 2;
+/// The map-authored environment cube sampled by retail's `mesh.fx` unit material.
+constexpr NS::UInteger kUnitEnvironmentTextureIndex = 3;
 constexpr NS::UInteger kGroundSamplerIndex = 0;
 /// The repeating sampler the splat layers need — see where it is created.
 constexpr NS::UInteger kSplatSamplerIndex = 1;
@@ -394,6 +396,16 @@ const simd_float3 kSunDirection = simd_normalize(simd_make_float3(0.45f, 0.78f, 
 constexpr double kSkyR = 0.09;
 constexpr double kSkyG = 0.12;
 constexpr double kSkyB = 0.18;
+// Preserve the previous flat reflection when a map supplies no environment cube.
+// BGRA8Unorm stores linear sky values in 8-bit channels; alpha is opaque.
+constexpr double kUnorm8Max = 255.0;  // Maximum of an unsigned 8-bit channel.
+constexpr std::array<unsigned char, 4> kFallbackEnvironmentPixel{
+    static_cast<unsigned char>(kSkyB * kUnorm8Max),
+    static_cast<unsigned char>(kSkyG * kUnorm8Max),
+    static_cast<unsigned char>(kSkyR * kUnorm8Max),
+    static_cast<unsigned char>(kUnorm8Max),
+};
+constexpr NS::UInteger kCubeFaceCount = 6;  // DDSCAPS2_CUBEMAP: +X,-X,+Y,-Y,+Z,-Z.
 
 constexpr MTL::PixelFormat kColorFormat = MTL::PixelFormat::PixelFormatBGRA8Unorm;
 /// Linear HDR for the world target (and everything that renders into it or its

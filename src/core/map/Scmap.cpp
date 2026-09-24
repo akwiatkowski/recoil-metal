@@ -136,8 +136,12 @@ void readToTerrainType(Cursor& cursor, rm::scmap::Map& map) {
     cursor.skipCString();  // background
     cursor.skipCString();  // skycube
     for (std::int32_t i = 0, n = cursor.i32(); cursor.ok() && i < n; ++i) {
-        cursor.skipCString();  // envcube name
-        cursor.skipCString();  // envcube path
+        const std::string name = cursor.cstring();
+        if (name == "<default>") {
+            map.environmentCubePath = cursor.cstring();
+        } else {
+            cursor.skipCString();
+        }
     }
 
     // --- lighting block ----------------------------------------------------

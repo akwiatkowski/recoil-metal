@@ -61,14 +61,17 @@ inline constexpr float kDeathSmokeLifetime = 2.5f;
 void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> events,
     const WeaponVisuals* visuals, CombatEffectState* state, float seconds,
     std::function<float(sim::UnitId)> unitRadius,
-    std::function<ShotClass(sim::UnitId, std::string_view)> shotClass) {
+    std::function<ShotClass(sim::UnitId, std::string_view)> shotClass,
+    std::function<std::uint8_t(sim::Fx, sim::Fx)> terrainTypeAt) {
     CombatEffectState immediate;
     if (visuals && !state) state = &immediate;
     const auto burst = [&](const std::string& key, std::array<float,3> position,
-                           std::array<float,3> direction, sim::UnitId owner = {}, const std::string& weapon = "") {
+                           std::array<float,3> direction, sim::UnitId owner = {},
+                           const std::string& weapon = "", float scale = 1.0f) {
         if (!visuals || !visuals->contains(key)) return false;
         for (const auto id : visuals->find(key)) {
-            state->bursts.push_back({id, position, 0, ++state->seed, visuals->scale(key), owner, weapon, direction});
+            state->bursts.push_back({id, position, 0, ++state->seed,
+                visuals->scale(key) * scale, owner, weapon, direction});
         }
         return true;
     };
@@ -223,7 +226,22 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
             case sim::ImpactType::UnitAir: field="FxImpactAirUnit"; break;
             default: break;
             }
-            if (burst(event.visualId + "#" + field, at, direction)) break;
+            const bool classAuthored = burst(event.visualId + "#" + field, at, direction);
+            bool terrainAuthored = false;
+            if (event.impactType == sim::ImpactType::Terrain && visuals != nullptr) {
+                if (const auto spec = visuals->terrainImpact.find(foldedVisualKey(event.visualId));
+                    spec != visuals->terrainImpact.end()) {
+                    constexpr std::uint8_t kDefaultCode = 1;  // TerrainTypes.lua Default.
+                    const std::uint8_t code = terrainTypeAt
+                        ? terrainTypeAt(event.at[0], event.at[2]) : kDefaultCode;
+                    std::string key = "terrain:" + spec->second.kind + ":" + std::to_string(code);
+                    if (!visuals->contains(key)) {
+                        key = "terrain:" + spec->second.kind + ":" + std::to_string(kDefaultCode);
+                    }
+                    terrainAuthored = burst(key, at, direction, {}, "", spec->second.scale);
+                }
+            }
+            if (classAuthored || terrainAuthored) break;
             // The smoke: premultiplied grey, drifting up, gone in half a second. One puff
             // per impact rather than a burst — a battle is many impacts, and the burst is
             // the battle.

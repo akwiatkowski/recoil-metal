@@ -227,12 +227,9 @@ struct UnitOut {
 // how both engines light their models — see unitFragment.
 constant float3 kUnitSpecular = float3(0.7);  // unitSpecularColor, defaults to diffuse
 constant float kSpecularExponent = 100.0;     // specularExponent (MapInfo.cpp:221)
-
-// Stands in for Recoil's reflection cubemap, which the shading texture's green
-// channel mixes into the light (ModelFragProgGL4.glsl:130). We have no env cube
-// yet, so a shiny surface reflects a flat sky — the same colour the frame is
-// cleared to. Swapping a real cubemap in later changes this one line.
-constant float3 kEnvironment = float3(0.09, 0.12, 0.18);
+// Recoil's tex2 reflectivity still uses its old flat-sky fallback; SupCom
+// samples the map's authored DDS cube instead (unitFragment).
+constant float3 kRecoilEnvironment = float3(0.09, 0.12, 0.18);
 
 // Supreme Commander's own model constants, read from the game's HLSL rather
 // than guessed — `effects/mesh.fx` in `gamedata/effects.scd`, which ADR-009

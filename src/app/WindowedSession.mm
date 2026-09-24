@@ -2231,6 +2231,9 @@ int runWindowed(const Session& session) {
                     },
                     [&units](rm::sim::UnitId id, std::string_view key) {
                         return rm::app::shotClassOf(units, id, key);
+                    },
+                    [&units](rm::sim::Fx x, rm::sim::Fx z) {
+                        return units.terrainTypeGrid.at(x, z);
                     });
 
                 // ...and as SOUND, from the same per-tick queue for the same reason. The

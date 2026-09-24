@@ -49,6 +49,9 @@ void applyGround(Target& target, const LoadedMap& map) {
     if (map.environment) {
         target.setEnvironment(*map.environment);
     }
+    if (map.environmentCube.faces == 6 && !map.environmentCube.data.empty()) {
+        target.setEnvironmentCube(map.environmentCube);
+    }
 }
 
 /// Points the camera at the first instance of the first model.

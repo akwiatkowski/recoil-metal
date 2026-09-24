@@ -52,12 +52,22 @@ struct WeaponMaterial {
     std::array<float, 4> sampling{0,0,1,0};
 };
 
+/// Projectile.lua's separate GetTerrainEffects channel: impact class from the
+/// projectile blueprint, emitter scale from Display.ImpactEffects.Scale.
+struct TerrainImpactSpec {
+    std::string kind;
+    float scale = 1.0f;
+};
+
 /// Presentation-only definitions. Keys are projectile blueprint paths or UNIT:WeaponLabel
 /// for beams without a projectile. No inference from faction colours or ballistic arcs.
 struct WeaponVisuals {
     std::vector<WeaponMaterial> materials;
     std::map<std::string, std::vector<std::uint32_t>, std::less<>> definitions;
     std::map<std::string, float, std::less<>> scales;
+    /// Keyed by projectile blueprint path; `definitions` also holds
+    /// "terrain:<kind>:<TypeCode>" emitter lists from TerrainTypes.lua.
+    std::map<std::string, TerrainImpactSpec, std::less<>> terrainImpact;
     std::vector<std::string> unavailable;
     /// Definitions drawn as an original mesh (case-folded projectile keys). The app loads
     /// and draws those through the unit pipeline; the bolt strip stays out of their way.

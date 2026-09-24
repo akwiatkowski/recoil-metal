@@ -508,7 +508,11 @@ void composeHeadlessInterface(rm::Renderer& renderer, const Session& session,
                              .impactType=rm::sim::ImpactType::Unit, .visualId=examples[i].second},
                         }};
                         rm::CombatEffectState effects;
-                        rm::emitCombatEffects(shotParticles, events, &units.weaponVisuals, &effects);
+                        rm::emitCombatEffects(shotParticles, events, &units.weaponVisuals, &effects,
+                            gAppTickRate.secondsPerTick(), {}, {},
+                            [&units](rm::sim::Fx x, rm::sim::Fx z) {
+                                return units.terrainTypeGrid.at(x, z);
+                            });
                         // Inspect the flash fifty milliseconds after creation, as a live frame
                         // does between simulation ticks; zero-age ramps can be transparent.
                         for (auto p=first; p<shotParticles.size(); ++p) shotParticles[p].age += 0.05f;

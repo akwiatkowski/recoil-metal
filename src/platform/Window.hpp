@@ -100,6 +100,7 @@ public:
 
     /// The map's lighting and water settings. See Renderer::setEnvironment.
     void setEnvironment(const Renderer::Environment& environment);
+    void setEnvironmentCube(const dds::Texture& cube);
 
     /// The fog of war mask for the frame about to be drawn. See Renderer::setFog.
     void setFog(std::span<const std::uint16_t> counts, int squaresX, int squaresZ,

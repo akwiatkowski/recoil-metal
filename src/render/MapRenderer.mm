@@ -336,6 +336,15 @@ void Renderer::setEnvironment(const Environment& environment) noexcept {
     environment_ = environment;
 }
 
+void Renderer::setEnvironmentCube(const dds::Texture& cube) {
+    if (cube.faces != static_cast<int>(kCubeFaceCount)) {
+        throw RendererError{"environment texture must have all six DDS cube faces"};
+    }
+    MTL::Texture* uploaded = uploadTexture(cube, "environment cube", /*srgb=*/true);
+    environmentCube_->release();
+    environmentCube_ = uploaded;
+}
+
 void Renderer::clearFog() noexcept { hasFog_ = false; }
 
 void Renderer::setFog(std::span<const std::uint16_t> counts, int squaresX, int squaresZ,

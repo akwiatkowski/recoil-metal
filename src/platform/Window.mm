@@ -641,6 +641,10 @@ void Window::setEnvironment(const Renderer::Environment& environment) {
     impl_->renderer->setEnvironment(environment);
 }
 
+void Window::setEnvironmentCube(const dds::Texture& cube) {
+    impl_->renderer->setEnvironmentCube(cube);
+}
+
 void Window::setWater(bool enabled, float levelElmos) {
     impl_->renderer->setWater(enabled, levelElmos);
 }

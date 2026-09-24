@@ -95,6 +95,9 @@ struct LoadedMap {
     /// preview. Empty when the map names none or the archive lacks it — the water then
     /// keeps its analytic ripple.
     rm::dds::Texture waterWaves;
+    /// The map's `<default>` environment cube, for the `mesh.fx` unit reflection.
+    /// Empty on SMF or if the named DDS is absent.
+    rm::dds::Texture environmentCube;
 
     std::vector<rm::mapinfo::StartPosition> starts;
 
