@@ -976,6 +976,13 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
                     std::string{lods->items[1].stringAt("SpecularName").value_or("")};
             }
         }
+
+        // `Display.PlaceholderMeshName`: a BARE unit id — "UEC1101" — naming the
+        // stand-in mesh shown while the real one is unavailable, and the mesh the
+        // civilian and wreck bps draw outright because they name no LODs. Kept
+        // separate from modelPath: a placeholder is a second choice, not the mesh.
+        def.placeholderMesh =
+            std::string{display->stringAt("PlaceholderMeshName").value_or("")};
     }
 
     return def;
@@ -1045,10 +1052,23 @@ std::string resolveMeshInVfs(const unitdef::UnitDef& def, std::string_view bluep
                   .generic_string()
             : def.modelPath;
 
-    if (candidate.empty() || !content.contains(candidate)) {
-        return {};
+    if (!candidate.empty() && content.contains(candidate)) {
+        return candidate;
     }
-    return candidate;
+
+    // `Display.PlaceholderMeshName` is a bare unit id, not a path — the civilian
+    // and wreck bps' only mesh (`XRC2101` shows `UEC1101`, `URB3103` `UXB0000`).
+    // Read as "/units/<id>/<id>_lodN.scm": the unnamed-mesh convention applied to
+    // the id the name says.
+    if (!def.placeholderMesh.empty()) {
+        const std::string candidate2 = "/units/" + def.placeholderMesh + "/"
+                                       + def.placeholderMesh + "_lod"
+                                       + std::to_string(level) + ".scm";
+        if (content.contains(candidate2)) {
+            return candidate2;
+        }
+    }
+    return {};
 }
 
 std::filesystem::path resolveMesh(const unitdef::UnitDef& def,
@@ -1073,10 +1093,20 @@ std::filesystem::path resolveMesh(const unitdef::UnitDef& def,
     }();
 
     std::error_code ec;
-    if (candidate.empty() || !std::filesystem::is_regular_file(candidate, ec)) {
-        return {};
+    if (!candidate.empty() && std::filesystem::is_regular_file(candidate, ec)) {
+        return candidate;
     }
-    return candidate;
+    // Same placeholder chain as resolveMeshInVfs: a bare unit id joined to the
+    // root rather than the archive.
+    if (!def.placeholderMesh.empty() && !root.empty()) {
+        const std::filesystem::path candidate2 =
+            root / "units" / def.placeholderMesh
+            / (def.placeholderMesh + "_lod0.scm");
+        if (std::filesystem::is_regular_file(candidate2, ec)) {
+            return candidate2;
+        }
+    }
+    return {};
 }
 
 } // namespace rm::unitbp

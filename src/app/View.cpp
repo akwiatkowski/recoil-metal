@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <numbers>
 #include <cstring>
 #include <fstream>
 
@@ -55,6 +56,27 @@ namespace rm::app {
     }
     return options;
 }
+
+
+
+/// `--camera PITCH YAW`, both in degrees. Read like --look: any position after
+/// the map, stopped by the flag layout rather than a magic count.
+[[nodiscard]] CameraAngles parseCameraAngles(int argc, const char* argv[]) {
+    constexpr float kDegToRad = std::numbers::pi_v<float> / 180.0f;
+
+    CameraAngles options;
+    for (int i = 2; i + 2 < argc; ++i) {
+        if (std::string{argv[i]} != "--camera") {
+            continue;
+        }
+        options.enabled = true;
+        options.pitch = static_cast<float>(std::atof(argv[i + 1])) * kDegToRad;
+        options.yaw = static_cast<float>(std::atof(argv[i + 2])) * kDegToRad;
+        break;
+    }
+    return options;
+}
+
 
 
 /// Recognises `--bench <frames> <out.csv>` anywhere after the map path.

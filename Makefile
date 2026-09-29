@@ -94,7 +94,7 @@ FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
 .PHONY: help build configure test verify golden play play-from watch run run-fa run-bar \
         skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar \
         check-ai ai ai-play ai-report ai-sanity ai-matrix ai-matrix-report shot-ui \
-        shot-engineer demo all-units
+        shot-engineer demo all-units unit-icons
 
 help:
 	@echo 'recoil-metal — make targets'
@@ -112,6 +112,7 @@ help:
 	@echo '  play-from       the same, joining SECONDS in, so a base already stands'
 	@echo '  watch           every side scripted, nothing selectable (and no fog)'
 	@echo '  ai-play         bots vs bots, with the FAF AI sandbox report on the console'
+	@echo '  unit-icons      render every wiki-icon unit/building and compare beside it'
 	@echo '  ai-sanity       headless skirmish + the AI sanity report: built what, called what'
 	@echo '  ai-matrix       offline personality x faction 1v1s, live scoreboard + result cards'
 	@echo '  ai-matrix-report  re-render a finished job: MATRIX_REPORT=<job dir name>'
@@ -488,6 +489,11 @@ shot-ui: build check-fa
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --skirmish --armies 2 --play $(SECONDS) --select 1 \
 	  --screenshot $(SHOT) $(SHOT_SIZE)
 	@echo "  wrote $(SHOT)"
+
+# Every unit and building with a wiki build-button icon, rendered headless and
+# compared beside it — docs/unit-render-acceptance.md has the rig and verdicts.
+unit-icons: build
+	mise exec -- python3 tools/render_units.py
 
 # The same, for an ENGINEER — the unit a player actually selects to build something.
 #

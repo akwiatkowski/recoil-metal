@@ -1951,7 +1951,17 @@ TEST_CASE("every retail T1 land factory product performs its role through the ma
     }
     std::vector<rm::unitdef::UnitDef> units;
     rm::vfs::Vfs projectiles;
-    REQUIRE(projectiles.mountArchive("/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance/gamedata/projectiles.scd"));
+    // RM_FA_ROOT mirrors the Makefile; the literal stays the machine where the
+    // drive lives.
+    const char* faRoot = std::getenv("RM_FA_ROOT");
+    const std::filesystem::path archive =
+        std::filesystem::path{faRoot != nullptr ? faRoot
+                                                : "/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance"}
+        / "gamedata/projectiles.scd";
+    if (!std::filesystem::is_regular_file(archive)) {
+        SKIP("no projectiles.scd at " + archive.string());
+    }
+    REQUIRE(projectiles.mountArchive(archive.string()));
     for (const auto& file : std::filesystem::recursive_directory_iterator{root}) {
         if (!file.is_regular_file() || !file.path().string().ends_with("_unit.bp")) {
             continue;

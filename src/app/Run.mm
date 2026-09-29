@@ -842,6 +842,17 @@ int runScreenshot(const Session& session) {
                                  look.radiusElmos);
             }
 
+            // `--camera PITCH YAW` sets the orbit itself, AFTER focusOn has chosen the
+            // target and distance — inspection captures pick their angles, a match
+            // capture stays at the resting 65 degrees.
+            const CameraAngles cameraAngles = parseCameraAngles(argc, argv);
+            if (cameraAngles.enabled) {
+                renderer.camera().pitch = std::clamp(cameraAngles.pitch,
+                                                     rm::OrbitCamera::kMinPitch,
+                                                     rm::OrbitCamera::kMaxPitch);
+                renderer.camera().yaw = cameraAngles.yaw;
+            }
+
             // `--screenshot W H` is the LOGICAL size and `--backing S` the display scale it
             // stands in for: the interface lays out in W×H points, fonts rasterise at S, and
             // the image is W·S × H·S pixels — the same contract a Retina window gives the
@@ -857,6 +868,19 @@ int runScreenshot(const Session& session) {
                         shot.width, shot.height, static_cast<double>(shot.backing), pixelsWide,
                         pixelsHigh, static_cast<double>(shotViewport.hudScale()));
             composeHeadlessInterface(renderer, session, shotViewport);
+
+            // `--no-hud`: a bare render of the world — no chrome, minimap, rings,
+            // decals or particles. Model-comparison captures ask for this because
+            // the reference they answer to is an isolated render, not a gameplay
+            // frame; everything else still ran, so the "units drawn" line below
+            // stays an honest census.
+            if (hasFlag(argc, argv, "--no-hud")) {
+                renderer.setMinimapRect(0.0f, 0.0f, 0.0f, 0.0f);
+                renderer.setHud({});
+                renderer.setGroundDecals({});
+                renderer.setParticles({});
+                renderer.setSelection({});
+            }
 
 
             // WHAT REACHED THE GPU, against what the sim holds. The two disagreeing is the

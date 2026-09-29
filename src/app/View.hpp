@@ -83,6 +83,17 @@ struct LookOptions {
     float radiusElmos = 300.0f;
 };
 
+/// `--camera PITCH YAW`: override the orbit angles a capture takes, degrees.
+/// Exists for unit-inspection captures: the wiki's build-button renders sit at
+/// a shallow three-quarter view, and a screenshot meant to be compared against
+/// one has to hold the same angles or the comparison is of the cameras.
+struct CameraAngles {
+    bool enabled = false;
+    float pitch = 0.0f;
+    float yaw = 0.0f;
+};
+
+
 struct BenchOptions {
     bool enabled = false;
     bool offscreen = false;  ///< no window, no vsync
@@ -95,6 +106,7 @@ struct BenchOptions {
 
 [[nodiscard]] float parseFocus(int argc, const char* argv[]);
 [[nodiscard]] LookOptions parseLook(int argc, const char* argv[]);
+[[nodiscard]] CameraAngles parseCameraAngles(int argc, const char* argv[]);
 [[nodiscard]] BenchOptions parseBench(int argc, const char* argv[]);
 
 /// Writes a benchmark's per-frame samples as CSV.

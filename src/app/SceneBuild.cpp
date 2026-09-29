@@ -595,6 +595,28 @@ resolveAttachBones(const rm::Model& model, const rm::unitdef::UnitDef& def) {
     return content.contains(literal) ? literal : std::string{};
 }
 
+/// The texture convention against the BLUEPRINT's directory, not the mesh's.
+///
+/// A `MeshName` can point at a different unit's files — the Megalith's LOD0 is
+/// `/Units/xrl0404/xrl0404_LOD0.scm`, and `xrl0404` ships no textures at all —
+/// while the unit's own `XRL0403_Albedo.dds` sits beside the blueprint that
+/// named it. When the mesh-relative name resolves to nothing, the blueprint's
+/// own id is the last convention left before the white fallback lies.
+[[nodiscard]] std::string unitTextureInVfs(const std::string& blueprintPath,
+                                           const char* suffix,
+                                           const rm::vfs::Vfs& content) {
+    const std::filesystem::path path{blueprintPath};
+    // `<id>_unit.bp` -> `<id>`; the suffix needs the plain id.
+    std::string id = path.stem().string();
+    if (const std::size_t cut = id.find("_unit"); cut != std::string::npos) {
+        id.resize(cut);
+    }
+    const std::string candidate =
+        path.parent_path().generic_string() + "/" + id + suffix;
+    return content.contains(candidate) ? candidate : std::string{};
+}
+
+
 /// Reads a unit entirely out of the mounted content: blueprint, then the mesh it
 /// does not name, then the textures neither of them names.
 ///
@@ -674,9 +696,25 @@ resolveAttachBones(const rm::Model& model, const rm::unitdef::UnitDef& def) {
     model->name = resolved.def.name;
 
     resolved.model = std::move(*model);
+    // Mesh-relative first — the convention that covers the other 567 units —
+    // then the blueprint's own id: a `MeshName` can borrow another unit's file
+    // (the Megalith's LOD0 is xrl0404's, which ships no textures at all), and
+    // the pair named after THIS unit is what is left before white fallback.
     resolved.albedoPath = scmTextureInVfs(meshPath, kScmDiffuseSuffix, content);
+    if (resolved.albedoPath.empty()) {
+        resolved.albedoPath =
+            unitTextureInVfs(blueprintPath, kScmDiffuseSuffix, content);
+    }
     resolved.shadingPath = scmTextureInVfs(meshPath, kScmShadingSuffix, content);
+    if (resolved.shadingPath.empty()) {
+        resolved.shadingPath =
+            unitTextureInVfs(blueprintPath, kScmShadingSuffix, content);
+    }
     resolved.normalsPath = scmTextureInVfs(meshPath, kScmNormalsSuffix, content);
+    if (resolved.normalsPath.empty()) {
+        resolved.normalsPath =
+            unitTextureInVfs(blueprintPath, kScmNormalsSuffix, content);
+    }
     return resolved;
 }
 
@@ -1912,9 +1950,10 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
         }
         const std::size_t remaining =
             request.count > placed.size() ? request.count - placed.size() : 0;
-        const auto scattered = surfaceWater
-                                 ? std::vector<rm::UnitInstance>{}
-                                 : rm::scatterOnLand(
+        // On a dry map a ship has nowhere to float. Show it beached rather than
+        // not at all: --units is for looking at models, and an invisible hull
+        // makes a working model file indistinguishable from a broken one.
+        const auto scattered = rm::scatterOnLand(
                                        field, remaining,
                                        kScatterSeed + static_cast<std::uint32_t>(i), scale,
                                        hasWater ? waterLevelElmos : 0.0f);
@@ -1974,6 +2013,19 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             }
             rm::sim::Transform transform = transformAt(instance.position, instance.rotationY);
             rm::sim::placeOnMotionLayer(transform, state, scene.terrain(field));
+            // A submerged hull spawned on dry ground is sunk under it and
+            // draws nothing. Retail's own answer for scenario spawn is "wet
+            // means Sub"; beached means surfaced — the only pose left that is
+            // visible, and for a --units crowd visibility is the point.
+            const rm::sim::Terrain spawnTerrain = scene.terrain(field);
+            if (state.submerged
+                && spawnTerrain.heightAt(transform.x, transform.z)
+                       >= spawnTerrain.waterLevel()) {
+                state.submerged = false;
+                state.diveTargetSubmerged = false;
+                state.submarineOffset = rm::sim::Fx{};
+                rm::sim::placeOnMotionLayer(transform, state, spawnTerrain);
+            }
             // Scenario-placed structures flatten their pads too — retail's
             // `CreateUnitHPR` runs the same `OnCreate` → `FlattenSkirt` a built one does.
             if (def) {

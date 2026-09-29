@@ -655,6 +655,11 @@ struct UnitDef {
     std::string lod1Albedo;   ///< `LODs[2].AlbedoName`, or empty to share the fine albedo
     std::string lod1Spec;     ///< `LODs[2].SpecularName`, same fallback
 
+    /// `Display.PlaceholderMeshName` — a bare unit id ("UEC1101") naming the
+    /// stand-in mesh to draw when the unit's own LODs name nothing. The civilian
+    /// and wreck blueprints use it as their only mesh.
+    std::string placeholderMesh;
+
     // --- threat ------------------------------------------------------------
     //
     // The blueprint's own estimate of how dangerous this unit is, per domain —
