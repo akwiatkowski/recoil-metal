@@ -17,8 +17,11 @@
 #include "app/View.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
+
+#include <unistd.h>
 
 using Catch::Approx;
 using rm::app::BenchOptions;
@@ -471,4 +474,36 @@ TEST_CASE("march parses the matrix report flags", "[matrix]") {
     const rm::app::MarchOptions quiet = rm::app::parseMarch(plain.argc(), plain.argv());
     CHECK(quiet.matrixOutPath.empty());
     CHECK(quiet.reportIntervalSeconds == 0.0);
+}
+
+TEST_CASE("mods flag parses directories through mod_info.lua, failing open", "[mods][cli]") {
+    // `C-268`: mods arrive as directories; a missing mod_info.lua or uid fails
+    // the parse (empty list) rather than seating a match without its mods.
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / ("rm_cli_mods_test-" + std::to_string(getpid()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root / "Chess");
+    {
+        std::ofstream out{root / "Chess" / "mod_info.lua", std::ios::binary};
+        out << "uid = \"chess-uid\",\nname = \"Chess\",\n";
+    }
+    std::filesystem::create_directories(root / "Empty");
+
+    Args none{{}};
+    CHECK(rm::app::parseMods(none.argc(), none.argv()).empty());
+
+    Args one{{"--mods", (root / "Chess").string()}};
+    const auto mods = rm::app::parseMods(one.argc(), one.argv());
+    REQUIRE(mods.size() == 1);
+    CHECK(mods[0].uid == "chess-uid");
+    CHECK(mods[0].name == "Chess");
+
+    Args bad{{"--mods", (root / "Empty").string()}};
+    CHECK(rm::app::parseMods(bad.argc(), bad.argv()).empty());
+
+    Args pair{{"--mods", (root / "Chess").string() + "," + (root / "Empty").string()}};
+    CHECK(rm::app::parseMods(pair.argc(), pair.argv()).empty());
+
+    std::filesystem::remove_all(root, ec);
 }

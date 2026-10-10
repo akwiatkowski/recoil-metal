@@ -35,6 +35,7 @@ bool gPrintEvents = false;
 bool gFafOpponents = false;
 std::string gFafBaseTemplate = "NormalMain";
 std::vector<std::string> gFafPersonalityNames;
+std::vector<rm::vfs::ActiveMod> gActiveMods;
 bool gFafLog = false;
 
 /// Sends one unit to a world position, routed around whatever is in the way.
@@ -1397,6 +1398,9 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
     // AI than asked is worse than one that says it could not.
     if (gFafOpponents) {
         auto sandbox = std::make_unique<rm::ai::FafAi>(rm::ai::defaultCorpus());
+        if (!gActiveMods.empty()) {
+            sandbox->setActiveMods(gActiveMods);
+        }
         if (sandbox->ready()) {
             sandbox->setLogPassthrough(gFafLog);
             // Driver BEFORE the corpus: the condition files capture engine functions out of

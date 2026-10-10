@@ -48,7 +48,14 @@ struct ActiveMod {
 /// constraint naming a mod outside the set is ignored; a contradictory set
 /// (mods.lua warns it "may cause an arbitrary ordering") resolves
 /// deterministically by the same uid order rather than sorting garbage.
-[[nodiscard]] std::vector<ActiveMod> orderActiveMods(std::vector<ActiveMod> mods);
+ [[nodiscard]] std::vector<ActiveMod> orderActiveMods(std::vector<ActiveMod> mods);
+
+ /// Reads a mod directory's `mod_info.lua` into an `ActiveMod` — the fields
+ /// `mods.lua`'s `LoadModInfo` fills: uid, name, ui_only, requires, before,
+ /// after, hookdir (default `/hook`). `location` is the directory itself.
+ /// Returns nullopt when the file is missing or unparsable, or when uid is
+ /// absent — an unidentifiable mod cannot be ordered or mounted.
+ [[nodiscard]] std::optional<ActiveMod> loadModInfo(const std::filesystem::path& directory);
 
 
 // The game's content as the game sees it: one namespace of paths, assembled from

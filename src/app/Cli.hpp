@@ -208,6 +208,11 @@ orderArchivesForMount(std::vector<std::filesystem::path> archives);
 /// when neither flag is present; names are validated eagerly.
 [[nodiscard]] std::vector<std::string> parseFafPersonalityNames(int argc, const char* argv[]);
 
+/// `--mods dir,...`: mod directories, each carrying a `mod_info.lua`. Parsed
+/// eagerly through `loadModInfo` so a missing file or uid fails at startup
+/// rather than seating a match without its mods. Empty when absent.
+[[nodiscard]] std::vector<rm::vfs::ActiveMod> parseMods(int argc, const char* argv[]);
+
 /// `--placement grid|free`: how structures are sited. Grid, the game's rule, is the default.
 [[nodiscard]] rm::sim::PlacementMode parsePlacementMode(int argc, const char* argv[]);
 

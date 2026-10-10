@@ -215,6 +215,8 @@ extern bool gPrintEvents;
 /// the seating happens inside `makeMatchRunner`, which both the headless pre-run and the
 /// windowed loop call, and threading a parameter through both call chains would touch every
 /// caller to carry one bit that changes no signature's meaning.
+/// The match's mods, parsed from `--mods` (`C-268` mount points).
+extern std::vector<rm::vfs::ActiveMod> gActiveMods;
 extern bool gFafOpponents;
 /// Explicit base template selected by --ai-personality, shared by all FAF armies.
 extern std::string gFafBaseTemplate;
@@ -222,6 +224,8 @@ extern std::string gFafBaseTemplate;
 /// more armies than names. Non-empty it overrides `gFafBaseTemplate` per seat; empty keeps
 /// the single-template behaviour.
 extern std::vector<std::string> gFafPersonalityNames;
+/// `--mods dir,...`: parsed mod directories, applied to the FAF sandbox
+/// at boot via `setActiveMods`. Empty keeps the match unmodded.
 
 /// `--ai-log`: narrate the FAF opponents — every decision with the corpus builder that
 /// fired it, and the corpus's own LOG/WARN lines (normally counted and discarded). The

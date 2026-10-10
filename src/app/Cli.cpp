@@ -53,6 +53,36 @@ std::string parseFafBaseTemplate(int argc, const char* argv[]) {
     return "NormalMain";
 }
 
+std::vector<rm::vfs::ActiveMod> parseMods(int argc, const char* argv[]) {
+    // `--mods ~/mods/Chess,~/mods/Checkers`: each directory carries a
+    // `mod_info.lua`; a missing file or uid fails here, at startup, rather
+    // than seating a match that silently lacks its mods.
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string{argv[i]} != "--mods") {
+            continue;
+        }
+        std::vector<rm::vfs::ActiveMod> mods;
+        const std::string value{argv[i + 1]};
+        std::size_t from = 0;
+        while (from <= value.size()) {
+            const std::size_t comma = std::min(value.find(',', from), value.size());
+            const std::string dir = value.substr(from, comma - from);
+            if (!dir.empty()) {
+                std::optional<rm::vfs::ActiveMod> mod = rm::vfs::loadModInfo(dir);
+                if (!mod.has_value()) {
+                    rm::log::writef(rm::log::Level::Error, "content",
+                                    "--mods: no usable mod_info.lua in %s", dir.c_str());
+                    return {};
+                }
+                mods.push_back(*mod);
+            }
+            from = comma + 1;
+        }
+        return mods;
+    }
+    return {};
+}
+
 std::vector<std::string> parseFafPersonalityNames(int argc, const char* argv[]) {
     // `--ai-personalities easy,turtle`: seat order, cycled over more armies — the same
     // shape as `--factions`. Each name is mapped eagerly so an unknown personality fails

@@ -335,3 +335,67 @@ TEST_CASE("a mod mounts under /mods/<name> and hooks join the concat",
     CHECK(hooks[2] == "/mods/Second/hook/lua/base.lua");
     CHECK(vfs.hooksFor("/lua/other.lua").empty());
 }
+
+TEST_CASE("mod_info.lua loads into an ActiveMod with LoadModInfo fields", "[vfs][mods]") {
+    // `LoadModInfo`: uid (required), name, ui_only, requires, before, after,
+    // hookdir — everything else in the file is display metadata and stays out.
+    const Scratch guard;
+    writeFile(scratch() / "Chess/mod_info.lua", R"(
+        uid = "chess-uid",
+        name = "Chess",
+        description = "A chess mod",
+        author = "Someone",
+        ui_only = false,
+        requires = { "base-uid" },
+        after = { "other-uid" },
+        before = { },
+    )");
+
+    const std::optional<rm::vfs::ActiveMod> mod =
+        rm::vfs::loadModInfo(scratch() / "Chess");
+    REQUIRE(mod.has_value());
+    CHECK(mod->uid == "chess-uid");
+    CHECK(mod->name == "Chess");
+    CHECK_FALSE(mod->uiOnly);
+    CHECK(mod->requiredUids == std::vector<std::string>{"base-uid"});
+    CHECK(mod->after == std::vector<std::string>{"other-uid"});
+    CHECK(mod->before.empty());
+    CHECK(mod->hookdir.empty());
+    CHECK(mod->location == scratch() / "Chess");
+}
+
+TEST_CASE("mod_info.lua without uid, or missing entirely, loads nothing", "[vfs][mods]") {
+    const Scratch guard;
+    writeFile(scratch() / "Noid/mod_info.lua", "name = \"No Uid\"\n");
+    CHECK_FALSE(rm::vfs::loadModInfo(scratch() / "Noid").has_value());
+    CHECK_FALSE(rm::vfs::loadModInfo(scratch() / "Absent").has_value());
+}
+
+TEST_CASE("a parsed mod mounts, orders, and joins the hook concat", "[vfs][mods]") {
+    // End to end through loadModInfo: parse → order → mount → concat.
+    const Scratch guard;
+    writeFile(scratch() / "mods/Chess/mod_info.lua", "uid = \"chess\",\nname = \"Chess\",\n");
+    writeFile(scratch() / "mods/Chess/hook/lua/base.lua", "chess-hook");
+    writeFile(scratch() / "mods/Checkers/mod_info.lua",
+              "uid = \"checkers\"\nafter = { \"chess\" }\n");
+    writeFile(scratch() / "mods/Checkers/hook/lua/base.lua", "checkers-hook");
+
+    rm::vfs::Vfs vfs;
+    std::vector<rm::vfs::ActiveMod> mods;
+    for (const char* name : {"Chess", "Checkers"}) {
+        auto mod = rm::vfs::loadModInfo(scratch() / "mods" / name);
+        REQUIRE(mod.has_value());
+        mods.push_back(*mod);
+    }
+    mods = rm::vfs::orderActiveMods(std::move(mods));
+    REQUIRE(mods.size() == 2);
+    CHECK(mods[0].uid == "chess");
+    CHECK(mods[1].uid == "checkers");
+    for (const auto& mod : mods) {
+        REQUIRE(vfs.mountMod(mod));
+    }
+    const auto hooks = vfs.hooksFor("/lua/base.lua");
+    REQUIRE(hooks.size() == 2);
+    CHECK(hooks[0] == "/mods/Chess/hook/lua/base.lua");
+    CHECK(hooks[1] == "/mods/Checkers/hook/lua/base.lua");
+}

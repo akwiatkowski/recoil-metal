@@ -1,4 +1,5 @@
 #include "core/vfs/Vfs.hpp"
+#include "core/lua/LuaTable.hpp"
 
 #include "miniz.h"
 
@@ -301,6 +302,82 @@ std::vector<std::string> Vfs::hooksFor(std::string_view gamePath) const {
 
 std::span<const std::string> Vfs::hookDirectories() const noexcept {
     return impl_->hookDirs;
+}
+
+std::optional<ActiveMod> loadModInfo(const std::filesystem::path& directory) {
+    // `mods.lua` `LoadModInfo`: uid (required), name, ui_only, requires,
+    // before, after, hookdir. Everything else in the file (description,
+    // author, version, icon, selective ... ) is display metadata the engine
+    // never acts on, so it is not carried.
+    // `mod_info.lua` is bare assignments, not a table literal (`uid = "…"`
+    // at top level, as `dofile` executes it). The data reader only takes
+    // table literals, so the file is wrapped — `{` + body + `}` is exactly
+    // what those assignments construct.
+    std::ifstream source{(directory / "mod_info.lua"), std::ios::binary};
+    if (!source)
+        return std::nullopt;
+    std::string body{std::istreambuf_iterator<char>{source},
+                     std::istreambuf_iterator<char>{}};
+    // Retail `mod_info.lua` is bare assignments, usually WITHOUT trailing
+    // commas (`uid = "…"\nname = "…"`), which a table literal rejects. Commas
+    // are added per line unless the line already ends with one, opens a block
+    // (`{`, `(`), or is blank/a comment; `}` lines take one because the next
+    // field requires a separator.
+    {
+        std::string commaed;
+        commaed.reserve(body.size() + 32);
+        std::string::size_type start = 0;
+        while (start <= body.size()) {
+            std::string::size_type end = body.find('\n', start);
+            if (end == std::string::npos)
+                end = body.size();
+            std::string line = body.substr(start, end - start);
+            const std::string::size_type last = line.find_last_not_of(" \t\r");
+            const bool bare = last == std::string::npos || line.compare(0, 2, "--") == 0;
+            const char tail = bare ? '\0' : line[last];
+            commaed += line;
+            if (!bare && tail != ',' && tail != '{' && tail != '(')
+                commaed += ',';
+            commaed += '\n';
+            if (end == body.size())
+                break;
+            start = end + 1;
+        }
+        body = std::move(commaed);
+    }
+    const std::expected<rm::lua::Value, rm::lua::ParseError> parsed =
+        rm::lua::parseTable("{" + body + "}");
+    if (!parsed.has_value() || !parsed->isTable())
+        return std::nullopt;
+    const rm::lua::Value& info = *parsed;
+    const std::optional<std::string_view> uid = info.stringAt("uid");
+    if (!uid.has_value() || uid->empty())
+        return std::nullopt;
+    ActiveMod mod;
+    mod.uid = std::string{*uid};
+    if (const std::optional<std::string_view> name = info.stringAt("name"))
+        mod.name = std::string{*name};
+    if (const rm::lua::Value* uiOnly = info.find("ui_only")) {
+        if (const std::optional<bool> b = uiOnly->asBoolean())
+            mod.uiOnly = *b;
+    }
+    const auto readUids = [&](std::string_view key, std::vector<std::string>& out) {
+        if (const rm::lua::Value* list = info.find(key)) {
+            for (const rm::lua::Value& item : list->items) {
+                if (const std::optional<std::string_view> s = item.asString()) {
+                    if (!s->empty())
+                        out.emplace_back(*s);
+                }
+            }
+        }
+    };
+    readUids("requires", mod.requiredUids);
+    readUids("before", mod.before);
+    readUids("after", mod.after);
+    if (const std::optional<std::string_view> hookdir = info.stringAt("hookdir"))
+        mod.hookdir = std::string{*hookdir};
+    mod.location = directory;
+    return mod;
 }
 
 bool Vfs::mountMod(const ActiveMod& mod) {
