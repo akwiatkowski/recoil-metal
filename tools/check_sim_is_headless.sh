@@ -3,11 +3,11 @@
 #
 # Asserts that the sim and data layers include nothing from the render side.
 #
-# WHY THIS EXISTS (PLAN2.md §4, §7 P6.3). §4 names the target shape as four libraries —
-# `rm_core` -> `rm_data` -> `rm_sim` -> `rm_render`+app — so that `rm_sim` has no link line to
-# Metal and a stray include is a compile error. The libraries are still one CMake target, so
-# there is no link line to be missing and no compile error to hit. Until there is, this grep is
-# the boundary.
+# WHY THIS EXISTS (PLAN2.md §4, §7 P6.3). CMake now separates rm_fa_sim,
+# rm_fa_data and rm_fa_presentation, but core/... still has a shared include root.
+# Separate link targets alone cannot stop a stray presentation-header include.
+# This check preserves the headless simulation/data boundary until include roots
+# are restricted as well.
 #
 # §7 P6.3 states the assertion as "`rm_sim` compiles with `core/scene/` off its include path —
 # the real assertion", and it is right that a compiler is the better instrument. This is the

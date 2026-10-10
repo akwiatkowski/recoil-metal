@@ -1,16 +1,22 @@
 <!-- Generated and maintained by Claude -->
 # recoil-metal
 
-A Mac-native RTS engine that reads **Recoil** and **Supreme Commander** content
+The Forged Alliance runtime is a Mac-native RTS engine that reads **Recoil** and **Supreme Commander** content
 straight off disk — their maps, models, textures, unit blueprints and sound
 banks — and plays a match out of them. It draws through Metal directly instead
 of translating OpenGL, and its simulation is fixed-point, so the same command
 log replays the same match tick for tick.
 
-It is not a port. Recoil's engine is ~385k lines and reaching a Mac GPU costs it
+The FA runtime is not a Recoil port. Recoil's engine is ~385k lines and reaching a Mac GPU costs it
 four translation layers; this is a new C++23 core built test-first through
 vertical slices of the two games' data formats. **Formats convert, behaviour
 gets reimplemented.**
+
+**Two runtimes, separate simulations:** `recoil-metal` runs FA through native
+Metal; `recoil-bar` launches the pinned upstream-derived Recoil engine for BAR.
+The BAR launcher shares `rm_foundation` with FA, not its simulation or Lua VM.
+BAR retains its own Lua UI and SDL3 → Mesa EGL → Zink → Kosmickrisp rendering;
+native Metal BAR rendering and cross-platform multiplayer are not claimed.
 
 - **Fast.** 0.554 ms/frame against 7.416 ms for Recoil's OpenGL path on the same
   map and machine — 13.4×. The scope limits are stated rather than glossed:
@@ -19,8 +25,8 @@ gets reimplemented.**
 - **Deterministic.** The sim is fixed point, proved identical at every
   optimisation level by a test. `--hash-log` writes a per-tick state hash and
   `--check-hash-log` names the tick a divergence began at.
-- **Tested.** **1,556 registered tests: 1,554 passed, two optional skips**
-  (2026-09-09). Anything that does not touch the GPU gets a failing test first,
+- **Tested.** **2,113 registered tests: 2,077 passed, 36 asset-dependent skips**
+  (2026-10-10, external retail map drive disconnected). GPU paths have runtime smoke checks,
   and parsers are tested against the
   real retail corpus — all 2034 BAR `.s3o` models and 2552 `.dds` textures.
 - **It plays.** Economy, construction, weapons, shields, aircraft, fog of war,
@@ -235,6 +241,49 @@ The binary underneath takes a map and a pile of flags:
 ./build/recoil-metal                    # procedural terrain, no assets needed
 ./build/recoil-metal path/to/map.smf    # a real Recoil map
 ```
+
+### Beyond All Reason runtime
+
+```sh
+mise exec -- make prepare-bar  # verify external runtime/content pins, then mount an isolated datadir
+mise exec -- make play-bar     # real BAR: human Armada versus BAR's built-in SimpleAI
+mise exec -- make smoke-bar    # observe player movement/building, AI actions and rendered UI
+```
+
+The engine/Mesa builds live in `build/bar/engine-build` and `build/bar/mesa-install`;
+BAR, maps and fonts remain external. `tools/bar-runtime.lock.json` pins upstream revisions, the
+actual numeric ancestor tag, port patch and compiled artifact/content hashes.
+`BAR_ENGINE`, `BAR_MESA`, `BAR_GAME`, `BAR_RUNTIME_MAP` and `BAR_DATA` override
+full-game paths; `BAR_ROOT` remains the Metal preview corpus. The launcher accepts explicit font/dependency paths.
+
+For setup/source-build recipes, run `mise exec -- python3 tools/bar_runtime.py --help`.
+`fetch-engine` obtains the pinned source/tag/submodules and applies the recorded
+macOS patch; do not build a tagless shallow clone or override its release number.
+An imported private baseline can be used with `build/recoil-bar --bundle DIR`.
+Export with `mise exec -- python3 tools/bar_runtime.py export --export-dir DIR`;
+review the asset licenses before transferring or distributing that directory.
+
+`--smoke` uses BAR's existing developer test runner and an isolated raw LuaUI
+test, not modified game content. It observes API-issued player MOVE/BUILD effects,
+completion of a SimpleAI-commanded building, live build/order menus and a rendered
+frame. It temporarily enables cheats/full visibility for the runner, but creates
+no units or resources. `make smoke-bar` validates the current upstream report and
+receipt; inspect screenshots too. BAR's upstream infolog-only test is disabled, so this is not an all-errors-clean claim.
+
+**Verified baseline, 2026-10-10:** the default `make smoke-bar` and the exported
+private bundle both pass the real player MOVE/solar BUILD, SimpleAI construction
+and final-frame RGB regression. Evidence is in `build/bar/testlog/results.json`,
+`build/bar/infolog.txt` and `build/bar/screenshots/`; bundle evidence is in
+`build/bar-final-bundle-smoke/`. Library tracing confirms bundled EGL, Gallium,
+Kosmickrisp and native dependencies are loaded, not the donor installation.
+
+The recorded Mesa patches repair native window sizing and remove the fork's
+unconditional color-blit alpha override, which made RmlUI erase the scene.
+MSAA, RmlUI and game rendering remain enabled. Shader caches are isolated per
+datadir. This is a single-player baseline, not BAR-wide visual parity or public
+multiplayer validation; driver capability and content warnings remain.
+Normal launch reached gameplay without cheats; OS-level visual/input capture
+was limited by the locked desktop. Engine framebuffer captures were inspected.
 
 ### Benchmarks
 
@@ -842,7 +891,11 @@ done
 The PNGs stay out of git (`.gitignore`); the JPEGs are what is committed.
 ---
 
-## Why not port Recoil class-by-class
+## Why the FA runtime does not port Recoil class-by-class
+
+This is the FA implementation strategy, not the BAR compatibility strategy.
+BAR runs the existing Recoil engine; its simulation, Lua API, UI and protocol
+are not reimplemented by this project.
 
 Measured on the real tree (`reference/RecoilEngine` in FAR, Spring/Recoil
 `rts/`): of ~1.95M lines, **1.57M is `rts/lib/`** — vendored third-party code
@@ -892,15 +945,33 @@ recoil-metal/
 │   │   ├── bench/      the benchmark harness
 │   │   ├── settings/   quality switches
 │   │   └── camera/     orbit camera + projection
-│   ├── app/            wiring: CLI, the match loop, the FAF AI adapter
+│   ├── app/            FA wiring: CLI, match loop, FAF AI adapter
+│   ├── games/bar/      Recoil launcher and actual BAR runtime acceptance
 │   ├── render/         Metal renderer (Objective-C++ where bridging)
 │   ├── platform/       AppKit window + display link (pImpl hides ObjC)
 │   └── main.mm         thin entry point
- ├── tests/              Catch2 unit and integration tests; 1,556 total CTest entries
+├── tests/              Catch2 unit and integration tests; 2,113 CTest entries
 ├── third_party/        metal-cpp and miniz (fetched, gitignored)
 │                       NEVER modified — `make ai`, ADR-039)
 └── docs/               research notes, benchmark results, the golden hash log
 ```
+
+### Build ownership
+
+The existing `core/...` paths contain both neutral and FA-specific code.
+CMake targets, not directory names, define which runtime owns each component:
+
+| Targets | Ownership |
+|---|---|
+| `rm_foundation` | Neutral logging/task pool; both executables link it |
+| `rm_content`, `rm_render_data`, `rm_audio` | CPU asset readers, geometry/camera/text preparation, mixer |
+| `rm_fa_data`, `rm_fa_sim`, `rm_fa_presentation`, `rm_fa_app` | FA formats, gameplay, scene/UI, application |
+| `rm_metal`, `rm_platform` | Extracted native rendering and macOS window/audio implementations |
+
+`rm_metal` still consumes FA presentation types; extracting a library does not
+make that interface BAR-compatible. `rm_platform` depends on `rm_metal` because
+the window owns a renderer. `recoil-bar` links only `rm_foundation` and executes
+Recoil separately. Neither game shares unit storage, tick arithmetic or Lua state.
 
 ## Legal
 
@@ -930,3 +1001,9 @@ unrestricted; it is the *adapted* Recoil code above that sets the licence.
 No game assets are or will ever be committed — same rule as FAR. The
 screenshots under `docs/images/` are output of this renderer, not game content,
 though they necessarily depict textures the two games ship.
+
+BAR's Lua code is GPL, but its artwork uses mixed licenses, including
+CC BY-NC-ND; see the external game's `LICENSE.md` and `license_*.txt`.
+The BAR preparation/export tools do not grant redistribution rights. Keep
+game/map/font assets out of git and review each asset's terms before sharing
+a runtime bundle. The captured Recoil macOS source patch is GPL-derived.

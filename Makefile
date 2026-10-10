@@ -45,6 +45,14 @@ FA_ROOT ?= $(if $(RM_FA_ROOT),$(RM_FA_ROOT),/Volumes/Samsung_T5/faf/Supreme Comm
 BAR_ROOT  ?= $(if $(RM_BAR_ROOT),$(RM_BAR_ROOT),$(HOME)/projects/llm/games/faf/forged-alliance-reborn/reference/BAR)
 BAR_MAPS  ?= $(if $(RM_BAR_MAPS),$(RM_BAR_MAPS),$(HOME)/projects/llm/input/recoil/maps)
 
+# Full BAR uses an archive and its own Recoil runtime, not the extracted Metal preview map.
+BAR_RUNTIME_MAP ?= $(BAR_MAPS)/angel_crossing_1.4.sd7
+BAR_DATA ?= $(BUILD)/bar
+BAR_ENGINE ?=
+BAR_MESA ?=
+# The full game may differ from the partial asset corpus used by view-bar.
+BAR_GAME ?= $(RM_BAR_GAME)
+
 # The defaults each family is exercised with. SCMP_009 because it is the map every screenshot
 # in the README was taken on; aw04 because it is the Recoil map the benchmarks are calibrated
 # against.
@@ -89,9 +97,11 @@ LOG_FILE  ?=
 LOG_FLAGS = --log-level $(LOG_LEVEL) $(if $(LOG_FILE),--log-file "$(LOG_FILE)",)
 
 FA_FLAGS  = --gamedata "$(FA_ROOT)/gamedata"
+BAR_FLAGS = $(if $(BAR_GAME),--game "$(BAR_GAME)",) --map "$(BAR_RUNTIME_MAP)" --data-dir "$(BAR_DATA)" \
+            $(if $(BAR_ENGINE),--engine "$(BAR_ENGINE)",) $(if $(BAR_MESA),--mesa "$(BAR_MESA)",)
 
 .DEFAULT_GOAL := help
-.PHONY: help build configure test verify golden play play-from watch run run-fa run-bar \
+.PHONY: help build configure test verify golden play play-from watch run run-fa view-bar \
         skirmish battle match shot-fa shot-bar bench bench-fa bench-gl clean check-fa check-bar \
         check-ai ai ai-play ai-report ai-sanity ai-matrix ai-matrix-report shot-ui \
         shot-engineer demo all-units unit-icons
@@ -120,7 +130,10 @@ help:
 	@echo
 	@echo '  run             procedural terrain, no content needed'
 	@echo '  run-fa          a Supreme Commander map, its own units, read from the archives'
-	@echo '  run-bar         a Recoil map with Beyond All Reason units'
+	@echo '  view-bar        preview BAR assets with the native Metal renderer (not BAR gameplay)'
+	@echo '  prepare-bar     verify pinned Recoil/Mesa/BAR inputs and prepare an isolated skirmish'
+	@echo '  play-bar        full BAR: human Armada vs Recoil SimpleAI, through the macOS GL stack'
+	@echo '  smoke-bar       exercise a real BAR skirmish and retain acceptance evidence'
 	@echo '  skirmish        default duel: you are army 0, FAF drives army 1'
 	@echo '  battle          the same, marched to the middle and fought to a finish'
 	@echo
@@ -235,8 +248,18 @@ run: build
 run-fa: build check-fa
 	$(BIN) "$(FA_MAP)" $(FA_FLAGS) --units $(FA_UNIT) $(UNITS)
 
-run-bar: build check-bar
+view-bar: build check-bar
 	$(BIN) "$(BAR_MAP)" --units "$(BAR_UNIT)" $(UNITS)
+
+# The full game stays in Recoil; the native Metal content preview above is separate.
+.PHONY: prepare-bar play-bar smoke-bar
+prepare-bar: build
+	mise exec -- ./$(BUILD)/recoil-bar $(BAR_FLAGS) --prepare-only
+play-bar: build
+	mise exec -- ./$(BUILD)/recoil-bar $(BAR_FLAGS)
+smoke-bar: build
+	mise exec -- ./$(BUILD)/recoil-bar $(BAR_FLAGS) --smoke
+	mise exec -- python3 tools/check_bar_smoke.py --data-dir "$(BAR_DATA)"
 
 # --- Playing it -------------------------------------------------------------
 #

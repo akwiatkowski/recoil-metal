@@ -1,0 +1,74 @@
+diff --git a/src/egl/drivers/dri2/platform_surfaceless.c b/src/egl/drivers/dri2/platform_surfaceless.c
+index d9d2485..7aa56f2 100644
+--- a/src/egl/drivers/dri2/platform_surfaceless.c
++++ b/src/egl/drivers/dri2/platform_surfaceless.c
+@@ -43,11 +43,37 @@
+ #include "loader_dri_helper.h"
+ 
+ #if defined(__APPLE__) && defined(VK_USE_PLATFORM_METAL_EXT)
++#include <CoreGraphics/CGGeometry.h>
+ #include <pthread.h>
+ #include <dispatch/dispatch.h>
+ #include <objc/message.h>
+ #include <objc/runtime.h>
+ #include <vulkan/vulkan_metal.h>
++
++static void
++surfaceless_metal_update_size(struct dri2_egl_surface *dri2_surf)
++{
++   id layer = (id)dri2_surf->base.NativeSurface;
++   CGRect bounds;
++
++#if defined(__x86_64__)
++   ((void (*)(CGRect *, id, SEL))objc_msgSend_stret)(
++      &bounds, layer, sel_registerName("bounds"));
++#else
++   bounds = ((CGRect (*)(id, SEL))objc_msgSend)(
++      layer, sel_registerName("bounds"));
++#endif
++   CGFloat scale = ((CGFloat (*)(id, SEL))objc_msgSend)(
++      layer, sel_registerName("contentsScale"));
++
++   /* Match wsi_metal_layer_size: drawableSize is swapchain output and can
++    * still be 1x1 before allocation. CALayer bounds and contentsScale give
++    * the native backing size, including Retina scale and window resizes.
++    * These property reads need no dispatch to the AppKit main thread.
++    */
++   dri2_surf->base.Width = bounds.size.width * scale;
++   dri2_surf->base.Height = bounds.size.height * scale;
++}
+ #endif
+ 
+ static struct dri_image *
+@@ -223,6 +249,10 @@ dri2_surfaceless_create_window_surface(_EGLDisplay *disp, _EGLConfig *conf,
+    if (dri2_surf->visual == PIPE_FORMAT_NONE)
+       goto cleanup_surface;
+ 
++#ifdef VK_USE_PLATFORM_METAL_EXT
++   surfaceless_metal_update_size(dri2_surf);
++#endif
++
+    if (!dri2_create_drawable(dri2_dpy, config, dri2_surf, dri2_surf))
+       goto cleanup_surface;
+ 
+@@ -328,16 +358,11 @@ surfaceless_metal_kopper_get_drawable_info(struct dri_drawable *draw, int *w,
+ {
+    struct dri2_egl_surface *dri2_surf = loaderPrivate;
+ 
+-   /* PERFORMANCE FIX: Return cached dimensions instead of querying the
+-    * CAMetalLayer on every call via dispatch_sync to main thread.
+-    *
+-    * The previous implementation was a major performance bottleneck - each
+-    * dispatch_sync_f() blocks the calling thread waiting for the main thread.
+-    * This was happening multiple times per frame, causing massive stalls.
+-    *
+-    * The surface dimensions are already updated through kopper_update_size()
+-    * on resize events, so we can safely return the cached values.
++   /* Kopper consumes these dimensions; it cannot initialize or resize the
++    * cache from itself. Refresh from the native layer without main-thread
++    * dispatch, including the first call before any swapchain is allocated.
+     */
++   surfaceless_metal_update_size(dri2_surf);
+    *w = dri2_surf->base.Width;
+    *h = dri2_surf->base.Height;
+ }

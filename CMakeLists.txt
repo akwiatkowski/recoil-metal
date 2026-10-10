@@ -99,6 +99,7 @@ find_library(QUARTZCORE_FW QuartzCore REQUIRED)
 # ImageIO: PNG encoding for --screenshot. Part of the OS, not a dependency.
 find_library(IMAGEIO_FW ImageIO REQUIRED)
 find_library(COREGRAPHICS_FW CoreGraphics REQUIRED)
+find_library(CORETEXT_FW CoreText REQUIRED)
 # AVFoundation: the audio output. Part of the OS, not a dependency (ADR-044's standard).
 find_library(AVFOUNDATION_FW AVFoundation REQUIRED)
 
@@ -117,63 +118,71 @@ target_include_directories(miniz SYSTEM INTERFACE
 add_library(miniz_impl STATIC ${CMAKE_SOURCE_DIR}/third_party/miniz/miniz.c)
 target_include_directories(miniz_impl PUBLIC ${CMAKE_SOURCE_DIR}/third_party/miniz)
 
-# --- rm_core: pure C++, no Metal, no AppKit --------------------------------
-# Everything in here is unit-testable on any machine, even one without a GPU.
-add_library(rm_core STATIC
+# --- Shared CPU libraries --------------------------------------------------
+# Foundation has no game/content, Lua interpreter, Metal, or AppKit dependency.
+# Keep the existing core/... include paths; ownership is expressed by targets.
+add_library(rm_foundation STATIC
     src/core/TaskPool.cpp
-    src/core/log/Log.cpp
-    src/core/map/HeightField.cpp
-    src/core/map/MaxHeightPyramid.cpp
-    src/core/map/MapInfo.cpp
-    src/core/map/Smt.cpp
-    src/core/map/TileAtlas.cpp
+    src/core/log/Log.cpp)
+target_include_directories(rm_foundation PUBLIC src)
+target_link_libraries(rm_foundation PUBLIC rm_project_warnings)
+
+# Neutral file readers and CPU content representations. Lua here is a data
+# parser, not the Lua interpreter used by the FA AI adapter.
+add_library(rm_content STATIC
     src/core/lua/LuaValue.cpp
     src/core/lua/LuaTable.cpp
+    src/core/map/HeightField.cpp
+    src/core/map/MaxHeightPyramid.cpp
     src/core/map/ProceduralField.cpp
+    src/core/map/MapInfo.cpp
     src/core/map/Smf.cpp
-    src/core/map/Scmap.cpp
-    src/core/blueprint/BlueprintMesh.cpp
-    src/core/map/PropBlueprint.cpp
-    src/core/map/ScenarioSave.cpp
-    src/core/map/TerrainType.cpp
+    src/core/map/Smt.cpp
+    src/core/model/Model.cpp
+    src/core/model/S3o.cpp
+    src/core/texture/Dds.cpp
+    src/core/vfs/AssetSearch.cpp
+    src/core/vfs/Vfs.cpp)
+target_link_libraries(rm_content PUBLIC rm_foundation miniz miniz_impl)
+
+# CPU-side geometry, camera, text, and texture preparation, independent of the
+# FA simulation and of the graphics API.
+add_library(rm_render_data STATIC
+    src/core/map/TileAtlas.cpp
     src/core/mesh/TerrainMesh.cpp
     src/core/mesh/ChunkDraws.cpp
     src/core/camera/OrbitCamera.cpp
     src/core/camera/Frustum.cpp
     src/core/bench/FrameStats.cpp
-    src/core/model/Model.cpp
-    src/core/model/S3o.cpp
+    src/core/text/TextLayout.cpp
+    src/core/ui/IconAtlas.cpp)
+target_link_libraries(rm_render_data PUBLIC rm_content)
+
+add_library(rm_audio STATIC
+    src/core/audio/Curve.cpp
+    src/core/audio/Mixer.cpp)
+target_link_libraries(rm_audio PUBLIC rm_foundation)
+
+# --- FA data and simulation ------------------------------------------------
+# These formats and terrain conventions belong to FA, even where their headers
+# still live under core/. They are not part of the BAR runtime.
+add_library(rm_fa_data STATIC
+    src/core/map/Scmap.cpp
+    src/core/blueprint/BlueprintMesh.cpp
+    src/core/map/PropBlueprint.cpp
+    src/core/map/ScenarioSave.cpp
+    src/core/map/TerrainType.cpp
     src/core/model/Scm.cpp
     src/core/model/Sca.cpp
-    src/core/model/Pose.cpp
-    src/core/model/BuilderAim.cpp
-    src/core/text/TextLayout.cpp
-    src/core/ui/Hud.cpp
-    src/core/ui/CommandPanel.cpp
-    src/core/ui/ProductionPanel.cpp
-    src/core/ui/EconomyWindow.cpp
-    src/core/ui/PanelPages.cpp
-    src/core/ui/BuildPanel.cpp
-    src/core/ui/IconAtlas.cpp
-    src/core/ui/Roster.cpp
-    src/core/ui/Minimap.cpp
-    src/core/texture/Dds.cpp
-    src/core/scene/UnitIcons.cpp
-    src/core/scene/UnitPlacement.cpp
-    src/core/scene/UnitBatch.cpp
-    src/core/scene/UnitDraw.cpp
-    src/core/scene/PropBatch.cpp
-    src/core/scene/Picking.cpp
-    src/core/scene/Selection.cpp
-    src/core/scene/GroundDecals.cpp
-    src/core/scene/Particles.cpp
-    src/core/scene/BuildEffects.cpp
-    src/core/scene/CombatEffects.cpp
-    src/core/scene/ProjectileFx.cpp
-    src/core/scene/ProjectileTrails.cpp
-    src/core/scene/WeaponVisuals.cpp
-    src/core/scene/OrderTimes.cpp
-    src/core/scene/ReclaimFields.cpp
+    src/core/audio/Xgs.cpp
+    src/core/audio/Xwb.cpp
+    src/core/audio/Xsb.cpp)
+target_link_libraries(rm_fa_data PUBLIC rm_content rm_audio)
+
+# Unit definitions and authored gameplay data call simulation helpers
+# (Movement, Pathfinding, TickRate, Veterancy). Keep that coupled domain in one
+# target rather than introducing a data <-> simulation library cycle.
+add_library(rm_fa_sim STATIC
     src/core/sim/Army.cpp
     src/core/sim/Command.cpp
     src/core/sim/CommandBuffer.cpp
@@ -193,14 +202,6 @@ add_library(rm_core STATIC
     src/core/sim/Manipulator.cpp
     src/core/sim/ThreatGrid.cpp
     src/core/sim/BuildOrder.cpp
-    src/core/audio/Cues.cpp
-    src/core/audio/CueEvents.cpp
-    src/core/audio/Curve.cpp
-    src/core/audio/Mixer.cpp
-    src/core/audio/Xgs.cpp
-    src/core/audio/Xwb.cpp
-    src/core/audio/Xsb.cpp
-    src/core/audio/WeaponSounds.cpp
     src/core/sim/Economy.cpp
     src/core/sim/Movement.cpp
     src/core/sim/Pathfinding.cpp
@@ -237,21 +238,48 @@ add_library(rm_core STATIC
     src/core/data/Roster.cpp
     src/core/data/Opening.cpp
     src/core/data/MoveDef.cpp
-    src/core/data/ArmorDefs.cpp
-    src/core/vfs/AssetSearch.cpp
-    src/core/vfs/Vfs.cpp
-    src/core/settings/Settings.cpp)
-target_include_directories(rm_core PUBLIC src)
-target_link_libraries(rm_core PUBLIC rm_project_warnings miniz miniz_impl)
+    src/core/data/ArmorDefs.cpp)
+target_link_libraries(rm_fa_sim PUBLIC rm_fa_data)
 
-# --- rm_app: the application layer, testable ---------------------------------
-#
-# WHY THIS LIBRARY EXISTS (PLAN2.md §7 P7.5). `main.mm` had grown to 5,098 lines, and §7 asks
-# for it to be "argv plus wiring, under 400". Most of what was in there is a library — content
-# loading, scene assembly, the match runner, the CLI — and a library inside an
-# executable-only translation unit is one no test can link. These are `.cpp`, not `.mm`:
-# `Renderer.hpp` forward-declares its Metal types, so the app layer needs no Objective-C.
-add_library(rm_app STATIC
+# FA scene/UI and event-to-presentation adapters remain FA-owned: their public
+# types reference FA units, armies, weapons, and animation formats.
+add_library(rm_fa_presentation STATIC
+    src/core/model/Pose.cpp
+    src/core/model/BuilderAim.cpp
+    src/core/ui/Hud.cpp
+    src/core/ui/CommandPanel.cpp
+    src/core/ui/ProductionPanel.cpp
+    src/core/ui/EconomyWindow.cpp
+    src/core/ui/PanelPages.cpp
+    src/core/ui/BuildPanel.cpp
+    src/core/ui/Roster.cpp
+    src/core/ui/Minimap.cpp
+    src/core/scene/UnitIcons.cpp
+    src/core/scene/UnitPlacement.cpp
+    src/core/scene/UnitBatch.cpp
+    src/core/scene/UnitDraw.cpp
+    src/core/scene/PropBatch.cpp
+    src/core/scene/Picking.cpp
+    src/core/scene/Selection.cpp
+    src/core/scene/GroundDecals.cpp
+    src/core/scene/Particles.cpp
+    src/core/scene/BuildEffects.cpp
+    src/core/scene/CombatEffects.cpp
+    src/core/scene/ProjectileFx.cpp
+    src/core/scene/ProjectileTrails.cpp
+    src/core/scene/WeaponVisuals.cpp
+    src/core/scene/OrderTimes.cpp
+    src/core/scene/ReclaimFields.cpp
+    src/core/audio/Cues.cpp
+    src/core/audio/CueEvents.cpp
+    src/core/audio/WeaponSounds.cpp
+    src/core/settings/Settings.cpp)
+target_link_libraries(rm_fa_presentation PUBLIC rm_fa_sim rm_render_data rm_audio)
+
+# --- FA application: CPU-side, testable without platform/Metal linkage -----
+# Renderer.hpp forward-declares its Metal types; including its data interface
+# does not make the application depend on the renderer implementation.
+add_library(rm_fa_app STATIC
     src/app/Content.cpp
     src/app/Scene.cpp
     src/app/SceneBuild.cpp
@@ -264,36 +292,52 @@ add_library(rm_app STATIC
     src/app/Match.cpp
     src/app/Interface.cpp
     src/app/View.cpp)
-target_link_libraries(rm_app PUBLIC rm_core rm_project_warnings lua54)
+target_link_libraries(rm_fa_app PUBLIC rm_fa_presentation lua54)
 
-# --- recoil-metal: the app --------------------------------------------------
-add_executable(recoil-metal
-    src/main.mm
-    # The three run modes. Objective-C++ because one owns an NSApplication and one an ImageIO
-    # destination — the only part of the app layer that genuinely needs Objective-C, which is
-    # why everything that did not was moved into rm_app first (PLAN2.md §7 P7.5). Run.mm is the
-    # two headless modes; WindowedSession.mm is the interactive game, split the same way
-    # Command.cpp was — the file is the pipeline stage.
-    src/app/Run.mm
-    src/app/WindowedSession.mm
-    src/platform/Audio.mm
-    src/platform/Window.mm
+# --- Native Metal and macOS libraries --------------------------------------
+# The current Renderer consumes FA presentation types. Library reuse does not
+# imply a BAR-compatible renderer; BAR retains upstream Lua/OpenGL rendering.
+add_library(rm_metal STATIC
+    # The metal-cpp PRIVATE_IMPLEMENTATION defines remain in Renderer.mm only.
     src/render/Renderer.mm
     src/render/MpsBlur.mm
-    # One class, several translation units (PLAN2.md §7 P7.3). `Renderer.mm` keeps the device,
-    # the queue, the frame orchestration and the metal-cpp PRIVATE_IMPLEMENTATION defines, which
-    # must stay in exactly one TU; each of these defines that domain's members.
     src/render/MapRenderer.mm
     src/render/UnitRenderer.mm
     src/render/FxRenderer.mm
     src/render/UiRenderer.mm)
+target_link_libraries(rm_metal
+    PUBLIC rm_fa_presentation metal_cpp
+    PRIVATE ${MPS_FW} ${COREGRAPHICS_FW} ${CORETEXT_FW})
+target_compile_options(rm_metal PRIVATE
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+
+# Window owns a Renderer: platform -> Metal, never Metal -> platform.
+add_library(rm_platform STATIC
+    src/platform/Audio.mm
+    src/platform/Window.mm)
+target_link_libraries(rm_platform
+    PUBLIC rm_metal rm_audio
+    PRIVATE ${APPKIT_FW} ${AVFOUNDATION_FW})
+target_compile_options(rm_platform PRIVATE
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+
+# --- recoil-metal: the existing FA executable ------------------------------
+# Objective-C++ session wiring stays here: NSApplication and screenshot I/O
+# are runtime concerns, not dependencies of the CPU-side FA application/tests.
+add_executable(recoil-metal
+    src/main.mm
+    src/app/Run.mm
+    src/app/WindowedSession.mm)
 target_link_libraries(recoil-metal PRIVATE
-    rm_app rm_core rm_project_warnings metal_cpp ${APPKIT_FW}
-    ${IMAGEIO_FW} ${COREGRAPHICS_FW} ${AVFOUNDATION_FW} ${MPS_FW})
-# ARC for the Objective-C side only. metal-cpp objects are C++ and unaffected
-# (they are manually retained/released — see AGENT.md gotchas).
+    rm_fa_app rm_platform ${APPKIT_FW} ${IMAGEIO_FW} ${COREGRAPHICS_FW})
+# ARC affects Objective-C only; metal-cpp objects remain manually managed.
 target_compile_options(recoil-metal PRIVATE
     $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+
+# BAR keeps Recoil in its own process; only neutral services enter the launcher.
+add_executable(recoil-bar src/games/bar/main.cpp)
+target_link_libraries(recoil-bar PRIVATE rm_foundation)
+target_compile_definitions(recoil-bar PRIVATE RM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # --- Tests ------------------------------------------------------------------
 include(CTest)
@@ -470,7 +514,7 @@ if(BUILD_TESTING)
     # tests/ on the include path so fixtures resolve as "support/SmfWriter.hpp",
     # matching how src/ headers resolve as "core/...".
     target_include_directories(rm_tests PRIVATE tests)
-    target_link_libraries(rm_tests PRIVATE rm_app rm_core Catch2::Catch2WithMain)
+    target_link_libraries(rm_tests PRIVATE rm_fa_app Catch2::Catch2WithMain)
 
     include(Catch)
     catch_discover_tests(rm_tests)
@@ -530,10 +574,9 @@ if(BUILD_TESTING)
     add_test(NAME "every order goes through applyCommand"
              COMMAND ${CMAKE_SOURCE_DIR}/tools/check_one_order_path.sh ${CMAKE_SOURCE_DIR})
 
-    # The sim and data layers must not include the render side (PLAN2.md §4, §7 P6.3). §7 asks
-    # for this as a COMPILE error — `rm_sim` built with `core/scene/` off its include path — and
-    # that needs the four libraries §4 describes, which do not exist yet. This is the same claim
-    # with the tool that does.
+    # The FA sim and authored gameplay data must not include the render side.
+    # Target ownership is explicit above; core/... remains a shared include root,
+    # so this structural check also guards forbidden header dependencies.
     add_test(NAME "the sim knows nothing about drawing"
              COMMAND ${CMAKE_SOURCE_DIR}/tools/check_sim_is_headless.sh ${CMAKE_SOURCE_DIR})
 endif()

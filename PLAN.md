@@ -23,9 +23,9 @@ Supreme Commander on macOS **and Linux**, running the existing mods through a
 hosted Lua layer while offering a clean modern API for new ones (ADR-028), and
 playing multiplayer through FAF's open lobby ecosystem on its **own**
 deterministic lockstep protocol — never the retail one, whose desyncs are the
-reason FAF needs an engine at all (ADR-030). Beyond All Reason stays supported
-at the content level — maps, models, blueprints — not as a Recoil replacement
-(ADR-031). Who this is for: everyone who wants to upgrade the game and keep
+reason FAF needs an engine at all (ADR-030). Beyond All Reason uses a separate
+upstream-derived Recoil runtime; its simulation and Spring API stay intact (ADR-132).
+Who this is for: everyone who wants to upgrade the game and keep
 playing it. The tracks from here to there are at the end of this file.
 
 ---

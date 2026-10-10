@@ -349,6 +349,12 @@ pattern is what to reach for, and this is the note that says where to look.**
 
 ## 4. The target layers
 
+**Current build (2026-10-10):** target ownership is implemented with explicit
+`rm_foundation`, content/render-data/audio, `rm_fa_*`, Metal and platform libraries.
+BAR runs a separate upstream-derived Recoil process (ADR-132); see README's
+Build ownership section. The original diagram below is not the current target list.
+The shared `core/...` include root still needs the structural headless-header check.
+
 Four static libraries, dependency arrows left to right only. Separate CMake targets rather than
 directories, because `rm_sim` then has **no link line to Metal or AppKit** and a stray include
 is a compile error. `README.md:1141` has claimed *"core/ — pure C++, no Metal"* all along; it

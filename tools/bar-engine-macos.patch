@@ -1,0 +1,470 @@
+diff --git a/AI/CMakeLists.txt b/AI/CMakeLists.txt
+index 9ec1c9a..c37d018 100644
+--- a/AI/CMakeLists.txt
++++ b/AI/CMakeLists.txt
+@@ -11,6 +11,15 @@
+ 
+ add_definitions(-DBUILDING_AI)
+ 
++# AI wrappers include engine headers that reach streflop_cond.h (AIFloat3.cpp ->
++# System/float3.h). Without STREFLOP_NEON on ARM64 they take the non-streflop
++# branch, which resolves math::sqrtf to fastmath's SSE implementation and fails
++# to compile. Scoped to this directory rather than set globally, because a global
++# definition also reaches vendored third-party code that is not streflop-aware.
++if (ENABLE_STREFLOP AND STREFLOP_NEON)
++	add_definitions(-DSTREFLOP_NEON)
++endif ()
++
+ 
+ ### User-definable build options
+ set (AI_EXCLUDE_REGEX "XXXXXXXX" CACHE STRING "Which Skirmish AIs not to build (none by default, example: \"NTai|Null.*AI\", see also: AI_TYPES")
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d35d402..ac113fe 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -319,6 +319,26 @@ endif (RECOIL_DETAILED_TRACY_ZONING)
+ find_package(SDL2 MODULE)
+ if (APPLE AND RECOIL_MACOS_SDL3_EGL)
+ 	find_package(MesaEGL MODULE)
++
++	# The SDLCompat shims must outrank the real SDL2 headers, which on Homebrew
++	# live under /opt/homebrew/include/SDL2 -- a prefix already added to the
++	# include path for DevIL, minizip and friends. Directory-level entries are
++	# searched before a target's INTERFACE includes, so the BEFORE INTERFACE in
++	# FindSDL2.cmake is not sufficient on its own.
++	#
++	# If real SDL2 wins, sources including <SDL2/SDL_keyboard.h> pull in SDL2's
++	# headers, which define the SAME include guards as SDL3 (SDL_stdinc_h_,
++	# SDL_pixels_h_, ...). SDL3's versions are then silently skipped and the
++	# build fails with "unknown type name 'SDL_FunctionPointer'" and
++	# "unknown type name 'SDL_FColor'" from deep inside SDL3's own headers.
++	include_directories(BEFORE "${CMAKE_SOURCE_DIR}/rts/System/SDLCompat")
++
++	# Same hazard, different library: Homebrew ships fmt 12.2.0 while the tree
++	# vendors 12.1.0. Both use the fmt::v12 inline namespace, so the mismatch is
++	# invisible until link time, when 12.2.0's headers reference
++	# fmt::v12::detail::allocate() that 12.1.0's libfmt.a does not define.
++	# The vendored headers have to win over /opt/homebrew/include.
++	include_directories(BEFORE "${CMAKE_SOURCE_DIR}/rts/lib/fmt/include")
+ endif()
+ 
+ find_package_static(DevIL 1.8.0 REQUIRED)
+@@ -449,6 +469,11 @@ if (ENABLE_STREFLOP)
+ 	set(STREFLOP_AUTO ON CACHE BOOL "Enable STREFLOP autodetection" FORCE)
+ 	if (IS_ARM64_BUILD)
+ 		set(STREFLOP_NEON ON CACHE BOOL "Use ARM NEON for deterministic ARM64 streflop" FORCE)
++		# NOTE: do NOT add_definitions(-DSTREFLOP_NEON) globally here. It would
++		# reach vendored third-party code (assimp in particular), which is not
++		# built against streflop and fails with "no member named 'abs' in
++		# namespace 'std'". The definition is added per-directory instead, in
++		# the directories holding code that reaches streflop_cond.h.
+ 	endif ()
+ else ()
+ 	add_definitions(-DNOT_USING_STREFLOP)
+diff --git a/rts/Rendering/GlobalRendering.cpp b/rts/Rendering/GlobalRendering.cpp
+index b137b37..d1169de 100644
+--- a/rts/Rendering/GlobalRendering.cpp
++++ b/rts/Rendering/GlobalRendering.cpp
+@@ -501,7 +501,14 @@ SDL_Window* CGlobalRendering::CreateSDLWindow(const char* title) const
+ 
+ SDL_GLContext CGlobalRendering::CreateGLContext(const int2& minCtx)
+ {
+-#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++#if defined(HEADLESS)
++	// Headless never renders: every GL entry point is replaced by a stub in
++	// rts/lib/headlessStubs/gladstub.cpp and there is no window server to talk
++	// to. Return a non-null sentinel so callers that merely null-check succeed,
++	// without initialising EGL (which needs a real Cocoa NSWindow and aborts
++	// startup under SDL's dummy video driver) or SDL's GL backend.
++	return reinterpret_cast<SDL_GLContext>(this);
++#elif defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
+ 	if (macSDL3EGLBridge == nullptr)
+ 		macSDL3EGLBridge = std::make_unique<MacSDL3EGL::Bridge>();
+ 
+@@ -642,7 +649,7 @@ bool CGlobalRendering::CreateWindowAndContext(const char* title)
+ 	if ((glContext = CreateGLContext(minCtx)) == nullptr)
+ 		return false;
+ 
+-#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL) && !defined(HEADLESS)
+ 	const int gladStatus = gladLoadGLLoader(MacSDL3EGL::GetGLProcAddress);
+ 	LOG("[GR::%s] gladLoadGLLoader via Mesa EGL returned %d", __func__, gladStatus);
+ 	if (gladStatus == 0) {
+@@ -650,9 +657,13 @@ bool CGlobalRendering::CreateWindowAndContext(const char* title)
+ 		return false;
+ 	}
+ #else
++	// Headless takes this path too: there is no EGL context to load entry points
++	// from, and gladstub.cpp's gladLoadGL() installs the no-op stubs instead.
+ 	gladLoadGL();
+ #endif
+-#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL) && !defined(HEADLESS)
++	// The bridge is never constructed in headless (see CreateGLContext), so this
++	// would dereference a null pointer.
+ 	macSDL3EGLBridge->LogContextDiagnostics("after-glad-load");
+ #endif
+ 	GLX::Load(sdlWindow);
+@@ -784,7 +795,11 @@ void CGlobalRendering::SwapBuffers(bool allowSwapBuffers, bool clearErrors)
+ 		#endif
+ 		
+ #if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
+-		macSDL3EGLBridge->SwapBuffers();
++		// Null-checked like the MakeCurrent and Destroy call sites: the bridge is
++		// never constructed when there is no GL context to present to, which is
++		// always the case in headless builds.
++		if (macSDL3EGLBridge != nullptr)
++			macSDL3EGLBridge->SwapBuffers();
+ #else
+ 		SDL_GL_SwapWindow(sdlWindow);
+ #endif
+diff --git a/rts/Rendering/Models/GLTFParser.cpp b/rts/Rendering/Models/GLTFParser.cpp
+index f72b17d..38ca9cd 100644
+--- a/rts/Rendering/Models/GLTFParser.cpp
++++ b/rts/Rendering/Models/GLTFParser.cpp
+@@ -22,6 +22,13 @@
+ #include <fastgltf/core.hpp>
+ #include <fastgltf/tools.hpp>
+ #include <fastgltf/math.hpp>
++
++// rts/lib/smmalloc/smmalloc.h leaks `#define INLINE inline` into every
++// translation unit that reaches it, and simdjson declares an enumerator named
++// INLINE (simdjson.h: `INLINE, // Single line: [1, 2, 3] or {"a": 1}`). The
++// macro rewrites the enumerator and the header fails to parse. Drop the macro
++// before including simdjson; nothing below this point uses it.
++#undef INLINE
+ #include <simdjson.h>
+ 
+ 
+diff --git a/rts/System/Platform/Mac/MacSDL3EGLBridge.mm b/rts/System/Platform/Mac/MacSDL3EGLBridge.mm
+index 1355831..ca99760 100644
+--- a/rts/System/Platform/Mac/MacSDL3EGLBridge.mm
++++ b/rts/System/Platform/Mac/MacSDL3EGLBridge.mm
+@@ -185,9 +185,33 @@ static bool ChooseConfig(EGLDisplay display, EGLConfig* outConfig)
+ 		EGL_NONE
+ 	};
+ 
++	// Take the whole matching list rather than the first entry. EGL sorts configs
++	// with *more* colour bits first, so the first match here is 16-bit-per-channel
++	// -- and a Metal surface refuses R16G16B16A16_UNORM, which surfaces later as
++	// "CreateSwapchainKHR failed with VK_ERROR_FORMAT_NOT_SUPPORTED". Only the
++	// 8-bit configs map onto a format Metal will present (BGRA8).
++	EGLConfig candidates[32];
+ 	EGLint count = 0;
+-	if (eglChooseConfig(display, preferredAttribs, outConfig, 1, &count) && count > 0) {
+-		LOG("[MacSDL3EGL::%s] eglChooseConfig depth=24 stencil=8 count=%d", __func__, count);
++	if (eglChooseConfig(display, preferredAttribs, candidates, 32, &count) && count > 0) {
++		for (EGLint i = 0; i < count; ++i) {
++			EGLint red = 0, green = 0, blue = 0, alpha = 0;
++			eglGetConfigAttrib(display, candidates[i], EGL_RED_SIZE, &red);
++			eglGetConfigAttrib(display, candidates[i], EGL_GREEN_SIZE, &green);
++			eglGetConfigAttrib(display, candidates[i], EGL_BLUE_SIZE, &blue);
++			eglGetConfigAttrib(display, candidates[i], EGL_ALPHA_SIZE, &alpha);
++
++			if (red != 8 || green != 8 || blue != 8 || alpha != 8)
++				continue;
++
++			*outConfig = candidates[i];
++			LOG("[MacSDL3EGL::%s] eglChooseConfig depth=24 stencil=8 count=%d picked=%d rgba=8888",
++				__func__, count, i);
++			return true;
++		}
++
++		*outConfig = candidates[0];
++		LOG_L(L_WARNING, "[MacSDL3EGL::%s] no 8-bit config among %d matches; falling back to the first",
++			__func__, count);
+ 		return true;
+ 	}
+ 
+@@ -280,6 +304,8 @@ struct Bridge::Impl {
+ 	EGLContext context = EGL_NO_CONTEXT;
+ 	EGLSurface surface = EGL_NO_SURFACE;
+ 	bool initialized = false;
++	// Which native-window convention this Mesa expects; see Initialize().
++	bool usePrivateCocoaSurface = true;
+ };
+ 
+ DisplayGeometry QueryDisplayGeometry(SDL_Window* window)
+@@ -371,6 +397,20 @@ bool Bridge::Initialize(SDL_Window* window, int requestMajor, int requestMinor,
+ 		LOG("[MacSDL3EGL::%s] EGL_PLATFORM was unset; set to cocoa for project-local Mesa bridge", __func__);
+ 	}
+ 
++	// Two different Mesa builds can serve this bridge, and they disagree about what
++	// eglCreateWindowSurface's native window is:
++	//
++	//   EGL_PLATFORM=cocoa       a Mesa carrying this project's private cocoa
++	//                            platform, which expects the BarOnMVKPrivateCocoaSurface
++	//                            struct below.
++	//   EGL_PLATFORM=surfaceless a Mesa whose surfaceless platform grew a macOS path
++	//                            (zink/kopper KOPPER_METAL), which expects a bare
++	//                            CAMetalLayer* and drives VK_EXT_metal_surface itself.
++	//
++	// Stock Homebrew Mesa has neither and fails earlier, at eglInitialize.
++	const char* eglPlatform = std::getenv("EGL_PLATFORM");
++	impl->usePrivateCocoaSurface = (eglPlatform == nullptr || std::strcmp(eglPlatform, "cocoa") == 0);
++
+ 	impl->nsWindow = GetNSWindow(window);
+ 	if (impl->nsWindow == nil || impl->nsWindow.contentView == nil) {
+ 		LOG_L(L_ERROR, "[MacSDL3EGL::%s] SDL Cocoa NSWindow/contentView unavailable via %s",
+@@ -438,23 +478,31 @@ bool Bridge::Initialize(SDL_Window* window, int requestMajor, int requestMinor,
+ 	if (impl->context == EGL_NO_CONTEXT)
+ 		return false;
+ 
++	const char* surfaceTarget = impl->usePrivateCocoaSurface
++		? "BarOnMVKPrivateCocoaSurface"
++		: "CAMetalLayer";
++	EGLNativeWindowType nativeWindow = impl->usePrivateCocoaSurface
++		? reinterpret_cast<EGLNativeWindowType>(&impl->privateSurface)
++		: reinterpret_cast<EGLNativeWindowType>((__bridge void*)impl->metalLayer);
++
+ 	impl->surface = eglCreateWindowSurface(
+ 		impl->display,
+ 		impl->config,
+-		reinterpret_cast<EGLNativeWindowType>(&impl->privateSurface),
++		nativeWindow,
+ 		nullptr
+ 	);
+ 
+ 	if (impl->surface == EGL_NO_SURFACE) {
+-		LOG_L(L_ERROR, "[MacSDL3EGL::%s] eglCreateWindowSurface target=BarOnMVKPrivateCocoaSurface failed eglGetError=0x%04x",
+-			__func__, eglGetError());
++		LOG_L(L_ERROR, "[MacSDL3EGL::%s] eglCreateWindowSurface target=%s failed eglGetError=0x%04x",
++			__func__, surfaceTarget, eglGetError());
+ 		return false;
+ 	}
+ 
+-	LOG("[MacSDL3EGL::%s] eglCreateWindowSurface target=BarOnMVKPrivateCocoaSurface surface=%p privateSurface=%p magic=0x%08x version=%u layer=%p size=%ux%u",
++	LOG("[MacSDL3EGL::%s] eglCreateWindowSurface target=%s surface=%p nativeWindow=%p magic=0x%08x version=%u layer=%p size=%ux%u",
+ 		__func__,
++		surfaceTarget,
+ 		impl->surface,
+-		&impl->privateSurface,
++		reinterpret_cast<void*>(nativeWindow),
+ 		impl->privateSurface.magic,
+ 		impl->privateSurface.version,
+ 		impl->privateSurface.metalLayer,
+diff --git a/rts/System/SDLCompat/SDLRecoilCompat.h b/rts/System/SDLCompat/SDLRecoilCompat.h
+index b15700f..f59453f 100644
+--- a/rts/System/SDLCompat/SDLRecoilCompat.h
++++ b/rts/System/SDLCompat/SDLRecoilCompat.h
+@@ -281,10 +281,12 @@ static inline SDL_MouseButtonFlags SDLCompat_GetMouseState(int* x, int* y)
+ 	float yf = 0.0f;
+ 	const SDL_MouseButtonFlags buttons = SDL_GetMouseState(&xf, &yf);
+ 
++	/* C-style casts, not static_cast: this header is included from
++	 * rts/lib/headlessStubs/sdlstub.c, which is compiled as C. */
+ 	if (x != NULL)
+-		*x = static_cast<int>(xf);
++		*x = (int)xf;
+ 	if (y != NULL)
+-		*y = static_cast<int>(yf);
++		*y = (int)yf;
+ 
+ 	return buttons;
+ }
+diff --git a/rts/System/SpringHashMap.hpp b/rts/System/SpringHashMap.hpp
+index 1bf487a..8030133 100644
+--- a/rts/System/SpringHashMap.hpp
++++ b/rts/System/SpringHashMap.hpp
+@@ -6,6 +6,7 @@
+ 
+ #pragma once
+ 
++#include <algorithm> // fill_n
+ #include <cstdint>
+ #include <cstdlib>
+ #include <iterator>
+diff --git a/rts/System/SpringHashSet.hpp b/rts/System/SpringHashSet.hpp
+index 3375e12..eb2d753 100644
+--- a/rts/System/SpringHashSet.hpp
++++ b/rts/System/SpringHashSet.hpp
+@@ -6,6 +6,7 @@
+ 
+ #pragma once
+ 
++#include <algorithm> // fill_n
+ #include <cstdint>
+ #include <cstdlib> // malloc
+ #include <iterator>
+diff --git a/rts/builds/headless/CMakeLists.txt b/rts/builds/headless/CMakeLists.txt
+index 7a7a031..41cf515 100644
+--- a/rts/builds/headless/CMakeLists.txt
++++ b/rts/builds/headless/CMakeLists.txt
+@@ -11,6 +11,15 @@ add_definitions(-DHEADLESS)
+ add_definitions(-DNO_SOUND)
+ remove_definitions(-DAVI_CAPTURING)
+ 
++# create_headless_target_from() deliberately does not inherit COMPILE_DEFINITIONS
++# (see the NOTE below), so definitions added at the rts/ folder level are lost for
++# headless targets. STREFLOP_NEON is one of them: without it, ARM64 falls through
++# to the non-streflop branch of streflop_cond.h, which resolves math::sqrtf to
++# fastmath's SSE implementation and fails to compile on Apple Silicon.
++if (ENABLE_STREFLOP AND STREFLOP_NEON)
++	add_definitions(-DSTREFLOP_NEON)
++endif ()
++
+ set(OpenGL_GL_PREFERENCE LEGACY)
+ 
+ find_package(OpenGL 3.0 REQUIRED)
+@@ -33,6 +42,19 @@ endfunction()
+ 
+ # headlessstubs are our stubs that replace libGL, libGLU, libGLEW, libSDL (yes really!)
+ list(APPEND engineHeadlessLibraries headlessStubs)
++
++# MacSDL3EGLBridge.mm is part of the shared Mac platform source list, so it is
++# compiled into the headless engine as well and pulls in eglInitialize,
++# eglMakeCurrent and friends. Headless never creates a context, but the symbols
++# still have to resolve at link time.
++if (APPLE AND RECOIL_MACOS_SDL3_EGL)
++	list(APPEND engineHeadlessLibraries MesaEGL::EGL)
++endif ()
++
++# SpringApp parses command-line flags via gflags (google::ParseCommandLineFlags).
++# The dedicated build links gflags_nothreads_static explicitly; headless needs it
++# for the same reason.
++list(APPEND engineHeadlessLibraries gflags_nothreads_static)
+ list(APPEND engineHeadlessLibraries ${SPRING_SIM_LIBRARIES})
+ list(APPEND engineHeadlessLibraries engineSystemNet)
+ list(APPEND engineHeadlessLibraries ${engineCommonLibraries})
+@@ -62,7 +84,20 @@ target_link_libraries(GameHeadless PRIVATE
+ )
+ ### Build the executable
+ add_executable(engine-headless ${engineSources} ${ENGINE_ICON})
+-target_link_libraries(engine-headless no-sound ${engineHeadlessLibraries} GameHeadless no-sound)
++target_link_libraries(engine-headless no-sound ${engineHeadlessLibraries} GameHeadless no-sound fmt::fmt)
++
++if (APPLE AND RECOIL_MACOS_SDL3_EGL)
++	# MacSDL3EGLBridge.mm is in the shared Mac platform source list and so is
++	# compiled into the headless engine, bringing references to
++	# MTLCreateSystemDefaultDevice and CAMetalLayer. The rendering build links
++	# these frameworks for the same reason (rts/builds/legacy/CMakeLists.txt).
++	target_link_options(engine-headless PRIVATE
++		"SHELL:-framework Cocoa"
++		"SHELL:-framework Foundation"
++		"SHELL:-framework QuartzCore"
++		"SHELL:-framework Metal"
++	)
++endif ()
+ 
+ # Export symbols for plugin access (replaces CMP0065 OLD behavior)
+ set_target_properties(engine-headless PROPERTIES ENABLE_EXPORTS TRUE)
+diff --git a/rts/lib/CMakeLists.txt b/rts/lib/CMakeLists.txt
+index 74b8b28..cbfc558 100644
+--- a/rts/lib/CMakeLists.txt
++++ b/rts/lib/CMakeLists.txt
+@@ -60,6 +60,11 @@ SET(GFLAGS_BUILD_TESTING              FALSE)
+ SET(GFLAGS_INSTALL_HEADERS            FALSE)
+ SET(GFLAGS_INSTALL_SHARED_LIBS        FALSE)
+ SET(GFLAGS_INSTALL_STATIC_LIBS        FALSE)
++# Keep the legacy "google" namespace as primary. The engine calls
++# gflags::ParseCommandLineFlags(), which the generated headers alias to
++# google::, so a library built with "gflags" as the primary namespace links
++# against undefined google:: symbols.
++SET(NAMESPACE                         "google;gflags")
+ 
+ #Meh-meh
+ if (WIN32)
+diff --git a/rts/lib/headlessStubs/CMakeLists.txt b/rts/lib/headlessStubs/CMakeLists.txt
+index 43c24d3..e01eccf 100644
+--- a/rts/lib/headlessStubs/CMakeLists.txt
++++ b/rts/lib/headlessStubs/CMakeLists.txt
+@@ -1,10 +1,40 @@
+ SET(headlessStubsSources
+ 		"gladstub.cpp"
+-		"sdlstub.c"
+ 	)
+ 
+ find_package(SDL2 MODULE REQUIRED)
+ 
++# sdlstub.c hand-implements the SDL2 ABI so that headless builds need no SDL
++# library at all. That approach does not survive SDL3: the stub is written against
++# DECLSPEC, SDL_INIT_EVERYTHING, SDL_RWops, SDL_version and the 6-argument
++# SDL_CreateWindow, none of which exist in SDL3. Porting it would mean maintaining
++# ~80 hand-written stubs against a moving API.
++#
++# On the SDL3 path we link the real SDL3 instead and let its "dummy" video driver
++# provide the headless behaviour (SDL_VIDEODRIVER=dummy). GL is still stubbed by
++# gladstub.cpp, which is the part headless actually needs.
++if (APPLE AND RECOIL_MACOS_SDL3_EGL)
++	set(HEADLESS_USES_REAL_SDL TRUE)
++else()
++	set(HEADLESS_USES_REAL_SDL FALSE)
++	list(APPEND headlessStubsSources "sdlstub.c")
++endif()
++
++# gladstub.cpp reaches streflop_cond.h transitively, which on ARM64 needs
++# STREFLOP_NEON to avoid resolving math::sqrtf to the SSE implementation.
++# This target is built outside the headless folder, so it does not pick up the
++# definitions added in rts/builds/headless/CMakeLists.txt.
++if (ENABLE_STREFLOP AND STREFLOP_NEON)
++	add_definitions(-DSTREFLOP_NEON)
++endif ()
++
+ ADD_LIBRARY(headlessStubs STATIC EXCLUDE_FROM_ALL ${headlessStubsSources})
+-target_link_libraries(headlessStubs PUBLIC $<COMPILE_ONLY:SDL2::SDL2>)
++
++if (HEADLESS_USES_REAL_SDL)
++	# Link, not just compile against: the stub used to supply these symbols.
++	target_link_libraries(headlessStubs PUBLIC SDL2::SDL2)
++else()
++	target_link_libraries(headlessStubs PUBLIC $<COMPILE_ONLY:SDL2::SDL2>)
++endif()
++
+ SET_TARGET_PROPERTIES(headlessStubs PROPERTIES COMPILE_FLAGS "${PIC_FLAG}")
+diff --git a/rts/lib/headlessStubs/gladstub.cpp b/rts/lib/headlessStubs/gladstub.cpp
+index f34a055..b77e23b 100644
+--- a/rts/lib/headlessStubs/gladstub.cpp
++++ b/rts/lib/headlessStubs/gladstub.cpp
+@@ -967,4 +967,14 @@ int gladLoadGL(void) {
+     glad_glGetTextureSubImage = MakeStubImpl(glad_glGetTextureSubImage);
+ 
+     return 0;
+-}
+\ No newline at end of file
++}
++// The macOS SDL3/EGL bridge (rts/System/Platform/Mac/MacSDL3EGLBridge.mm) calls
++// gladLoadGLLoader() to resolve GL entry points through eglGetProcAddress. That
++// bridge is compiled into the headless build too, because it lives in the shared
++// Mac platform source list, so the symbol has to exist here.
++//
++// Headless never renders: every GL entry point is already replaced by a stub in
++// gladLoadGL(), so the loader argument is ignored and we simply delegate.
++extern "C" int gladLoadGLLoader(void* (*)(const char*)) {
++    return gladLoadGL();
++}
+diff --git a/test/CMakeLists.txt b/test/CMakeLists.txt
+index 099dc4d..9839bea 100644
+--- a/test/CMakeLists.txt
++++ b/test/CMakeLists.txt
+@@ -401,6 +401,11 @@ endif()
+ 		)
+ 	if (WIN32)
+ 		list(APPEND test_src "${ENGINE_SOURCE_DIR}/System/Platform/Win/CpuTopology.cpp")
++	elseif (APPLE)
++		# macOS is UNIX but not Linux; Linux/CpuTopology.cpp needs glibc's
++		# cpu_set_t. ${sources_engine_System_Threading} above already selects the
++		# Mac variant, so adding the Linux one here would also be a duplicate.
++		list(APPEND test_src "${ENGINE_SOURCE_DIR}/System/Platform/Mac/CpuTopology.cpp")
+ 	else (WIN32)
+ 		list(APPEND test_src "${ENGINE_SOURCE_DIR}/System/Platform/Linux/CpuTopology.cpp")
+ 	endif (WIN32)
+diff --git a/tools/unitsync/CMakeLists.txt b/tools/unitsync/CMakeLists.txt
+index 00f124f..8e07833 100644
+--- a/tools/unitsync/CMakeLists.txt
++++ b/tools/unitsync/CMakeLists.txt
+@@ -107,6 +107,15 @@ if (WIN32)
+ 	list(APPEND main_files "${ENGINE_SRC_ROOT}/System/Platform/Win/WinVersion.cpp")
+ 	list(APPEND main_files "${ENGINE_SRC_ROOT}/System/Platform/SharedLib.cpp")
+ 	list(APPEND main_files "${ENGINE_SRC_ROOT}/System/Platform/Win/DllLib.cpp")
++elseif (APPLE)
++	# macOS is UNIX but not Linux: Linux/CpuTopology.cpp uses cpu_set_t and
++	# sched_getaffinity, which are glibc-only. The engine already ships a Mac
++	# implementation (sources_engine_System_Threading_Mac in rts/System), and
++	# Linux/Hardware.cpp is portable enough to share, exactly as the engine's
++	# own Mac platform source list does.
++	list(APPEND main_files "${ENGINE_SRC_ROOT}/System/Platform/Mac/CpuTopology.cpp")
++	list(APPEND main_files "${ENGINE_SRC_ROOT}/System/Platform/Linux/Hardware.cpp")
++	list(APPEND main_files "${ENGINE_SRC_ROOT}/System/Platform/Mac/ThreadSupport.cpp")
+ else (WIN32)
+ 	list(APPEND main_files "${ENGINE_SRC_ROOT}/System/Platform/Linux/CpuTopology.cpp")
+ 	list(APPEND main_files "${ENGINE_SRC_ROOT}/System/Platform/Linux/Hardware.cpp")

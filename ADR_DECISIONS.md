@@ -1206,6 +1206,9 @@ input log against a fixed tick.
 
 ## ADR-031 — Beyond All Reason compatibility means content, not the Spring API
 
+**Superseded by ADR-132:** full BAR support uses an upstream-derived Recoil
+runtime, rather than reimplementing the Spring API in the FA simulation.
+
 **Context.** The engine already loads both families — Recoil maps and models, BAR
 blueprints, SupCom archives — with per-family semantics where they differ (the
 turnrate-per-frame discovery of milestone 16). "Usable for BAR" could mean two
@@ -4204,4 +4207,31 @@ is pure data and lives in `core/audio/Curve.hpp` so the synthesised cues (Cues.c
 and the bank's authored curves share one evaluator. XACT volume curves are still
 measured flat across retail weapon banks (Xsb.hpp:14-19), so the new wiring degrades to
 identity on real content — the shape is there when authored curves arrive.
+
+## ADR-132 — Two game runtimes share services, not simulation
+
+**Decision.** Keep FA's native simulation/Metal executable and BAR's
+upstream-derived Recoil runtime separate. Share `rm_foundation` immediately;
+extract neutral CPU content/render-data/audio and native Metal/platform libraries.
+Recoil retains BAR's scripting, simulation, UI, networking and graphics contract.
+
+**Boundary.** `rm_fa_*` owns gameplay and presentation. `rm_metal` still depends
+on FA presentation types; library extraction alone is not a game-neutral API.
+`recoil-bar` links only `rm_foundation`, then execs the pinned external engine.
+Neither runtime shares unit storage, numeric/tick rules, Lua state or replay format.
+Content remains externally mounted and must retain its original license.
+
+**Compatibility fixes.** Pin the real numeric upstream tag/history, not a raw
+Git hash masquerading as `Engine.versionMajor`. Mesa's native surface callback
+uses CALayer bounds/scale, and color blits/resolves preserve sampled RGBA instead
+of the donor fork's forced alpha-one output. RmlUI, MSAA and BAR assets stay intact.
+The launcher imports only the required EGL/driver libraries, not the GL interposer.
+
+**Verification (2026-10-10).** FA's 7,000-tick baseline and 6,000-tick FAF-AI
+run match their pre-extraction recordings, with byte-identical captures; native
+build-preview input passes. CTest has 2,077 passes and 36 asset-dependent skips.
+BAR's default and exported-bundle skirmish smokes pass visible final-frame,
+player MOVE/BUILD and actual SimpleAI construction assertions. The black-frame
+regression failed before the RGBA fix and passes after it. No public multiplayer,
+BAR-wide visual parity, or OS-level BAR input delivery claim is made.
 

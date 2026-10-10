@@ -1,0 +1,161 @@
+{
+  "format": 1,
+  "engine": {
+    "upstream_url": "https://github.com/beyond-all-reason/RecoilEngine.git",
+    "upstream_revision": "6ff25429f4de37a0761815602fb7b09299ab9ffb",
+    "numeric_release_tag": "2026.06.06",
+    "numeric_release_tag_object": "98a8ded339d63f9af789c433881203557994358b",
+    "numeric_release_commit": "74e145c7079c1e3a4d9fd5e17e3c8358325168bd",
+    "source_git_describe": "2026.06.06-81-g6ff2542",
+    "port_revision": "bba02dbb97238cc0b561e1147c203941de178a06",
+    "reported_version": "spring version 2026.06.06-81-g6ff2542 HEAD",
+    "source_artifact_relationship": "Built from the pinned upstream revision, verified numeric ancestor and captured macOS patch using AppleClang 21 on arm64. Binary/base hashes identify this baseline; no byte-identical cross-toolchain rebuild claim.",
+    "port_patch": "tools/bar-engine-macos.patch",
+    "port_patch_sha256": "1610732d78291dc54dbb269340e1ce3f8a95f1eb508895a37c9272bdefaefd3e",
+    "local_port_commits": [
+      "012f6d223ba8eff233784fbadacd9aba92ab8141",
+      "2151fa65077037df9806f73fc125ab1c121920f3",
+      "bba02dbb97238cc0b561e1147c203941de178a06"
+    ],
+    "sha256": "c5200e070f210cca51b0e99ea6f2d89ea8873b52fc417270c3eed4397d76c908",
+    "base": {
+      "sha256": "911f98f0424eb44dedddccda77253145a663b484127fb8f4e2e1d5cab00cb417",
+      "files": 4
+    },
+    "license": "GPL-2.0-or-later; see upstream COPYING/LICENSE"
+  },
+  "mesa": {
+    "url": "https://github.com/lucamignatti/mesa.git",
+    "revision": "919e1d923bd967154b87ebe01ba5ba88cc693c3d",
+    "port_patch": "tools/bar-mesa-surface.patch",
+    "port_patch_sha256": "9cb9edeca34adf03fcfe80b164b11dffa89e9ab3c57ef354fb2a9fb7cd8b65bc",
+    "rgba_patch": "tools/bar-render-msaa-alpha.patch",
+    "rgba_patch_sha256": "7be3c28fec7a7ef4b9267737b184e65796ca86e539b5b85f2835c8673d0a6339",
+    "libraries": {
+      "libEGL.1.dylib": "34c59cfb4cc99c91c370a0416930c420a59ec3daf544d7b512f4943fee03038e",
+      "libEGL.dylib": "34c59cfb4cc99c91c370a0416930c420a59ec3daf544d7b512f4943fee03038e",
+      "libGL.dylib": "c9731d304ad80d1e949322d283d191dee1fbe97dbc7f9264a2cab9893a492995",
+      "libGLESv1_CM.1.dylib": "e75c5f72a8fe8bae559ab52dd341d13bc00b7d32761ecb5d86c1753e30235904",
+      "libGLESv1_CM.dylib": "e75c5f72a8fe8bae559ab52dd341d13bc00b7d32761ecb5d86c1753e30235904",
+      "libGLESv2.2.dylib": "8110f04818110822b7c74ab274078bd958e3c8b6121885af7ea158b3005b576b",
+      "libGLESv2.dylib": "8110f04818110822b7c74ab274078bd958e3c8b6121885af7ea158b3005b576b",
+      "libgallium-26.1.0-devel.dylib": "2fffe55609defbcefb320d15145ea2bd9a48ec3124ef228b066480f93e7c86c0",
+      "libgl_interpose.dylib": "f8815927302f4ea4c3857b9cd1bf77a6e4b5d0cd89c3206e0243d363bac24754",
+      "libvulkan_kosmickrisp.dylib": "5e5dfa4e5d68b13dc311c959b70747911947fd99ebf0225f6d33c4b9b55de317"
+    },
+    "icd_sha256": "8d851f6a8fd4e396c3d1f105aa2ce08aba8cd02ab02e9b8fb33403447d38b85c",
+    "license": "MIT and component-specific permissive licenses; see upstream licenses/"
+  },
+  "game": {
+    "url": "https://github.com/beyond-all-reason/Beyond-All-Reason.git",
+    "revision": "fae345cdf11aef9a1b8d17ffa34413274aeb284a",
+    "tree": {
+      "sha256": "59ee5e87f4cf734ab3804f735f631356944a342d0469191fb3e0e45f15cb9884",
+      "files": 18319
+    },
+    "version": "Beyond All Reason $VERSION",
+    "ai": "SimpleAI",
+    "submodule_revision": "bd6ac7a1adb808c21b5a43b8c52172ff0473b422",
+    "submodule_initialized": false,
+    "license": "Mixed per-asset licenses and GPL Lua code; see BAR/LICENSE.md and license_*.txt. No game assets redistributed."
+  },
+  "font": {
+    "sha256": "8b1fb134c1ae1c4c8da1952e3c2535f7242899da21d556e9fd1d6fdf31af3242",
+    "license": "GNU FreeFont GPL with font exception; see Recoil cont/fonts/"
+  },
+  "default_map": {
+    "filename": "angel_crossing_1.4.sd7",
+    "name": "Angel Crossing 1.4",
+    "sha256": "7f8c5f5b07e0995ba2065467b4a827494f6f0b9ebb89908fe7fb94a1f4b39fbb",
+    "license": "External user-supplied map; not redistributed"
+  },
+  "dependencies": {
+    "libIL.dylib": {
+      "path": "/opt/homebrew/opt/devil/lib/libIL.dylib",
+      "sha256": "7a3b0a556d323da7c636baf29c1b75e986465433a34311ce8d7e0ddb5ba6122c"
+    },
+    "libLLVM.dylib": {
+      "path": "/opt/homebrew/opt/llvm/lib/libLLVM.dylib",
+      "sha256": "b502b2e9e95c1f32c54c4fa3a977b339bb14855747eae27859f588739d205a0b"
+    },
+    "libSDL3.0.dylib": {
+      "path": "/opt/homebrew/opt/sdl3/lib/libSDL3.0.dylib",
+      "sha256": "66a2b17bd086a0d4e061cd5c8dd86291c566ddd3c3faf894d6633ac6a4cdde1d"
+    },
+    "libSPIRV-Tools.dylib": {
+      "path": "/opt/homebrew/opt/spirv-tools/lib/libSPIRV-Tools.dylib",
+      "sha256": "d821f73e05e720e07805aec3d8120c67daec3de5a4bf281069c95d4d9b377404"
+    },
+    "libfontconfig.1.dylib": {
+      "path": "/opt/homebrew/Cellar/fontconfig/2.18.2/lib/libfontconfig.1.dylib",
+      "version": "fontconfig 2.18.2",
+      "sha256": "eb0749ca591fb9cc66a963f65f443f9cdb4f3ee15b5916c3d73716fa9eb56300"
+    },
+    "libfreetype.6.dylib": {
+      "path": "/opt/homebrew/opt/freetype/lib/libfreetype.6.dylib",
+      "sha256": "3e85a7f40549dc2d42d68fcd5b18eefd5a41079d1b5a5933888c585b8e1fed9e"
+    },
+    "libintl.8.dylib": {
+      "path": "/opt/homebrew/opt/gettext/lib/libintl.8.dylib",
+      "sha256": "0c6d618e75fea85cc3d631e164a71766fba9341d19ce1f723300c52e63037c51"
+    },
+    "libjasper.7.dylib": {
+      "path": "/opt/homebrew/opt/jasper/lib/libjasper.7.dylib",
+      "sha256": "ee7f67ace7bd03384aff940b2500700596b2c3b5700018c38c70d05c0a831572"
+    },
+    "libjpeg.8.dylib": {
+      "path": "/opt/homebrew/opt/jpeg-turbo/lib/libjpeg.8.dylib",
+      "sha256": "e17205913bfdb5535bbdbc7127d0eeb0970f5e6c85f68f0c75a1e711878e1e3a"
+    },
+    "liblcms2.2.dylib": {
+      "path": "/opt/homebrew/opt/little-cms2/lib/liblcms2.2.dylib",
+      "sha256": "faf9c8f2322a2bb47d04d3077a79cc7103fba68a186697cf91e5f6ef467d1b77"
+    },
+    "liblzma.5.dylib": {
+      "path": "/opt/homebrew/Cellar/xz/5.8.3/lib/liblzma.5.dylib",
+      "version": "xz 5.8.3",
+      "sha256": "3d5bfa2f097c31463642b1daab5e662b44368bb4da368f85e412e7f9adcbaa10"
+    },
+    "libminizip.1.dylib": {
+      "path": "/opt/homebrew/opt/minizip/lib/libminizip.1.dylib",
+      "sha256": "286edff93eefb9f943cac87584f4d0daf06eabf8e693f52a3958f6aa591b8994"
+    },
+    "libogg.0.dylib": {
+      "path": "/opt/homebrew/opt/libogg/lib/libogg.0.dylib",
+      "sha256": "5c34fd5e4637d0f5d2997f333e3b19d3f9583243673499f81ee7be7d0067b62c"
+    },
+    "libopenal.1.dylib": {
+      "path": "/opt/homebrew/opt/openal-soft/lib/libopenal.1.dylib",
+      "sha256": "7e02c3c4e69f2ad470aa926c2b2642f5300677cb1693cad836dd0a93e9a2818a"
+    },
+    "libpng16.16.dylib": {
+      "path": "/opt/homebrew/Cellar/libpng/1.6.58/lib/libpng16.16.dylib",
+      "version": "libpng 1.6.58",
+      "sha256": "ed50e7c1582d94c40489a37097cbb2fcea81e5450173ee9bbe2871cbfdea27eb"
+    },
+    "libtiff.6.dylib": {
+      "path": "/opt/homebrew/opt/libtiff/lib/libtiff.6.dylib",
+      "sha256": "168c75754e1cb9ac3ee714103df24e35e510106cf9fe9a4499c3bcfbb330ae4c"
+    },
+    "libvorbis.0.dylib": {
+      "path": "/opt/homebrew/Cellar/libvorbis/1.3.7/lib/libvorbis.0.dylib",
+      "sha256": "38df2463cc776f5a4dd58331e0abb46dba0a143b65e345ece328ea61978dd795"
+    },
+    "libvorbisfile.3.dylib": {
+      "path": "/opt/homebrew/opt/libvorbis/lib/libvorbisfile.3.dylib",
+      "sha256": "182caefbd3eec6f61e513900b5f9c4a796c83048aa0d1a882e30c232d248cb35"
+    },
+    "libvulkan.1.dylib": {
+      "path": "/opt/homebrew/opt/vulkan-loader/lib/libvulkan.1.dylib",
+      "sha256": "52861d3f339401cf4b1e0e8e66ce103de1a51b7eedc9a21aadd9de87040b3c5d"
+    },
+    "libz3.4.16.dylib": {
+      "path": "/opt/homebrew/opt/z3/lib/libz3.4.16.dylib",
+      "sha256": "ff9f9462f03e4f2b8871b59ef50da0ddd0bd19f5ebc85f6c2812e47bd5051834"
+    },
+    "libzstd.1.dylib": {
+      "path": "/opt/homebrew/opt/zstd/lib/libzstd.1.dylib",
+      "sha256": "e2847c4613b386683c234913ae3b7b04299254096caf7616e3b3cd9bb97a39ab"
+    }
+  }
+}
