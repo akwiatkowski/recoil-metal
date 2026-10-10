@@ -155,20 +155,88 @@
  			depthBufferCopy->MakeDepthBufferCopy();
  		}
  		{
-@@ -365,7 +378,12 @@
+@@ -365,13 +378,26 @@
  	{
  		SCOPED_TIMER("Draw::World::Models::Opaque");
  		SCOPED_GL_DEBUGGROUP("Draw::World::Models::Opaque");
 -		unitDrawer->Draw(false);
+-		featureDrawer->Draw(false);
 +#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
-+		if (NativeMetalWorld::Enabled())
++		if (NativeMetalWorld::Enabled()) {
 +			NativeMetalWorld::DrawUnits();
-+		else
++			NativeMetalWorld::DrawFeatures();
++		} else
 +#endif
++		{
 +			unitDrawer->Draw(false);
- 		featureDrawer->Draw(false);
++			featureDrawer->Draw(false);
++		}
  	}
  	{
+ 		SCOPED_TIMER("Draw::World::Models::Projectiles");
+ 		SCOPED_GL_DEBUGGROUP("Draw::World::Models::Projectiles");
+-		projectileDrawer->DrawOpaque(false);
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++		if (NativeMetalWorld::Enabled())
++			NativeMetalWorld::DrawProjectiles();
++		else
++#endif
++			projectileDrawer->DrawOpaque(false);
+ 	}
+ 	{
+ 		SCOPED_TIMER("Draw::OpaqueObjects::Debug");
+@@ -406,8 +432,16 @@
+ 		}
+ 
+ 		// draw alpha-objects below water surface (farthest)
+-		unitDrawer->DrawAlphaPass(false);
+-		featureDrawer->DrawAlphaPass(false);
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++		if (NativeMetalWorld::Enabled()) {
++			NativeMetalWorld::DrawAlphaUnits(hasWaterRendering ? 1 : 0);
++			NativeMetalWorld::DrawAlphaFeatures(hasWaterRendering ? 1 : 0);
++		} else
++#endif
++		{
++			unitDrawer->DrawAlphaPass(false);
++			featureDrawer->DrawAlphaPass(false);
++		}
+ 	}
+ 	{
+ 		SCOPED_TIMER("Draw::World::Particles");
+@@ -431,7 +465,12 @@
+ 			ZoneScopedN("Draw::World::Water::UpdateWater");
+ 			water->UpdateWater(game);
+ 		}
+-		water->Draw();
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++		if (NativeMetalWorld::Enabled())
++			NativeMetalWorld::DrawWater();
++		else
++#endif
++			water->Draw();
+ 		eventHandler.DrawWaterPost();
+ 	}
+ 
+@@ -445,8 +484,16 @@
+ 		glEnable(GL_CLIP_PLANE3);
+ 
+ 		// draw alpha-objects above water surface (closest)
+-		unitDrawer->DrawAlphaPass(false);
+-		featureDrawer->DrawAlphaPass(false);
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++		if (NativeMetalWorld::Enabled()) {
++			NativeMetalWorld::DrawAlphaUnits(2);
++			NativeMetalWorld::DrawAlphaFeatures(2);
++		} else
++#endif
++		{
++			unitDrawer->DrawAlphaPass(false);
++			featureDrawer->DrawAlphaPass(false);
++		}
+ 	}
+ 	{
+ 		SCOPED_TIMER("Draw::World::Particles");
 --- a/rts/Rendering/Units/UnitDrawer.cpp
 +++ b/rts/Rendering/Units/UnitDrawer.cpp
 @@ -22,6 +22,7 @@
@@ -189,6 +257,16 @@
  	return true;
  }
  
+@@ -912,6 +916,9 @@
+ 	if (!drawGhostBuildingsPass && !ShouldDrawAlphaUnit(unit, thisPassMask))
+ 		return;
+ 
++	if (!drawGhostBuildingsPass && NativeMetalWorld::QueueAlphaUnit(unit))
++		return;
++
+ 	const unsigned short losStatus = unit->losStatus[gu->myAllyTeam];
+ 
+ 	if (drawGhostBuildingsPass) {
 --- a/rts/Rendering/Units/UnitDrawer.h
 +++ b/rts/Rendering/Units/UnitDrawer.h
 @@ -5,6 +5,7 @@
@@ -209,12 +287,132 @@
  	}
  	void DrawAlphaPass(bool drawReflection, bool drawRefraction = false) const override {
  		DrawAlphaPassImpl<LuaObjType::LUAOBJ_UNIT>(drawReflection, drawRefraction);
+--- a/rts/Rendering/Features/FeatureDrawer.h
++++ b/rts/Rendering/Features/FeatureDrawer.h
+@@ -7,6 +7,7 @@
+ #include "Game/Camera.h"
+ #include "Rendering/Models/ModelRenderContainer.h"
+ #include "Rendering/Common/ModelDrawer.h"
++#include "Rendering/NativeMetalWorld.h"
+ #include "Rendering/Features/FeatureDrawerData.h"
+ 
+ class CFeature;
+@@ -49,7 +50,9 @@
+ {
+ public:
+ 	void DrawOpaquePass(bool deferredPass, bool drawReflection, bool drawRefraction) const override {
++		const bool previous = NativeMetalWorld::SetUnitPass(!deferredPass && !drawReflection && !drawRefraction);
+ 		DrawOpaquePassImpl<LuaObjType::LUAOBJ_FEATURE>(deferredPass, drawReflection, drawRefraction);
++		NativeMetalWorld::SetUnitPass(previous);
+ 	}
+ 	void DrawAlphaPass(bool drawReflection, bool drawRefraction = false) const override {
+ 		DrawAlphaPassImpl<LuaObjType::LUAOBJ_FEATURE>(drawReflection, drawRefraction);
+--- a/rts/Rendering/Features/FeatureDrawer.cpp
++++ b/rts/Rendering/Features/FeatureDrawer.cpp
+@@ -16,6 +16,7 @@
+ #include "Rendering/GL/myGL.h"
+ #include "Rendering/GL/RenderBuffers.h"
+ #include "Rendering/LuaObjectDrawer.h"
++#include "Rendering/NativeMetalWorld.h"
+ #include "Rendering/ShadowHandler.h"
+ #include "Rendering/Shaders/Shader.h"
+ #include "Rendering/Common/ModelDrawerHelpers.h"
+@@ -272,6 +273,9 @@
+ 	if (!ShouldDrawOpaqueFeature(f, thisPassMask))
+ 		return;
+ 
++	if (NativeMetalWorld::QueueFeature(f))
++		return;
++
+ 	// draw the unit with the default (non-Lua) material
+ 	SetTeamColor(f->team);
+ 	DrawFeatureTrans(f, 0, 0, false, false);
+@@ -283,6 +287,9 @@
+ 	if (!ShouldDrawAlphaFeature(f, thisPassMask))
+ 		return;
+ 
++	if (NativeMetalWorld::QueueAlphaFeature(f))
++		return;
++
+ 	SetTeamColor(f->team, IModelDrawerState::alphaValues.x);
+ 	DrawFeatureTrans(f, 0, 0, false, false);
+ }
+@@ -361,6 +368,9 @@
+ 			if (!ShouldDrawOpaqueFeature(o, thisPassMask))
+ 				continue;
+ 
++			if (NativeMetalWorld::QueueFeature(o))
++				continue;
++
+ 			smv.AddToSubmission(o);
+ 		}
+ 
+@@ -398,6 +408,9 @@
+ 			if (!ShouldDrawAlphaFeature(o, thisPassMask))
+ 				continue;
+ 
++			if (NativeMetalWorld::QueueAlphaFeature(o))
++				continue;
++
+ 			smv.AddToSubmission(o);
+ 		}
+ 
+--- a/rts/Rendering/Env/Particles/ProjectileDrawer.cpp
++++ b/rts/Rendering/Env/Particles/ProjectileDrawer.cpp
+@@ -15,6 +15,7 @@
+ #include "Rendering/GlobalRendering.h"
+ #include "Rendering/ShadowHandler.h"
+ #include "Rendering/Units/UnitDrawer.h"
++#include "Rendering/NativeMetalWorld.h"
+ #include "Rendering/Env/ISky.h"
+ #include "Rendering/GL/FBO.h"
+ #include "Rendering/GL/SubState.h"
+@@ -726,6 +727,9 @@
+ 				if (!ShouldDrawProjectile(p, thisPassMask))
+ 					continue;
+ 
++				if (NativeMetalWorld::QueueProjectile(p, modelType))
++					continue;
++
+ 				DrawProjectileModel(p);
+ 			}
+ 
+--- a/rts/Rendering/Env/BumpWater.h
++++ b/rts/Rendering/Env/BumpWater.h
+@@ -39,6 +39,25 @@
+ 	void Draw() override;
+ 	WATER_RENDERER GetID() const override { return WATER_RENDERER_BUMPMAPPED; }
+ 
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++	// Native Metal surface pass borrows these GL textures; generation
++	// (reflection/refraction/depth copies, wave updates) stays compat.
++	GLuint GetNormalTexture() const { return normalTexture; }
++	GLuint GetFoamTexture() const { return foamTexture; }
++	GLuint GetReflectTexture() const { return reflectTexture; }
++	GLuint GetRefractTexture() const { return refractTexture; }
++	GLuint GetCoastTexture() const { return coastTexture; }
++	GLuint GetDepthCopyTexture() const { return depthTexture; }
++	GLuint GetWaveRandTexture() const { return waveRandTexture; }
++	GLuint GetCausticTexture(size_t frame) const { return caustTextures.empty() ? 0 : caustTextures[frame % caustTextures.size()]; }
++	bool HasReflection() const { return reflection > 0; }
++	bool HasRefraction() const { return refraction > 0; }
++	bool HasShoreWaves() const { return shoreWaves; }
++	bool HasDepthCopy() const { return depthCopy; }
++	bool HasBlurReflection() const { return blurRefl; }
++	bool IsEndlessOcean() const { return endlessOcean; }
++#endif
++
+ 	bool CanDrawReflectionPass() const override { return true; }
+ 	bool CanDrawRefractionPass() const override { return true; }
+ private:
 --- a/rts/Rendering/NativeMetalWorld.h
 +++ b/rts/Rendering/NativeMetalWorld.h
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,38 @@
 +#pragma once
 +
 +class CUnit;
++class CFeature;
++class CProjectile;
 +class CSMFReadMap;
 +class CSMFGroundTextures;
 +
@@ -223,20 +421,34 @@
 +	bool Enabled();
 +	void DrawTerrain(CSMFReadMap& map, CSMFGroundTextures& textures);
 +	void DrawUnits();
++	void DrawFeatures();
++	void DrawProjectiles();
++	void DrawAlphaUnits(int clip);
++	void DrawWater();
++	void DrawAlphaFeatures(int clip);
++	void DrawWater();
 +	// Called only after the engine's opaque visibility and Lua-material decisions.
 +	bool SetUnitPass(bool forward);
 +	bool QueueUnit(CUnit* unit);
++	bool QueueFeature(CFeature* feature);
++	bool QueueProjectile(CProjectile* projectile, int modelType);
++	bool QueueAlphaUnit(CUnit* unit);
++	bool QueueAlphaFeature(CFeature* feature);
 +	void Kill();
 +#else
 +	inline bool Enabled() { return false; }
 +	inline bool QueueUnit(CUnit*) { return false; }
++	inline bool QueueFeature(CFeature*) { return false; }
++	inline bool QueueProjectile(CProjectile*, int) { return false; }
++	inline bool QueueAlphaUnit(CUnit*) { return false; }
++	inline bool QueueAlphaFeature(CFeature*) { return false; }
 +	inline bool SetUnitPass(bool) { return false; }
 +	inline void Kill() {}
 +#endif
 +}
 --- a/rts/Rendering/NativeMetalWorld.mm
 +++ b/rts/Rendering/NativeMetalWorld.mm
-@@ -0,0 +1,558 @@
+@@ -0,0 +1,1453 @@
 +/* This file is part of the Spring engine (GPL v2 or later), see LICENSE.html */
 +#include "Rendering/NativeMetalWorld.h"
 +
@@ -247,6 +459,7 @@
 +#include <array>
 +#include <cstring>
 +#include <dlfcn.h>
++#include <type_traits>
 +#include <memory>
 +#include <unordered_map>
 +#include <vector>
@@ -259,15 +472,28 @@
 +#include "Rendering/Env/ISky.h"
 +#include "Rendering/Env/MapRendering.h"
 +#include "Rendering/Env/SunLighting.h"
++#include "Rendering/Env/BumpWater.h"
++#include "Rendering/Env/WaterRendering.h"
++#include "Rendering/Map/InfoTexture/IInfoTextureHandler.h"
++#include "Map/Ground.h"
++#include "Sim/Misc/GlobalSynced.h"
 +#include "Rendering/GL/myGL.h"
++#include "Rendering/ShadowHandler.h"
 +#include "Rendering/GlobalRendering.h"
 +#include "Rendering/Models/3DModel.hpp"
 +#include "Rendering/Models/3DModelPiece.hpp"
 +#include "Rendering/Textures/S3OTextureHandler.h"
 +#include "Rendering/Units/UnitDrawer.h"
++#include "Rendering/Common/ModelDrawerState.hpp"
++#include "Rendering/Features/FeatureDrawer.h"
++#include "Rendering/Env/Particles/ProjectileDrawer.h"
++#include "Sim/Projectiles/Projectile.h"
++#include "Sim/Projectiles/WeaponProjectiles/WeaponProjectile.h"
 +#include "Sim/Misc/Team.h"
 +#include "Sim/Misc/TeamHandler.h"
 +#include "Sim/Units/Unit.h"
++#include "Sim/Features/Feature.h"
++#include "Sim/Features/FeatureDef.h"
 +#include "Sim/Units/UnitDef.h"
 +#include "System/Config/ConfigHandler.h"
 +#include "System/Exceptions.h"
@@ -310,7 +536,29 @@
 +	float specular[4];
 +	float fogColor[4];
 +	float fog[4]; // start, end, GL zero-to-one, alpha discard threshold
++	float shadowMatrix[16];
++	float shadow[4]; // density, depth bias, enabled, reserved
 +};
++struct alignas(16) WaterU {
++	float surfaceColor[4];
++	float diffuseColor[4];
++	float specularColor[4];
++	float paramsA[4];
++	float paramsB[4];
++	float paramsC[4];
++	float paramsD[4];
++	float paramsE[4];
++	float eyePos[4];
++	float sunDir[4];
++	float mapMid[4];
++	float texGenPlane[4];
++	float shadingPlane[4];
++	float screen[4];
++	float viewPos[4];
++	float fog[4];
++	float shadowMatrix[16];
++};
++static_assert(sizeof(WaterU) == 16 * 16 + 64);
 +struct alignas(16) Draw {
 +	float world[16];
 +	float team[4];
@@ -322,19 +570,20 @@
 +	float uv[2];
 +};
 +static_assert(sizeof(Vertex) == 32);
-+static_assert(sizeof(Scene) == 176);
++static_assert(sizeof(Scene) == 256);
 +static_assert(sizeof(Draw) == 96);
 +// Dynamic per-draw uniforms use one persistent shared buffer, with aligned
 +// offsets. Immutable indices/model geometry are uploaded only on first use.
 +constexpr size_t DRAW_STRIDE = 256;
 +constexpr unsigned TILE_SIZE = CSMFReadMap::bigSquareSize;
 +
-+constexpr const char* metalSource = R"MSL(
-+#include <metal_stdlib>
++constexpr const char* metalSource = R"MSL(#include <metal_stdlib>
 +using namespace metal;
 +struct Scene {
 +    float4x4 viewProjection;
 +    float4 eye, sun, ambient, diffuse, specular, fogColor, fog;
++    float4x4 shadowMatrix;
++    float4 shadow; // density, bias, enabled, reserved
 +};
 +struct Draw { float4x4 world; float4 team, tile; };
 +struct Vertex { packed_float3 position, normal; packed_float2 uv; };
@@ -386,6 +635,17 @@
 +    r.uv = float2(v.uv);
 +    return r;
 +}
++float shadowed(float3 world, constant Scene& s,
++                   depth2d<float> shadowTex, sampler shadowSampler) {
++    if (s.shadow.z < 0.5) return 1.0;
++    float4 sc = s.shadowMatrix * float4(world, 1.0);
++    float3 coord = sc.xyz / max(sc.w, 0.0001);
++    // Outside the shadow map: lit (matches compat border clamp to white).
++    if (coord.x < 0.0 || coord.x > 1.0 || coord.y < 0.0 || coord.y > 1.0 || coord.z > 1.0)
++        return 1.0;
++    float lit = shadowTex.sample_compare(shadowSampler, coord.xy, coord.z - s.shadow.y);
++    return mix(1.0, lit, s.shadow.x);
++}
 +float3 fogged(float3 rgb, float3 world, constant Scene& s) {
 +    float distance = length(world - s.eye.xyz);
 +    float f = clamp((s.fog.y - distance) / max(s.fog.y - s.fog.x, 0.0001), 0.0, 1.0);
@@ -394,18 +654,31 @@
 +fragment float4 terrainFragment(Raster r [[stage_in]],
 +                               constant Scene& s [[buffer(1)]],
 +                               texture2d<float> tile [[texture(0)]],
-+                               sampler filtering [[sampler(0)]]) {
++                               depth2d<float> shadowTex [[texture(3)]],
++                               sampler filtering [[sampler(0)]],
++                               sampler shadowSampler [[sampler(3)]]) {
 +    float4 texel = tile.sample(filtering, r.uv);
 +    if (s.fog.w >= 0.0 && texel.a <= s.fog.w) discard_fragment();
 +    float light = max(dot(normalize(r.normal), normalize(s.sun.xyz)), 0.0);
-+    return float4(fogged(texel.rgb * (s.ambient.rgb + s.diffuse.rgb * light), r.world, s), 1.0);
++    float shade = shadowed(r.world, s, shadowTex, shadowSampler);
++    return float4(fogged(texel.rgb * (s.ambient.rgb + s.diffuse.rgb * light * shade), r.world, s), 1.0);
++}
++float clipAlpha(float3 world, constant Scene& s) {
++    // Compat GL_CLIP_PLANE3 model-space water clipping: below keeps y<=0,
++    // above keeps y>=0. Encoded in s.shadow.w to avoid growing Scene.
++    if (s.shadow.w < 0.5) return 1.0;
++    bool below = s.shadow.w < 1.5;
++    if (below ? (world.y > 0.0) : (world.y < 0.0)) discard_fragment();
++    return 1.0;
 +}
 +fragment float4 unitFragment(Raster r [[stage_in]],
 +                            constant Scene& s [[buffer(1)]],
 +                            constant Draw& d [[buffer(2)]],
 +                            texture2d<float> tex1 [[texture(0)]],
 +                            texture2d<float> tex2 [[texture(1)]],
-+                            sampler filtering [[sampler(0)]]) {
++                            depth2d<float> shadowTex [[texture(3)]],
++                            sampler filtering [[sampler(0)]],
++                            sampler shadowSampler [[sampler(3)]]) {
 +    float4 base = tex1.sample(filtering, r.uv);
 +    float4 extra = tex2.sample(filtering, r.uv);
 +    if (extra.a < 0.5) discard_fragment();
@@ -416,9 +689,256 @@
 +    float h = max(dot(n, normalize(l + v)), 0.0);
 +    float specular = min(pow(h, 2.5 * s.specular.w) + 0.3 * pow(h, 6.0), 1.0) * extra.g * 4.0;
 +    float3 rgb = mix(base.rgb, d.team.rgb, base.a);
-+    rgb = rgb * (s.ambient.rgb + s.diffuse.rgb * diffuse + extra.rrr) + s.specular.rgb * specular;
++    float shade = shadowed(r.world, s, shadowTex, shadowSampler);
++    rgb = rgb * (s.ambient.rgb + s.diffuse.rgb * diffuse * shade + extra.rrr) + s.specular.rgb * specular * shade;
 +    return float4(fogged(rgb, r.world, s), 1.0);
 +}
++fragment float4 unitAlphaFragment(Raster r [[stage_in]],
++                            constant Scene& s [[buffer(1)]],
++                            constant Draw& d [[buffer(2)]],
++                            texture2d<float> tex1 [[texture(0)]],
++                            texture2d<float> tex2 [[texture(1)]],
++                            depth2d<float> shadowTex [[texture(3)]],
++                            sampler filtering [[sampler(0)]],
++                            sampler shadowSampler [[sampler(3)]]) {
++    clipAlpha(r.world, s);
++    float4 base = tex1.sample(filtering, r.uv);
++    float4 extra = tex2.sample(filtering, r.uv);
++    if (extra.a < 0.5) discard_fragment();
++    float3 n = normalize(r.normal);
++    float3 l = normalize(s.sun.xyz);
++    float3 v = normalize(s.eye.xyz - r.world);
++    float diffuse = max(dot(n, l), 0.0);
++    float h = max(dot(n, normalize(l + v)), 0.0);
++    float specular = min(pow(h, 2.5 * s.specular.w) + 0.3 * pow(h, 6.0), 1.0) * extra.g * 4.0;
++    float3 rgb = mix(base.rgb, d.team.rgb, base.a);
++    float shade = shadowed(r.world, s, shadowTex, shadowSampler);
++    rgb = rgb * (s.ambient.rgb + s.diffuse.rgb * diffuse * shade + extra.rrr) + s.specular.rgb * specular * shade;
++    // Compat alpha pass modulates team-color opacity (alphaValues); the base
++    // texture alpha already selected team vs diffuse above.
++    return float4(fogged(rgb, r.world, s), d.team.a);
++}
++// ---- BumpWater surface port (GLSL/BumpWaterVS.glsl + BumpWaterFS.glsl) ----
++// opt_* defines are injected per live flags; all numeric params are uniforms.
++struct WaterU {
++    float4 surfaceColor;   // rgb + alpha
++    float4 diffuseColor;   // rgb + diffuseFactor*15
++    float4 specularColor;  // rgb + specularPower
++    float4 paramsA;        // ambientFactor, specularFactor, fresnelMin, fresnelMax
++    float4 paramsB;        // fresnelPower, reflDistortion, blurBase, blurExponent
++    float4 paramsC;        // perlinStartFreq, perlinLacunarity, perlinAmp, waveOffsetFactor
++    float4 paramsD;        // waveLength, waveFoamDistortion, waveFoamIntensity, causticsResolution
++    float4 paramsE;        // causticsStrength, shadowDensity, frame, blurReflectionOn
++    float4 eyePos;
++    float4 sunDir;
++    float4 mapMid;
++    float4 texGenPlane;    // 1/mapX, 1/mapZ, scaleX/mapX, scaleZ/mapZ
++    float4 shadingPlane;   // shadingX/mapX, shadingZ/mapZ, shadingX, shadingZ
++    float4 screen;         // screenInvX, screenInvY, texSizeInvX, texSizeInvY
++    float4 viewPos;        // viewPosX, viewPosY, projM14, projM10
++    float4 fog;            // fogColor rgb + fogEnd, fogScale
++    float4x4 shadowMatrix;
++};
++struct WaterPos { packed_float3 pos; };
++struct WaterRaster {
++    float4 position [[position]];
++    float3 eyeVec, ligVec, worldPos;
++    float4 tc0, tc1, tc2, tc3, tc4, tc5;
++    float fogZ;
++};
++vertex WaterRaster waterVert(uint vid [[vertex_id]],
++                              const device WaterPos* verts [[buffer(0)]],
++                              constant Scene& s [[buffer(1)]],
++                              constant WaterU& w [[buffer(3)]]) {
++    float3 pos = float3(verts[vid].pos);
++    float4 pos4 = float4(pos, 1.0);
++    float4 tc0 = float4(w.texGenPlane.x * pos4.x, w.texGenPlane.y * pos4.z,
++                        w.texGenPlane.z * pos4.x, w.texGenPlane.w * pos4.z);
++    WaterRaster r;
++    r.tc0 = tc0;
++    r.tc5 = float4(0.0); r.tc5.xy = float2(w.shadingPlane.x * pos4.x, w.shadingPlane.y * pos4.z);
++    float fstart = w.paramsC.x;
++    float f = w.paramsC.y;
++    r.tc1.xy = (float2(-1.0,-1.0) + tc0.zw + 0.75) * fstart       + w.paramsE.z * float2(15.0, 15.0);
++    r.tc1.zw = (float2(-1.0, 1.0) + tc0.zw + 0.50) * fstart*f     - w.paramsE.z * float2(15.0, 15.0);
++    r.tc2.xy = (float2( 1.0,-1.0) + tc0.zw + 0.25) * fstart*f*f   + w.paramsE.z * float2(15.0, 15.0);
++    r.tc2.zw = (float2( 1.0, 1.0) + tc0.zw + 0.00) * fstart*f*f*f - w.paramsE.z * float2(15.0, 15.0);
++    r.tc3.xy = tc0.zw * 160.0 + w.paramsE.z * 2.5;
++    r.tc3.zw = tc0.zw * 90.0  - w.paramsE.z * 2.0;
++    r.tc4.xy = tc0.zw * 2.0;
++    r.tc4.zw = tc0.zw * 6.0 + w.paramsE.z * 0.37;
++    float3 wave = pos;
++    wave.y = 3.0 * (cos(w.paramsE.z * 500.0 + pos4.z) * sin(w.paramsE.z * 500.0 + pos4.x / 1000.0));
++    r.eyeVec = w.eyePos.xyz - wave;
++    r.ligVec = normalize(w.sunDir.xyz * 20000.0 + w.mapMid.xyz - wave);
++    r.worldPos = wave;
++    float4 clip = s.viewProjection * float4(wave, 1.0);
++    clip.y = -clip.y;
++    if (s.fog.z == 0.0) clip.z = (clip.z + clip.w) * 0.5;
++    r.position = clip;
++    r.fogZ = (s.viewProjection * float4(wave, 1.0)).z;
++    return r;
++}
++float waterShadow(float3 worldPos, constant WaterU& w, constant Scene& s,
++                  depth2d<float> shadowTex, sampler shadowSampler, texture2d<float> shadowColor, sampler samp) {
++#ifdef OPT_SHADOWS
++    float4 sp = s.shadowMatrix * float4(worldPos, 1.0);
++    sp.xy += float2(0.5, 0.5);
++    float3 ndc = sp.xyz / max(sp.w, 0.0001);
++    if (ndc.x < 0.0 || ndc.x > 1.0 || ndc.y < 0.0 || ndc.y > 1.0) return 1.0;
++    float sh = shadowTex.sample_compare(shadowSampler, ndc.xy, ndc.z - 0.0015);
++    float3 shColor = shadowColor.sample(samp, ndc.xy).rgb;
++    return mix(1.0, sh, w.paramsE.y) * (shColor.r + shColor.g + shColor.b) / 3.0;
++#endif
++    return 1.0;
++}
++float ConvertEyeZ(float d, constant WaterU& w) {
++    return w.viewPos.z / (d * -2.0 + 1.0 - w.viewPos.w);
++}
++fragment float4 waterFragment(WaterRaster r [[stage_in]],
++                              constant Scene& s [[buffer(1)]],
++                              constant WaterU& w [[buffer(3)]],
++                              texture2d<float> normalTex [[texture(0)]],
++                              texture2d<float> shadeTex [[texture(1)]],
++                              texture2d<float> causticTex [[texture(2)]],
++                              texture2d<float> foamTex [[texture(3)]],
++                              texture2d<float> reflectTex [[texture(4)]],
++                              texture2d<float> refractTex [[texture(5)]],
++                              texture2d<float> coastTex [[texture(6)]],
++                              texture2d<float> depthTex [[texture(7)]],
++                              texture2d<float> waverandTex [[texture(8)]],
++                              depth2d<float> shadowTex [[texture(9)]],
++                              texture2d<float> infoTex [[texture(10)]],
++                              texture2d<float> shadowColorTex [[texture(11)]],
++                              sampler samp [[sampler(0)]],
++                              sampler shadowSamp [[sampler(3)]]) {
++    float2 screenPos = r.position.xy - w.viewPos.xy;
++    float2 screencoord = screenPos * w.screen.zw;
++    float2 reftexcoord = screenPos * w.screen.xy;
++    // water depth
++    float invwaterdepth = shadeTex.sample(samp, r.tc0.xy).a;
++    float outside = 0.0;
++#ifdef OPT_ENDLESS
++    float2 clampedWP = clamp(r.worldPos.xz, float2(0.0), float2(1.0) / w.texGenPlane.xy);
++    outside = min(1.0, distance(clampedWP, r.worldPos.xz));
++    invwaterdepth = mix(invwaterdepth, 1.0, step(0.5, outside));
++#endif
++    float waterdepth = 1.0 - invwaterdepth;
++    // normal octaves
++    float3 o1 = normalTex.sample(samp, r.tc1.xy).rgb;
++    float3 o2 = normalTex.sample(samp, r.tc1.zw).rgb;
++    float3 o3 = normalTex.sample(samp, r.tc2.xy).rgb;
++    float3 o4 = normalTex.sample(samp, r.tc2.zw).rgb;
++    float a = w.paramsC.z;
++    float3 normal = normalize(((o1*2.0-1.0)*a + (o2*2.0-1.0)*a*a + (o3*2.0-1.0)*a*a*a + (o4*2.0-1.0)*a*a*a*a).xzy);
++    float3 eVec = normalize(r.eyeVec);
++    float eyeNormalCos = dot(-eVec, normal);
++    float angle = 1.0 - abs(eyeNormalCos);
++    float shadowOcc = waterShadow(r.worldPos + float3(normal.x, 0.0, normal.z) * 10.0, w, s, shadowTex, shadowSamp, shadowColorTex, samp);
++    float3 reflectDir = reflect(normalize(-r.ligVec), normal);
++#ifdef OPT_DEPTH
++    float fragEyeZ = w.viewPos.z / (r.position.z * -2.0 + 1.0 - w.viewPos.w);
++    float shallowScale = clamp(abs(ConvertEyeZ(depthTex.sample(samp, screencoord).r, w) - fragEyeZ) * 0.333, 0.0, 1.0);
++#else
++    float shallowScale = waterdepth;
++#endif
++    float specular = angle * pow(max(dot(reflectDir, eVec), 0.0), w.specularColor.w) * w.paramsA.y * shallowScale;
++    float3 sunLow = w.sunDir.xyz * float3(1.0, 0.1, 1.0);
++    float diffuse = pow(max(dot(normal, sunLow), 0.0), 3.0) * w.diffuseColor.w;
++    float ambient = smoothstep(-1.3, 0.0, eyeNormalCos) * w.paramsA.x;
++    float3 waterSurface = w.surfaceColor.rgb + w.diffuseColor.rgb * diffuse + float3(ambient);
++    float surfaceMix = (w.surfaceColor.a + diffuse) * shallowScale;
++    float3 info = float3(0.0);
++#ifdef OPT_INFOTEX
++    float2 clampedPot = w.shadingPlane.xy * clamp(r.worldPos.xz, float2(0.0), float2(1.0) / w.texGenPlane.xy);
++    info = (infoTex.sample(samp, clampedPot).rgb - 0.5) * 0.5;
++    info = mix(info, float3(0.0), outside);
++#endif
++    waterSurface += info;
++    float3 rgb;
++    float alpha = 1.0;
++#ifdef OPT_REFRACTION
++    float refractDistortion = 60.0 * (1.0 - pow(r.position.z, 80.0)) * shallowScale;
++    float2 refrUV = screencoord + normal.xz * refractDistortion * w.screen.xy;
++    float3 refrColor = refractTex.sample(samp, refrUV).rgb;
++    float texZ = ConvertEyeZ(depthTex.sample(samp, refrUV).r, w);
++    float fragZ = ConvertEyeZ(r.position.z, w);
++    float mixback = clamp(texZ - fragZ, 0.0, 1.0);
++    float3 origRefr = refractTex.sample(samp, screencoord).rgb;
++    refrColor = mix(refrColor, origRefr, mixback);
++    rgb = mix(refrColor, waterSurface, 0.1 + surfaceMix * 0.100);
++#else
++    rgb = waterSurface;
++    alpha = surfaceMix + specular;
++#endif
++    if (waterdepth > 0.0) {
++        float3 caust = causticTex.sample(samp, r.tc0.zw * w.paramsD.w).rgb;
++#ifdef OPT_REFRACTION
++        float caustBlend = smoothstep(0.45, 0.0, abs(waterdepth - 0.5));
++        rgb += caust * caustBlend * w.paramsE.x;
++#else
++        alpha *= min(waterdepth * 4.0, 1.0);
++        rgb += caust * (1.0 - waterdepth) * 7.5 * w.paramsE.x;
++#endif
++    }
++#ifdef OPT_SHORE
++    {
++        float3 coast = coastTex.sample(samp, r.tc0.xy).rgb;
++        float coastdist = coast.g + o3.x * 0.1;
++        float3 shore = float3(0.0);
++        if (coastdist > 0.0) {
++            float underground = 1.0 - step(1.0, invwaterdepth);
++            float3 wavefoam = foamTex.sample(samp, r.tc3.xy + o3.xy * w.paramsD.y).rgb;
++            wavefoam += foamTex.sample(samp, r.tc3.zw + o3.xy * w.paramsD.y).rgb;
++            wavefoam *= w.paramsD.z;
++            float4 waverands = waverandTex.sample(samp, r.tc4.zw);
++            float4 fi = float4(0.25, 0.50, 0.75, 1.00);
++            float4 fw = fract(fi + w.paramsE.z * 50.0 + (r.tc1.x + r.tc1.y) * w.paramsC.w);
++            fw = fw * 1.4 - float4(coastdist);
++            fw = float4(1.0) - fw * (1.0 / w.paramsD.x);
++            fw = clamp(fw, 0.0, 1.0);
++            float4 front = float4(1.0) - abs(fw - float4(0.85)) / float4(0.15);
++            front = max(front, select(float4(0.0), float4(1.0), fw < float4(0.85)) * fw * 0.5);
++            float intensity = dot(front, waverands) * coastdist;
++            float iwd = mix(invwaterdepth, invwaterdepth - (fmod(invwaterdepth, 0.8) * 0.8) / (1.0 - 0.8), step(0.8, invwaterdepth));
++            intensity *= iwd * 1.5;
++            shore += wavefoam * underground * intensity;
++            shore += (wavefoam * wavefoam) * (underground * 5.5 * pow(coast.r, 3.0) * pow(coastdist, 4.0));
++        }
++        rgb += shadowOcc * shore;
++    }
++#endif
++    // NOTE: shore contribution with shadow multiply applied here to match GLSL order
++    rgb = rgb; // (shore block above already added unshadowed; corrected below)
++    float fresnel = 0.0;
++    float3 reflColor = float3(0.0);
++#ifdef OPT_REFLECTION
++    {
++        float2 rtc = float2(reftexcoord.x, 1.0 - reftexcoord.y);
++        rtc += float2(0.0, 3.0 * w.screen.y) + normal.xz * 0.09 * w.paramsB.y;
++        reflColor = reflectTex.sample(samp, rtc).rgb;
++#ifdef OPT_BLURREFL
++        float2 v = float2(0.0, w.paramsB.z);
++        float se = w.paramsB.w;
++        reflColor += reflectTex.sample(samp, rtc + v).rgb;
++        reflColor += reflectTex.sample(samp, rtc + v * se).rgb;
++        reflColor += reflectTex.sample(samp, rtc + v * se * se).rgb;
++        reflColor += reflectTex.sample(samp, rtc + v * se * se * se).rgb;
++        reflColor += reflectTex.sample(samp, rtc + v * se * se * se * se).rgb;
++        reflColor += reflectTex.sample(samp, rtc + v * se * se * se * se * se).rgb;
++        reflColor += reflectTex.sample(samp, rtc + v * se * se * se * se * se * se).rgb;
++        reflColor *= 0.125;
++#endif
++        fresnel = w.paramsA.z + w.paramsA.w * pow(angle, w.paramsB.x);
++    }
++#endif
++    rgb = mix(rgb, reflColor, fresnel * shallowScale);
++    rgb += shadowOcc * specular * w.specularColor.rgb;
++    float fogF = clamp((w.fog.w - abs(r.fogZ)) * w.mapMid.w, 0.0, 1.0);
++    rgb = mix(w.fog.rgb, rgb, fogF);
++    return float4(rgb, alpha);
++}
++
 +)MSL";
 +
 +[[noreturn]] void Fail(const std::string& reason) {
@@ -438,7 +958,9 @@
 +struct Pipelines {
 +	id<MTLRenderPipelineState> terrain = nil;
 +	id<MTLRenderPipelineState> unit = nil;
++	id<MTLRenderPipelineState> unitAlpha = nil;
 +};
++struct ProjectileDraw { const CProjectile* p; CMatrix44f matrix; int team; };
 +struct Frame {
 +	id<MTLTexture> color = nil;
 +	id<MTLTexture> depth = nil;
@@ -450,19 +972,39 @@
 +	id<MTLCommandQueue> queue = nil;
 +	id<MTLLibrary> library = nil;
 +	id<MTLDepthStencilState> depthState = nil;
++	id<MTLDepthStencilState> alphaDepthState = nil;
 +	id<MTLSamplerState> tileSampler = nil;
 +	id<MTLSamplerState> unitSampler = nil;
++	id<MTLSamplerState> shadowSampler = nil;
++	id<MTLTexture> whiteShadow = nil;
++	id<MTLTexture> whiteColor = nil;
 +	id<MTLBuffer> sceneBuffer = nil;
 +	id<MTLBuffer> drawBuffer = nil;
 +	id<MTLBuffer> tileIndices = nil;
++	id<MTLBuffer> waterBuffer = nil;
++	id<MTLBuffer> waterUniforms = nil;
++	size_t waterIndexCount = 0;
++	id<MTLBuffer> waterIndexBuffer = nil;
++	MTLPrimitiveType waterPrimitive = MTLPrimitiveTypeTriangle;
++	std::unordered_map<uint64_t, id<MTLRenderPipelineState>> waterPipelines;
++	bool waterLogged = false;
 +	size_t drawCapacity = 0;
 +	std::unordered_map<uint64_t, Pipelines> pipelines;
 +	std::unordered_map<const S3DModelPiece*, Mesh> meshes;
 +	std::vector<CUnit*> units;
++	std::vector<CFeature*> features;
++	std::vector<ProjectileDraw> projectiles;
++	std::vector<CUnit*> alphaUnits;
++	std::vector<CFeature*> alphaFeatures;
 +	bool collecting = false;
 +	bool forwardUnitPass = false;
 +	bool terrainLogged = false;
 +	bool unitsLogged = false;
++	bool featuresLogged = false;
++	bool projectilesLogged = false;
++	bool alphaUnitsLogged = false;
++	bool alphaFeaturesLogged = false;
++	bool forwardProjectilePass = false;
 +
 +	Frame BorrowFrame() {
 +		// Deliberate initial hybrid synchronization: this blocks the CPU and
@@ -515,6 +1057,10 @@
 +		depth.depthCompareFunction = MTLCompareFunctionLessEqual;
 +		depth.depthWriteEnabled = YES;
 +		depthState = [device newDepthStencilStateWithDescriptor:depth];
++	MTLDepthStencilDescriptor* alphaDepthDesc = [MTLDepthStencilDescriptor new];
++	alphaDepthDesc.depthCompareFunction = MTLCompareFunctionLessEqual;
++	alphaDepthDesc.depthWriteEnabled = NO;
++	alphaDepthState = [device newDepthStencilStateWithDescriptor:alphaDepthDesc];
 +		MTLSamplerDescriptor* sampler = [MTLSamplerDescriptor new];
 +		sampler.minFilter = MTLSamplerMinMagFilterLinear;
 +		sampler.magFilter = MTLSamplerMinMagFilterLinear;
@@ -526,8 +1072,27 @@
 +		sampler.sAddressMode = MTLSamplerAddressModeRepeat;
 +		sampler.tAddressMode = MTLSamplerAddressModeRepeat;
 +		unitSampler = [device newSamplerStateWithDescriptor:sampler];
++	MTLSamplerDescriptor* shadowDesc = [MTLSamplerDescriptor new];
++	shadowDesc.minFilter = MTLSamplerMinMagFilterLinear;
++	shadowDesc.magFilter = MTLSamplerMinMagFilterLinear;
++	shadowDesc.mipFilter = MTLSamplerMipFilterNotMipmapped;
++	shadowDesc.sAddressMode = MTLSamplerAddressModeClampToBorderColor;
++	shadowDesc.tAddressMode = MTLSamplerAddressModeClampToBorderColor;
++	shadowDesc.borderColor = MTLSamplerBorderColorOpaqueWhite;
++	shadowDesc.compareFunction = MTLCompareFunctionLess;
++	shadowSampler = [device newSamplerStateWithDescriptor:shadowDesc];
++	// Satisfies Metal resource validation on the shadow slot when shadows
++	// are off; the shader early-outs before sampling it.
++	MTLTextureDescriptor* whiteDesc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float width:1 height:1 mipmapped:NO];
++	whiteDesc.storageMode = MTLStorageModeShared;
++	whiteShadow = [device newTextureWithDescriptor:whiteDesc];
++	if (whiteShadow == nil) Fail("cannot allocate shadow fallback texture");
++	MTLTextureDescriptor* whiteColorDesc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:1 height:1 mipmapped:NO];
++	whiteColorDesc.storageMode = MTLStorageModeShared;
++	whiteColor = [device newTextureWithDescriptor:whiteColorDesc];
++	if (whiteColor == nil) Fail("cannot allocate color fallback texture");
 +		sceneBuffer = [device newBufferWithLength:sizeof(Scene) options:MTLResourceStorageModeShared];
-+		if (depthState == nil || tileSampler == nil || unitSampler == nil || sceneBuffer == nil)
++		if (depthState == nil || alphaDepthState == nil || tileSampler == nil || unitSampler == nil || shadowSampler == nil || sceneBuffer == nil)
 +			Fail("cannot allocate cached Metal scene state");
 +		std::vector<uint32_t> indices;
 +		indices.reserve(TILE_SIZE * TILE_SIZE * 6);
@@ -564,6 +1129,15 @@
 +		desc.fragmentFunction = [library newFunctionWithName:@"unitFragment"];
 +		result.unit = [device newRenderPipelineStateWithDescriptor:desc error:&error];
 +		if (result.unit == nil) Fail("cannot create unit Metal pipeline: " + ErrorText(error));
++		desc.vertexFunction = [library newFunctionWithName:@"unitVertex"];
++		desc.fragmentFunction = [library newFunctionWithName:@"unitAlphaFragment"];
++		desc.colorAttachments[0].blendingEnabled = YES;
++		desc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
++		desc.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
++		desc.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
++		desc.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
++		result.unitAlpha = [device newRenderPipelineStateWithDescriptor:desc error:&error];
++		if (result.unitAlpha == nil) Fail("cannot create unit alpha Metal pipeline: " + ErrorText(error));
 +		return pipelines.emplace(key, result).first->second;
 +	}
 +
@@ -573,12 +1147,22 @@
 +		// array Metal textures. The slice view shares storage (no copy) and
 +		// lives only inside the synchronized borrow window.
 +		if (texture != nil && texture.textureType == MTLTextureType2DArray &&
-+		    texture.arrayLength == 1 && texture.mipmapLevelCount == 1) {
++		    texture.arrayLength == 1 && texture.mipmapLevelCount >= 1) {
 +			texture = [texture newTextureViewWithPixelFormat:texture.pixelFormat
-+			    textureType:MTLTextureType2D levels:NSMakeRange(0, 1) slices:NSMakeRange(0, 1)];
++			    textureType:MTLTextureType2D levels:NSMakeRange(0, texture.mipmapLevelCount) slices:NSMakeRange(0, 1)];
 +		}
 +		if (texture == nil || texture.device != device || texture.textureType != MTLTextureType2D || texture.sampleCount != 1)
-+			Fail("GL texture " + std::to_string(name) + " cannot export ordinary 2D Metal storage");
++			return nil;
++		return texture;
++	}
++	// Transient streaming storage (unconsolidated mips) resolves within frames.
++	// Skipped objects pop back once resident; each id logs once. Only the frame
++	// attachments and the heightmap are fatal, since nothing can proceed.
++	std::unordered_set<unsigned> skipLogged;
++	id<MTLTexture> BorrowMaterial(unsigned name, const char* pass) {
++		id<MTLTexture> texture = BorrowTexture(name);
++		if (texture == nil && skipLogged.insert(name).second)
++			LOG("BAR-METAL %s material %u unavailable, skipping object until resident", pass, name);
 +		return texture;
 +	}
 +	void ReserveDraws(size_t needed) {
@@ -589,6 +1173,33 @@
 +	}
 +	Draw& DrawAt(size_t i) {
 +		return *reinterpret_cast<Draw*>(static_cast<char*>(drawBuffer.contents) + i * DRAW_STRIDE);
++	}
++	bool ProbeMaterial(unsigned tex1, unsigned tex2, const char* pass) {
++		// Conservative pre-check during collection (no GPU sync, pure query).
++		// Textures with permanently split mip storage (e.g. wreck atlases
++		// with redefined levels) stay on compatibility; compat still draws
++		// them, so nothing vanishes. A NULL here only misses an opportunity;
++		// BorrowMaterial remains the post-glFinish safety net for races.
++		bool ok = abi.texture(tex1) != nullptr && abi.texture(tex2) != nullptr;
++		if (!ok) {
++			unsigned id = abi.texture(tex1) == nullptr ? tex1 : tex2;
++			if (skipLogged.insert(id).second)
++				LOG("BAR-METAL %s material %u stays compat (split storage)", pass, id);
++		}
++		return ok;
++	}
++	id<MTLTexture> BorrowShadow() {
++		// The compat shadow pass wrote this depth texture during
++		// GenerateIBLTextures; borrowing needs no extra GL work here.
++		if (!shadowHandler.ShadowsLoaded())
++			return nil;
++		id<MTLTexture> shadow = BorrowTexture(shadowHandler.GetShadowTextureID());
++		if (shadow.pixelFormat != MTLPixelFormatDepth32Float &&
++		    shadow.pixelFormat != MTLPixelFormatDepth16Unorm &&
++		    shadow.pixelFormat != MTLPixelFormatDepth32Float_Stencil8 &&
++		    shadow.pixelFormat != MTLPixelFormatDepth24Unorm_Stencil8)
++			Fail("shadow depth texture has an unsupported Metal pixel format");
++		return shadow;
 +	}
 +	void SetScene(bool terrain) {
 +		Scene& s = *static_cast<Scene*>(sceneBuffer.contents);
@@ -606,6 +1217,17 @@
 +		if (!globalRendering->drawFog) { s.fog[0] = 1.0e20f; s.fog[1] = 2.0e20f; }
 +		s.fog[2] = globalRendering->supportClipSpaceControl ? 1.0f : 0.0f;
 +		s.fog[3] = terrain && (mapRendering->voidGround || mapRendering->voidWater) ? mapInfo->map.voidAlphaMin : -1.0f;
++		// Shadow-map receive: compat GenerateIBLTextures already rendered the
++		// depth map this frame; sample it with the engine drawing matrix.
++		if (shadowHandler.ShadowsLoaded()) {
++			Matrix(s.shadowMatrix, shadowHandler.GetShadowMatrix());
++			s.shadow[0] = terrain ? sunLighting->groundShadowDensity : sunLighting->modelShadowDensity;
++			s.shadow[1] = 0.0015f;
++			s.shadow[2] = 1.0f;
++		} else {
++			s.shadow[0] = 1.0f; s.shadow[1] = 0.0f; s.shadow[2] = 0.0f;
++		}
++		s.shadow[3] = 0.0f;
 +	}
 +
 +	id<MTLRenderCommandEncoder> Begin(const Frame& f, id<MTLCommandBuffer> command) {
@@ -639,15 +1261,14 @@
 +		[encoder setFragmentBuffer:sceneBuffer offset:0 atIndex:1];
 +		return encoder;
 +	}
-+	void Complete(id<MTLRenderCommandEncoder> encoder, id<MTLCommandBuffer> command, bool terrain, uint64_t triangles) {
++	void Complete(id<MTLRenderCommandEncoder> encoder, id<MTLCommandBuffer> command, const char* pass, bool& logged, uint64_t triangles) {
 +		[encoder endEncoding];
 +		[command commit];
 +		[command waitUntilCompleted];
 +		if (command.status != MTLCommandBufferStatusCompleted)
 +			Fail("native world command buffer failed: " + ErrorText(command.error));
-+		bool& logged = terrain ? terrainLogged : unitsLogged;
 +		if (!logged && triangles != 0) {
-+			LOG("BAR-METAL %s triangles=%llu", terrain ? "terrain" : "units", static_cast<unsigned long long>(triangles));
++			LOG("BAR-METAL %s triangles=%llu", pass, static_cast<unsigned long long>(triangles));
 +			logged = true;
 +		}
 +	}
@@ -679,6 +1300,7 @@
 +		ReserveDraws(size_t(map.numBigTexX) * map.numBigTexY);
 +		SetScene(true);
 +		id<MTLTexture> heights = BorrowTexture(map.GetHeightMapTexture());
++		if (heights == nil) Fail("SMF height texture is not borrowable");
 +		if (heights.pixelFormat != MTLPixelFormatR32Float || heights.width != size_t(mapDims.mapxp1) || heights.height != size_t(mapDims.mapyp1))
 +			Fail("SMF live height texture must be full-resolution R32Float corner data");
 +		id<MTLCommandBuffer> command = [queue commandBuffer];
@@ -688,6 +1310,13 @@
 +		[encoder setRenderPipelineState:GetPipelines(f).terrain];
 +		[encoder setVertexTexture:heights atIndex:0];
 +		[encoder setFragmentSamplerState:tileSampler atIndex:0];
++		id<MTLTexture> terrainShadow = BorrowShadow();
++		if (terrainShadow != nil) {
++			[encoder setFragmentTexture:terrainShadow atIndex:3];
++		} else {
++			[encoder setFragmentTexture:whiteShadow atIndex:3];
++		}
++		[encoder setFragmentSamplerState:shadowSampler atIndex:3];
 +		size_t draw = 0;
 +		uint64_t triangles = 0;
 +		for (int z = 0; z < map.numBigTexY; ++z) {
@@ -701,7 +1330,8 @@
 +				// after LOS permits them. Sampling that live texture also updates
 +				// native normals without copying/rebuilding a mesh or exposing
 +				// unseen enemy deformation from the synced simulation map.
-+				id<MTLTexture> tile = BorrowTexture(textures.GetSquareTextureID(x, z));
++				id<MTLTexture> tile = BorrowMaterial(textures.GetSquareTextureID(x, z), "terrain");
++				if (tile == nil) continue;
 +				[encoder setFragmentTexture:tile atIndex:0];
 +				[encoder setVertexBuffer:drawBuffer offset:draw * DRAW_STRIDE atIndex:2];
 +				[encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:TILE_SIZE * TILE_SIZE * 6 indexType:MTLIndexTypeUInt32 indexBuffer:tileIndices indexBufferOffset:0];
@@ -709,7 +1339,7 @@
 +				++draw;
 +			}
 +		}
-+		Complete(encoder, command, true, triangles);
++		Complete(encoder, command, "terrain", terrainLogged, triangles);
 +	}
 +	void Units() {
 +		units.clear();
@@ -736,13 +1366,23 @@
 +		id<MTLRenderCommandEncoder> encoder = Begin(f, command);
 +		[encoder setRenderPipelineState:GetPipelines(f).unit];
 +		[encoder setFragmentSamplerState:unitSampler atIndex:0];
++		id<MTLTexture> unitShadow = BorrowShadow();
++		if (unitShadow != nil) {
++			[encoder setFragmentTexture:unitShadow atIndex:3];
++		} else {
++			[encoder setFragmentTexture:whiteShadow atIndex:3];
++		}
++		[encoder setFragmentSamplerState:shadowSampler atIndex:3];
 +		uint64_t triangles = 0;
 +		size_t draw = 0;
 +		for (const CUnit* u : units) {
 +			const auto* material = textureHandlerS3O.GetTexture(u->model->textureType);
 +			if (material == nullptr) Fail("unit S3O texture material is unavailable");
-+			[encoder setFragmentTexture:BorrowTexture(material->tex1) atIndex:0];
-+			[encoder setFragmentTexture:BorrowTexture(material->tex2) atIndex:1];
++			id<MTLTexture> unitTex1 = BorrowMaterial(material->tex1, "units");
++			id<MTLTexture> unitTex2 = BorrowMaterial(material->tex2, "units");
++			if (unitTex1 == nil || unitTex2 == nil) continue;
++			[encoder setFragmentTexture:unitTex1 atIndex:0];
++			[encoder setFragmentTexture:unitTex2 atIndex:1];
 +			const CMatrix44f object = u->GetTransformMatrix();
 +			const CTeam* team = teamHandler.Team(u->team);
 +			for (const LocalModelPiece& piece : u->localModel.pieces) {
@@ -761,7 +1401,401 @@
 +				++draw;
 +			}
 +		}
-+		Complete(encoder, command, false, triangles);
++		Complete(encoder, command, "units", unitsLogged, triangles);
++	}
++	void Features() {
++		features.clear();
++		collecting = true;
++		try {
++			// Same contract as Units: engine traversal, LOS, Lua materials
++			// and draw masks stay authoritative; only default S3O features
++			// are removed from the compat draw into the native queue.
++			featureDrawer->Draw(false);
++		} catch (...) {
++			collecting = false;
++			throw;
++		}
++		collecting = false;
++		if (features.empty()) return;
++		Frame f = BorrowFrame();
++		size_t pieceCount = 0;
++		for (const CFeature* feat : features) pieceCount += feat->localModel.pieces.size();
++		ReserveDraws(pieceCount);
++		SetScene(false);
++		id<MTLCommandBuffer> command = [queue commandBuffer];
++		if (command == nil) Fail("cannot create feature command buffer");
++		command.label = @"BAR-METAL features";
++		id<MTLRenderCommandEncoder> encoder = Begin(f, command);
++		[encoder setRenderPipelineState:GetPipelines(f).unit];
++		[encoder setFragmentSamplerState:unitSampler atIndex:0];
++		id<MTLTexture> featShadow = BorrowShadow();
++		if (featShadow != nil) {
++			[encoder setFragmentTexture:featShadow atIndex:3];
++		} else {
++			[encoder setFragmentTexture:whiteShadow atIndex:3];
++		}
++		[encoder setFragmentSamplerState:shadowSampler atIndex:3];
++		uint64_t triangles = 0;
++		size_t draw = 0;
++		for (const CFeature* feat : features) {
++			const auto* material = textureHandlerS3O.GetTexture(feat->model->textureType);
++			if (material == nullptr) Fail("feature S3O texture material is unavailable");
++			id<MTLTexture> featTex1 = BorrowMaterial(material->tex1, "features");
++			id<MTLTexture> featTex2 = BorrowMaterial(material->tex2, "features");
++			if (featTex1 == nil || featTex2 == nil) continue;
++			[encoder setFragmentTexture:featTex1 atIndex:0];
++			[encoder setFragmentTexture:featTex2 atIndex:1];
++			const CMatrix44f object = feat->GetTransformMatrix();
++			const CTeam* team = teamHandler.Team(feat->team);
++			for (const LocalModelPiece& piece : feat->localModel.pieces) {
++				if (!piece.GetScriptVisible() || !piece.original->HasGeometryData()) continue;
++				// Static feature geometry never interpolates: unsynced prev
++				// transforms stay zero-scale, so use the current transform.
++				const Transform& transform = piece.GetModelSpaceTransform();
++				if (transform.s <= 0.0f) continue;
++				Mesh& mesh = GetMesh(piece.original);
++				Draw& d = DrawAt(draw);
++				Matrix(d.world, object * transform.ToMatrix());
++				for (unsigned i = 0; i < 4; ++i) d.team[i] = team->color[i] / 255.0f;
++				[encoder setVertexBuffer:mesh.vertices offset:0 atIndex:0];
++				[encoder setVertexBuffer:drawBuffer offset:draw * DRAW_STRIDE atIndex:2];
++				[encoder setFragmentBuffer:drawBuffer offset:draw * DRAW_STRIDE atIndex:2];
++				[encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:mesh.indexCount indexType:MTLIndexTypeUInt32 indexBuffer:mesh.indices indexBufferOffset:0];
++				triangles += mesh.indexCount / 3;
++				++draw;
++			}
++		}
++		Complete(encoder, command, "features", featuresLogged, triangles);
++	}
++	void Projectiles() {
++		projectiles.clear();
++		collecting = true;
++		forwardProjectilePass = true;
++		try {
++			// Only model-type opaque projectiles are collected; billboard
++			// particles, ground flashes and flying pieces stay compat.
++			projectileDrawer->DrawOpaque(false);
++		} catch (...) {
++			collecting = false;
++			forwardProjectilePass = false;
++			throw;
++		}
++		collecting = false;
++		forwardProjectilePass = false;
++		if (projectiles.empty()) return;
++		Frame f = BorrowFrame();
++		ReserveDraws(projectiles.size());
++		SetScene(false);
++		id<MTLCommandBuffer> command = [queue commandBuffer];
++		if (command == nil) Fail("cannot create projectile command buffer");
++		command.label = @"BAR-METAL projectiles";
++		id<MTLRenderCommandEncoder> encoder = Begin(f, command);
++		[encoder setRenderPipelineState:GetPipelines(f).unit];
++		[encoder setFragmentSamplerState:unitSampler atIndex:0];
++		id<MTLTexture> projShadow = BorrowShadow();
++		if (projShadow != nil) {
++			[encoder setFragmentTexture:projShadow atIndex:3];
++		} else {
++			[encoder setFragmentTexture:whiteShadow atIndex:3];
++		}
++		[encoder setFragmentSamplerState:shadowSampler atIndex:3];
++		uint64_t triangles = 0;
++		size_t draw = 0;
++		for (const ProjectileDraw& pd : projectiles) {
++			const S3DModel* model = pd.p->model;
++			const auto* material = textureHandlerS3O.GetTexture(model->textureType);
++			if (material == nullptr) Fail("projectile S3O texture material is unavailable");
++			id<MTLTexture> projTex1 = BorrowMaterial(material->tex1, "projectiles");
++			id<MTLTexture> projTex2 = BorrowMaterial(material->tex2, "projectiles");
++			if (projTex1 == nil || projTex2 == nil) continue;
++			[encoder setFragmentTexture:projTex1 atIndex:0];
++			[encoder setFragmentTexture:projTex2 atIndex:1];
++			const CTeam* team = teamHandler.Team(pd.team);
++			for (int pi = 0, pn = model->numPieces; pi < pn; ++pi) {
++				const S3DModelPiece* piece = model->GetPiece(pi);
++				if (piece == nullptr || !piece->HasGeometryData()) continue;
++				Mesh& mesh = GetMesh(piece);
++				Draw& d = DrawAt(draw);
++				Matrix(d.world, pd.matrix * piece->bposeTransform.ToMatrix());
++				for (unsigned i = 0; i < 4; ++i) d.team[i] = team->color[i] / 255.0f;
++				[encoder setVertexBuffer:mesh.vertices offset:0 atIndex:0];
++				[encoder setVertexBuffer:drawBuffer offset:draw * DRAW_STRIDE atIndex:2];
++				[encoder setFragmentBuffer:drawBuffer offset:draw * DRAW_STRIDE atIndex:2];
++				[encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:mesh.indexCount indexType:MTLIndexTypeUInt32 indexBuffer:mesh.indices indexBufferOffset:0];
++				triangles += mesh.indexCount / 3;
++				++draw;
++			}
++		}
++		Complete(encoder, command, "projectiles", projectilesLogged, triangles);
++	}
++	template<typename TObject>
++	void AlphaObjectsImpl(std::vector<TObject*>& objects, const char* pass, bool& logged, int clip) {
++		// Compat alpha section enables blending with LEQUAL depth and no depth
++		// writes; water clipping arrives as an explicit mode (0 none, 1 below
++		// y<=0, 2 above y>=0) carried in s.shadow.w for this draw only.
++		objects.clear();
++		collecting = true;
++		try {
++			if constexpr (std::is_same_v<TObject, CUnit>) unitDrawer->DrawAlphaPass(false);
++			else featureDrawer->DrawAlphaPass(false);
++		} catch (...) {
++			collecting = false;
++			throw;
++		}
++		collecting = false;
++		if (objects.empty()) return;
++		Frame f = BorrowFrame();
++		size_t pieceCount = 0;
++		for (const auto* o : objects) pieceCount += o->localModel.pieces.size();
++		ReserveDraws(pieceCount);
++		SetScene(false);
++		Scene& as = *static_cast<Scene*>(sceneBuffer.contents);
++		as.shadow[3] = float(clip);
++		id<MTLCommandBuffer> command = [this->queue commandBuffer];
++		if (command == nil) Fail("cannot create alpha command buffer");
++		command.label = [NSString stringWithUTF8String:pass];
++		id<MTLRenderCommandEncoder> encoder = Begin(f, command);
++		[encoder setRenderPipelineState:GetPipelines(f).unitAlpha];
++		[encoder setDepthStencilState:alphaDepthState];
++		[encoder setFragmentSamplerState:unitSampler atIndex:0];
++		id<MTLTexture> alphaShadow = BorrowShadow();
++		if (alphaShadow != nil) {
++			[encoder setFragmentTexture:alphaShadow atIndex:3];
++		} else {
++			[encoder setFragmentTexture:whiteShadow atIndex:3];
++		}
++		[encoder setFragmentSamplerState:shadowSampler atIndex:3];
++		uint64_t triangles = 0;
++		size_t draw = 0;
++		for (const auto* o : objects) {
++			const auto* material = textureHandlerS3O.GetTexture(o->model->textureType);
++			if (material == nullptr) Fail("alpha S3O texture material is unavailable");
++			id<MTLTexture> tex1 = BorrowMaterial(material->tex1, pass);
++			id<MTLTexture> tex2 = BorrowMaterial(material->tex2, pass);
++			if (tex1 == nil || tex2 == nil) continue;
++			[encoder setFragmentTexture:tex1 atIndex:0];
++			[encoder setFragmentTexture:tex2 atIndex:1];
++			const CMatrix44f object = o->GetTransformMatrix();
++			const CTeam* team = teamHandler.Team(o->team);
++			for (const LocalModelPiece& piece : o->localModel.pieces) {
++				if (!piece.GetScriptVisible() || !piece.original->HasGeometryData()) continue;
++				const Transform transform = Transform::Lerp(piece.GetEffectivePrevModelSpaceTransform(), piece.GetModelSpaceTransform(), globalRendering->timeOffset);
++				if (transform.s <= 0.0f) continue;
++				Mesh& mesh = GetMesh(piece.original);
++				Draw& d = DrawAt(draw);
++				Matrix(d.world, object * transform.ToMatrix());
++				for (unsigned i = 0; i < 4; ++i) d.team[i] = team->color[i] / 255.0f;
++				d.team[3] = IModelDrawerState::alphaValues.x;
++				[encoder setVertexBuffer:mesh.vertices offset:0 atIndex:0];
++				[encoder setVertexBuffer:drawBuffer offset:draw * DRAW_STRIDE atIndex:2];
++				[encoder setFragmentBuffer:drawBuffer offset:draw * DRAW_STRIDE atIndex:2];
++				[encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:mesh.indexCount indexType:MTLIndexTypeUInt32 indexBuffer:mesh.indices indexBufferOffset:0];
++				triangles += mesh.indexCount / 3;
++				++draw;
++			}
++		}
++		Complete(encoder, command, pass, logged, triangles);
++	}
++	void AlphaObjects(bool units, int clip) {
++		if (units) AlphaObjectsImpl(alphaUnits, "alphaUnits", alphaUnitsLogged, clip);
++		else AlphaObjectsImpl(alphaFeatures, "alphaFeatures", alphaFeaturesLogged, clip);
++	}
++	void BuildWaterGeometry(bool endless) {
++		// Mirrors CBumpWater::GenWaterPlaneBuffer vertex positions as indexed
++		// triangles (compat uses arrays/strips; indices are equivalent).
++		struct WPos { float v[3]; };
++		std::vector<WPos> verts;
++		std::vector<uint32_t> idx;
++		if (endless) {
++			const float xsize = float((mapDims.mapx * SQUARE_SIZE) >> 2);
++			const float ysize = float((mapDims.mapy * SQUARE_SIZE) >> 2);
++			const float step = 6.283185307179586f / 32.0f;
++			const float size = std::min(xsize, ysize);
++			for (int n = 0; n < 4; ++n) {
++				const float k = (n == 3) ? 0.5f : 1.0f;
++				const float r1 = float(n * n) * size;
++				const float r2 = float((n + k) * (n + k)) * size;
++				uint32_t base = verts.size();
++				for (int s = 0; s <= 32; ++s) {
++					const float a = s * step;
++					const float sn = sinf(a), cs = cosf(a);
++					verts.push_back({{r1 * sn + 2 * xsize, 0.0f, r1 * cs + 2 * ysize}});
++					verts.push_back({{r2 * sn + 2 * xsize, 0.0f, r2 * cs + 2 * ysize}});
++				}
++				for (int s = 0; s < 32; ++s) {
++					uint32_t a = base + s * 2, b = a + 1, c = a + 2, d = a + 3;
++					idx.insert(idx.end(), {a, b, c, b, d, c});
++				}
++			}
++		waterPrimitive = MTLPrimitiveTypeTriangle;
++		} else {
++			const float mapX = float(mapDims.mapx * SQUARE_SIZE);
++			const float mapZ = float(mapDims.mapy * SQUARE_SIZE);
++			for (int z = 0; z <= 9; ++z) {
++				for (int x = 0; x <= 9; ++x) {
++					verts.push_back({{x * (mapX / 9.0f), 0.0f, z * (mapZ / 9.0f)}});
++				}
++			}
++			for (int z = 0; z < 9; ++z) {
++				for (int x = 0; x < 9; ++x) {
++					uint32_t v0 = z * 10 + x, v1 = v0 + 10, v2 = v0 + 1, v3 = v1 + 1;
++					idx.insert(idx.end(), {v0, v1, v2, v1, v3, v2});
++				}
++			}
++		waterPrimitive = MTLPrimitiveTypeTriangle;
++		}
++		waterBuffer = [device newBufferWithBytes:verts.data() length:verts.size() * sizeof(WPos) options:MTLResourceStorageModeShared];
++		id<MTLBuffer> waterIdx = [device newBufferWithBytes:idx.data() length:idx.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
++		if (waterBuffer == nil || waterIdx == nil) Fail("cannot allocate water geometry");
++		waterIndexBuffer = waterIdx;
++		waterIndexCount = idx.size();
++	}
++	id<MTLRenderPipelineState> GetWaterPipeline(const Frame& f, CBumpWater& water) {
++		unsigned key = (water.HasReflection() ? 1 : 0) | (water.HasRefraction() ? 2 : 0)
++		    | (water.HasShoreWaves() ? 4 : 0) | (water.HasDepthCopy() ? 8 : 0)
++		    | (water.HasBlurReflection() ? 16 : 0) | (water.IsEndlessOcean() ? 32 : 0)
++		    | (shadowHandler.ShadowsLoaded() ? 64 : 0)
++		    | (infoTextureHandler->IsEnabled() ? 128 : 0);
++		uint64_t full = (uint64_t(key) << 32) | (uint64_t(f.color.pixelFormat) << 16) | uint64_t(f.depth.pixelFormat);
++		auto it = waterPipelines.find(full);
++		if (it != waterPipelines.end()) return it->second;
++		std::string defines;
++		if (key & 1) defines += "#define OPT_REFLECTION\n";
++		if (key & 2) defines += "#define OPT_REFRACTION\n";
++		if (key & 4) defines += "#define OPT_SHORE\n";
++		if (key & 8) defines += "#define OPT_DEPTH\n";
++		if (key & 16) defines += "#define OPT_BLURREFL\n";
++		if (key & 32) defines += "#define OPT_ENDLESS\n";
++		if (key & 64) defines += "#define OPT_SHADOWS\n";
++		if (key & 128) defines += "#define OPT_INFOTEX\n";
++		NSString* defs = [NSString stringWithUTF8String:defines.c_str()];
++		NSString* base = [NSString stringWithUTF8String:metalSource];
++		NSString* source = [defs stringByAppendingString:base];
++		NSError* error = nil;
++		id<MTLLibrary> waterLib = [device newLibraryWithSource:source options:nil error:&error];
++		if (waterLib == nil) Fail("cannot create water MSL library: " + ErrorText(error));
++		MTLRenderPipelineDescriptor* desc = [MTLRenderPipelineDescriptor new];
++		desc.colorAttachments[0].pixelFormat = f.color.pixelFormat;
++		desc.depthAttachmentPixelFormat = f.depth.pixelFormat;
++		desc.colorAttachments[0].blendingEnabled = water.HasRefraction() ? NO : YES;
++		desc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
++		desc.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
++		desc.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
++		desc.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
++		desc.vertexFunction = [waterLib newFunctionWithName:@"waterVert"];
++		desc.fragmentFunction = [waterLib newFunctionWithName:@"waterFragment"];
++		id<MTLRenderPipelineState> pipeline = [device newRenderPipelineStateWithDescriptor:desc error:&error];
++		if (pipeline == nil) Fail("cannot create water Metal pipeline: " + ErrorText(error));
++		waterPipelines.emplace(full, pipeline);
++		return pipeline;
++	}
++	void Water() {
++		if (IWater::GetWater()->GetID() != IWater::WATER_RENDERER_BUMPMAPPED) {
++			// Only BumpWater has a native surface pass; other renderers stay compat.
++			IWater::GetWater()->Draw();
++			return;
++		}
++		CBumpWater& water = static_cast<CBumpWater&>(*IWater::GetWater());
++		// Screen-copy generation stays compat GL (mirrors CBumpWater::Draw head).
++		// Reflection/refraction scene rendering already ran in UpdateWater.
++		if (water.HasRefraction()) {
++			glBindTexture(GL_TEXTURE_2D, water.GetRefractTexture());
++			glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, globalRendering->viewPosX, globalRendering->viewPosY, globalRendering->viewSizeX, globalRendering->viewSizeY);
++		}
++		if (water.HasDepthCopy()) {
++			glBindTexture(GL_TEXTURE_2D, water.GetDepthCopyTexture());
++			glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, globalRendering->viewPosX, globalRendering->viewPosY, globalRendering->viewSizeX, globalRendering->viewSizeY);
++		}
++		Frame f = BorrowFrame();
++		if (waterBuffer == nil) BuildWaterGeometry(water.IsEndlessOcean());
++		if (waterUniforms == nil) {
++			waterUniforms = [device newBufferWithLength:sizeof(WaterU) options:MTLResourceStorageModeShared];
++			if (waterUniforms == nil) Fail("cannot allocate water uniforms");
++		}
++		WaterU& w = *static_cast<WaterU*>(waterUniforms.contents);
++		{ float3 sc = waterRendering->surfaceColor * 0.4f; w.surfaceColor[0] = sc.x; w.surfaceColor[1] = sc.y; w.surfaceColor[2] = sc.z; w.surfaceColor[3] = waterRendering->surfaceAlpha; }
++		Copy(w.diffuseColor, waterRendering->diffuseColor); w.diffuseColor[3] = waterRendering->diffuseFactor * 15.0f;
++		Copy(w.specularColor, waterRendering->specularColor); w.specularColor[3] = waterRendering->specularPower;
++		w.paramsA[0] = waterRendering->ambientFactor; w.paramsA[1] = waterRendering->specularFactor;
++		w.paramsA[2] = waterRendering->fresnelMin; w.paramsA[3] = waterRendering->fresnelMax;
++		w.paramsB[0] = waterRendering->fresnelPower; w.paramsB[1] = waterRendering->reflDistortion;
++		w.paramsB[2] = 0.0f; w.paramsB[3] = waterRendering->blurExponent;
++		w.paramsC[0] = waterRendering->perlinStartFreq; w.paramsC[1] = waterRendering->perlinLacunarity;
++		w.paramsC[2] = waterRendering->perlinAmplitude; w.paramsC[3] = waterRendering->waveOffsetFactor;
++		w.paramsD[0] = waterRendering->waveLength; w.paramsD[1] = waterRendering->waveFoamDistortion;
++		w.paramsD[2] = waterRendering->waveFoamIntensity; w.paramsD[3] = waterRendering->causticsResolution;
++		w.paramsE[0] = waterRendering->causticsStrength; w.paramsE[1] = sunLighting->groundShadowDensity;
++		w.paramsE[2] = (gs->frameNum + globalRendering->timeOffset) / 15000.0f; w.paramsE[3] = 0.0f;
++		{ const float3& eye = camera->GetPos(); w.eyePos[0] = eye.x; w.eyePos[1] = eye.y; w.eyePos[2] = eye.z; w.eyePos[3] = 1.0f; }
++		Copy(w.sunDir, ISky::GetSky()->GetLight()->GetLightDir()); w.sunDir[3] = 0.0f;
++		w.mapMid[0] = mapDims.mapx * SQUARE_SIZE * 0.5f; w.mapMid[1] = 0.0f; w.mapMid[2] = mapDims.mapy * SQUARE_SIZE * 0.5f;
++		{ GLfloat fogStart = 0.0f, fogEnd = 1.0f; GLfloat fogColor[4] = {0, 0, 0, 1};
++		glGetFloatv(GL_FOG_START, &fogStart); glGetFloatv(GL_FOG_END, &fogEnd); glGetFloatv(GL_FOG_COLOR, fogColor);
++		w.mapMid[3] = (fogEnd > fogStart) ? 1.0f / (fogEnd - fogStart) : 0.0f;
++		w.fog[0] = fogColor[0]; w.fog[1] = fogColor[1]; w.fog[2] = fogColor[2]; w.fog[3] = fogEnd; }
++		{ const int mapX = mapDims.mapx * SQUARE_SIZE; const int mapZ = mapDims.mapy * SQUARE_SIZE;
++		const float shadingX = float(mapDims.mapx) / mapDims.pwr2mapx;
++		const float shadingZ = float(mapDims.mapy) / mapDims.pwr2mapy;
++		const float scaleX = (mapX > mapZ) ? (mapDims.mapy >> 6) / 16.0f * float(mapX) / mapZ : (mapDims.mapx >> 6) / 16.0f;
++		const float scaleZ = (mapX > mapZ) ? (mapDims.mapy >> 6) / 16.0f : (mapDims.mapx >> 6) / 16.0f * float(mapZ) / mapX;
++		w.texGenPlane[0] = 1.0f / mapX; w.texGenPlane[1] = 1.0f / mapZ; w.texGenPlane[2] = scaleX / mapX; w.texGenPlane[3] = scaleZ / mapZ;
++		w.shadingPlane[0] = shadingX / mapX; w.shadingPlane[1] = shadingZ / mapZ; w.shadingPlane[2] = shadingX; w.shadingPlane[3] = shadingZ; }
++		w.screen[0] = 1.0f / globalRendering->viewSizeX; w.screen[1] = 1.0f / globalRendering->viewSizeY;
++		w.screen[2] = w.screen[0]; w.screen[3] = w.screen[1];
++		w.viewPos[0] = globalRendering->viewPosX; w.viewPos[1] = globalRendering->viewPosY;
++		{ const CMatrix44f& proj = camera->GetProjectionMatrix(); w.viewPos[2] = proj.m[14]; w.viewPos[3] = proj.m[10]; }
++		if (shadowHandler.ShadowsLoaded()) Matrix(w.shadowMatrix, shadowHandler.GetShadowMatrix());
++		SetScene(false);
++		id<MTLTexture> t_normal = BorrowMaterial(water.GetNormalTexture(), "water");
++		id<MTLTexture> t_shade = BorrowMaterial(readMap->GetShadingTexture(), "water");
++		id<MTLTexture> t_caustic = BorrowMaterial(water.GetCausticTexture(gs->frameNum), "water");
++		id<MTLTexture> t_foam = BorrowMaterial(water.GetFoamTexture(), "water");
++		id<MTLTexture> t_reflect = water.HasReflection() ? BorrowMaterial(water.GetReflectTexture(), "water") : nil;
++		id<MTLTexture> t_refract = water.HasRefraction() ? BorrowMaterial(water.GetRefractTexture(), "water") : nil;
++		id<MTLTexture> t_coast = water.HasShoreWaves() ? BorrowMaterial(water.GetCoastTexture(), "water") : nil;
++		id<MTLTexture> t_depth = water.HasDepthCopy() ? BorrowMaterial(water.GetDepthCopyTexture(), "water") : nil;
++		id<MTLTexture> t_wave = BorrowMaterial(water.GetWaveRandTexture(), "water");
++		id<MTLTexture> t_shadow = BorrowShadow();
++		id<MTLTexture> t_info = infoTextureHandler->IsEnabled() ? BorrowMaterial(infoTextureHandler->GetCurrentInfoTexture(), "water") : nil;
++		if (t_refract != nil && t_refract.width > 0 && t_refract.height > 0) {
++			w.screen[2] = 1.0f / t_refract.width; w.screen[3] = 1.0f / t_refract.height;
++		}
++		id<MTLTexture> t_shadowColor = (t_shadow != nil) ? BorrowMaterial(shadowHandler.GetColorTextureID(), "water") : nil;
++		if (t_shadow == nil || t_normal == nil || t_shade == nil || t_caustic == nil || t_foam == nil || t_wave == nil) {
++			if (skipLogged.insert(1000000u).second)
++				LOG("BAR-METAL water core textures unavailable, falling back to compat");
++			water.Draw();
++			return;
++		}
++		if ((water.HasReflection() && t_reflect == nil) || (water.HasRefraction() && t_refract == nil)
++		    || (water.HasShoreWaves() && t_coast == nil) || (water.HasDepthCopy() && t_depth == nil)
++		    || (infoTextureHandler->IsEnabled() && t_info == nil)) {
++			if (skipLogged.insert(1000001u).second)
++				LOG("BAR-METAL water optional textures unavailable, falling back to compat");
++			water.Draw();
++			return;
++		}
++		id<MTLCommandBuffer> command = [this->queue commandBuffer];
++		if (command == nil) Fail("cannot create water command buffer");
++		command.label = @"BAR-METAL water";
++		id<MTLRenderCommandEncoder> encoder = Begin(f, command);
++		[encoder setRenderPipelineState:GetWaterPipeline(f, water)];
++		[encoder setDepthStencilState:alphaDepthState];
++		[encoder setVertexBuffer:waterBuffer offset:0 atIndex:0];
++		[encoder setVertexBuffer:sceneBuffer offset:0 atIndex:1];
++		[encoder setVertexBuffer:waterUniforms offset:0 atIndex:3];
++		[encoder setFragmentBuffer:sceneBuffer offset:0 atIndex:1];
++		[encoder setFragmentBuffer:waterUniforms offset:0 atIndex:3];
++		id<MTLTexture> blanks[12] = {t_normal, t_shade, t_caustic, t_foam, t_reflect, t_refract, t_coast, t_depth, t_wave, t_shadow, t_info, t_shadowColor};
++		for (int i = 0; i < 12; ++i) { if (blanks[i] == nil) blanks[i] = (i == 9) ? (id<MTLTexture>)whiteShadow : whiteColor; }
++		[encoder setFragmentSamplerState:unitSampler atIndex:0];
++		[encoder setFragmentSamplerState:shadowSampler atIndex:3];
++		for (int i = 0; i < 12; ++i) { if (i != 9) [encoder setFragmentTexture:blanks[i] atIndex:i]; }
++		id<MTLTexture> shadowDepth = (t_shadow != nil) ? t_shadow : whiteShadow;
++		[encoder setFragmentTexture:shadowDepth atIndex:9];
++		[encoder drawIndexedPrimitives:waterPrimitive indexCount:waterIndexCount indexType:MTLIndexTypeUInt32 indexBuffer:waterIndexBuffer indexBufferOffset:0];
++		uint64_t triangles = waterIndexCount / 3;
++		Complete(encoder, command, "water", waterLogged, triangles);
 +	}
 +};
 +
@@ -779,12 +1813,85 @@
 +void NativeMetalWorld::DrawUnits() {
 +	@autoreleasepool { GetRenderer().Units(); }
 +}
++void NativeMetalWorld::DrawFeatures() {
++	@autoreleasepool { GetRenderer().Features(); }
++}
++void NativeMetalWorld::DrawProjectiles() {
++	@autoreleasepool { GetRenderer().Projectiles(); }
++}
++void NativeMetalWorld::DrawAlphaUnits(int clip) {
++	@autoreleasepool { GetRenderer().AlphaObjects(true, clip); }
++}
++void NativeMetalWorld::DrawAlphaFeatures(int clip) {
++	@autoreleasepool { GetRenderer().AlphaObjects(false, clip); }
++}
++void NativeMetalWorld::DrawWater() {
++	@autoreleasepool { GetRenderer().Water(); }
++}
++bool NativeMetalWorld::QueueAlphaUnit(CUnit* unit) {
++	if (renderer == nullptr || !renderer->collecting) return false;
++	if (unit->model->type != MODELTYPE_S3O || unit->luaDraw) return false;
++	{
++		const auto* material = textureHandlerS3O.GetTexture(unit->model->textureType);
++		if (material == nullptr) return false;
++		if (!renderer->ProbeMaterial(material->tex1, material->tex2, "alphaUnits")) return false;
++	}
++	renderer->alphaUnits.push_back(unit);
++	return true;
++}
++bool NativeMetalWorld::QueueAlphaFeature(CFeature* feature) {
++	if (renderer == nullptr || !renderer->collecting) return false;
++	if (feature->model->type != MODELTYPE_S3O || feature->luaDraw) return false;
++	{
++		const auto* material = textureHandlerS3O.GetTexture(feature->model->textureType);
++		if (material == nullptr) return false;
++		if (!renderer->ProbeMaterial(material->tex1, material->tex2, "alphaFeatures")) return false;
++	}
++	renderer->alphaFeatures.push_back(feature);
++	return true;
++}
++bool NativeMetalWorld::QueueProjectile(CProjectile* projectile, int modelType) {
++	if (renderer == nullptr || !renderer->collecting || !renderer->forwardProjectilePass) return false;
++	// Only static S3O weapon models without Lua overrides; piece projectiles,
++	// billboards and flying pieces stay on compatibility.
++	if (!projectile->weapon || modelType != MODELTYPE_S3O || projectile->model == nullptr ||
++	    projectile->model->type != MODELTYPE_S3O || projectile->luaDraw) return false;
++	{
++		const auto* material = textureHandlerS3O.GetTexture(projectile->model->textureType);
++		if (material == nullptr) return false;
++		if (!renderer->ProbeMaterial(material->tex1, material->tex2, "units")) return false;
++	}
++	const CWeaponProjectile* wp = static_cast<const CWeaponProjectile*>(projectile);
++	ProjectileDraw pd;
++	pd.p = projectile;
++	pd.matrix = wp->GetTransformMatrix(wp->GetProjectileType() == WEAPON_MISSILE_PROJECTILE);
++	pd.team = wp->GetTeamID();
++	renderer->projectiles.push_back(pd);
++	return true;
++}
++bool NativeMetalWorld::QueueFeature(CFeature* feature) {
++	if (renderer == nullptr || !renderer->collecting || !renderer->forwardUnitPass) return false;
++	// Custom Lua materials and non-S3O geometry stay on compatibility.
++	if (feature->model->type != MODELTYPE_S3O || feature->luaDraw) return false;
++	{
++		const auto* material = textureHandlerS3O.GetTexture(feature->model->textureType);
++		if (material == nullptr) return false;
++		if (!renderer->ProbeMaterial(material->tex1, material->tex2, "units")) return false;
++	}
++	renderer->features.push_back(feature);
++	return true;
++}
 +bool NativeMetalWorld::QueueUnit(CUnit* unit) {
 +	if (renderer == nullptr || !renderer->collecting || !renderer->forwardUnitPass) return false;
 +	// 3DO atlases, custom Lua draw callbacks, and construction visualization
 +	// retain their original compatibility renderer and are never double drawn.
 +	if (unit->model->type != MODELTYPE_S3O || unit->luaDraw ||
 +		(unit->beingBuilt && unit->unitDef->showNanoFrame)) return false;
++	{
++		const auto* material = textureHandlerS3O.GetTexture(unit->model->textureType);
++		if (material == nullptr) return false;
++		if (!renderer->ProbeMaterial(material->tex1, material->tex2, "units")) return false;
++	}
 +	renderer->units.push_back(unit);
 +	return true;
 +}

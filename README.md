@@ -15,9 +15,12 @@ gets reimplemented.**
 **Two runtimes, separate simulations:** `recoil-metal` runs FA through native
 Metal; `recoil-bar` launches the pinned upstream-derived Recoil engine for BAR.
 The BAR launcher shares `rm_foundation` with FA, not its simulation or Lua VM.
- BAR renders normal SMF terrain and default opaque S3O units through native Metal
- into the same Kosmickrisp framebuffer (zero-copy borrowed attachments); shadows,
- water, particles, CUS GL4 custom materials and UI stay on the compatibility path.
+ BAR renders its persistent 3D world through native Metal into the same Kosmickrisp
+ framebuffer (zero-copy borrowed attachments): SMF terrain, S3O units, features,
+ model projectiles, transparent variants, shadow-map receive, and the BumpWater
+ surface. Compat by design: grass, decals, sky, billboard particles, icons/lines,
+ minimap 2D, Rml UI, CUS GL4 custom materials, debug drawers, and offscreen
+ generation (shadow/reflection/refraction/deferred) which feeds native sampling.
  Cross-platform multiplayer is not claimed.
 
 - **Fast.** 0.554 ms/frame against 7.416 ms for Recoil's OpenGL path on the same
@@ -251,13 +254,16 @@ mise exec -- make prepare-bar  # verify external runtime/content pins, then moun
 mise exec -- make play-bar     # real BAR: human Armada versus BAR's built-in SimpleAI
 mise exec -- make smoke-bar    # observe player movement/building, AI actions and rendered UI
 ```
- Hybrid native Metal (2026-10-10): smoke renders normal SMF terrain (1.57M tris)
- and default opaque S3O units through direct MSL into the borrowed Kosmickrisp
- framebuffer; the checker requires both BAR-METAL markers plus gameplay. Smoke
- disables CUS GL4 (`luarules disablecusgl4`) because BAR's options widget
+ Hybrid native Metal (2026-10-10): smoke renders SMF terrain (1.57M tris), S3O units,
+ BumpWater surface, and opportunistic features/alpha/projectiles through direct MSL;
+ the checker requires terrain/units/water markers plus gameplay and reports the rest.
+ Smoke disables CUS GL4 (`luarules disablecusgl4`) because BAR's options widget
  force-enables it on capable GPUs, masking engine unit draws; normal play keeps
- CUS GL4. Native scope: SMF diffuse + sun/fog, S3O diffuse/teamcolor/alpha-mask;
- no shadow-map receiving, env cubemaps, or custom Lua materials.
+ CUS GL4. Native shading: diffuse/teamcolor/alpha + shadow-map receive + sun/fog;
+ no env cubemaps or custom Lua materials. Material storage that Mesa streams
+ mid-frame falls back per-object with an explicit log (nothing vanishes silently).
+ Wall time parity with compat (548 vs 551 frames in ~71s vs ~73s); queue
+ serialization stays until a bottleneck shows in Instruments.
 
 The engine/Mesa builds live in `build/bar/engine-build` and `build/bar/mesa-install`;
 BAR, maps and fonts remain external. `tools/bar-runtime.lock.json` pins upstream revisions, the

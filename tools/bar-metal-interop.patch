@@ -1,5 +1,5 @@
 diff --git a/src/gallium/drivers/zink/zink_resource.c b/src/gallium/drivers/zink/zink_resource.c
-index 38400a3..881677b 100644
+index 38400a3..14e698d 100644
 --- a/src/gallium/drivers/zink/zink_resource.c
 +++ b/src/gallium/drivers/zink/zink_resource.c
 @@ -22,6 +22,10 @@
@@ -21,7 +21,7 @@ index 38400a3..881677b 100644
  #include "util/os_file.h"
  #include "frontend/winsys_handle.h"
  
-@@ -68,6 +73,64 @@
+@@ -68,6 +73,59 @@
  
  #define ZINK_EXTERNAL_MEMORY_HANDLE 999
  
@@ -38,8 +38,7 @@ index 38400a3..881677b 100644
 +      return NULL;
 +
 +   const char *name = pscreen->get_name(pscreen);
-+   if (!name || strncmp(name, "zink Vulkan ", 12) != 0)
-+      return NULL;
++   if (!name || strncmp(name, "zink Vulkan ", 12) != 0) return NULL;
 +
 +   struct pipe_screen *resource_screen = resource->screen;
 +   if (resource_screen && resource_screen->get_driver_pipe_screen)
@@ -48,18 +47,15 @@ index 38400a3..881677b 100644
 +       resource->target != PIPE_TEXTURE_2D ||
 +       resource->array_size != 1 || resource->depth0 != 1 ||
 +       resource->nr_samples > 1 || resource->nr_storage_samples > 1 ||
-+       (resource->flags & PIPE_RESOURCE_FLAG_SPARSE))
-+      return NULL;
++       (resource->flags & PIPE_RESOURCE_FLAG_SPARSE)) return NULL;
 +
 +   struct zink_screen *screen = zink_screen(pscreen);
 +   if (zink_driverid(screen) != VK_DRIVER_ID_MESA_KOSMICKRISP ||
-+       screen->device_lost || !screen->loader_lib)
-+      return NULL;
++       screen->device_lost || !screen->loader_lib) return NULL;
 +
 +   struct zink_resource *res = zink_resource(resource);
 +   if (!res->obj || !res->obj->image || res->deleted ||
-+       res->transient || res->unflushed_transient)
-+      return NULL;
++       res->transient || res->unflushed_transient) return NULL;
 +
 +   typedef void *(*export_image_fn)(uint64_t);
 +   export_image_fn export_image = NULL;
@@ -77,8 +73,7 @@ index 38400a3..881677b 100644
 +            export_image = (export_image_fn)dlsym(driver, "recoil_metal_vk_image");
 +      }
 +   }
-+   if (!export_image)
-+      return NULL;
++   if (!export_image) return NULL;
 +
 +   return export_image((uint64_t)(uintptr_t)res->obj->image);
 +}
@@ -86,7 +81,7 @@ index 38400a3..881677b 100644
  
  
  struct zink_debug_mem_entry {
-@@ -2154,7 +2217,7 @@ zink_resource_from_handle(struct pipe_screen *pscreen,
+@@ -2154,7 +2212,7 @@ zink_resource_from_handle(struct pipe_screen *pscreen,
  
     return pres;
  #else
@@ -95,7 +90,7 @@ index 38400a3..881677b 100644
  #endif
  }
  
-@@ -2613,7 +2676,7 @@ fail:
+@@ -2613,7 +2671,7 @@ fail:
     if (ctx == screen->copy_context)
        zink_screen_unlock_context(screen);
     destroy_transfer(ctx, trans);
@@ -104,7 +99,7 @@ index 38400a3..881677b 100644
  }
  
  static void *
-@@ -2746,7 +2809,7 @@ zink_image_map(struct pipe_context *pctx,
+@@ -2746,7 +2804,7 @@ zink_image_map(struct pipe_context *pctx,
  
  fail:
     destroy_transfer(ctx, trans);
@@ -113,7 +108,7 @@ index 38400a3..881677b 100644
  }
  
  static void
-@@ -3223,7 +3286,7 @@ zink_resource_get_separate_stencil(struct pipe_resource *pres)
+@@ -3223,7 +3281,7 @@ zink_resource_get_separate_stencil(struct pipe_resource *pres)
     if (pres->next && pres->next->format == PIPE_FORMAT_S8_UINT)
        return pres->next;
  
@@ -192,10 +187,10 @@ index 8c9c0bb..f80246c 100644
     // TODO_KOSMICKRISP Only have one handle since we will only create 2D arrays
 diff --git a/src/gallium/targets/dri/recoil_metal.c b/src/gallium/targets/dri/recoil_metal.c
 new file mode 100644
-index 0000000..0493ad5
+index 0000000..f5803e3
 --- /dev/null
 +++ b/src/gallium/targets/dri/recoil_metal.c
-@@ -0,0 +1,139 @@
+@@ -0,0 +1,146 @@
 +/* SPDX-License-Identifier: MIT */
 +#include "main/context.h"
 +#include "main/framebuffer.h"
@@ -313,27 +308,34 @@ index 0000000..0493ad5
 +   if (!texture || texture->Target != GL_TEXTURE_2D || !texture->pt ||
 +       texture->Attrib.BaseLevel != 0 || texture->Attrib.MinLevel != 0 ||
 +       texture->Attrib.MinLayer != 0 ||
-+       (texture->surface_based && texture->surface_format != texture->pt->format)) {
-+      return NULL;
++       (texture->surface_based && texture->surface_format != texture->pt->format)) { return NULL;
 +   }
 +
 +   struct gl_texture_image *base = texture->Image[0][0];
-+   if (!base || base->pt != texture->pt ||
-+       base->Width != texture->pt->width0 ||
-+       base->Height != texture->pt->height0 ||
-+       texture->pt->last_level >= MAX_TEXTURE_LEVELS) {
-+      return NULL;
-+   }
-+   for (unsigned level = 0; level <= texture->pt->last_level; level++) {
-+      struct gl_texture_image *image = texture->Image[0][level];
-+      if (image && image->pt != texture->pt)
-+         return NULL;
-+   }
++   if (!base || !base->pt) { return NULL; }
++   /* Render-to-texture resources (dynamic waves, coast updates) are rewritten
++    * every frame: the level image keeps the previous backing while the object
++    * already references the new one. Sampling the previous backing lags one
++    * frame behind, which is visually irrelevant and always memory-safe
++    * (refcounted). Require matching dimensions so a redefined texture can
++    * never alias an unrelated allocation.
++    */
++   struct pipe_resource *backing = base->pt;
++   if (base->Width != backing->width0 || base->Height != backing->height0) { return NULL; }
++   if (backing == texture->pt) {
++      if (texture->pt->last_level >= MAX_TEXTURE_LEVELS) { return NULL; }
++   } else if (backing->target != PIPE_TEXTURE_2D || backing->width0 == 0 || backing->height0 == 0) { return NULL; }
++   /* Mutable per-level uploads (RecoilBuildMipmaps: glTexImage2D per level)
++    * leave higher levels in separate backing resources. The base level is
++    * always current when the checks above pass, and Metal clamps mip sampling
++    * to the resident levels of the borrowed backing, so returning it is safe:
++    * distant detail falls back to base-level content instead of failing.
++    */
 +
 +   /* Do not finalize a texture here: that can migrate/copy its storage after
-+    * the caller's glFinish. An unallocated or stale backing is rejected.
++    * the caller's glFinish. An unallocated backing is rejected.
 +    */
-+   return zink_recoil_metal_texture(ctx->screen, texture->pt);
++   return zink_recoil_metal_texture(ctx->screen, backing);
 +}
 diff --git a/src/gallium/drivers/zink/zink_recoil_metal.h b/src/gallium/drivers/zink/zink_recoil_metal.h
 new file mode 100644

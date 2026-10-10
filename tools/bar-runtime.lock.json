@@ -17,14 +17,14 @@
       "2151fa65077037df9806f73fc125ab1c121920f3",
       "bba02dbb97238cc0b561e1147c203941de178a06"
     ],
-    "sha256": "19223e4d560e5da2c98336d4dbfc1c11e215f9e9379ffefa41224aa8f3df878c",
+    "sha256": "c45da1c2772f42ae0db9e150c44228068fa6309d45308841ec59d6498e8dc3da",
     "base": {
       "sha256": "911f98f0424eb44dedddccda77253145a663b484127fb8f4e2e1d5cab00cb417",
       "files": 4
     },
     "license": "GPL-2.0-or-later; see upstream COPYING/LICENSE",
     "metal_patch": "tools/bar-metal-engine.patch",
-    "metal_patch_sha256": "27bdf446ff532f5dfa7643b2c985f94d0e22b7ac66e26f71c498362d4713d442"
+    "metal_patch_sha256": "1e8b16dfe69f4c7b224b2ea32b1fdd068aecd25042c6495667f25e09dea40a30"
   },
   "mesa": {
     "url": "https://github.com/lucamignatti/mesa.git",
@@ -41,14 +41,14 @@
       "libGLESv1_CM.dylib": "e75c5f72a8fe8bae559ab52dd341d13bc00b7d32761ecb5d86c1753e30235904",
       "libGLESv2.2.dylib": "8110f04818110822b7c74ab274078bd958e3c8b6121885af7ea158b3005b576b",
       "libGLESv2.dylib": "8110f04818110822b7c74ab274078bd958e3c8b6121885af7ea158b3005b576b",
-      "libgallium-26.1.0-devel.dylib": "f7d99377f78ff8ef0cf7b7f0405338ac7b2f2e9e906d56dc870c4be526f37a77",
+      "libgallium-26.1.0-devel.dylib": "6f69db2141a2f905f87620d2070b0b6b72a0eaaaeb6db4c8e6cf5e7c48896cd5",
       "libgl_interpose.dylib": "f8815927302f4ea4c3857b9cd1bf77a6e4b5d0cd89c3206e0243d363bac24754",
       "libvulkan_kosmickrisp.dylib": "d9658cca71455ecedb86e95b2899f9ae46ccc49f1628070f53c13372a32b56f1"
     },
     "icd_sha256": "8d851f6a8fd4e396c3d1f105aa2ce08aba8cd02ab02e9b8fb33403447d38b85c",
     "license": "MIT and component-specific permissive licenses; see upstream licenses/",
     "metal_patch": "tools/bar-metal-interop.patch",
-    "metal_patch_sha256": "e528bcfbf68322af60fd2623106cb0808f0dcae190550490a008b8ee29ab3eab"
+    "metal_patch_sha256": "894ee1b9acfb7d90e36a3d5cf38f349052c89e5ebc4163c67a92855b712e2c5e"
   },
   "game": {
     "url": "https://github.com/beyond-all-reason/Beyond-All-Reason.git",

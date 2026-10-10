@@ -40,10 +40,21 @@ def main():
             if row["err"] or (row["fullTitle"] in pending and row["file"] != UPSTREAM_DISABLED_TEST):
                 raise ValueError(f"Unexpected failing/skipped scenario: {row}")
         infolog = (args.data_dir / "infolog.txt").read_text()
-        for native_pass in ("terrain", "units"):
+        # Deterministic every run: terrain, units, water. Opportunistic
+        # (wrecks/combat/cloak dependent): features, alphaUnits, alphaFeatures,
+        # projectiles — reported, never required.
+        for native_pass in ("terrain", "units", "water"):
             if not re.search(rf"BAR-METAL {native_pass} triangles=[1-9][0-9]*", infolog):
                 raise ValueError(f"No completed native Metal {native_pass} draw in this run")
-        print(f"BAR smoke PASS: native Metal terrain/units, player MOVE/BUILD, SimpleAI construction, UI; evidence: {args.data_dir}")
+        opportunistic = sorted(set(re.findall(r"BAR-METAL (features|alphaUnits|alphaFeatures|projectiles) triangles=([1-9][0-9]*)", infolog)))
+        compat_notes = sorted(set(re.findall(r"BAR-METAL (\w[\w]*) (?:material \d+ (?:unavailable|stays compat)[^\n]*|core textures unavailable[^\n]*|.*falling back to compat)", infolog)))
+        print(f"BAR smoke PASS: native Metal terrain/units/water, player MOVE/BUILD, SimpleAI construction, UI; evidence: {args.data_dir}")
+        if opportunistic:
+            print(f"Opportunistic native draws: {', '.join(f'{name}={count}' for name, count in opportunistic)}")
+        else:
+            print("Opportunistic native draws: none this run (no wrecks/cloaked units/model projectiles in view)")
+        if compat_notes:
+            print(f"Compat fallbacks (logged, objects still drawn): {len(compat_notes)} distinct notes")
         if pending:
             print("Upstream infolog-only check is disabled; no all-errors-clean claim.")
         return 0
