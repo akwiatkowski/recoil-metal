@@ -1,0 +1,359 @@
+diff --git a/src/gallium/drivers/zink/zink_resource.c b/src/gallium/drivers/zink/zink_resource.c
+index 38400a3..881677b 100644
+--- a/src/gallium/drivers/zink/zink_resource.c
++++ b/src/gallium/drivers/zink/zink_resource.c
+@@ -22,6 +22,10 @@
+  */
+ 
+ #include "zink_resource.h"
++#include "zink_recoil_metal.h"
++#include <dlfcn.h>
++#include <mach-o/dyld.h>
++#include <string.h>
+ 
+ #include "zink_batch.h"
+ #include "zink_clear.h"
+@@ -45,6 +49,7 @@
+ #include "util/u_inlines.h"
+ #include "util/u_memory.h"
+ #include "util/u_upload_mgr.h"
++#include "util/u_dl.h"
+ #include "util/os_file.h"
+ #include "frontend/winsys_handle.h"
+ 
+@@ -68,6 +73,64 @@
+ 
+ #define ZINK_EXTERNAL_MEMORY_HANDLE 999
+ 
++void *
++zink_recoil_metal_texture(struct pipe_screen *pscreen,
++                         struct pipe_resource *resource)
++{
++   if (!pscreen || !resource)
++      return NULL;
++
++   if (pscreen->get_driver_pipe_screen)
++      pscreen = pscreen->get_driver_pipe_screen(pscreen);
++   if (!pscreen || !pscreen->get_name)
++      return NULL;
++
++   const char *name = pscreen->get_name(pscreen);
++   if (!name || strncmp(name, "zink Vulkan ", 12) != 0)
++      return NULL;
++
++   struct pipe_screen *resource_screen = resource->screen;
++   if (resource_screen && resource_screen->get_driver_pipe_screen)
++      resource_screen = resource_screen->get_driver_pipe_screen(resource_screen);
++   if (resource_screen != pscreen ||
++       resource->target != PIPE_TEXTURE_2D ||
++       resource->array_size != 1 || resource->depth0 != 1 ||
++       resource->nr_samples > 1 || resource->nr_storage_samples > 1 ||
++       (resource->flags & PIPE_RESOURCE_FLAG_SPARSE))
++      return NULL;
++
++   struct zink_screen *screen = zink_screen(pscreen);
++   if (zink_driverid(screen) != VK_DRIVER_ID_MESA_KOSMICKRISP ||
++       screen->device_lost || !screen->loader_lib)
++      return NULL;
++
++   struct zink_resource *res = zink_resource(resource);
++   if (!res->obj || !res->obj->image || res->deleted ||
++       res->transient || res->unflushed_transient)
++      return NULL;
++
++   typedef void *(*export_image_fn)(uint64_t);
++   export_image_fn export_image = NULL;
++   /* The Vulkan loader opened the ICD by its absolute install path, which
++    * this bridge cannot know. RTLD_NOLOAD matches by path string, so locate
++    * the already-loaded Kosmickrisp image through dyld and re-open that exact
++    * path (no new copy, no other driver). Nothing is copied or retained.
++    */
++   uint32_t image_count = _dyld_image_count();
++   for (uint32_t i = 0; i < image_count && !export_image; i++) {
++      const char *name = _dyld_get_image_name(i);
++      if (name && strstr(name, "libvulkan_kosmickrisp") != NULL) {
++         void *driver = dlopen(name, RTLD_NOW | RTLD_NOLOAD | RTLD_LOCAL);
++         if (driver)
++            export_image = (export_image_fn)dlsym(driver, "recoil_metal_vk_image");
++      }
++   }
++   if (!export_image)
++      return NULL;
++
++   return export_image((uint64_t)(uintptr_t)res->obj->image);
++}
++
+ 
+ 
+ struct zink_debug_mem_entry {
+@@ -2154,7 +2217,7 @@ zink_resource_from_handle(struct pipe_screen *pscreen,
+ 
+    return pres;
+ #else
+-   return NULL;
++      return NULL;
+ #endif
+ }
+ 
+@@ -2613,7 +2676,7 @@ fail:
+    if (ctx == screen->copy_context)
+       zink_screen_unlock_context(screen);
+    destroy_transfer(ctx, trans);
+-   return NULL;
++      return NULL;
+ }
+ 
+ static void *
+@@ -2746,7 +2809,7 @@ zink_image_map(struct pipe_context *pctx,
+ 
+ fail:
+    destroy_transfer(ctx, trans);
+-   return NULL;
++      return NULL;
+ }
+ 
+ static void
+@@ -3223,7 +3286,7 @@ zink_resource_get_separate_stencil(struct pipe_resource *pres)
+    if (pres->next && pres->next->format == PIPE_FORMAT_S8_UINT)
+       return pres->next;
+ 
+-   return NULL;
++      return NULL;
+ 
+ }
+ 
+diff --git a/src/gallium/targets/dri/meson.build b/src/gallium/targets/dri/meson.build
+index c8ac8f7..7313072 100644
+--- a/src/gallium/targets/dri/meson.build
++++ b/src/gallium/targets/dri/meson.build
+@@ -37,9 +37,16 @@ else
+   libgallium_name = 'gallium-@0@'.format(meson.project_version())
+ endif
+ 
++# Build the C borrowing ABI directly into libgallium so hidden static archives
++# cannot discard its otherwise unreferenced public entrypoints.
++recoil_metal_sources = []
++if host_machine.system() == 'darwin' and with_gallium_zink
++  recoil_metal_sources = files('recoil_metal.c')
++endif
++
+ libgallium_dri = shared_library(
+   libgallium_name,
+-  files('dri_target.c'),
++  [files('dri_target.c'), recoil_metal_sources],
+   include_directories : [
+     inc_include, inc_src, inc_mesa, inc_gallium, inc_gallium_aux, inc_util, inc_gallium_drivers,
+     inc_gallium_winsys, include_directories('../../frontends/dri'),
+diff --git a/src/kosmickrisp/vulkan/kk_image.c b/src/kosmickrisp/vulkan/kk_image.c
+index 8583fc3..4192851 100644
+--- a/src/kosmickrisp/vulkan/kk_image.c
++++ b/src/kosmickrisp/vulkan/kk_image.c
+@@ -20,6 +20,27 @@
+ #include "vk_format.h"
+ #include "wsi_common_private.h"
+ 
++__attribute__((visibility("default"))) void *
++recoil_metal_vk_image(uint64_t image_handle)
++{
++   if (!image_handle)
++      return NULL;
++
++   struct kk_image *image =
++      kk_image_from_handle((VkImage)(uintptr_t)image_handle);
++   if (image->vk.base.type != VK_OBJECT_TYPE_IMAGE ||
++       image->vk.image_type != VK_IMAGE_TYPE_2D ||
++       image->vk.array_layers != 1 || image->vk.samples != VK_SAMPLE_COUNT_1_BIT ||
++       image->plane_count != 1 || image->disjoint ||
++       !image->planes[0].mtl_handle)
++      return NULL;
++
++   /* This is the live image backing, not an image view, copy, or readback.
++    * Borrow only until the caller's Metal commands complete; do not retain it.
++    */
++   return image->planes[0].mtl_handle;
++}
++
+ static VkFormatFeatureFlags2
+ kk_get_image_plane_format_features(struct kk_physical_device *pdev,
+                                    VkFormat vk_format, VkImageTiling tiling,
+diff --git a/src/kosmickrisp/vulkan/kk_image.h b/src/kosmickrisp/vulkan/kk_image.h
+index 8c9c0bb..f80246c 100644
+--- a/src/kosmickrisp/vulkan/kk_image.h
++++ b/src/kosmickrisp/vulkan/kk_image.h
+@@ -28,6 +28,9 @@ kk_get_image_format_features(struct kk_physical_device *pdevice,
+ 
+ uint32_t kk_image_max_dimension(VkImageType image_type);
+ 
++/* Borrowed plane-zero Metal texture; the caller owns all synchronization. */
++void *recoil_metal_vk_image(uint64_t image);
++
+ struct kk_image_plane {
+    struct kk_image_layout layout;
+    // TODO_KOSMICKRISP Only have one handle since we will only create 2D arrays
+diff --git a/src/gallium/targets/dri/recoil_metal.c b/src/gallium/targets/dri/recoil_metal.c
+new file mode 100644
+index 0000000..0493ad5
+--- /dev/null
++++ b/src/gallium/targets/dri/recoil_metal.c
+@@ -0,0 +1,139 @@
++/* SPDX-License-Identifier: MIT */
++#include "main/context.h"
++#include "main/framebuffer.h"
++#include "main/renderbuffer.h"
++#include "main/state.h"
++#include "main/texobj.h"
++#include "state_tracker/st_manager.h"
++#include "pipe/p_context.h"
++#include "pipe/p_state.h"
++#include "util/format/u_format.h"
++#include "zink/zink_recoil_metal.h"
++
++/* The bridge deliberately performs no GPU waits. glFinish before borrowing and
++ * Metal command-buffer completion before resuming GL serialize the two queues.
++ * This sacrifices overlap for correctness without any framebuffer copy.
++ */
++static struct gl_context *
++recoil_metal_context(void)
++{
++   struct gl_context *ctx = _mesa_get_current_context();
++   if (!ctx || !ctx->st || !ctx->pipe || !ctx->screen ||
++       _mesa_inside_begin_end(ctx) ||
++       (ctx->Dispatch.ContextLost &&
++        ctx->Dispatch.Current == ctx->Dispatch.ContextLost))
++      return NULL;
++   return ctx;
++}
++
++static bool
++recoil_metal_renderbuffer(struct gl_context *ctx, struct gl_renderbuffer *rb,
++                          bool depth)
++{
++   if (!rb || !rb->texture || rb->software || rb->NumSamples > 1 ||
++       rb->NumStorageSamples > 1 || rb->rtt_layered || rb->rtt_numviews > 1)
++      return false;
++
++   if (rb->is_rtt)
++      _mesa_update_renderbuffer_surface(ctx, rb);
++
++   struct pipe_surface *surface = &rb->surface;
++   struct pipe_resource *resource = rb->texture;
++   if (surface->texture != resource || surface->level != 0 ||
++       surface->first_layer != 0 || surface->last_layer != 0 ||
++       surface->nr_samples > 1 || rb->Width != resource->width0 ||
++       rb->Height != resource->height0 || !rb->Width || !rb->Height)
++      return false;
++
++   /* Returning the base image cannot express a reinterpreted attachment view,
++    * including an sRGB/linear view selected by GL_FRAMEBUFFER_SRGB.
++    */
++   enum pipe_format format = depth ? surface->format :
++      _mesa_renderbuffer_get_format(ctx, rb);
++   if (format != resource->format)
++      return false;
++
++   return depth ? util_format_has_depth(util_format_description(format)) :
++      !util_format_is_depth_or_stencil(format);
++}
++
++__attribute__((visibility("default"))) int
++recoil_metal_frame(void **color, void **depth)
++{
++   if (color)
++      *color = NULL;
++   if (depth)
++      *depth = NULL;
++   if (!color || !depth || color == depth)
++      return 0;
++
++   struct gl_context *ctx = recoil_metal_context();
++   if (!ctx || !ctx->DrawBuffer || !ctx->ReadBuffer)
++      return 0;
++
++   /* Drawable resources can change after a swap or resize. Validate the live
++    * framebuffer every query; never cache borrowed native attachments.
++    */
++   st_manager_validate_framebuffers(ctx->st);
++   if (ctx->NewState)
++      _mesa_update_state(ctx);
++   _mesa_update_framebuffer(ctx, ctx->ReadBuffer, ctx->DrawBuffer);
++
++   struct gl_framebuffer *fb = ctx->DrawBuffer;
++   if (fb->_Status != GL_FRAMEBUFFER_COMPLETE ||
++       _mesa_fb_orientation(fb) != Y_0_TOP || fb->_NumColorDrawBuffers != 1 ||
++       fb->resolve || fb->Width == 0 || fb->Height == 0)
++      return 0;
++
++   struct gl_renderbuffer *color_rb = fb->_ColorDrawBuffers[0];
++   struct gl_renderbuffer *depth_rb = fb->Attachment[BUFFER_DEPTH].Renderbuffer;
++   if (!recoil_metal_renderbuffer(ctx, color_rb, false) ||
++       !recoil_metal_renderbuffer(ctx, depth_rb, true) ||
++       color_rb->Width != depth_rb->Width ||
++       color_rb->Height != depth_rb->Height ||
++       color_rb->Width != fb->Width || color_rb->Height != fb->Height)
++      return 0;
++
++   void *native_color = zink_recoil_metal_texture(ctx->screen, color_rb->texture);
++   void *native_depth = zink_recoil_metal_texture(ctx->screen, depth_rb->texture);
++   if (!native_color || !native_depth)
++   return 0;
++
++   *color = native_color;
++   *depth = native_depth;
++   return 1;
++}
++
++__attribute__((visibility("default"))) void *
++recoil_metal_texture(unsigned int name)
++{
++   struct gl_context *ctx = recoil_metal_context();
++   if (!ctx || !name)
++      return NULL;
++
++   struct gl_texture_object *texture = _mesa_lookup_texture(ctx, name);
++   if (!texture || texture->Target != GL_TEXTURE_2D || !texture->pt ||
++       texture->Attrib.BaseLevel != 0 || texture->Attrib.MinLevel != 0 ||
++       texture->Attrib.MinLayer != 0 ||
++       (texture->surface_based && texture->surface_format != texture->pt->format)) {
++      return NULL;
++   }
++
++   struct gl_texture_image *base = texture->Image[0][0];
++   if (!base || base->pt != texture->pt ||
++       base->Width != texture->pt->width0 ||
++       base->Height != texture->pt->height0 ||
++       texture->pt->last_level >= MAX_TEXTURE_LEVELS) {
++      return NULL;
++   }
++   for (unsigned level = 0; level <= texture->pt->last_level; level++) {
++      struct gl_texture_image *image = texture->Image[0][level];
++      if (image && image->pt != texture->pt)
++         return NULL;
++   }
++
++   /* Do not finalize a texture here: that can migrate/copy its storage after
++    * the caller's glFinish. An unallocated or stale backing is rejected.
++    */
++   return zink_recoil_metal_texture(ctx->screen, texture->pt);
++}
+diff --git a/src/gallium/drivers/zink/zink_recoil_metal.h b/src/gallium/drivers/zink/zink_recoil_metal.h
+new file mode 100644
+index 0000000..f835edf
+--- /dev/null
++++ b/src/gallium/drivers/zink/zink_recoil_metal.h
+@@ -0,0 +1,16 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef ZINK_RECOIL_METAL_H
++#define ZINK_RECOIL_METAL_H
++
++struct pipe_screen;
++struct pipe_resource;
++
++/* Borrowed native textures: caller must finish GL first and finish Metal before
++ * resuming GL. No texture lifetime extends beyond that synchronized interval.
++ */
++void *zink_recoil_metal_texture(struct pipe_screen *screen,
++                                struct pipe_resource *resource);
++int recoil_metal_frame(void **color, void **depth);
++void *recoil_metal_texture(unsigned int name);
++
++#endif

@@ -25,6 +25,10 @@ local function test()
     -- Startup sets cheat/devlua idempotently before invoking the runner.
     -- Toggle visibility once here, after those synchronized commands arrive.
     Spring.SendCommands("globallos")
+    -- Native Metal unit fixture: BAR's options widget force-enables CUS GL4 on
+    -- capable GPUs, which masks engine unit draws. Disable it explicitly here
+    -- Default gameplay keeps CUS GL4; this is a smoke-only rendering fixture.
+    Spring.SendCommands("luarules disablecusgl4")
     assert(Spring.GetLocalTeamID() == 0, "Player is not controlling team 0")
     assert(not Spring.GetSpectatingState(), "Player is a spectator")
     assert(Spring.GetTeamLuaAI(1) == "SimpleAI", "Real SimpleAI opponent is absent")

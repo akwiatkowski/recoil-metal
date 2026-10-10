@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -38,7 +39,11 @@ def main():
         for row in rows:
             if row["err"] or (row["fullTitle"] in pending and row["file"] != UPSTREAM_DISABLED_TEST):
                 raise ValueError(f"Unexpected failing/skipped scenario: {row}")
-        print(f"BAR smoke PASS: player MOVE/BUILD, SimpleAI construction, UI; evidence: {args.data_dir}")
+        infolog = (args.data_dir / "infolog.txt").read_text()
+        for native_pass in ("terrain", "units"):
+            if not re.search(rf"BAR-METAL {native_pass} triangles=[1-9][0-9]*", infolog):
+                raise ValueError(f"No completed native Metal {native_pass} draw in this run")
+        print(f"BAR smoke PASS: native Metal terrain/units, player MOVE/BUILD, SimpleAI construction, UI; evidence: {args.data_dir}")
         if pending:
             print("Upstream infolog-only check is disabled; no all-errors-clean claim.")
         return 0

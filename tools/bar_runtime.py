@@ -272,15 +272,27 @@ def fetch_source(args: argparse.Namespace) -> None:
         patch = ROOT / specification["port_patch"]
         require_digest(patch, specification["port_patch_sha256"])
         patch_paths = set(re.findall(r"^\+\+\+ b/(.+)$", patch.read_text(), re.MULTILINE))
+        metal_patch_path = specification.get("metal_patch")
+        metal_patch = ROOT / metal_patch_path if metal_patch_path else None
+        if metal_patch is not None:
+            require_digest(metal_patch, specification["metal_patch_sha256"])
+            patch_paths.update(re.findall(r"^\+\+\+ b/(.+)$", metal_patch.read_text(), re.MULTILINE))
         changes = set(git_output("diff", "--name-only").splitlines())
         changes.update(git_output("ls-files", "--others", "--exclude-standard").splitlines())
         if changes - patch_paths:
             raise ValueError(f"Unrelated source edits in {destination}: {sorted(changes - patch_paths)}")
+        native_applied = True
+        if metal_patch is not None:
+            native_applied = subprocess.run(["mise", "exec", "--", "git", "-C", str(destination),
+                                            "apply", "--reverse", "--check", str(metal_patch)],
+                                           capture_output=True).returncode == 0
         applied = subprocess.run(["mise", "exec", "--", "git", "-C", str(destination),
-                                  "apply", "--reverse", "--check", str(patch)],
-                                 capture_output=True).returncode == 0
+                                 "apply", "--reverse", "--check", str(patch)],
+                                capture_output=True).returncode == 0
         if not applied:
             run("git", "-C", str(destination), "apply", str(patch))
+        if metal_patch is not None and not native_applied:
+            run("git", "-C", str(destination), "apply", str(metal_patch))
         configuration = ["-c", "protocol.file.allow=always"]
         if args.engine_cache:
             cache = Path(args.engine_cache).expanduser().resolve()
@@ -302,6 +314,11 @@ def fetch_source(args: argparse.Namespace) -> None:
         rgba_patch = ROOT / specification["rgba_patch"]
         require_digest(rgba_patch, specification["rgba_patch_sha256"])
         run("git", "-C", str(destination), "apply", str(rgba_patch))
+        metal_patch_path = specification.get("metal_patch")
+        if metal_patch_path is not None:
+            metal_patch = ROOT / metal_patch_path
+            require_digest(metal_patch, specification["metal_patch_sha256"])
+            run("git", "-C", str(destination), "apply", str(metal_patch))
     elif kind == "game":
         # The captured runnable checkout leaves its developer-only Lua library
         # submodule empty. Fetching it would not reproduce this content tree.

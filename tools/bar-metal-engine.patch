@@ -1,0 +1,797 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -305,6 +305,13 @@
+ endif (USE_ASAN)
+ 
+ option(RECOIL_MACOS_SDL3_EGL "Use project-local SDL3 Cocoa windowing and Mesa Cocoa EGL/Zink on macOS" ${APPLE})
++if (APPLE AND RECOIL_MACOS_SDL3_EGL)
++	enable_language(OBJCXX)
++	set(CMAKE_OBJCXX_STANDARD 23)
++	set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
++	set(CMAKE_OBJCXX_EXTENSIONS OFF)
++	set(CMAKE_OBJCXX_FLAGS "${CMAKE_CXX_FLAGS}")
++endif ()
+ 
+ ### Tracy related stuff
+ option(RECOIL_DETAILED_TRACY_ZONING "Enable additional detailed tracy zones (only enable this for testing/debugging)" FALSE)
+--- a/rts/Map/SMF/SMFGroundDrawer.cpp
++++ b/rts/Map/SMF/SMFGroundDrawer.cpp
+@@ -11,6 +11,8 @@
+ #include "Map/SMF/ROAM/RoamMeshDrawer.h"
+ #include "Rendering/GlobalRendering.h"
+ #include "Rendering/ShadowHandler.h"
++#include "Rendering/NativeMetalWorld.h"
++#include "System/Exceptions.h"
+ #include "Rendering/Env/ISky.h"
+ #include "Rendering/Env/WaterRendering.h"
+ #include "Rendering/Env/MapRendering.h"
+@@ -305,6 +307,28 @@
+ 		eventHandler.DrawGroundPostForward();
+ }
+ 
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++void CSMFGroundDrawer::DrawNativeMetal()
++{
++	if (!globalRendering->drawGround || readMap->HasOnlyVoidWater())
++		return;
++	if (HaveLuaRenderState())
++		throw content_error("NativeMetalWorld does not support Lua terrain shaders; disable NativeMetalWorld for this map");
++
++	// Preserve the optional compatibility G-buffer and its Lua callins. Only
++	// the normal forward terrain is replaced; borders remain compatibility.
++	if (drawDeferred)
++		DrawDeferredPass(DrawPass::Normal, mapRendering->voidGround || mapRendering->voidWater);
++	if (alwaysDispatchEvents)
++		eventHandler.DrawGroundPreForward();
++	NativeMetalWorld::DrawTerrain(*smfMap, *static_cast<CSMFGroundTextures*>(groundTextures));
++	if (alwaysDispatchEvents)
++		eventHandler.DrawGroundPostForward();
++	if (drawMapEdges)
++		DrawBorder(DrawPass::Normal);
++}
++#endif
++
+ void CSMFGroundDrawer::Draw(const DrawPass::e& drawPass)
+ {
+ 	RECOIL_DETAILED_TRACY_ZONE;
+--- a/rts/Map/SMF/SMFGroundDrawer.h
++++ b/rts/Map/SMF/SMFGroundDrawer.h
+@@ -41,6 +41,9 @@
+ 	friend class CSMFReadMap;
+ 
+ 	void Draw(const DrawPass::e& drawPass);
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++	void DrawNativeMetal();
++#endif
+ 	void DrawDeferredPass(const DrawPass::e& drawPass, bool alphaTest);
+ 	void DrawForwardPass(const DrawPass::e& drawPass, bool alphaTest);
+ 	void DrawShadowPass();
+--- a/rts/Map/SMF/SMFGroundTextures.cpp
++++ b/rts/Map/SMF/SMFGroundTextures.cpp
+@@ -629,6 +629,11 @@
+ 
+ void CSMFGroundTextures::BindSquareTexture(int texSquareX, int texSquareY)
+ {
++	glBindTexture(GL_TEXTURE_2D, GetSquareTextureID(texSquareX, texSquareY));
++}
++
++unsigned int CSMFGroundTextures::GetSquareTextureID(int texSquareX, int texSquareY)
++{
+ 	RECOIL_DETAILED_TRACY_ZONE;
+ 	assert(texSquareX >= 0);
+ 	assert(texSquareY >= 0);
+@@ -636,9 +641,9 @@
+ 	assert(texSquareY < smfMap->numBigTexY);
+ 
+ 	GroundSquare* square = &squares[texSquareY * smfMap->numBigTexX + texSquareX];
+-	glBindTexture(GL_TEXTURE_2D, square->GetTextureID());
+ 
+ 	if (game->GetDrawMode() == CGame::gameNormalDraw) {
+ 		square->SetDrawFrame(globalRendering->drawFrame);
+ 	}
++	return square->GetTextureID();
+ }
+--- a/rts/Map/SMF/SMFGroundTextures.h
++++ b/rts/Map/SMF/SMFGroundTextures.h
+@@ -21,6 +21,7 @@
+ 	bool SetSquareLuaTexture(int texSquareX, int texSquareY, int texID) override;
+ 	bool GetSquareLuaTexture(int texSquareX, int texSquareY, int texID, int texSizeX, int texSizeY, int lodMin, int lodMax) override;
+ 	void BindSquareTexture(int texSquareX, int texSquareY) override;
++	unsigned int GetSquareTextureID(int texSquareX, int texSquareY);
+ 
+ protected:
+ 	void LoadTiles(CSMFMapFile& file);
+--- a/rts/Rendering/CMakeLists.txt
++++ b/rts/Rendering/CMakeLists.txt
+@@ -148,5 +148,12 @@
+ 		"${CMAKE_CURRENT_SOURCE_DIR}/Fonts/glFont.cpp"
+ 		"${CMAKE_CURRENT_SOURCE_DIR}/Fonts/glFontRenderer.cpp"
+ 		"${CMAKE_CURRENT_SOURCE_DIR}/Fonts/TextWrap.cpp"
+-		PARENT_SCOPE
+ 	)
++
++if (APPLE AND RECOIL_MACOS_SDL3_EGL)
++	set_source_files_properties(NativeMetalWorld.mm PROPERTIES
++		COMPILE_OPTIONS "-fobjc-arc"
++	)
++	list(APPEND sources_engine_Rendering "${CMAKE_CURRENT_SOURCE_DIR}/NativeMetalWorld.mm")
++endif ()
++set(sources_engine_Rendering ${sources_engine_Rendering} PARENT_SCOPE)
+--- a/rts/Rendering/WorldDrawer.cpp
++++ b/rts/Rendering/WorldDrawer.cpp
+@@ -3,6 +3,10 @@
+ #include "Rendering/GL/myGL.h"
+ 
+ #include "WorldDrawer.h"
++#include "Rendering/NativeMetalWorld.h"
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++#include "Map/SMF/SMFGroundDrawer.h"
++#endif
+ #include "Sim/Units/UnitDefHandler.h"
+ #include "Sim/Features/FeatureDefHandler.h"
+ #include "Sim/Weapons/WeaponDefHandler.h"
+@@ -172,6 +176,7 @@
+ 
+ void CWorldDrawer::Kill()
+ {
++	NativeMetalWorld::Kill();
+ 	infoTextureHandler = nullptr;
+ 
+ 	IWater::KillWater();
+@@ -335,7 +340,15 @@
+ 		{
+ 			SCOPED_TIMER("Draw::World::Terrain");
+ 			SCOPED_GL_DEBUGGROUP("Draw::World::Terrain");
+-			gd->Draw(DrawPass::Normal);
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++			if (NativeMetalWorld::Enabled()) {
++				auto* smf = dynamic_cast<CSMFGroundDrawer*>(gd);
++				if (smf == nullptr)
++					throw content_error("NativeMetalWorld requires an SMF map");
++				smf->DrawNativeMetal();
++			} else
++#endif
++				gd->Draw(DrawPass::Normal);
+ 			depthBufferCopy->MakeDepthBufferCopy();
+ 		}
+ 		{
+@@ -365,7 +378,12 @@
+ 	{
+ 		SCOPED_TIMER("Draw::World::Models::Opaque");
+ 		SCOPED_GL_DEBUGGROUP("Draw::World::Models::Opaque");
+-		unitDrawer->Draw(false);
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++		if (NativeMetalWorld::Enabled())
++			NativeMetalWorld::DrawUnits();
++		else
++#endif
++			unitDrawer->Draw(false);
+ 		featureDrawer->Draw(false);
+ 	}
+ 	{
+--- a/rts/Rendering/Units/UnitDrawer.cpp
++++ b/rts/Rendering/Units/UnitDrawer.cpp
+@@ -22,6 +22,7 @@
+ #include "Rendering/Env/SunLighting.h"
+ #include "Rendering/Colors.h"
+ #include "Rendering/IconHandler.h"
++#include "Rendering/NativeMetalWorld.h"
+ #include "Rendering/LuaObjectDrawer.h"
+ #include "Rendering/ShadowHandler.h"
+ #include "Rendering/Textures/Bitmap.h"
+@@ -209,6 +210,9 @@
+ 	if ((u->engineDrawMask & thisPassMask) != thisPassMask)
+ 		return false;
+ 
++	if (NativeMetalWorld::QueueUnit(u))
++		return false;
++
+ 	return true;
+ }
+ 
+--- a/rts/Rendering/Units/UnitDrawer.h
++++ b/rts/Rendering/Units/UnitDrawer.h
+@@ -5,6 +5,7 @@
+ #include <array>
+ 
+ #include "Rendering/Common/ModelDrawer.h"
++#include "Rendering/NativeMetalWorld.h"
+ #include "Rendering/Common/ModelDrawerState.hpp"
+ #include "Rendering/Units/UnitDrawerData.h"
+ #include "Rendering/GL/LightHandler.h"
+@@ -109,7 +110,9 @@
+ class CUnitDrawerBase : public CUnitDrawer {
+ public:
+ 	void DrawOpaquePass(bool deferredPass, bool drawReflection, bool drawRefraction) const override {
++		const bool previous = NativeMetalWorld::SetUnitPass(!deferredPass && !drawReflection && !drawRefraction);
+ 		DrawOpaquePassImpl<LuaObjType::LUAOBJ_UNIT>(deferredPass, drawReflection, drawRefraction);
++		NativeMetalWorld::SetUnitPass(previous);
+ 	}
+ 	void DrawAlphaPass(bool drawReflection, bool drawRefraction = false) const override {
+ 		DrawAlphaPassImpl<LuaObjType::LUAOBJ_UNIT>(drawReflection, drawRefraction);
+--- a/rts/Rendering/NativeMetalWorld.h
++++ b/rts/Rendering/NativeMetalWorld.h
+@@ -0,0 +1,22 @@
++#pragma once
++
++class CUnit;
++class CSMFReadMap;
++class CSMFGroundTextures;
++
++namespace NativeMetalWorld {
++#if defined(__APPLE__) && defined(RECOIL_MACOS_SDL3_EGL)
++	bool Enabled();
++	void DrawTerrain(CSMFReadMap& map, CSMFGroundTextures& textures);
++	void DrawUnits();
++	// Called only after the engine's opaque visibility and Lua-material decisions.
++	bool SetUnitPass(bool forward);
++	bool QueueUnit(CUnit* unit);
++	void Kill();
++#else
++	inline bool Enabled() { return false; }
++	inline bool QueueUnit(CUnit*) { return false; }
++	inline bool SetUnitPass(bool) { return false; }
++	inline void Kill() {}
++#endif
++}
+--- a/rts/Rendering/NativeMetalWorld.mm
++++ b/rts/Rendering/NativeMetalWorld.mm
+@@ -0,0 +1,558 @@
++/* This file is part of the Spring engine (GPL v2 or later), see LICENSE.html */
++#include "Rendering/NativeMetalWorld.h"
++
++#import <Foundation/Foundation.h>
++#import <Metal/Metal.h>
++
++#include <algorithm>
++#include <array>
++#include <cstring>
++#include <dlfcn.h>
++#include <memory>
++#include <unordered_map>
++#include <vector>
++
++#include "Game/Camera.h"
++#include "Map/MapInfo.h"
++#include "Map/ReadMap.h"
++#include "Map/SMF/SMFReadMap.h"
++#include "Map/SMF/SMFGroundTextures.h"
++#include "Rendering/Env/ISky.h"
++#include "Rendering/Env/MapRendering.h"
++#include "Rendering/Env/SunLighting.h"
++#include "Rendering/GL/myGL.h"
++#include "Rendering/GlobalRendering.h"
++#include "Rendering/Models/3DModel.hpp"
++#include "Rendering/Models/3DModelPiece.hpp"
++#include "Rendering/Textures/S3OTextureHandler.h"
++#include "Rendering/Units/UnitDrawer.h"
++#include "Sim/Misc/Team.h"
++#include "Sim/Misc/TeamHandler.h"
++#include "Sim/Units/Unit.h"
++#include "Sim/Units/UnitDef.h"
++#include "System/Config/ConfigHandler.h"
++#include "System/Exceptions.h"
++#include "System/Log/ILog.h"
++
++CONFIG(bool, NativeMetalWorld).defaultValue(true)
++	.description("Render normal SMF terrain and default opaque S3O units directly with Metal on macOS SDL3/EGL. Serializes GL and Metal queues for correctness.");
++
++namespace {
++// The ABI borrows storage, not copies or private framebuffer attachments. Its
++// frame export rejects non-window orientation, texture views, MRT and MSAA.
++struct MesaABI {
++	using Frame = int (*)(void**, void**);
++	using Texture = void* (*)(unsigned int);
++	void* library = nullptr;
++	Frame frame = nullptr;
++	Texture texture = nullptr;
++
++	MesaABI() {
++		library = dlopen("libgallium-26.1.0-devel.dylib", RTLD_NOW | RTLD_LOCAL);
++		if (library == nullptr)
++			throw content_error(std::string("NativeMetalWorld cannot load Gallium: ") + dlerror());
++		frame = reinterpret_cast<Frame>(dlsym(library, "recoil_metal_frame"));
++		texture = reinterpret_cast<Texture>(dlsym(library, "recoil_metal_texture"));
++		if (frame == nullptr || texture == nullptr) {
++			dlclose(library);
++			library = nullptr;
++			throw content_error("NativeMetalWorld requires the Gallium native Metal attachment/texture ABI");
++		}
++	}
++	~MesaABI() { if (library != nullptr) dlclose(library); }
++};
++
++struct alignas(16) Scene {
++	float viewProjection[16];
++	float eye[4];
++	float sun[4];
++	float ambient[4];
++	float diffuse[4];
++	float specular[4];
++	float fogColor[4];
++	float fog[4]; // start, end, GL zero-to-one, alpha discard threshold
++};
++struct alignas(16) Draw {
++	float world[16];
++	float team[4];
++	float tile[4]; // heightmap origin, square count, reserved
++};
++struct Vertex {
++	float position[3];
++	float normal[3];
++	float uv[2];
++};
++static_assert(sizeof(Vertex) == 32);
++static_assert(sizeof(Scene) == 176);
++static_assert(sizeof(Draw) == 96);
++// Dynamic per-draw uniforms use one persistent shared buffer, with aligned
++// offsets. Immutable indices/model geometry are uploaded only on first use.
++constexpr size_t DRAW_STRIDE = 256;
++constexpr unsigned TILE_SIZE = CSMFReadMap::bigSquareSize;
++
++constexpr const char* metalSource = R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++struct Scene {
++    float4x4 viewProjection;
++    float4 eye, sun, ambient, diffuse, specular, fogColor, fog;
++};
++struct Draw { float4x4 world; float4 team, tile; };
++struct Vertex { packed_float3 position, normal; packed_float2 uv; };
++struct Raster {
++    float4 position [[position]];
++    float3 world, normal;
++    float2 uv;
++};
++float4 clipPosition(float3 world, constant Scene& s) {
++    float4 p = s.viewProjection * float4(world, 1.0);
++    // Gallium's ABI guarantees a FlipY window attachment. Camera matrices
++    // already include GL_ZERO_TO_ONE when clip-control is supported.
++    p.y = -p.y;
++    if (s.fog.z == 0.0) p.z = (p.z + p.w) * 0.5;
++    return p;
++}
++vertex Raster terrainVertex(uint index [[vertex_id]],
++                            constant Scene& s [[buffer(1)]],
++                            constant Draw& d [[buffer(2)]],
++                            texture2d<float, access::read> heights [[texture(0)]]) {
++    uint side = uint(d.tile.z) + 1;
++    uint2 local = uint2(index % side, index / side);
++    uint2 q = uint2(d.tile.xy) + local;
++    uint2 last = uint2(heights.get_width() - 1, heights.get_height() - 1);
++    uint2 lo = uint2(q.x > 0 ? q.x - 1 : 0, q.y > 0 ? q.y - 1 : 0);
++    uint2 hi = min(q + 1, last);
++    float hx = heights.read(uint2(hi.x, q.y)).r - heights.read(uint2(lo.x, q.y)).r;
++    float hz = heights.read(uint2(q.x, hi.y)).r - heights.read(uint2(q.x, lo.y)).r;
++    float3 tx = float3(float(hi.x - lo.x) * 8.0, hx, 0.0);
++    float3 tz = float3(0.0, hz, float(hi.y - lo.y) * 8.0);
++    Raster r;
++    r.world = float3(float(q.x) * 8.0, heights.read(q).r, float(q.y) * 8.0);
++    r.normal = normalize(cross(tz, tx));
++    r.position = clipPosition(r.world, s);
++    r.uv = float2(local) / float(d.tile.z);
++    return r;
++}
++vertex Raster unitVertex(uint index [[vertex_id]],
++                         const device Vertex* vertices [[buffer(0)]],
++                         constant Scene& s [[buffer(1)]],
++                         constant Draw& d [[buffer(2)]]) {
++    Vertex v = vertices[index];
++    Raster r;
++    r.world = (d.world * float4(float3(v.position), 1.0)).xyz;
++    // Unit/piece transforms have rotation plus uniform scale, so normalize
++    // handles their scale and the engine's object-space mirroring.
++    r.normal = normalize((d.world * float4(float3(v.normal), 0.0)).xyz);
++    r.position = clipPosition(r.world, s);
++    r.uv = float2(v.uv);
++    return r;
++}
++float3 fogged(float3 rgb, float3 world, constant Scene& s) {
++    float distance = length(world - s.eye.xyz);
++    float f = clamp((s.fog.y - distance) / max(s.fog.y - s.fog.x, 0.0001), 0.0, 1.0);
++    return mix(s.fogColor.rgb, rgb, f);
++}
++fragment float4 terrainFragment(Raster r [[stage_in]],
++                               constant Scene& s [[buffer(1)]],
++                               texture2d<float> tile [[texture(0)]],
++                               sampler filtering [[sampler(0)]]) {
++    float4 texel = tile.sample(filtering, r.uv);
++    if (s.fog.w >= 0.0 && texel.a <= s.fog.w) discard_fragment();
++    float light = max(dot(normalize(r.normal), normalize(s.sun.xyz)), 0.0);
++    return float4(fogged(texel.rgb * (s.ambient.rgb + s.diffuse.rgb * light), r.world, s), 1.0);
++}
++fragment float4 unitFragment(Raster r [[stage_in]],
++                            constant Scene& s [[buffer(1)]],
++                            constant Draw& d [[buffer(2)]],
++                            texture2d<float> tex1 [[texture(0)]],
++                            texture2d<float> tex2 [[texture(1)]],
++                            sampler filtering [[sampler(0)]]) {
++    float4 base = tex1.sample(filtering, r.uv);
++    float4 extra = tex2.sample(filtering, r.uv);
++    if (extra.a < 0.5) discard_fragment();
++    float3 n = normalize(r.normal);
++    float3 l = normalize(s.sun.xyz);
++    float3 v = normalize(s.eye.xyz - r.world);
++    float diffuse = max(dot(n, l), 0.0);
++    float h = max(dot(n, normalize(l + v)), 0.0);
++    float specular = min(pow(h, 2.5 * s.specular.w) + 0.3 * pow(h, 6.0), 1.0) * extra.g * 4.0;
++    float3 rgb = mix(base.rgb, d.team.rgb, base.a);
++    rgb = rgb * (s.ambient.rgb + s.diffuse.rgb * diffuse + extra.rrr) + s.specular.rgb * specular;
++    return float4(fogged(rgb, r.world, s), 1.0);
++}
++)MSL";
++
++[[noreturn]] void Fail(const std::string& reason) {
++	throw content_error("NativeMetalWorld: " + reason);
++}
++std::string ErrorText(NSError* error) {
++	return error == nil ? "unknown Metal error" : std::string([[error localizedDescription] UTF8String]);
++}
++void Copy(float* dst, const float4& src) { std::memcpy(dst, &src.x, sizeof(float) * 4); }
++void Matrix(float* dst, const CMatrix44f& src) { std::memcpy(dst, src.m, sizeof(float) * 16); }
++
++struct Mesh {
++	id<MTLBuffer> vertices = nil;
++	id<MTLBuffer> indices = nil;
++	size_t indexCount = 0;
++};
++struct Pipelines {
++	id<MTLRenderPipelineState> terrain = nil;
++	id<MTLRenderPipelineState> unit = nil;
++};
++struct Frame {
++	id<MTLTexture> color = nil;
++	id<MTLTexture> depth = nil;
++};
++
++struct Renderer {
++	MesaABI abi;
++	id<MTLDevice> device = nil;
++	id<MTLCommandQueue> queue = nil;
++	id<MTLLibrary> library = nil;
++	id<MTLDepthStencilState> depthState = nil;
++	id<MTLSamplerState> tileSampler = nil;
++	id<MTLSamplerState> unitSampler = nil;
++	id<MTLBuffer> sceneBuffer = nil;
++	id<MTLBuffer> drawBuffer = nil;
++	id<MTLBuffer> tileIndices = nil;
++	size_t drawCapacity = 0;
++	std::unordered_map<uint64_t, Pipelines> pipelines;
++	std::unordered_map<const S3DModelPiece*, Mesh> meshes;
++	std::vector<CUnit*> units;
++	bool collecting = false;
++	bool forwardUnitPass = false;
++	bool terrainLogged = false;
++	bool unitsLogged = false;
++
++	Frame BorrowFrame() {
++		// Deliberate initial hybrid synchronization: this blocks the CPU and
++		// both queues twice per world frame. No attachment survives the call.
++		glFinish();
++		void* color = nullptr;
++		void* depth = nullptr;
++		if (!abi.frame(&color, &depth) || color == nullptr || depth == nullptr)
++			Fail("current GL draw framebuffer cannot export a window-oriented single-color/depth Metal target");
++		Frame f{(__bridge id<MTLTexture>)color, (__bridge id<MTLTexture>)depth};
++	// Kosmickrisp swapchain drawables arrive as a single-slice 2D array. A 2D
++	// slice view shares the same storage (no copy) and is only used inside the
++	// synchronized borrow window; anything else is rejected, not reinterpreted.
++	id<MTLTexture> colorView = nil;
++	if (f.color.textureType == MTLTextureType2DArray && f.color.arrayLength == 1 &&
++	    f.color.mipmapLevelCount == 1) {
++		colorView = [f.color newTextureViewWithPixelFormat:f.color.pixelFormat
++		    textureType:MTLTextureType2D levels:NSMakeRange(0, 1) slices:NSMakeRange(0, 1)];
++		if (colorView == nil) Fail("cannot create 2D view of single-slice array framebuffer");
++		f.color = colorView;
++	}
++		if (f.color.textureType != MTLTextureType2D || f.depth.textureType != MTLTextureType2D ||
++			f.color.sampleCount != 1 || f.depth.sampleCount != 1 ||
++			f.color.width != f.depth.width || f.color.height != f.depth.height ||
++			f.color.device != f.depth.device)
++			Fail("unsupported Metal framebuffer shape, device, or multisampling");
++		switch (f.color.pixelFormat) {
++			case MTLPixelFormatBGRA8Unorm: case MTLPixelFormatRGBA8Unorm:
++			case MTLPixelFormatBGRA8Unorm_sRGB: case MTLPixelFormatRGBA8Unorm_sRGB:
++			case MTLPixelFormatRGBA16Float: break;
++			default: Fail("unsupported Metal framebuffer color format");
++		}
++		switch (f.depth.pixelFormat) {
++			case MTLPixelFormatDepth16Unorm: case MTLPixelFormatDepth32Float:
++			case MTLPixelFormatDepth32Float_Stencil8: case MTLPixelFormatDepth24Unorm_Stencil8: break;
++			default: Fail("unsupported Metal framebuffer depth format");
++		}
++		if (device == nil) Init(f.color.device);
++		if (device != f.color.device) Fail("GL changed Metal device during the world renderer lifetime");
++		return f;
++	}
++
++	void Init(id<MTLDevice> borrowedDevice) {
++		device = borrowedDevice;
++		queue = [device newCommandQueue];
++		NSError* error = nil;
++		library = [device newLibraryWithSource:[NSString stringWithUTF8String:metalSource] options:nil error:&error];
++		if (queue == nil || library == nil) Fail("cannot create direct MSL library/queue: " + ErrorText(error));
++		MTLDepthStencilDescriptor* depth = [MTLDepthStencilDescriptor new];
++		depth.depthCompareFunction = MTLCompareFunctionLessEqual;
++		depth.depthWriteEnabled = YES;
++		depthState = [device newDepthStencilStateWithDescriptor:depth];
++		MTLSamplerDescriptor* sampler = [MTLSamplerDescriptor new];
++		sampler.minFilter = MTLSamplerMinMagFilterLinear;
++		sampler.magFilter = MTLSamplerMinMagFilterLinear;
++		sampler.mipFilter = MTLSamplerMipFilterLinear;
++		sampler.maxAnisotropy = 8;
++		sampler.sAddressMode = MTLSamplerAddressModeClampToEdge;
++		sampler.tAddressMode = MTLSamplerAddressModeClampToEdge;
++		tileSampler = [device newSamplerStateWithDescriptor:sampler];
++		sampler.sAddressMode = MTLSamplerAddressModeRepeat;
++		sampler.tAddressMode = MTLSamplerAddressModeRepeat;
++		unitSampler = [device newSamplerStateWithDescriptor:sampler];
++		sceneBuffer = [device newBufferWithLength:sizeof(Scene) options:MTLResourceStorageModeShared];
++		if (depthState == nil || tileSampler == nil || unitSampler == nil || sceneBuffer == nil)
++			Fail("cannot allocate cached Metal scene state");
++		std::vector<uint32_t> indices;
++		indices.reserve(TILE_SIZE * TILE_SIZE * 6);
++		for (unsigned z = 0; z < TILE_SIZE; ++z) {
++			for (unsigned x = 0; x < TILE_SIZE; ++x) {
++				const uint32_t a = z * (TILE_SIZE + 1) + x;
++				const uint32_t b = a + 1, c = a + TILE_SIZE + 1, d = c + 1;
++				indices.insert(indices.end(), {a, c, b, b, c, d});
++			}
++		}
++		tileIndices = [device newBufferWithBytes:indices.data() length:indices.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
++		if (tileIndices == nil) Fail("cannot allocate immutable terrain index mesh");
++	}
++
++	static bool HasStencil(id<MTLTexture> depth) {
++		return depth.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 || depth.pixelFormat == MTLPixelFormatDepth24Unorm_Stencil8;
++	}
++	Pipelines& GetPipelines(const Frame& f) {
++		const uint64_t key = (uint64_t(f.color.pixelFormat) << 32) | uint64_t(f.depth.pixelFormat);
++		auto it = pipelines.find(key);
++		if (it != pipelines.end()) return it->second;
++		MTLRenderPipelineDescriptor* desc = [MTLRenderPipelineDescriptor new];
++		desc.colorAttachments[0].pixelFormat = f.color.pixelFormat;
++		desc.depthAttachmentPixelFormat = f.depth.pixelFormat;
++		desc.stencilAttachmentPixelFormat = HasStencil(f.depth) ? f.depth.pixelFormat : MTLPixelFormatInvalid;
++		desc.rasterSampleCount = 1;
++		Pipelines result;
++		NSError* error = nil;
++		desc.vertexFunction = [library newFunctionWithName:@"terrainVertex"];
++		desc.fragmentFunction = [library newFunctionWithName:@"terrainFragment"];
++		result.terrain = [device newRenderPipelineStateWithDescriptor:desc error:&error];
++		if (result.terrain == nil) Fail("cannot create terrain Metal pipeline: " + ErrorText(error));
++		desc.vertexFunction = [library newFunctionWithName:@"unitVertex"];
++		desc.fragmentFunction = [library newFunctionWithName:@"unitFragment"];
++		result.unit = [device newRenderPipelineStateWithDescriptor:desc error:&error];
++		if (result.unit == nil) Fail("cannot create unit Metal pipeline: " + ErrorText(error));
++		return pipelines.emplace(key, result).first->second;
++	}
++
++	id<MTLTexture> BorrowTexture(unsigned name) {
++		id<MTLTexture> texture = (__bridge id<MTLTexture>)abi.texture(name);
++		// Kosmickrisp backs ordinary 2D Vulkan images with single-slice 2D
++		// array Metal textures. The slice view shares storage (no copy) and
++		// lives only inside the synchronized borrow window.
++		if (texture != nil && texture.textureType == MTLTextureType2DArray &&
++		    texture.arrayLength == 1 && texture.mipmapLevelCount == 1) {
++			texture = [texture newTextureViewWithPixelFormat:texture.pixelFormat
++			    textureType:MTLTextureType2D levels:NSMakeRange(0, 1) slices:NSMakeRange(0, 1)];
++		}
++		if (texture == nil || texture.device != device || texture.textureType != MTLTextureType2D || texture.sampleCount != 1)
++			Fail("GL texture " + std::to_string(name) + " cannot export ordinary 2D Metal storage");
++		return texture;
++	}
++	void ReserveDraws(size_t needed) {
++		if (needed <= drawCapacity) return;
++		drawCapacity = std::max(needed, std::max(size_t(256), drawCapacity * 2));
++		drawBuffer = [device newBufferWithLength:drawCapacity * DRAW_STRIDE options:MTLResourceStorageModeShared];
++		if (drawBuffer == nil) Fail("cannot grow dynamic Metal draw uniforms");
++	}
++	Draw& DrawAt(size_t i) {
++		return *reinterpret_cast<Draw*>(static_cast<char*>(drawBuffer.contents) + i * DRAW_STRIDE);
++	}
++	void SetScene(bool terrain) {
++		Scene& s = *static_cast<Scene*>(sceneBuffer.contents);
++		Matrix(s.viewProjection, camera->GetViewProjectionMatrix());
++		const float3& eye = camera->GetPos();
++		s.eye[0] = eye.x; s.eye[1] = eye.y; s.eye[2] = eye.z; s.eye[3] = 1.0f;
++		Copy(s.sun, ISky::GetSky()->GetLight()->GetLightDir());
++		Copy(s.ambient, terrain ? sunLighting->groundAmbientColor : sunLighting->modelAmbientColor);
++		Copy(s.diffuse, terrain ? sunLighting->groundDiffuseColor : sunLighting->modelDiffuseColor);
++		Copy(s.specular, sunLighting->modelSpecularColor);
++		s.specular[3] = sunLighting->specularExponent;
++		Copy(s.fogColor, ISky::GetSky()->fogColor);
++		s.fog[0] = ISky::GetSky()->fogStart * camera->GetFarPlaneDist();
++		s.fog[1] = ISky::GetSky()->fogEnd * camera->GetFarPlaneDist();
++		if (!globalRendering->drawFog) { s.fog[0] = 1.0e20f; s.fog[1] = 2.0e20f; }
++		s.fog[2] = globalRendering->supportClipSpaceControl ? 1.0f : 0.0f;
++		s.fog[3] = terrain && (mapRendering->voidGround || mapRendering->voidWater) ? mapInfo->map.voidAlphaMin : -1.0f;
++	}
++
++	id<MTLRenderCommandEncoder> Begin(const Frame& f, id<MTLCommandBuffer> command) {
++		MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
++		pass.colorAttachments[0].texture = f.color;
++		pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
++		pass.colorAttachments[0].storeAction = MTLStoreActionStore;
++		pass.depthAttachment.texture = f.depth;
++		pass.depthAttachment.loadAction = MTLLoadActionLoad;
++		pass.depthAttachment.storeAction = MTLStoreActionStore;
++		if (HasStencil(f.depth)) {
++			pass.stencilAttachment.texture = f.depth;
++			pass.stencilAttachment.loadAction = MTLLoadActionLoad;
++			pass.stencilAttachment.storeAction = MTLStoreActionStore;
++		}
++		id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
++		if (encoder == nil) Fail("cannot encode borrowed world framebuffer");
++		GLint viewport[4]; GLdouble depthRange[2];
++		glGetIntegerv(GL_VIEWPORT, viewport);
++		glGetDoublev(GL_DEPTH_RANGE, depthRange);
++		if (viewport[0] < 0 || viewport[1] < 0 || viewport[2] <= 0 || viewport[3] <= 0 ||
++			uint64_t(viewport[0] + viewport[2]) > f.color.width || uint64_t(viewport[1] + viewport[3]) > f.color.height)
++			Fail("GL viewport outside exported Metal attachment");
++		[encoder setViewport:MTLViewport{double(viewport[0]), double(f.color.height) - viewport[1] - viewport[3], double(viewport[2]), double(viewport[3]), depthRange[0], depthRange[1]}];
++		[encoder setDepthStencilState:depthState];
++		// Engine model-space has mirrored Z. The FlipY clip conversion also
++		// reverses winding relative to compatibility GL's CCW front faces.
++		[encoder setFrontFacingWinding:MTLWindingClockwise];
++		[encoder setCullMode:MTLCullModeBack];
++		[encoder setVertexBuffer:sceneBuffer offset:0 atIndex:1];
++		[encoder setFragmentBuffer:sceneBuffer offset:0 atIndex:1];
++		return encoder;
++	}
++	void Complete(id<MTLRenderCommandEncoder> encoder, id<MTLCommandBuffer> command, bool terrain, uint64_t triangles) {
++		[encoder endEncoding];
++		[command commit];
++		[command waitUntilCompleted];
++		if (command.status != MTLCommandBufferStatusCompleted)
++			Fail("native world command buffer failed: " + ErrorText(command.error));
++		bool& logged = terrain ? terrainLogged : unitsLogged;
++		if (!logged && triangles != 0) {
++			LOG("BAR-METAL %s triangles=%llu", terrain ? "terrain" : "units", static_cast<unsigned long long>(triangles));
++			logged = true;
++		}
++	}
++	Mesh& GetMesh(const S3DModelPiece* piece) {
++		auto it = meshes.find(piece);
++		if (it != meshes.end()) return it->second;
++		const auto& source = piece->GetVerticesVec();
++		const auto& indices = piece->GetIndicesVec();
++		if (source.empty() || indices.empty() || indices.size() % 3 != 0)
++			Fail("model CPU geometry is unavailable or not triangular");
++		std::vector<Vertex> vertices(source.size());
++		for (size_t i = 0; i < source.size(); ++i) {
++			std::memcpy(vertices[i].position, &source[i].pos.x, sizeof(float) * 3);
++			std::memcpy(vertices[i].normal, &source[i].normal.x, sizeof(float) * 3);
++			std::memcpy(vertices[i].uv, &source[i].texCoords[0].x, sizeof(float) * 2);
++		}
++		for (uint32_t index : indices) if (index >= vertices.size()) Fail("model piece index outside CPU geometry");
++		Mesh mesh;
++		mesh.vertices = [device newBufferWithBytes:vertices.data() length:vertices.size() * sizeof(Vertex) options:MTLResourceStorageModeShared];
++		mesh.indices = [device newBufferWithBytes:indices.data() length:indices.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
++		mesh.indexCount = indices.size();
++		if (mesh.vertices == nil || mesh.indices == nil) Fail("cannot upload immutable model piece geometry");
++		return meshes.emplace(piece, mesh).first->second;
++	}
++
++	void Terrain(CSMFReadMap& map, CSMFGroundTextures& textures) {
++		Frame f = BorrowFrame();
++		if (map.bigTexSize != int(TILE_SIZE * SQUARE_SIZE)) Fail("unsupported SMF diffuse tile dimensions");
++		ReserveDraws(size_t(map.numBigTexX) * map.numBigTexY);
++		SetScene(true);
++		id<MTLTexture> heights = BorrowTexture(map.GetHeightMapTexture());
++		if (heights.pixelFormat != MTLPixelFormatR32Float || heights.width != size_t(mapDims.mapxp1) || heights.height != size_t(mapDims.mapyp1))
++			Fail("SMF live height texture must be full-resolution R32Float corner data");
++		id<MTLCommandBuffer> command = [queue commandBuffer];
++		if (command == nil) Fail("cannot create terrain command buffer");
++		command.label = @"BAR-METAL terrain";
++		id<MTLRenderCommandEncoder> encoder = Begin(f, command);
++		[encoder setRenderPipelineState:GetPipelines(f).terrain];
++		[encoder setVertexTexture:heights atIndex:0];
++		[encoder setFragmentSamplerState:tileSampler atIndex:0];
++		size_t draw = 0;
++		uint64_t triangles = 0;
++		for (int z = 0; z < map.numBigTexY; ++z) {
++			for (int x = 0; x < map.numBigTexX; ++x) {
++				const float3& bounds = map.GetUnsyncedHeightInfo(x, z);
++				const float ox = x * map.bigTexSize, oz = z * map.bigTexSize;
++				if (!camera->InView(float3(ox, bounds.x, oz), float3(ox + map.bigTexSize, bounds.y, oz + map.bigTexSize))) continue;
++				Draw& d = DrawAt(draw);
++				d.tile[0] = x * TILE_SIZE; d.tile[1] = z * TILE_SIZE; d.tile[2] = TILE_SIZE; d.tile[3] = 0.0f;
++				// ReadMap already updates dirty unsynced height texture rectangles
++				// after LOS permits them. Sampling that live texture also updates
++				// native normals without copying/rebuilding a mesh or exposing
++				// unseen enemy deformation from the synced simulation map.
++				id<MTLTexture> tile = BorrowTexture(textures.GetSquareTextureID(x, z));
++				[encoder setFragmentTexture:tile atIndex:0];
++				[encoder setVertexBuffer:drawBuffer offset:draw * DRAW_STRIDE atIndex:2];
++				[encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:TILE_SIZE * TILE_SIZE * 6 indexType:MTLIndexTypeUInt32 indexBuffer:tileIndices indexBufferOffset:0];
++				triangles += TILE_SIZE * TILE_SIZE * 2;
++				++draw;
++			}
++		}
++		Complete(encoder, command, true, triangles);
++	}
++	void Units() {
++		units.clear();
++		collecting = true;
++		try {
++			// Keep engine traversal, LOS/frustum/icon decisions, Lua materials,
++			// Lua draw overrides, nanoframes and temporary models unchanged.
++			// QueueUnit removes only native-supported default opaque objects.
++			unitDrawer->Draw(false);
++		} catch (...) {
++			collecting = false;
++			throw;
++		}
++		collecting = false;
++		if (units.empty()) return;
++		Frame f = BorrowFrame();
++		size_t pieceCount = 0;
++		for (const CUnit* u : units) pieceCount += u->localModel.pieces.size();
++		ReserveDraws(pieceCount);
++		SetScene(false);
++		id<MTLCommandBuffer> command = [queue commandBuffer];
++		if (command == nil) Fail("cannot create unit command buffer");
++		command.label = @"BAR-METAL units";
++		id<MTLRenderCommandEncoder> encoder = Begin(f, command);
++		[encoder setRenderPipelineState:GetPipelines(f).unit];
++		[encoder setFragmentSamplerState:unitSampler atIndex:0];
++		uint64_t triangles = 0;
++		size_t draw = 0;
++		for (const CUnit* u : units) {
++			const auto* material = textureHandlerS3O.GetTexture(u->model->textureType);
++			if (material == nullptr) Fail("unit S3O texture material is unavailable");
++			[encoder setFragmentTexture:BorrowTexture(material->tex1) atIndex:0];
++			[encoder setFragmentTexture:BorrowTexture(material->tex2) atIndex:1];
++			const CMatrix44f object = u->GetTransformMatrix();
++			const CTeam* team = teamHandler.Team(u->team);
++			for (const LocalModelPiece& piece : u->localModel.pieces) {
++				if (!piece.GetScriptVisible() || !piece.original->HasGeometryData()) continue;
++				const Transform transform = Transform::Lerp(piece.GetEffectivePrevModelSpaceTransform(), piece.GetModelSpaceTransform(), globalRendering->timeOffset);
++				if (transform.s <= 0.0f) continue;
++				Mesh& mesh = GetMesh(piece.original);
++				Draw& d = DrawAt(draw);
++				Matrix(d.world, object * transform.ToMatrix());
++				for (unsigned i = 0; i < 4; ++i) d.team[i] = team->color[i] / 255.0f;
++				[encoder setVertexBuffer:mesh.vertices offset:0 atIndex:0];
++				[encoder setVertexBuffer:drawBuffer offset:draw * DRAW_STRIDE atIndex:2];
++				[encoder setFragmentBuffer:drawBuffer offset:draw * DRAW_STRIDE atIndex:2];
++				[encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:mesh.indexCount indexType:MTLIndexTypeUInt32 indexBuffer:mesh.indices indexBufferOffset:0];
++				triangles += mesh.indexCount / 3;
++				++draw;
++			}
++		}
++		Complete(encoder, command, false, triangles);
++	}
++};
++
++std::unique_ptr<Renderer> renderer;
++Renderer& GetRenderer() {
++	if (renderer == nullptr) renderer = std::make_unique<Renderer>();
++	return *renderer;
++}
++}
++
++bool NativeMetalWorld::Enabled() { return configHandler->GetBool("NativeMetalWorld"); }
++void NativeMetalWorld::DrawTerrain(CSMFReadMap& map, CSMFGroundTextures& textures) {
++	@autoreleasepool { GetRenderer().Terrain(map, textures); }
++}
++void NativeMetalWorld::DrawUnits() {
++	@autoreleasepool { GetRenderer().Units(); }
++}
++bool NativeMetalWorld::QueueUnit(CUnit* unit) {
++	if (renderer == nullptr || !renderer->collecting || !renderer->forwardUnitPass) return false;
++	// 3DO atlases, custom Lua draw callbacks, and construction visualization
++	// retain their original compatibility renderer and are never double drawn.
++	if (unit->model->type != MODELTYPE_S3O || unit->luaDraw ||
++		(unit->beingBuilt && unit->unitDef->showNanoFrame)) return false;
++	renderer->units.push_back(unit);
++	return true;
++}
++bool NativeMetalWorld::SetUnitPass(bool forward) {
++	if (renderer == nullptr) return false;
++	const bool previous = renderer->forwardUnitPass;
++	renderer->forwardUnitPass = forward;
++	return previous;
++}
++void NativeMetalWorld::Kill() { renderer.reset(); }
