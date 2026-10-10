@@ -206,6 +206,12 @@ public:
     void setRefraction(bool enabled);
     [[nodiscard]] bool refractionEnabled() const;
 
+    /// Post-effect switches. See Renderer::setBloom/setSsao.
+    void setBloom(bool enabled);
+    [[nodiscard]] bool bloomEnabled() const;
+    void setSsao(bool enabled);
+    [[nodiscard]] bool ssaoEnabled() const;
+
     /// Whether the map's scenery is drawn. See Renderer::setPropsVisible.
     void setPropsVisible(bool visible);
     [[nodiscard]] bool propsVisible() const;

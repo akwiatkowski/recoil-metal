@@ -52,6 +52,8 @@ Settings loadSettings(const std::filesystem::path& path, std::vector<std::string
     readFlag(*table, "stratum_normals", settings.stratumNormals, problems);
     readFlag(*table, "props", settings.props, problems);
     readFlag(*table, "refraction", settings.refraction, problems);
+    readFlag(*table, "bloom", settings.bloom, problems);
+    readFlag(*table, "ssao", settings.ssao, problems);
     return settings;
 }
 

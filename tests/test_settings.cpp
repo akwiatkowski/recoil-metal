@@ -128,3 +128,18 @@ TEST_CASE("the settings file sits where macOS keeps such things") {
     // import — the same settled decision that rules out SDL.
     CHECK(path.string().find("Library/Application Support") != std::string::npos);
 }
+
+TEST_CASE("post effects default on and switch off by file") {
+    std::vector<std::string> problems;
+    const rm::Settings defaults =
+        rm::loadSettings(std::filesystem::temp_directory_path() / "rm_no_such_settings.lua",
+                         problems);
+    CHECK(defaults.bloom);
+    CHECK(defaults.ssao);
+
+    const TempSettings file{"{ bloom = false, ssao = false }"};
+    const rm::Settings off = rm::loadSettings(file.path(), problems);
+    CHECK_FALSE(off.bloom);
+    CHECK_FALSE(off.ssao);
+    CHECK(problems.empty());
+}

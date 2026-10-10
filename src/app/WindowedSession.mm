@@ -229,6 +229,8 @@ int runWindowed(const Session& session) {
         window.setReflections(settings.reflections);
         window.setStratumNormals(settings.stratumNormals);
         window.setRefraction(settings.refraction);
+        window.setBloom(settings.bloom);
+        window.setSsao(settings.ssao);
         // --- Click to move -------------------------------------------------
         // Left selects the unit under the cursor, right orders the selection to
         // the ground under it. Both arrive as a world ray; what it hit is

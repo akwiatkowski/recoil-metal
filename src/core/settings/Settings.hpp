@@ -24,7 +24,10 @@ namespace rm {
 //   stratum normals      +0.21 ms
 //   props                +0.17 ms at a working zoom, nothing when zoomed out
 //   water refraction     +0.17 to +0.28 ms, and it splits the render pass in two
+//   bloom, ssao          unmeasured — each skips one quarter-res blur pair;
+//                        measure on the 4v4/1000-unit bench before quoting.
 //
+
 // One of the four defaults OFF rather than on, which is the same rule rather than
 // an exception to it: with the wave field this water has, refraction does not look
 // best. See Renderer::setRefraction.
@@ -32,7 +35,7 @@ namespace rm {
 // — and every one is a single keypress away. What that DOES oblige is that a
 // benchmark states which switches were on, because otherwise two numbers from
 // this renderer are not comparable with each other, let alone with Recoil's.
-struct Settings {
+ struct Settings {
     bool reflections = true;
     bool stratumNormals = true;
     bool props = true;
@@ -40,7 +43,12 @@ struct Settings {
     /// the offset works, and reveals that the wave field it bends by is two
     /// analytic sinusoids whose lattice it draws across the water.
     bool refraction = false;
-};
+    /// Post effects, both map-gated today and switchless: bloom runs when the
+    /// map's lighting block asks for any, SSAO within its close-zoom range.
+    /// Defaults on (looks-best rule); each is one blur pair skipped when off.
+    bool bloom = true;
+    bool ssao = true;
+ };
 
 /// Where the settings file lives: the platform's own place for it.
 ///

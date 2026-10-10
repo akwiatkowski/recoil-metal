@@ -741,6 +741,22 @@ bool Window::refractionEnabled() const {
     return impl_->renderer->refractionEnabled();
 }
 
+void Window::setBloom(bool enabled) {
+    impl_->renderer->setBloom(enabled);
+}
+
+bool Window::bloomEnabled() const {
+    return impl_->renderer->bloomEnabled();
+}
+
+void Window::setSsao(bool enabled) {
+    impl_->renderer->setSsao(enabled);
+}
+
+bool Window::ssaoEnabled() const {
+    return impl_->renderer->ssaoEnabled();
+}
+
 void Window::setPropsVisible(bool visible) {
     impl_->renderer->setPropsVisible(visible);
 }

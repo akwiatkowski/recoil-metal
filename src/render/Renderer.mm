@@ -987,7 +987,7 @@ void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     // of taps per quarter-res pixel, then the shared blur. Skipped entirely at
     // map-view zooms — at 2500 elmos the four-elmo radius is already a pixel or
     // two, so the pass would spend GPU to return "unoccluded" everywhere.
-    const bool aoRan = camera_.distance <= 2500.0f && depthTexture_ != nullptr
+    const bool aoRan = ssaoEnabled_ && camera_.distance <= 2500.0f && depthTexture_ != nullptr
                        && aoA_ != nullptr && aoB_ != nullptr && fullBlur_ != nullptr;
     if (aoRan) {
         const float nearZ = camera_.nearZ;
@@ -1057,7 +1057,7 @@ void Renderer::encodeFrame(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
     // world at quarter res, blur it, and let the composite fold it back under the
     // tone curve. Reuses the glass kernel — a blur is a blur — but keeps its own
     // pair so the two never share a texture inside one frame.
-    if (environment_.bloom > 0.0f && bloomA_ != nullptr && bloomB_ != nullptr
+    if (bloomEnabled_ && environment_.bloom > 0.0f && bloomA_ != nullptr && bloomB_ != nullptr
         && fullBlur_ != nullptr) {
         MTL::RenderPassDescriptor* thresholdPass =
             MTL::RenderPassDescriptor::alloc()->init();

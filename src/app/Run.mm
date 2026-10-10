@@ -770,6 +770,8 @@ int runOffscreenBenchmark(const Session& session) {
             renderer.setReflections(settings.reflections);
             renderer.setStratumNormals(settings.stratumNormals);
             renderer.setRefraction(settings.refraction);
+            renderer.setBloom(settings.bloom);
+            renderer.setSsao(settings.ssao);
             // --focus works here too, so the benchmark can measure a close
             // camera as well as a whole-map one. They are different workloads:
             // anything that culls to what the camera sees is invisible at full

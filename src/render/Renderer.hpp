@@ -278,6 +278,14 @@ public:
     void setRefraction(bool enabled) noexcept { refractionEnabled_ = enabled; }
     [[nodiscard]] bool refractionEnabled() const noexcept { return refractionEnabled_; }
 
+    // Post-effect switches. Both default on (looks-best); the settings file
+    // carries them like the other four. Bloom gates the map's own bloom gain;
+    // SSAO gates the close-zoom occlusion pair. Each skips one blur pair.
+    void setBloom(bool enabled) noexcept { bloomEnabled_ = enabled; }
+    [[nodiscard]] bool bloomEnabled() const noexcept { return bloomEnabled_; }
+    void setSsao(bool enabled) noexcept { ssaoEnabled_ = enabled; }
+    [[nodiscard]] bool ssaoEnabled() const noexcept { return ssaoEnabled_; }
+
     // The rings marking which units are selected, for this frame.
     //
     // Rebuilt and pushed every frame, like instances and for the same reason: a
@@ -1096,6 +1104,8 @@ private:
     bool stratumNormalsEnabled_ = true;
     bool propsVisible_ = true;
     bool refractionEnabled_ = false;
+    bool bloomEnabled_ = true;
+    bool ssaoEnabled_ = true;
 
     // Selection rings. One buffer with a slot per frame in flight, exactly like
     // the unit instances and for the same reason: the vertices are rewritten
