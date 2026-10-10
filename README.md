@@ -17,7 +17,7 @@ Metal; `recoil-bar` launches the pinned upstream-derived Recoil engine for BAR.
 The BAR launcher shares `rm_foundation` with FA, not its simulation or Lua VM.
  BAR renders its persistent 3D world through native Metal into the same Kosmickrisp
  framebuffer (zero-copy borrowed attachments): SMF terrain, S3O units, features,
- model projectiles, transparent variants, shadow-map receive, and the BumpWater
+ model projectiles, transparent variants, shadow-map receive, env cubemap, and the BumpWater
  surface. Compat by design: grass, decals, sky, billboard particles, icons/lines,
  minimap 2D, Rml UI, CUS GL4 custom materials, debug drawers, and offscreen
  generation (shadow/reflection/refraction/deferred) which feeds native sampling.
@@ -259,9 +259,8 @@ mise exec -- make smoke-bar    # observe player movement/building, AI actions an
  the checker requires terrain/units/water markers plus gameplay and reports the rest.
  Smoke disables CUS GL4 (`luarules disablecusgl4`) because BAR's options widget
  force-enables it on capable GPUs, masking engine unit draws; normal play keeps
- CUS GL4. Native shading: diffuse/teamcolor/alpha + shadow-map receive + sun/fog;
- no env cubemaps or custom Lua materials. Material storage that Mesa streams
- mid-frame falls back per-object with an explicit log (nothing vanishes silently).
+ CUS GL4. Native shading: diffuse/teamcolor/alpha + shadow-map receive + env cubemap
+ + sun/fog; no custom Lua materials. Material storage that Mesa streams
  Wall time parity with compat (548 vs 551 frames in ~71s vs ~73s); queue
  serialization stays until a bottleneck shows in Instruments.
 

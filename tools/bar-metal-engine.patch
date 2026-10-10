@@ -448,7 +448,7 @@
 +}
 --- a/rts/Rendering/NativeMetalWorld.mm
 +++ b/rts/Rendering/NativeMetalWorld.mm
-@@ -0,0 +1,1453 @@
+@@ -0,0 +1,1519 @@
 +/* This file is part of the Spring engine (GPL v2 or later), see LICENSE.html */
 +#include "Rendering/NativeMetalWorld.h"
 +
@@ -473,6 +473,7 @@
 +#include "Rendering/Env/MapRendering.h"
 +#include "Rendering/Env/SunLighting.h"
 +#include "Rendering/Env/BumpWater.h"
++#include "Rendering/Env/CubeMapHandler.h"
 +#include "Rendering/Env/WaterRendering.h"
 +#include "Rendering/Map/InfoTexture/IInfoTextureHandler.h"
 +#include "Map/Ground.h"
@@ -677,6 +678,9 @@
 +                            texture2d<float> tex1 [[texture(0)]],
 +                            texture2d<float> tex2 [[texture(1)]],
 +                            depth2d<float> shadowTex [[texture(3)]],
++#ifdef OPT_ENVMAP
++                            texturecube<float> envMap [[texture(4)]],
++#endif
 +                            sampler filtering [[sampler(0)]],
 +                            sampler shadowSampler [[sampler(3)]]) {
 +    float4 base = tex1.sample(filtering, r.uv);
@@ -691,6 +695,14 @@
 +    float3 rgb = mix(base.rgb, d.team.rgb, base.a);
 +    float shade = shadowed(r.world, s, shadowTex, shadowSampler);
 +    rgb = rgb * (s.ambient.rgb + s.diffuse.rgb * diffuse * shade + extra.rrr) + s.specular.rgb * specular * shade;
++#ifdef OPT_ENVMAP
++    {
++        float3 refl = reflect(-v, n);
++        float3 envDiff = envMap.sample(filtering, n).rgb;
++        float3 envSpec = envMap.sample(filtering, refl).rgb;
++        rgb += envDiff * 0.25 + envSpec * specular;
++    }
++#endif
 +    return float4(fogged(rgb, r.world, s), 1.0);
 +}
 +fragment float4 unitAlphaFragment(Raster r [[stage_in]],
@@ -699,6 +711,9 @@
 +                            texture2d<float> tex1 [[texture(0)]],
 +                            texture2d<float> tex2 [[texture(1)]],
 +                            depth2d<float> shadowTex [[texture(3)]],
++#ifdef OPT_ENVMAP
++                            texturecube<float> envMap [[texture(4)]],
++#endif
 +                            sampler filtering [[sampler(0)]],
 +                            sampler shadowSampler [[sampler(3)]]) {
 +    clipAlpha(r.world, s);
@@ -714,6 +729,12 @@
 +    float3 rgb = mix(base.rgb, d.team.rgb, base.a);
 +    float shade = shadowed(r.world, s, shadowTex, shadowSampler);
 +    rgb = rgb * (s.ambient.rgb + s.diffuse.rgb * diffuse * shade + extra.rrr) + s.specular.rgb * specular * shade;
++#ifdef OPT_ENVMAP
++    {
++        float3 refl = reflect(-v, n);
++        rgb += envMap.sample(filtering, n).rgb * 0.25 + envMap.sample(filtering, refl).rgb * specular;
++    }
++#endif
 +    // Compat alpha pass modulates team-color opacity (alphaValues); the base
 +    // texture alpha already selected team vs diffuse above.
 +    return float4(fogged(rgb, r.world, s), d.team.a);
@@ -959,6 +980,8 @@
 +	id<MTLRenderPipelineState> terrain = nil;
 +	id<MTLRenderPipelineState> unit = nil;
 +	id<MTLRenderPipelineState> unitAlpha = nil;
++	id<MTLRenderPipelineState> unitEnv = nil;
++	id<MTLRenderPipelineState> unitAlphaEnv = nil;
 +};
 +struct ProjectileDraw { const CProjectile* p; CMatrix44f matrix; int team; };
 +struct Frame {
@@ -971,6 +994,7 @@
 +	id<MTLDevice> device = nil;
 +	id<MTLCommandQueue> queue = nil;
 +	id<MTLLibrary> library = nil;
++	id<MTLLibrary> envLibrary = nil;
 +	id<MTLDepthStencilState> depthState = nil;
 +	id<MTLDepthStencilState> alphaDepthState = nil;
 +	id<MTLSamplerState> tileSampler = nil;
@@ -1052,6 +1076,9 @@
 +		queue = [device newCommandQueue];
 +		NSError* error = nil;
 +		library = [device newLibraryWithSource:[NSString stringWithUTF8String:metalSource] options:nil error:&error];
++		NSString* envSource = [[NSString stringWithUTF8String:"#define OPT_ENVMAP\n"] stringByAppendingString:[NSString stringWithUTF8String:metalSource]];
++		envLibrary = [device newLibraryWithSource:envSource options:nil error:&error];
++		if (envLibrary == nil) Fail("cannot create env MSL library: " + ErrorText(error));
 +		if (queue == nil || library == nil) Fail("cannot create direct MSL library/queue: " + ErrorText(error));
 +		MTLDepthStencilDescriptor* depth = [MTLDepthStencilDescriptor new];
 +		depth.depthCompareFunction = MTLCompareFunctionLessEqual;
@@ -1110,8 +1137,8 @@
 +	static bool HasStencil(id<MTLTexture> depth) {
 +		return depth.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 || depth.pixelFormat == MTLPixelFormatDepth24Unorm_Stencil8;
 +	}
-+	Pipelines& GetPipelines(const Frame& f) {
-+		const uint64_t key = (uint64_t(f.color.pixelFormat) << 32) | uint64_t(f.depth.pixelFormat);
++	Pipelines& GetPipelines(const Frame& f, bool withEnv = false) {
++		const uint64_t key = (uint64_t(f.color.pixelFormat) << 32) | uint64_t(f.depth.pixelFormat) | (withEnv ? (1ULL << 63) : 0);
 +		auto it = pipelines.find(key);
 +		if (it != pipelines.end()) return it->second;
 +		MTLRenderPipelineDescriptor* desc = [MTLRenderPipelineDescriptor new];
@@ -1125,12 +1152,21 @@
 +		desc.fragmentFunction = [library newFunctionWithName:@"terrainFragment"];
 +		result.terrain = [device newRenderPipelineStateWithDescriptor:desc error:&error];
 +		if (result.terrain == nil) Fail("cannot create terrain Metal pipeline: " + ErrorText(error));
-+		desc.vertexFunction = [library newFunctionWithName:@"unitVertex"];
-+		desc.fragmentFunction = [library newFunctionWithName:@"unitFragment"];
++		id<MTLLibrary> unitLib = withEnv ? envLibrary : library;
++		desc.vertexFunction = [unitLib newFunctionWithName:@"unitVertex"];
++		desc.fragmentFunction = [unitLib newFunctionWithName:@"unitFragment"];
 +		result.unit = [device newRenderPipelineStateWithDescriptor:desc error:&error];
 +		if (result.unit == nil) Fail("cannot create unit Metal pipeline: " + ErrorText(error));
-+		desc.vertexFunction = [library newFunctionWithName:@"unitVertex"];
-+		desc.fragmentFunction = [library newFunctionWithName:@"unitAlphaFragment"];
++		// Env variants share the opaque/alpha blend configuration of their
++		// base pipelines; withEnv=false leaves them nil (never selected).
++		if (withEnv) {
++			desc.vertexFunction = [envLibrary newFunctionWithName:@"unitVertex"];
++			desc.fragmentFunction = [envLibrary newFunctionWithName:@"unitFragment"];
++			result.unitEnv = [device newRenderPipelineStateWithDescriptor:desc error:&error];
++			if (result.unitEnv == nil) Fail("cannot create unit env Metal pipeline: " + ErrorText(error));
++		}
++		desc.vertexFunction = [unitLib newFunctionWithName:@"unitVertex"];
++		desc.fragmentFunction = [unitLib newFunctionWithName:@"unitAlphaFragment"];
 +		desc.colorAttachments[0].blendingEnabled = YES;
 +		desc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
 +		desc.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
@@ -1138,6 +1174,12 @@
 +		desc.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
 +		result.unitAlpha = [device newRenderPipelineStateWithDescriptor:desc error:&error];
 +		if (result.unitAlpha == nil) Fail("cannot create unit alpha Metal pipeline: " + ErrorText(error));
++		if (withEnv) {
++			desc.vertexFunction = [envLibrary newFunctionWithName:@"unitVertex"];
++			desc.fragmentFunction = [envLibrary newFunctionWithName:@"unitAlphaFragment"];
++			result.unitAlphaEnv = [device newRenderPipelineStateWithDescriptor:desc error:&error];
++			if (result.unitAlphaEnv == nil) Fail("cannot create unit alpha env Metal pipeline: " + ErrorText(error));
++		}
 +		return pipelines.emplace(key, result).first->second;
 +	}
 +
@@ -1163,6 +1205,22 @@
 +		id<MTLTexture> texture = BorrowTexture(name);
 +		if (texture == nil && skipLogged.insert(name).second)
 +			LOG("BAR-METAL %s material %u unavailable, skipping object until resident", pass, name);
++		return texture;
++	}
++	id<MTLTexture> BorrowCube(unsigned name, const char* pass) {
++		// Kosmickrisp stores cube-compatible images as 6-layer 2D arrays;
++		// a cube view shares the storage (no copy) for the borrow window.
++		id<MTLTexture> texture = (id<MTLTexture>)abi.texture(name);
++		if (texture != nil && texture.textureType == MTLTextureType2DArray &&
++		    texture.arrayLength == 6) {
++			texture = [texture newTextureViewWithPixelFormat:texture.pixelFormat
++			    textureType:MTLTextureTypeCube levels:NSMakeRange(0, texture.mipmapLevelCount) slices:NSMakeRange(0, 6)];
++		}
++		if (texture == nil || texture.device != device || texture.textureType != MTLTextureTypeCube) {
++			if (skipLogged.insert(name).second)
++				LOG("BAR-METAL %s cubemap %u unavailable, env lighting off", pass, name);
++			return nil;
++		}
 +		return texture;
 +	}
 +	void ReserveDraws(size_t needed) {
@@ -1364,7 +1422,9 @@
 +		if (command == nil) Fail("cannot create unit command buffer");
 +		command.label = @"BAR-METAL units";
 +		id<MTLRenderCommandEncoder> encoder = Begin(f, command);
-+		[encoder setRenderPipelineState:GetPipelines(f).unit];
++		id<MTLTexture> unitEnv = BorrowCube(cubeMapHandler.GetEnvReflectionTextureID(), "units");
++		[encoder setRenderPipelineState:(unitEnv != nil ? GetPipelines(f, true).unitEnv : GetPipelines(f, false).unit)];
++		if (unitEnv != nil) [encoder setFragmentTexture:unitEnv atIndex:4];
 +		[encoder setFragmentSamplerState:unitSampler atIndex:0];
 +		id<MTLTexture> unitShadow = BorrowShadow();
 +		if (unitShadow != nil) {
@@ -1426,7 +1486,9 @@
 +		if (command == nil) Fail("cannot create feature command buffer");
 +		command.label = @"BAR-METAL features";
 +		id<MTLRenderCommandEncoder> encoder = Begin(f, command);
-+		[encoder setRenderPipelineState:GetPipelines(f).unit];
++		id<MTLTexture> featEnv = BorrowCube(cubeMapHandler.GetEnvReflectionTextureID(), "features");
++		[encoder setRenderPipelineState:(featEnv != nil ? GetPipelines(f, true).unitEnv : GetPipelines(f, false).unit)];
++		if (featEnv != nil) [encoder setFragmentTexture:featEnv atIndex:4];
 +		[encoder setFragmentSamplerState:unitSampler atIndex:0];
 +		id<MTLTexture> featShadow = BorrowShadow();
 +		if (featShadow != nil) {
@@ -1490,7 +1552,9 @@
 +		if (command == nil) Fail("cannot create projectile command buffer");
 +		command.label = @"BAR-METAL projectiles";
 +		id<MTLRenderCommandEncoder> encoder = Begin(f, command);
-+		[encoder setRenderPipelineState:GetPipelines(f).unit];
++		id<MTLTexture> projEnv = BorrowCube(cubeMapHandler.GetEnvReflectionTextureID(), "projectiles");
++		[encoder setRenderPipelineState:(projEnv != nil ? GetPipelines(f, true).unitEnv : GetPipelines(f, false).unit)];
++		if (projEnv != nil) [encoder setFragmentTexture:projEnv atIndex:4];
 +		[encoder setFragmentSamplerState:unitSampler atIndex:0];
 +		id<MTLTexture> projShadow = BorrowShadow();
 +		if (projShadow != nil) {
@@ -1555,7 +1619,9 @@
 +		if (command == nil) Fail("cannot create alpha command buffer");
 +		command.label = [NSString stringWithUTF8String:pass];
 +		id<MTLRenderCommandEncoder> encoder = Begin(f, command);
-+		[encoder setRenderPipelineState:GetPipelines(f).unitAlpha];
++		id<MTLTexture> alphaEnv = BorrowCube(cubeMapHandler.GetEnvReflectionTextureID(), "alpha");
++		[encoder setRenderPipelineState:(alphaEnv != nil ? GetPipelines(f, true).unitAlphaEnv : GetPipelines(f, false).unitAlpha)];
++		if (alphaEnv != nil) [encoder setFragmentTexture:alphaEnv atIndex:4];
 +		[encoder setDepthStencilState:alphaDepthState];
 +		[encoder setFragmentSamplerState:unitSampler atIndex:0];
 +		id<MTLTexture> alphaShadow = BorrowShadow();

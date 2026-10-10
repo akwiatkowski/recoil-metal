@@ -1,5 +1,5 @@
 diff --git a/src/gallium/drivers/zink/zink_resource.c b/src/gallium/drivers/zink/zink_resource.c
-index 38400a3..14e698d 100644
+index 38400a3..b604035 100644
 --- a/src/gallium/drivers/zink/zink_resource.c
 +++ b/src/gallium/drivers/zink/zink_resource.c
 @@ -22,6 +22,10 @@
@@ -21,7 +21,7 @@ index 38400a3..14e698d 100644
  #include "util/os_file.h"
  #include "frontend/winsys_handle.h"
  
-@@ -68,6 +73,59 @@
+@@ -68,6 +73,60 @@
  
  #define ZINK_EXTERNAL_MEMORY_HANDLE 999
  
@@ -43,9 +43,10 @@ index 38400a3..14e698d 100644
 +   struct pipe_screen *resource_screen = resource->screen;
 +   if (resource_screen && resource_screen->get_driver_pipe_screen)
 +      resource_screen = resource_screen->get_driver_pipe_screen(resource_screen);
++   bool isCube = (resource->target == PIPE_TEXTURE_CUBE && resource->array_size == 6);
 +   if (resource_screen != pscreen ||
-+       resource->target != PIPE_TEXTURE_2D ||
-+       resource->array_size != 1 || resource->depth0 != 1 ||
++       (resource->target != PIPE_TEXTURE_2D && !isCube) ||
++       (!isCube && (resource->array_size != 1 || resource->depth0 != 1)) ||
 +       resource->nr_samples > 1 || resource->nr_storage_samples > 1 ||
 +       (resource->flags & PIPE_RESOURCE_FLAG_SPARSE)) return NULL;
 +
@@ -81,7 +82,7 @@ index 38400a3..14e698d 100644
  
  
  struct zink_debug_mem_entry {
-@@ -2154,7 +2212,7 @@ zink_resource_from_handle(struct pipe_screen *pscreen,
+@@ -2154,7 +2213,7 @@ zink_resource_from_handle(struct pipe_screen *pscreen,
  
     return pres;
  #else
@@ -90,7 +91,7 @@ index 38400a3..14e698d 100644
  #endif
  }
  
-@@ -2613,7 +2671,7 @@ fail:
+@@ -2613,7 +2672,7 @@ fail:
     if (ctx == screen->copy_context)
        zink_screen_unlock_context(screen);
     destroy_transfer(ctx, trans);
@@ -99,7 +100,7 @@ index 38400a3..14e698d 100644
  }
  
  static void *
-@@ -2746,7 +2804,7 @@ zink_image_map(struct pipe_context *pctx,
+@@ -2746,7 +2805,7 @@ zink_image_map(struct pipe_context *pctx,
  
  fail:
     destroy_transfer(ctx, trans);
@@ -108,7 +109,7 @@ index 38400a3..14e698d 100644
  }
  
  static void
-@@ -3223,7 +3281,7 @@ zink_resource_get_separate_stencil(struct pipe_resource *pres)
+@@ -3223,7 +3282,7 @@ zink_resource_get_separate_stencil(struct pipe_resource *pres)
     if (pres->next && pres->next->format == PIPE_FORMAT_S8_UINT)
        return pres->next;
  
@@ -140,7 +141,7 @@ index c8ac8f7..7313072 100644
      inc_include, inc_src, inc_mesa, inc_gallium, inc_gallium_aux, inc_util, inc_gallium_drivers,
      inc_gallium_winsys, include_directories('../../frontends/dri'),
 diff --git a/src/kosmickrisp/vulkan/kk_image.c b/src/kosmickrisp/vulkan/kk_image.c
-index 8583fc3..4192851 100644
+index 8583fc3..4990786 100644
 --- a/src/kosmickrisp/vulkan/kk_image.c
 +++ b/src/kosmickrisp/vulkan/kk_image.c
 @@ -20,6 +20,27 @@
@@ -157,7 +158,7 @@ index 8583fc3..4192851 100644
 +      kk_image_from_handle((VkImage)(uintptr_t)image_handle);
 +   if (image->vk.base.type != VK_OBJECT_TYPE_IMAGE ||
 +       image->vk.image_type != VK_IMAGE_TYPE_2D ||
-+       image->vk.array_layers != 1 || image->vk.samples != VK_SAMPLE_COUNT_1_BIT ||
++       (image->vk.array_layers != 1 && image->vk.array_layers != 6) || image->vk.samples != VK_SAMPLE_COUNT_1_BIT ||
 +       image->plane_count != 1 || image->disjoint ||
 +       !image->planes[0].mtl_handle)
 +      return NULL;
@@ -187,7 +188,7 @@ index 8c9c0bb..f80246c 100644
     // TODO_KOSMICKRISP Only have one handle since we will only create 2D arrays
 diff --git a/src/gallium/targets/dri/recoil_metal.c b/src/gallium/targets/dri/recoil_metal.c
 new file mode 100644
-index 0000000..f5803e3
+index 0000000..64a8e6c
 --- /dev/null
 +++ b/src/gallium/targets/dri/recoil_metal.c
 @@ -0,0 +1,146 @@
@@ -305,7 +306,7 @@ index 0000000..f5803e3
 +      return NULL;
 +
 +   struct gl_texture_object *texture = _mesa_lookup_texture(ctx, name);
-+   if (!texture || texture->Target != GL_TEXTURE_2D || !texture->pt ||
++   if (!texture || (texture->Target != GL_TEXTURE_2D && texture->Target != GL_TEXTURE_CUBE_MAP) || !texture->pt ||
 +       texture->Attrib.BaseLevel != 0 || texture->Attrib.MinLevel != 0 ||
 +       texture->Attrib.MinLayer != 0 ||
 +       (texture->surface_based && texture->surface_format != texture->pt->format)) { return NULL;
@@ -324,7 +325,7 @@ index 0000000..f5803e3
 +   if (base->Width != backing->width0 || base->Height != backing->height0) { return NULL; }
 +   if (backing == texture->pt) {
 +      if (texture->pt->last_level >= MAX_TEXTURE_LEVELS) { return NULL; }
-+   } else if (backing->target != PIPE_TEXTURE_2D || backing->width0 == 0 || backing->height0 == 0) { return NULL; }
++   } else if ((backing->target != PIPE_TEXTURE_2D && backing->target != PIPE_TEXTURE_CUBE) || backing->width0 == 0 || backing->height0 == 0) { return NULL; }
 +   /* Mutable per-level uploads (RecoilBuildMipmaps: glTexImage2D per level)
 +    * leave higher levels in separate backing resources. The base level is
 +    * always current when the checks above pass, and Metal clamps mip sampling
