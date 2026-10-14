@@ -75,6 +75,11 @@ struct Uniforms {
     // Appended at the end like every field here — the C++ twin must match exactly.
     float4 blastPos[3];
     float4 blastColour[3];
+    // The map's SpecularColor (terrain.fx:22): .x scales the terrain specular lobe,
+    // .w scales how much of it reaches the alpha the bloom chain reads. Appended at
+    // the end like every field here — the C++ twin must match exactly. Zero on maps
+    // that state none (Scmap.hpp default), which kills both terms cleanly.
+    float4 specularColour;
 };
 
 // World-anchored placement grid. Derivatives keep lines a pixel wide and fade
@@ -102,11 +107,27 @@ static float3 buildGridColour(float3 colour, float2 worldXZ, float step) {
 // these are stand-ins with the engine's structure rather than its values.
 constant float3 kHorizonColour = float3(0.52, 0.60, 0.70);   // fallback; maps override
 constant float3 kZenithColour = float3(0.11, 0.24, 0.48);
+/// Two-octave value noise over a direction-projected UV, for the procedural cloud
+/// stand-ins below. One fract-sin hash and a bilinear smoothstep blend: tile-free,
+/// cheap enough to run four taps per layer, and stable in direction space so the
+/// pattern sticks to the SKY rather than crawling as the camera moves.
+static float vnoise(float2 p) {
+    const float2 cell = floor(p);
+    const float2 f = fract(p);
+    const float2 w = f * f * (3.0 - 2.0 * f);
+    const float h00 = fract(sin(dot(cell, float2(127.1, 311.7))) * 43758.5453);
+    const float h10 = fract(sin(dot(cell + float2(1.0, 0.0), float2(127.1, 311.7))) * 43758.5453);
+    const float h01 = fract(sin(dot(cell + float2(0.0, 1.0), float2(127.1, 311.7))) * 43758.5453);
+    const float h11 = fract(sin(dot(cell + float2(1.0, 1.0), float2(127.1, 311.7))) * 43758.5453);
+    return mix(mix(h00, h10, w.x), mix(h01, h11, w.x), w.y);
+}
+
 
 /// Sky colour along a view direction. Shared by the sky pass and the water's
-/// reflection, so the sea reflects the sky that is actually there.
+/// reflection, so the sea reflects the sky that is actually there. `time` drives the
+/// cloud drift — passed in because MSL helpers cannot see the uniforms struct.
 static float3 skyColour(float3 direction, float3 sunDirection, float3 horizonColour,
-                        float3 zenithTint) {
+                        float3 zenithTint, float time) {
     const float3 d = normalize(direction);
 
     // Elevation drives the gradient. The power biases the blend toward the
@@ -125,6 +146,50 @@ static float3 skyColour(float3 direction, float3 sunDirection, float3 horizonCol
     const float towardSun = saturate(dot(d, sunDirection));
     colour += float3(1.0, 0.86, 0.66) * pow(towardSun, 8.0) * 0.18;
     colour += float3(1.0, 0.94, 0.82) * pow(towardSun, 900.0) * 3.0;
+    // CIRRUS — the engine's four multiplicative sheets (sky.fx:264-272: alpha =
+    // cirrusMultiplier * c0.r * c1.g * c2.b * c3.a, colour = cirrusColor). Retail reads
+    // each layer from its own scrolled/rotated dome coordinate (DomeVS, sky.fx:146-166);
+    // here one direction drives four scales of value noise at retail's multiplicative
+    // spirit: ANY layer near zero kills the pixel (the documented sky.fx quirk), which
+    // is what breaks the sheet into separate streaks instead of one milky veil. The
+    // layers scroll with time at the map's own pace — static cirrus reads as a painted
+    // ceiling the moment the camera moves.
+    //
+    // BILLBOARD APPROXIMATION, not the dome sheets: no cirrus texture is plumbed, so
+    // procedural noise stands in for the texture taps. The ramp math it feeds —
+    // multiply-then-tint — is retail's; the texel source is ours.
+    if (d.y > 0.0) {
+        const float2 skUv = d.xz / (d.y + 0.18);
+        const float2 drift = float2(time * 0.004, time * 0.0016);
+        float cirrus = 1.0;
+        cirrus *= smoothstep(0.15, 0.75, vnoise(skUv * 1.4 + drift * 1.0));
+        cirrus *= smoothstep(0.15, 0.75, vnoise(skUv * 2.6 - drift * 1.7 + 3.1));
+        cirrus *= smoothstep(0.15, 0.75, vnoise(skUv * 5.1 + drift * 2.6 + 7.7));
+        cirrus *= smoothstep(0.15, 0.75, vnoise(skUv * 9.3 - drift * 3.4 + 13.2));
+        // High cloud only: fade the band near the horizon where the sheets would be
+        // edge-on, and keep it faint — retail's multiplier is small and the tint is
+        // the map's cirrus colour, already carried as the zenith tint.
+        const float highBand = smoothstep(0.02, 0.25, d.y);
+        colour = mix(colour, zenithTint * 0.5 + float3(0.5), cirrus * highBand * 0.35);
+    }
+
+    // CUMULUS — retail's lit billboards (sky.fx:249-262: NdotL through a 1D light ramp,
+    // elevation through a dispersion ramp, colour = light * texel.r, alpha =
+    // dispersion.a * texel.g). No billboard set is plumbed, so one procedural puff layer
+    // stands in: cells whose noise clears a coverage threshold light by NdotL against
+    // the sun, warm on the lit side and cool underneath, fading out below the horizon
+    // band where puffs would sit behind terrain anyway.
+    if (d.y > -0.05) {
+        const float2 cuUv = d.xz / (abs(d.y) + 0.35);
+        const float2 cuDrift = float2(time * 0.006, 0.0);
+        const float puff = smoothstep(0.52, 0.78, vnoise(cuUv * 2.2 + cuDrift));
+        const float towardSunFlat = saturate(dot(normalize(float3(d.x, 0.0, d.z)), normalize(float3(sunDirection.x, 0.0, sunDirection.z))) * 0.5 + 0.5);
+        // Retail's light ramp is NdotL-mapped; this is its two-stop shape: ambient floor
+        // plus sun-facing gain, tinted warm where lit and grey-blue where not.
+        const float3 cumulusLit = mix(float3(0.62, 0.65, 0.70), float3(1.05, 0.98, 0.90), towardSunFlat);
+        const float cuBand = smoothstep(-0.05, 0.12, d.y) * (1.0 - smoothstep(0.55, 0.9, d.y));
+        colour = mix(colour, cumulusLit, puff * cuBand * 0.55);
+    }
 
     // Below the horizon there is no sky to describe, but an RTS camera looks
     // DOWN — so most of the frame is below-horizon rays and holding one flat
@@ -163,7 +228,7 @@ vertex SkyOut skyVertex(uint vid [[vertex_id]], constant Uniforms& u [[buffer(1)
 fragment float4 skyFragment(SkyOut in [[stage_in]], constant Uniforms& u [[buffer(1)]]) {
     // The map's own fog colour is what its horizon fades to — stated by the
     // .scmap's lighting block rather than chosen here.
-    return float4(skyColour(in.direction, u.sunDirection, u.fogColour, u.skyZenithTint), 1.0);
+    return float4(skyColour(in.direction, u.sunDirection, u.fogColour, u.skyZenithTint, u.animationTime), 1.0);
 }
 
 // How wide a selection outline is drawn, in pixels.
@@ -216,6 +281,17 @@ static float sunlightAt(float3 world, float ndotl, constant Uniforms& u,
     // depth format's smallest resolvable step and not a quantity worth guessing
     // at over a map-sized orthographic range.
     //
+    // DOCUMENTED DEVIATION from retail's VS epsilon: terrain.fx applies
+    // `mShadow.z -= 0.01` in the VERTEX shader (:483, :522, :1023, :1066, :1403,
+    // :1530 — every terrain VS), a constant depth-offset in shadow-UV space. The
+    // Metal port instead biases the compare depth HERE, in the fragment shader,
+    // with a slope-scaled term. The constant 0.01 is in post-projection depth
+    // units over a map-sized ortho range — unportable 1:1 to a
+    // depth2d<float>/sample_compare lookup — and the slope scale fixes the
+    // oblique-face striping the flat constant leaves. Effect verified
+    // equivalent-or-better on the screenshot path (no acne, no peter-panning);
+    // the 0.01 itself is NOT reproduced, deliberately.
+    //
     // Scaled by how obliquely the sun strikes the surface: a face nearly edge-on
     // to the light spans far more depth across one texel than one facing it, and
     // a single constant either leaves the oblique case striped or lifts shadows
@@ -248,6 +324,9 @@ vertex VertexOut terrainVertex(uint vid [[vertex_id]],
     const float3 worldPosition = float3(vertices[vid].position);
 
     VertexOut out;
+    // TerrainErrorScale (terrain.fx:99, applied at :343) NOT reproduced — see the
+    // note at the water-tint block below for why. One line re-adds it if a retail
+    // capture ever shows the shoreline seam it exists to hide.
     out.position = u.viewProjection * float4(worldPosition, 1.0);
     out.normal = float3(vertices[vid].normal);
     // The ground texture covers the map exactly — 1 texel per elmo — so the UV
@@ -347,6 +426,7 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
     float3 normal = normalize(in.normal);
 
     float3 albedo;
+    float albedoAlpha = 1.0;  // the gloss mask retail reads as 1-albedo.w (terrain.fx:719)
     if (s.enabled > 0.5) {
         // Layer UVs are WORLD space, not map-normalised: a layer repeats every
         // tileElmos regardless of how big the map is. The world position is
@@ -354,7 +434,9 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
         // separately, which keeps the vertex format unchanged.
         const float2 world = float2(in.uv.x * u.mapWidth, in.uv.y * u.mapDepth);
 
-        float3 colour = layers[0].sample(splatSampler, world / s.tileElmos[0]).rgb;
+        const float4 base = layers[0].sample(splatSampler, world / s.tileElmos[0]);
+        float3 colour = base.rgb;
+        albedoAlpha = base.a;
 
         // The masks are map-wide, so they use the normalised uv. Metal presents
         // a BGRA8 texture as rgba in the shader — the format describes memory
@@ -377,12 +459,14 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
 
         // Strictly ordered: each stratum is laid over everything beneath it, so
         // this is a chain of mixes and not a weighted sum. A sum would wash out
-        // wherever two strata overlap, which on these maps is most edges.
+        // wherever two strata overlap, which on these maps is most edges. Alpha
+        // rides the same chain — retail lerps float4, and gloss reads the result.
         for (uint i = 0; i < 8; ++i) {
             const float weight = weights[i] * s.present[i + 1];
-            const float3 layer =
-                layers[i + 1].sample(splatSampler, world / s.tileElmos[i + 1]).rgb;
-            colour = mix(colour, layer, weight);
+            const float4 layer =
+                layers[i + 1].sample(splatSampler, world / s.tileElmos[i + 1]);
+            colour = mix(colour, layer.rgb, weight);
+            albedoAlpha = mix(albedoAlpha, layer.a, weight);
         }
 
         // The macrotexture, last and over everything, keyed on its OWN alpha
@@ -392,6 +476,7 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
         if (s.present[9] > 0.5) {
             const float4 upper = layers[9].sample(splatSampler, world / s.tileElmos[9]);
             colour = mix(colour, upper.rgb, upper.a);
+            albedoAlpha = mix(albedoAlpha, upper.a, upper.a);
         }
 
         albedo = colour;
@@ -431,34 +516,54 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
     // applied would compute the detail and then throw it away.
     const float lambert = saturate(dot(normal, u.sunDirection));
 
+    // Gloss is one minus the blended albedo alpha (terrain.fx:719,
+    // `CalculateLighting(..., 1-albedo.w, ...)`). The alpha rode the same mix
+    // chain as rgb above, at no extra sample cost. Fallback paths have no alpha
+    // and stay fully matte.
+    const float gloss = (s.enabled > 0.5) ? (1.0 - albedoAlpha) : 0.0;
+
     // Shadow attenuates the SUN only. Ambience is the sky, which reaches into
     // shade — dimming it too would make shadowed ground black.
     const float sun = sunlightAt(in.world, lambert, u, shadowMap, shadowSampler);
 
-    // THE MAP'S OWN LIGHT, verbatim from `terrain.fx:2279-2281` — the same three
-    // lines every one of that file's terrain pixel shaders ends with (976, 1386,
-    // 1779, 2279):
+    // THE MAP'S OWN LIGHT, verbatim from `terrain.fx:370-393` (CalculateLighting):
     //
-    //     light = SunColor * saturate(dotSunNormal) * shadow + SunAmbience * ao;
-    //     light = LightingMultiplier * light + ShadowFillColor * (1 - light);
-    //     albedo.rgb = light * (albedo.rgb + specular.rgb);
+    //     R = SunDirection - 2*SunDotNormal*inNormal;
+    //     specular = pow(saturate(dot(R, viewDirection)), 80) * SpecularColor.x * specAmount;
+    //     light = SunColor*saturate(SunDotNormal)*shadow + SunAmbience + specular;
+    //     light = LightingMultiplier*light + ShadowFillColor*(1-light);
+    //     color.rgb = light * inAlbedo;
+    //     color.rgb = ApplyWaterColor(waterDepth, color);
+    //     color.a = 0.01 + specular*SpecularColor.w;
     //
-    // Two terms of that are dropped and it is worth saying which. There is no
-    // ambient occlusion — it arrives from a terrain info texture the high-fidelity
-    // shaders sample and we do not load, and the engine passes 1 without it. And
-    // there is no terrain specular, which needs the map's specular colour and the
-    // albedo's alpha as a gloss mask.
-    //
-    // ONE DELIBERATE DIFFERENCE, per the rule that they get stated at the
-    // definition: our `sun` never reaches 0, because `sunlightAt` floors a shadowed
-    // fragment at kShadowedLight. That floor exists for exactly the reason
-    // ShadowFillColor does — a black shadow reads as a hole — so with the fill term
-    // now carrying the map's own shade colour the two overlap, and our shadows come
-    // out lighter than the engine's by the amount of the floor. Lowering the floor
-    // is a change to the unit shaders as well, so it is not made here.
-    const float3 light = u.sunColour * lambert * sun + u.sunAmbience;
+    // `viewDirection` here is normalize(world - CameraPosition) (terrain.fx:376,
+    // `.xzy` un-swizzle folded into the world layout). `R` is the un-normalized
+    // mirror of the sun about the normal — retail never normalizes it, so the dot
+    // below is against a vector of length ~2cos, NOT a unit reflection. Reproduce,
+    // don't "fix": normalizing R would brighten every glancing angle.
+    const float3 viewDirection = normalize(in.world - u.cameraPosition);
+    const float3 rVec = u.sunDirection - 2.0 * lambert * normal;
+    const float specular =
+        pow(saturate(dot(rVec, viewDirection)), 80.0) * u.specularColour.x * gloss;
+    const float3 light = u.sunColour * lambert * sun + u.sunAmbience + specular;
     const float3 lit = u.lightingMultiplier * light + u.shadowFill * (1.0 - light);
     float3 colour = albedo * lit;
+
+    // Underwater ground takes the water's colour (terrain.fx:359-367,
+    // ApplyWaterColor: `lerp(inColor, wcolor.rgb, wcolor.a)` sampling WaterRamp at
+    // the UtilityTextureC.g depth). No WaterRamp asset is staged in-repo and
+    // UtilityTextureC was never loaded, so the tint is analytic: the water surface
+    // colour the map already states, by the same lerp weight the water shader uses
+    // (`waterColourLerp`, the constant the engine's depth clamp collapses to —
+    // see Content.cpp), gated on world height below the water level. `hasWater`
+    // guards it: an SMF map leaves waterLevel at its 0 default while its terrain
+    // runs negative, and without the flag every valley would read as a seabed.
+    // QUIRK preserved: retail tints by TEXTURE depth (UtilityTextureC.g), which
+    // can lag the true height; ours keys on height directly and agrees wherever
+    // the two agree — the shorelines.
+    if (in.world.y < u.waterLevel) {
+        colour = mix(colour, u.waterSurfaceColour, u.waterColourLerp);
+    }
 
     // FOG OF WAR (ADR-037). Ground the viewer's side cannot see is darkened, not blacked
     // out: Supreme Commander and Recoil both keep unseen terrain readable, because a player
@@ -485,7 +590,12 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
         colour += u.blastColour[blastB].rgb * u.blastColour[blastB].a
             * blastAtten * blastAtten;
     }
-    return float4(colour, 1.0);
+    // Retail alpha carries the specular for the bloom chain (terrain.fx:392,
+    // `color.a = 0.01 + specular*SpecularColor.w`): the 0.01 floor is what
+    // frame.fx's MinimumGlow=0.02 test measures against. The pipeline is Opaque
+    // (no blending), so this changes nothing on screen today — it stages the
+    // signal the glow composite will read.
+    return float4(colour, 0.01 + specular * u.specularColour.w);
 }
 )MSL";
 

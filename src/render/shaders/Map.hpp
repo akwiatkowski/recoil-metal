@@ -125,26 +125,85 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)
 
     const float deep = saturate(in.depth / kWaterDepthRange);
 
-    // Two crossing wave trains standing in for the engine's four scrolling
-    // normal maps, perturbing the NORMAL only. Both run obliquely and at
-    // incommensurable angles: aligned to X and Z their crests intersect on a
-    // regular lattice, and open water reads as tiled graph paper.
     const float t = u.animationTime;
     const float2 first = float2(0.92f, 0.39f);
     const float2 second = float2(-0.36f, 0.93f);
     const float phase1 = dot(in.world.xz, first) * 0.021 + t * 0.9;
     const float phase2 = dot(in.world.xz, second) * 0.017 - t * 0.7;
 
-    const float2 slope = (first * cos(phase1) * 0.021 + second * cos(phase2) * 0.017) * 2.4;
-    const float3 normal = normalize(float3(-slope.x, 1.0, -slope.y));
+    // The slope the surface is lit by, and the crest it foams with. Two recipes,
+    // chosen by what the map brought: the engine's own scrolling normal maps when
+    // bound, two analytic trains when the map names none.
+    float2 slope;
+    float3 normal;
+    float texCrest = 0.0;
+    if (u.hasWaterWaves > 0.5) {
+        // RETAIL PATH — the engine's four scrolling normal layers (water2.fx:374-380).
+        // The map carries ONE wave-normal texture, so all four taps read it: twice at
+        // the water block's mid repeat, twice at its fine repeat (Renderer.hpp:138
+        // defaults are the stock maps' own 0.009/0.05 layers, water2.fx:167), each pair
+        // on its own scroll vector (water2.fx:172-175), laid down exactly as WaterVS
+        // lays them (water2.fx:315-318: uv = (xz + movement * Time) * repeat).
+        const float2 tapUv0 = (in.world.xz + u.waveMovements.xy * t) * u.waveRepeats.x;
+        const float2 tapUv1 = (in.world.xz + u.waveMovements.zw * t) * u.waveRepeats.x;
+        const float2 tapUv2 = (in.world.xz + u.waveMovements.xy * t) * u.waveRepeats.y;
+        const float2 tapUv3 = (in.world.xz + u.waveMovements.zw * t) * u.waveRepeats.y;
+        // Summed as retail sums: each tap decoded from [0,1] to tangent slope (.rg)
+        // plus a reconstructed up (z = sqrt(1-x²-y²)), accumulated over the four taps,
+        // then N = 2*sum - 4 with the .xzy swizzle (water2.fx:383-386). In signed slope
+        // sums that reads N = (Sx, 2*Sz-4, Sy): the x/y sums already ARE the 2*sum-4 of
+        // their unsigned halves, while z stays unsigned.
+        float3 s = float3(0.0);
+        float sumA = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            const float2 tapUv = i == 0 ? tapUv0 : (i == 1 ? tapUv1 : (i == 2 ? tapUv2 : tapUv3));
+            const float4 tap = waveNormals.sample(waveSampler, tapUv);
+            const float2 n = tap.rg * 2.0 - 1.0;
+            s += float3(n.x, n.y, sqrt(saturate(1.0 - dot(n, n))));
+            sumA += tap.a;
+        }
+        // The crest rides the SAME sum's alpha (water2.fx:380:
+        // waveCrest = saturate(sum.a - waveCrestThreshold), threshold 1 at :21).
+        texCrest = saturate(sumA - 1.0);
+        // Flatness lerp by the utility mask's red channel (water2.fx:387-388:
+        // N = lerp(up, N, waterTexture.r)). UtilityTextureC is not plumbed, so the
+        // factor is 1.0 and the lerp is an identity — flagged, not dropped: the day
+        // the mask arrives this is where it lands.
+        const float3 retail = normalize(float3(s.x, 2.0 * s.z - 4.0, s.y));
+        normal = mix(float3(0.0, 1.0, 0.0), retail, 1.0);
+        // A gradient again, so the reflection wobble below keeps its units: the
+        // analytic path builds normal = (-slope, 1, -slope), hence this inversion.
+        slope = -normal.xz / max(normal.y, 0.5);
+    } else {
+        // Two crossing wave trains standing in for the engine's four scrolling
+        // normal maps, perturbing the NORMAL only. Both run obliquely and at
+        // incommensurable angles: aligned to X and Z their crests intersect on a
+        // regular lattice, and open water reads as tiled graph paper.
+        slope = (first * cos(phase1) * 0.021 + second * cos(phase2) * 0.017) * 2.4;
+        normal = normalize(float3(-slope.x, 1.0, -slope.y));
+    }
 
     const float3 view = normalize(u.cameraPosition - in.world);
     const float3 mirrored = reflect(-view, normal);
 
-    // The engine reads Fresnel from a texture indexed by (depth, N.V); this
-    // evaluates the bias and power that texture is built from. Note how much
-    // softer it is than a physical Schlick term — power 1.5 against 5 — which
-    // is why the engine's water reflects noticeably even looking straight down.
+    // The engine reads Fresnel from a texture indexed by (depth, N.V)
+    // (water2.fx:429: tex2D(FresnelSampler, float2(waterDepth, NDotL)).r), baked from
+    // these same bias/power uniforms (water2.fx:148-149: 0.1/1.5). This evaluates them
+    // directly — the ACCEPTED DEVIATION, kept deliberately (see item 2 below):
+    //
+    //   1. The bake is a 256×256 table of smooth bias+(1-bias)*(1-x)^power values;
+    //      bilinear sampling of a smooth analytic function reproduces it to ~1e-3, and
+    //      the engine itself LINEAR-filters the lookup (water2.fx:79-86), so a baked
+    //      table would converge to this formula anyway.
+    //   2. Pixel-exactness needs the engine's BAKED BYTES, not its formula — the table
+    //      is built at runtime from cvars and no two captures agree on its contents.
+    //      Re-baking it here would quantize twice (bake, then sample) for zero gain.
+    //   3. u.waterFresnelBias/Power already ride the per-map values, so a map tuning
+    //      its water gets the tuned curve with no table upload in the middle.
+    //
+    // Note how much softer it is than a physical Schlick term — power 1.5 against
+    // 5 — which is why the engine's water reflects noticeably even looking straight
+    // down.
     const float NdotV = saturate(dot(normal, view));
     const float fresnel = u.waterFresnelBias
                         + (1.0 - u.waterFresnelBias) * pow(1.0 - NdotV, u.waterFresnelPower);
@@ -258,7 +317,7 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)
         planar = reflection.sample(reflectionSampler, reflectionUv);
     }
 
-    const float3 sky = skyColour(mirrored, u.sunDirection, u.fogColour, u.skyZenithTint);
+    const float3 sky = skyColour(mirrored, u.sunDirection, u.fogColour, u.skyZenithTint, u.animationTime);
     // Alpha is the mirror's coverage: 1 where it drew world, 0 where it drew
     // nothing and the sky is the truthful answer.
     const float3 reflected = mix(sky, planar.rgb, planar.a);
@@ -273,12 +332,22 @@ fragment float4 waterFragment(WaterOut in [[stage_in]], float4 behind [[color(0)
                        * u.waterSunColour;
     colour += glint * fresnel;
 
-    // Wave crests, from the same trains that made the normal. The engine gates
-    // these on a threshold too (waveCrestThreshold, water2.fx:21); kept rare
-    // and faint here, because two sine trains crest on a regular grid and a
-    // strong term turns that into visible polka dots.
-    const float crest = saturate((sin(phase1) + sin(phase2)) * 0.5 - 0.8);
-    colour = mix(colour, kWaveCrestColour, crest * 0.10);
+    // Wave crests. The engine gates these on the same sum's alpha (water2.fx:380,472:
+    // waveCrest = saturate(sum.a - waveCrestThreshold), lerped by (1 - waterTexture.a)).
+    // The (1 - alpha) gate needs UtilityTextureC's alpha, which is not plumbed, so the
+    // retail path lerps by the raw crest — full strength as the engine states it, flagged
+    // not softened. The analytic path keeps its faint sine crest: two trains crest on a
+    // regular grid and a strong term turns that into visible polka dots.
+    float crest;
+    float crestStrength;
+    if (u.hasWaterWaves > 0.5) {
+        crest = texCrest;
+        crestStrength = 1.0;
+    } else {
+        crest = saturate((sin(phase1) + sin(phase2)) * 0.5 - 0.8);
+        crestStrength = 0.10;
+    }
+    colour = mix(colour, kWaveCrestColour, crest * crestStrength);
 
     // Composited here rather than by the blender: the shader already holds
     // what is behind, so hardware blending would be a second, redundant mix —

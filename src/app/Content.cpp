@@ -291,6 +291,7 @@ namespace rm::app {
     environment.sunAmbience = map->lighting.sunAmbience;
     environment.shadowFill = map->lighting.shadowFill;
     environment.lightingMultiplier = map->lighting.multiplier;
+    environment.specularColour = map->lighting.specularColour;
     // The bloom gain the map's own lighting block asks for — parsed since the block
     // was first read and dropped until now. See Renderer::Environment::bloom.
     environment.bloom = map->lighting.bloom;

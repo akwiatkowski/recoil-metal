@@ -241,6 +241,14 @@ constant float3 kRecoilEnvironment = float3(0.09, 0.12, 0.18);
 constant float3 kSupComPhongCoeff = float3(0.6, 0.80, 0.90);  // NormalMappedPhongCoeff
 constant float kSupComGlowMultiplier = 2.0;                   // glowMultiplier
 
+// Aeon's own model constants. Retail keeps two phong coefficient colours side
+// by side: `NormalMappedPhongCoeff` (mesh.fx:97) for the base shader and
+// `AeonPhongCoeff` (mesh.fx:96) for the Aeon branch — the Aeon highlight is
+// bluer and stronger. `kAeonLightScale` (mesh.fx:2589) dims the whole Aeon
+// light sum to 0.6, a faction tint no other branch applies.
+constant float3 kAeonPhongCoeff = float3(0.8, 0.85, 1.10);  // AeonPhongCoeff
+constant float kAeonLightScale = 0.6;                       // AeonPS dimmer
+
 /// Which keyframe an instance is on. Shared so the shadow pass poses a unit
 /// exactly as the visible pass does — a unit casting the shadow of a different
 /// frame of its walk cycle is the kind of wrongness nobody would think to look

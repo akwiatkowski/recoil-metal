@@ -1234,6 +1234,9 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             simd_make_float4(blast.colour[0], blast.colour[1], blast.colour[2],
                              blast.intensity);
     }
+    uniforms.specularColour =
+        simd_make_float4(environment_.specularColour[0], environment_.specularColour[1],
+                         environment_.specularColour[2], environment_.specularColour[3]);
 
     // --- Sky ---------------------------------------------------------------
     // First, at the far plane, writing no depth. Everything else then draws

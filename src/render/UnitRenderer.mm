@@ -36,6 +36,43 @@ namespace rm {
 // The uniform layouts, the buffer indices and the small helpers live in
 // `RendererInternal.hpp` — see the note there on why they are not in `Renderer.hpp`.
 using namespace render_detail;  // NOLINT(google-build-using-namespace)
+namespace {
+// Which `unitFragment` branch a batch draws: 0 base `NormalMappedPS`, 1 Aeon
+// `AeonPS`, 2 Seraphim `UnitFalloffPS`, 3 `WreckagePS`. Retail picks per
+// blueprint (`ShaderName` in the mesh blueprint); the renderer only sees the
+// model file, so the faction comes from the FA id's second letter — UEL/UAL/
+// URL/XSL land units are UEF/Aeon/Cybran/Seraphim — and UEF/Cybran correctly
+// stay 0 (retail shades both with the base shader). Guarded to SupCom models:
+// a Recoil name happens to hit these letters by coincidence. Wreck meshes
+// share their live mesh's file (Blueprints.lua `ExtractWreckageBlueprint`
+// only retargets `ShaderName`), so variant 3 never fires yet — the branch
+// compiles and waits on `ShaderName` plumbing through `UnitBatch`.
+[[nodiscard]] unsigned unitShaderVariantFor(const Model& model) noexcept {
+    if (model.family != Family::SupremeCommander || model.name.size() < 2) {
+        return 0;
+    }
+    if (model.name.find("_wreck") != std::string::npos) {
+        return 3;
+    }
+    switch (model.name[1]) {
+    case 'A':
+    case 'a':
+        return 1;
+    case 'S':
+    case 's':
+        return 2;
+    default:
+        return 0;
+    }
+}
+
+// Variant per SOURCE batch index, filled by `setUnits` beside
+// `batchForSourceIndex_` and read by `setInstances`. File-static rather than
+// on `GpuUnitBatch` because that struct lives in `Renderer.hpp`, outside this
+// slice — and because its lifetime already mirrors `batchForSourceIndex_`:
+// every `setUnits` reassigns both together.
+std::vector<unsigned> unitVariantForSource;
+}  // namespace
 
 void Renderer::collectRetiredBuffers(bool everything) noexcept {
     // A buffer retired on frame N was last bindable by that frame, and `beginFrame`'s
@@ -250,6 +287,7 @@ void Renderer::setUnits(std::span<const dds::Texture> textures, std::span<const 
     // Every caller index starts unmapped, so a batch skipped below stays that
     // way and setInstances on it is a no-op rather than a stray write.
     batchForSourceIndex_.assign(batches.size(), kNoBatch);
+    unitVariantForSource.assign(batches.size(), 0);
 
     // Textures first: a failed upload here should leave nothing half-built, and
     // the batches below reference these by index.
@@ -408,6 +446,24 @@ void Renderer::setUnits(std::span<const dds::Texture> textures, std::span<const 
 
         batchForSourceIndex_[index] = unitBatches_.size();
         unitBatches_.push_back(uploaded);
+        // The fragment branch this batch draws. Stamped into the instances'
+        // team-colour alpha (see `unitFragment`'s variant selector): 1.0f is
+        // every authored team's alpha (TeamColours.hpp), so `1 + v/255` keeps
+        // the rgb tint byte-identical while smuggling 0..3 past the upload.
+        // Wreck jitter rides the green channel the same way (`fract` of it in
+        // the shader reads back the age) — zero here, real ages arrive via
+        // `setInstances` once wreck draws exist.
+        unitVariantForSource[index] = unitShaderVariantFor(model);
+        if (uploaded.instanceBuffer != nullptr && !batch.instances.empty()) {
+            const float stamped = 1.0f + static_cast<float>(unitVariantForSource[index]) / 255.0f;
+            auto* slots = static_cast<std::byte*>(uploaded.instanceBuffer->contents());
+            for (std::size_t slot = 0; slot < kMaxFramesInFlight; ++slot) {
+                auto* first = reinterpret_cast<UnitInstance*>(slots + slot * instanceBytes);
+                for (std::size_t i = 0; i < batch.instances.size(); ++i) {
+                    first[i].teamColour[3] = stamped;
+                }
+            }
+        }
     }
 }
 
@@ -461,6 +517,17 @@ void Renderer::setInstances(std::size_t batchIndex,
     auto* slots = static_cast<std::byte*>(batch.instanceBuffer->contents());
     std::memcpy(slots + instanceSlot_ * slotBytes, instances.data(),
                 count * sizeof(UnitInstance));
+    // Re-stamp the batch's branch: the caller's alpha is always 1 (see above),
+    // so the variant would otherwise wash out on the first per-frame write.
+    if (batchIndex < unitVariantForSource.size() && unitVariantForSource[batchIndex] != 0) {
+        const float stamped =
+            1.0f + static_cast<float>(unitVariantForSource[batchIndex]) / 255.0f;
+        auto* first =
+            reinterpret_cast<UnitInstance*>(slots + instanceSlot_ * slotBytes);
+        for (std::size_t i = 0; i < count; ++i) {
+            first[i].teamColour[3] = stamped;
+        }
+    }
 
     // Drawing fewer than were uploaded is fine — the tail of the slot simply
     // goes unread — so a caller may shrink a batch without reallocating.

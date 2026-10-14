@@ -126,6 +126,32 @@ fragment float4 screenFragment(ScreenOut in [[stage_in]],
     return image.sample(imageSampler, in.uv);
 }
 
+// GLOW-CHAIN ALIGNMENT (retail frame.fx vs this pipeline) — the ACCEPTED DEVIATION,
+// decided, not drifted into:
+//
+// Retail extracts glow by DESTINATION ALPHA (frame.fx:332-343 CopyGlowingPS:
+// c.a = saturate((c.a - MinimumGlow) * GlowCopyScale + GlowCopyAdd), MinimumGlow 0.02
+// at :327 reserves the water-signalling bottom of the alpha range), blurs it with a
+// FIXED 7-tap separable kernel (frame.fx:17-18, weights summing ~1.004 — a slight gain
+// quirk, then BlurScale), and folds it back ADDITIVELY (frame.fx:675-688 TFrameAdd/TAdd:
+// AlphaBlend_One_One) in LDR, post-tonemap.
+//
+// This pipeline extracts by LUMINANCE KNEE (0.8, below) and folds back in LINEAR HDR
+// pre-tonemap (compositeFragment below). The two WILL differ, in known ways:
+//   1. Predicate: retail glows what the MATERIAL marked (alpha channel authored per
+//      effect); this glows what is BRIGHT. A dim-but-marked effect (e.g. a faint shield
+//      shell) blooms in retail and not here; a bright-but-unmarked one (sun glint on
+//      water) blooms here and less there.
+//   2. Gain: retail's kernel sums to ~1.004 (net amplify); a normalized gaussian here
+//      conserves energy. Ours blooms very slightly dimmer at equal gain.
+//   3. Composite point: LDR-add post-curve (retail) vs linear-add pre-curve (here).
+//      Ours rolls off through the filmic shoulder instead of clipping — the deliberate
+//      choice: retail's clip is a 2007 LDR framebuffer constraint, not a look.
+//
+// Re-deriving the knee toward retail (e.g. alpha-reservation + material marking) needs
+// dest-alpha plumbed through every material shader first — a renderer-wide change, not
+// a threshold tweak. Until then the knee stays: it glows fire, explosions and glints,
+// which is what the chain exists for on screen.
 // The bloom bright pass, into its own quarter-res target — NOT the glass pair, which
 // the panel blur owns and the bloom pass must not fight mid-frame. The knee sits at
 // 0.8, just under the tone curve's shoulder: pixels still inside the curve keep
@@ -138,7 +164,6 @@ fragment float4 thresholdFragment(ScreenOut in [[stage_in]],
     const float3 colour = image.sample(imageSampler, in.uv).rgb;
     return float4(max(colour - float3(0.8), float3(0.0)), 1.0);
 }
-
 // Screen-space ambient occlusion. The world pass already pays for a full-res depth
 // buffer; this pass reads it back at quarter res and asks, for each pixel, how much
 // of a small sphere around the reconstructed view position is blocked by geometry

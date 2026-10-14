@@ -422,7 +422,118 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
         // `dot(reflect(sunDirection, N), -viewDirection)`, which is the same
         // value as reflecting the incident direction and dotting the direction
         // to the camera — the two negations cancel.
-        const float phongAmount = saturate(dot(reflect(-L, N), V));
+        //
+        // The faction selector: the team colour's alpha is NOT transparency —
+        // both engines multiply it into the alpha mask (TeamColours.hpp), so
+        // it stays 1 on every authored instance. Retail picks the faction
+        // shader per blueprint (`ShaderName`); here one fragment reads
+        // per-instance channels the host fills from the blueprint faction and
+        // wreck state. 0 = base, 1 = Aeon, 2 = Seraphim, 3 = wreckage.
+        // Stamped host-side as `1 + v/255` (UnitRenderer.mm): the tint rgb is
+        // byte-identical to 1.0, and subtracting 255 recovers 0..3 here.
+        const float variant = in.teamColour.a * 255.0 - 255.0;
+        const float phongAmountBase = saturate(dot(reflect(-L, N), V));
+        if (variant > 0.5 && variant < 1.5) {
+            // AEON, from `effects/mesh.fx`'s AeonPS (mesh.fx:2567-2598).
+            // TWO differences from NormalMappedPS and nothing else: the
+            // highlight is `AeonPhongCoeff * pow(amount, 3)` (mesh.fx:2584) —
+            // a tighter lobe in a bluer colour — and the whole light sum is
+            // scaled by 0.6 (mesh.fx:2589), which dims Aeon hulls against the
+            // same sun. Reflection stays `spec.r * env` WITHOUT the base
+            // shader's ×2 (mesh.fx:2585): the dimmer light and the un-doubled
+            // reflection are what make Aeon read duskier.
+            const float3 aeonAdditive =
+                kAeonPhongCoeff * pow(phongAmountBase, 3.0) * tex2.g;
+            const float3 aeonMultiplicative =
+                environment.sample(texSampler, reflect(-V, N)).rgb * tex2.r;
+            const float emissive = kSupComGlowMultiplier * tex2.b;
+            float3 aeonLight = u.sunColour * NdotL + u.sunAmbience;
+            aeonLight =
+                kAeonLightScale * u.lightingMultiplier * aeonLight
+                + u.shadowFill * (1.0 - aeonLight);
+            float3 blast = float3(0.0);
+            for (uint blastB = 0; blastB < 3; ++blastB) {
+                float blastDist = length(u.blastPos[blastB].xyz - in.world);
+                float blastAtten =
+                    saturate(1.0 - blastDist / max(u.blastPos[blastB].w, 0.001));
+                blast += u.blastColour[blastB].rgb * u.blastColour[blastB].a
+                    * blastAtten * blastAtten;
+            }
+            return float4(albedo * (emissive + aeonLight + aeonMultiplicative)
+                              + aeonAdditive + blast, tex2.b + 0.01);
+        }
+        if (variant > 1.5 && variant < 2.5) {
+            // SERAPHIM, from `effects/mesh.fx`'s UnitFalloffPS (mesh.fx:2649-2684).
+            // QUIRK Q2 REPRODUCED: retail forces `shadow = 0` (mesh.fx:2674,
+            // the ComputeShadow call commented out), so Seraphim hulls sit in
+            // FULL shadow — `light = sunAmbient + (1-sunAmbient)*shadowFill` —
+            // whatever the shadow map says. Flagged, not fixed: matching
+            // retail's look means matching its darkness here.
+            // The view ramp is procedural, not a texture: retail samples
+            // `falloffSampler` (mesh.fx:2663) — a per-blueprint LUT
+            // (`Falloff_seraphim_lookup.dds`, Blueprints.lua:630, Seraphim
+            // builds only) this renderer never uploads — so `fallOff.rgb`
+            // becomes a grazing sheen `pow(1-NdotV, 2)` tinted by the diffuse
+            // alpha, and `fallOff.a` gates the environment the same way the
+            // LUT's alpha does (mesh.fx:2671). The highlight keeps retail's
+            // own warm coeff and pow9 (mesh.fx:2668).
+            const float seraFacing = saturate(dot(normalize(V), N));
+            const float seraNdotV = pow(1.0 - seraFacing, 0.6);
+            const float3 seraSheen =
+                pow(1.0 - seraFacing, 2.0) * tex1.a;
+            const float seraGate = saturate(seraNdotV);
+            const float seraAmount = saturate(dot(reflect(L, N), V));
+            const float3 seraAdditive =
+                float3(0.5, 0.6, 0.7) * pow(seraAmount, 9.0) * tex2.g;
+            const float3 seraEnv =
+                environment.sample(texSampler, reflect(-V, N)).rgb * tex2.r
+                * seraGate;
+            const float seraShadow = 0.0;
+            float3 seraLight =
+                u.sunColour * saturate(dot(N, L)) * seraShadow + u.sunAmbience;
+            seraLight = seraLight + (1.0 - seraLight) * u.shadowFill;
+            float3 blast = float3(0.0);
+            for (uint blastB = 0; blastB < 3; ++blastB) {
+                float blastDist = length(u.blastPos[blastB].xyz - in.world);
+                float blastAtten =
+                    saturate(1.0 - blastDist / max(u.blastPos[blastB].w, 0.001));
+                blast += u.blastColour[blastB].rgb * u.blastColour[blastB].a
+                    * blastAtten * blastAtten;
+            }
+            const float3 seraColour = tex1.rgb * seraLight + seraEnv + seraAdditive
+                + seraSheen;
+            return float4(seraColour + blast, tex2.b + 0.01);
+        }
+        if (variant > 2.5 && variant < 3.5) {
+            // WRECKAGE, from `effects/mesh.fx`'s WreckagePS (mesh.fx:2334-2357).
+            // SHADOWLESS BY DESIGN: `ComputeLight(dot, 1)` (mesh.fx:2349) —
+            // retail's own comment says the crunch "makes for bad artifacts"
+            // under shadows (mesh.fx:2348), so a wreck is lit as if unshadowed
+            // even mid-map. The specular UV is jittered by the wreck's age
+            // (`frac(0.01 * depth.y)`, mesh.fx:2344-2345) and read at 5.15x
+            // (mesh.fx:2346); below `spec.g < 0.22` the colour is crushed by
+            // `(albedo + spec.r + spec.a) * spec.b * 2.5` (mesh.fx:2351-2352),
+            // above by `spec.b * 2` (mesh.fx:2354). Alpha is flat
+            // `glowMinimum` (mesh.fx:2356) — wrecks never bloom.
+            // The VERTEX crunch (mesh.fx:1176-1182: `sin(14.5…)/cos(10.8…)/
+            // sin(20.5…)` over a 0.15-scaled normal) stays CPU-side work the
+            // batch's bones would have to carry; the fragment crunch above is
+            // what reads on screen, so it lands first.
+            const float wreckJitter = fract(0.01 * in.teamColour.g * 255.0);
+            const float2 wreckUv = float2(in.uv.x + wreckJitter, in.uv.y - wreckJitter);
+            const float4 wreckSpec = shading.sample(texSampler, wreckUv * 5.15);
+            float3 wreckLight = u.sunColour * rawNdotL + u.sunAmbience;
+            wreckLight = u.lightingMultiplier * wreckLight
+                + (1.0 - wreckLight) * u.shadowFill;
+            float3 wreckColour = tex1.rgb * wreckLight;
+            if (wreckSpec.g < 0.22) {
+                wreckColour *= (tex1.a + wreckSpec.r + wreckSpec.a) * wreckSpec.b * 2.5;
+            } else {
+                wreckColour *= wreckSpec.b * 2.0;
+            }
+            return float4(wreckColour, 0.01);
+        }
+        const float phongAmount = phongAmountBase;
         const float3 phongAdditive = kSupComPhongCoeff * pow(phongAmount, 2.0) * tex2.g;
         const float3 phongMultiplicative =
             2.0 * environment.sample(texSampler, reflect(-V, N)).rgb * tex2.r;
@@ -473,6 +584,197 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
     light = mix(light, kRecoilEnvironment, shininess);  // Recoil's flat sky
     light += float3(selfIllum);                   // self-illum
     return float4(albedo * light + specular + blast, 1.0);
+}
+
+// SHIELD SHELLS, from `effects/mesh.fx`'s per-faction shield shaders.
+// Retail draws a shield as a SECOND pass over the unit: the opaque hull first,
+// then an electricity shell at a 0.05 offset (PhaseShield techniques,
+// mesh.fx:5805-5958). Here the same idea is one fragment on the unit's own
+// geometry — the offset becomes a view-facing lift in `shieldVertex` —
+// because there is no second-pass plumbing yet (see the gap note at the end).
+struct ShieldOut {
+    float4 position [[position]];
+    float2 uv;
+    float3 world;
+    float3 normal;
+    float health;   // 0..1, the shield's remaining fraction
+    float seconds;  // animation clock, retail `time`/`material.x`
+    uint kind;      // 0 UEF, 1 Cybran, 2 Aeon, 3 Seraphim
+};
+
+// Lifts the shell toward the viewer so it floats just off the hull — retail's
+// 0.05 pass offset (mesh.fx:5805-5958) without a second draw. In NDC so the
+// gap is constant on screen: `clip.z += 0.05 * clip.w` pushes depth away,
+// matching a shell drawn slightly proud of the surface.
+vertex ShieldOut shieldVertex(uint vid [[vertex_id]],
+                              uint iid [[instance_id]],
+                              const device UnitVertexIn* vertices [[buffer(0)]],
+                              constant Uniforms& u [[buffer(1)]],
+                              const device UnitInstanceIn* instances [[buffer(2)]],
+                              const device BoneTransformIn* bones [[buffer(3)]],
+                              constant PoseUniforms& p [[buffer(4)]],
+                              constant float4& shieldParams [[buffer(5)]]) {
+    const UnitVertexIn v = vertices[vid];
+    const UnitInstanceIn inst = instances[iid];
+    const uint poseIndex = poseIndexFor(p, inst.animationPhase);
+    const BoneTransformIn bone = bones[poseIndex * p.boneCount + v.boneIndex];
+    const float4 boneRotation = float4(bone.rotation);
+    const float3 local = applyBuilderAim(
+        rotateBy(boneRotation, float3(v.position)) + float3(bone.translation), bone, inst, p);
+    const float3 world = unitOrient(local, inst) * inst.scale + float3(inst.position);
+    ShieldOut out;
+    float4 clip = u.viewProjection * float4(world, 1.0);
+    clip.z += 0.05 * clip.w;
+    out.position = clip;
+    out.uv = float2(v.uv.x, 1.0 - v.uv.y);
+    out.world = world;
+    out.normal = unitOrient(
+        applyBuilderAimNormal(rotateBy(boneRotation, float3(v.normal)), bone, inst, p), inst);
+    out.health = shieldParams.x;
+    out.seconds = shieldParams.y;
+    out.kind = uint(shieldParams.z);
+    return out;
+}
+
+// The four faction shells. Each branch is its retail PS verbatim in structure;
+// `in.seconds` stands in for retail's per-shield `material.x` clock.
+// Sampler inputs reuse the unit's own textures (albedo/specular): retail reads
+// SEPARATE shield maps, so these are the closest bound analogues until shield
+// textures upload.
+fragment float4 shieldFragment(ShieldOut in [[stage_in]],
+                               constant Uniforms& u [[buffer(1)]],
+                               texture2d<float> albedoTex [[texture(0)]],
+                               texture2d<float> specTex [[texture(1)]],
+                               sampler texSampler [[sampler(0)]]) {
+    // UEF ShieldPS (mesh.fx:3076-3118): normal-modulated blue shell whose
+    // alpha picks from a decision tree over (spec.g vs albedo.r, spec.b vs
+    // albedo.g, …), reddening as `material.y` (health) drops (mesh.fx:3111),
+    // masked by `colorMask.a` against sphere-UV pinching (mesh.fx:3116).
+    if (in.kind == 0u) {
+        const float4 colorMask = albedoTex.sample(texSampler, in.uv);
+        const float4 albedo = albedoTex.sample(texSampler, in.uv);
+        const float3 nrm =
+            specTex.sample(texSampler, in.uv).gaa * 2.0 - 1.0;
+        const float nz = sqrt(saturate(1.0 - nrm.x * nrm.x - nrm.y * nrm.y));
+        const float3 spec = specTex.sample(texSampler, in.uv).rgb;
+        float4 colour = float4(albedo.r * nrm.x + albedo.g * nrm.y
+                                   + albedo.r * nz + 0.0,
+                               albedo.r * nrm.x + albedo.g * nrm.y
+                                   + albedo.g * nz + 0.0,
+                               albedo.r * nrm.x + albedo.g * nrm.y
+                                   + albedo.r * nz + 0.25,
+                               1.0);
+        const float pulse = sin(fract(0.01 * in.seconds) * 3.14);
+        const float pulse6 = sin(fract(0.06 * in.seconds) * 3.14);
+        if (spec.g <= albedo.r) {
+            if (spec.b >= albedo.g) {
+                colour.a = (colour.b >= nz) ? 0.12 : mix(0.05, 0.0, pulse);
+            } else {
+                colour.a = (nz >= albedo.r) ? 0.2 : mix(0.01, 0.1, pulse);
+            }
+        } else {
+            if (spec.r >= albedo.r) {
+                colour.a = (spec.b >= albedo.r) ? 0.025 : 0.1;
+            } else {
+                colour.a = (spec.g >= albedo.g) ? 0.02 : mix(0.37, 0.46, pulse);
+            }
+        }
+        colour.rgb += float3(0.0, 0.0, 0.15);
+        float4 mod1 = mix(float4(0.5, 0.0, 0.0, 0.05), colour, 0.5);
+        mod1 = mix(colour, mod1 + colour, pulse6);
+        colour = mix(mod1, colour, in.health);
+        colour += colorMask.b * 0.95;
+        colour.a *= colorMask.a;
+        return colour;
+    }
+    // CYBRAN ShieldCybranPS (mesh.fx:3145-3190, default alpha 0.17/0.24 per
+    // technique): colour-wackiness over two albedo and two specular taps,
+    // health-lerped from near-black red (mesh.fx:3170), floored to
+    // (0.15,0.15,0.3) when the sum dies (mesh.fx:3181).
+    if (in.kind == 1u) {
+        const float4 albedo = albedoTex.sample(texSampler, in.uv);
+        const float3 spec = specTex.sample(texSampler, in.uv).rgb;
+        const float3 color4 =
+            ((albedo.g - spec.b) * spec.b) * albedo.a;
+        const float3 color2 = albedo.b * spec.g * 3.0;
+        const float3 color3 = spec.g * albedo.a;
+        float3 final = float3(0.05, 0.0, 0.3) + color4 - color2 * color3;
+        float3 mod1 = mix(float3(0.2, 0.0, 0.0), final, 0.5);
+        mod1 = mix(final, (mod1 - final) + (color4 + mod1),
+                   sin(fract(0.06 * in.seconds) * 3.14));
+        final = mix(mod1, final, in.health);
+        final += (albedo.r + albedo.r) * 0.1;
+        final -= 1.0 - albedo.a;
+        const float clradd = final.r + final.g + final.b;
+        if (clradd < 0.1) {
+            final = float3(0.15, 0.15, 0.3);
+        } else if (clradd > 0.1 && clradd < 0.2) {
+            final = spec.b;
+        }
+        final += (albedo.r + albedo.r) * float3(0.0, 0.0, 0.3);
+        const float alpha = 0.17 + (albedo.r + albedo.r) * 0.2;
+        return float4(final, alpha);
+    }
+    // AEON ShieldAeonPS (mesh.fx:3210-3243, alpha 0.5 per technique):
+    // phong-plus-environment magic scaled by two pulsing specular layers,
+    // health-lerped from pale red (mesh.fx:3238).
+    if (in.kind == 2u) {
+        const float4 albedo = albedoTex.sample(texSampler, in.uv);
+        const float3 spec = specTex.sample(texSampler, in.uv).rgb;
+        const float3 N = normalize(in.normal);
+        const float3 V = normalize(u.cameraPosition - in.world);
+        const float phong =
+            saturate(dot(reflect(-V, N), V)) * 0.6;
+        const float3 env =
+            albedoTex.sample(texSampler, reflect(-V, N).xy * 0.5 + 0.5).rgb;
+        const float3 color1 = phong + env - albedo.ggg;
+        const float3 color2 =
+            spec.rrr * mix(0.6, 1.3, sin(fract(0.015 * in.seconds) * 3.14));
+        const float3 color3 =
+            spec.rrr * mix(2.0, 2.2, sin(fract(0.0045 * in.seconds) * 3.14));
+        float3 final = (color1 * color2) * color3;
+        final = (final * N) * 0.65 + final;
+        final = final * env * albedo.a;
+        const float3 mod1 = mix(float3(0.7, 0.3, 0.3), final, 0.9);
+        final = mix(mod1, final, in.health);
+        const float alpha =
+            0.707 * ((env.r + env.g + env.b) * 0.25) + albedo.b * 0.5;
+        return float4(mix(mod1, final, in.health), alpha);
+    }
+    // SERAPHIM ShieldSeraphimPS (mesh.fx:3260-3304, additive): a dome whose
+    // blue tint falls off as `dp*dp` from the world-up axis (mesh.fx:3302)
+    // and whose alpha fades near the crown past `t = 0.753` (mesh.fx:3285-3299).
+    // QUIRK REPRODUCED: `normal_pixel.g - 0.5` (mesh.fx:3277) and
+    // `dp = |cos(dot(up, N))|` (mesh.fx:3279) are kept as written.
+    const float3 N = normalize(in.normal);
+    const float4 normalPixel = specTex.sample(texSampler, in.uv);
+    const float4 uvAddr = specTex.sample(texSampler, in.uv);
+    const float4 spec = specTex.sample(texSampler, in.uv + uvAddr.rb * 0.1);
+    float m = abs(normalPixel.g - 0.5);
+    const float dp = abs(dot(float3(0.0, 1.0, 0.0), N));
+    const float t = abs(dot(float3(0.0, 1.0, 0.0), normalize(in.normal)));
+    const float cutoff = 0.753;
+    if (t >= cutoff) {
+        m = 1.0 - 0.7 * (t - cutoff) / (1.0 - cutoff);
+    } else {
+        m = 1.0;
+    }
+    const float dp2 = abs(dot(normalize(u.cameraPosition - in.world), N));
+    const float maxB = 0.453;
+    const float channel = maxB - clamp(1.0 - dp, 0.0, maxB);
+    const float alpha = m * (dp2 * 0.3 + channel) * 1.75;
+    return float4(0.425 * dp * dp * spec.r, 0.76274 * dp * dp * spec.g,
+                  1.0 * dp * dp * spec.b, alpha);
+
+// PIPELINE GAP (shields not yet drawn): `shieldVertex`/`shieldFragment` compile
+// with the library, which proves the equations, but no pipeline binds them.
+// To draw: (1) a `shieldPipeline_` (additive for Seraphim, StraightAlpha for
+// the rest) built in Renderer.mm beside `unitPipeline_`; (2) shield-texture
+// uploads (retail reads dedicated albedo/specular shield maps, not the unit's
+// pair); (3) per-shield health + clock uniforms (`shieldParams`: health,
+// seconds, kind) fed from the sim's shield state, which has no renderer
+// plumbing yet; (4) a second draw per shielded batch AFTER the hull (retail's
+// 2-pass structure) — all in Renderer.mm/FxRenderer scope, outside this slice.
 }
 )MSL";
 

@@ -131,6 +131,11 @@ struct TerrainUniforms {
     /// rgb colour, a intensity. Zero intensity is off.
     simd_float4 blastPos[rm::kBlastLightCount];
     simd_float4 blastColour[rm::kBlastLightCount];
+
+    /// The map's SpecularColor (terrain.fx:22): .x scales the terrain specular
+    /// lobe, .w how much of it reaches the alpha the bloom chain reads. Appended
+    /// at the END, same rule as every field above.
+    simd_float4 specularColour;
 };
 
 static_assert(offsetof(TerrainUniforms, buildGridStep) == 536);
@@ -164,9 +169,9 @@ static_assert(offsetof(TerrainUniforms, fogWidthElmos) == 488, "and stays in the
 static_assert(offsetof(TerrainUniforms, fogDepthElmos) == 492, "filling it exactly");
 static_assert(offsetof(TerrainUniforms, waveRepeats) == 496,
               "the wave block starts on the fresh 16-byte slot after the fog block");
-static_assert(sizeof(TerrainUniforms) == 640,
+static_assert(sizeof(TerrainUniforms) == 656,
               "the wave block and its flags occupy three 16-byte slots, then six "
-              "blast float4s take six more");
+              "blast float4s take six more, then one specular float4");
 static_assert(offsetof(TerrainUniforms, blastPos) == 544,
               "blast lights start on the fresh slot after buildGridStep");
 static_assert(offsetof(TerrainUniforms, hasUnitNormals) == 532,

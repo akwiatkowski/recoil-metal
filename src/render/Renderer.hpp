@@ -175,6 +175,12 @@ public:
         /// "high-fidelity" by testing `LightingMultiplier > 2.1`.
         float lightingMultiplier = 1.0f;
 
+        /// The map's `SpecularColor` (terrain.fx:22): .x scales the terrain specular
+        /// lobe, .w how much of it reaches the alpha the bloom chain reads. From the
+        /// same lighting block as sunColour; zero on maps that state none (Scmap.hpp
+        /// default), which kills the specular terms cleanly.
+        std::array<float, 4> specularColour{{0.0f, 0.0f, 0.0f, 0.0f}};
+
         /// The post-process bloom gain the map asks for — the `bloom` float in the
         /// `.scmap` lighting block. Stock maps carry 0..0.12, so this is a gentle
         /// halo on super-white pixels, not a glare. 0 = no bloom at all, which is
