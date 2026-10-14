@@ -45,3 +45,34 @@ TEST_CASE("UEF build beam height descends with construction progress") {
     CHECK(rm::uefBuildBeamEnds(site, builder, 20.0f, 40.0f, 20.0f, 1.0f, 0.0f)
               .first[1] == Approx(5.0f));
 }
+
+TEST_CASE("Cybran build beams land at a heading-rotated random offset inside "
+          "the target's size box") {
+    // `CreateCybranBuildBeams` (`lua/EffectUtilities.lua`, retail `lua.scd`)
+    // warps each bone's beam end to `unitBeingBuilt:GetPosition()` plus
+    // `builder.GetRandomOffset(unitBeingBuilt, 1)` every 0.2 s, where
+    // `Unit.lua:GetRandomOffset` scales the target's `SizeX/SizeY/SizeZ` by
+    // the scalar, draws three uniforms, and rotates by the builder heading.
+    // The draw is presentation Lua `Random()`, never the sim stream.
+    constexpr float kPi = 3.141592653589793f;
+    // Zero heading: the box passes through unrotated. Size 8 x 16 x 4 elmos,
+    // draws 0.75/0.5/0.25 -> rx = 0.75*8-4 = 2, y = 0.5*16 = 8,
+    // rz = 0.25*4-2 = -1.
+    const std::array<float, 3> plain =
+        rm::cybranBuildBeamTarget(8.0f, 16.0f, 4.0f, 0.0f, 0.0f, 0.75f, 0.5f, 0.25f);
+    CHECK(plain[0] == Approx(2.0f));
+    CHECK(plain[1] == Approx(8.0f));
+    CHECK(plain[2] == Approx(1.0f));
+    // A quarter turn: cos90*rx - sin90*rz = -rz, sin90*rx - cos90*rz = rx.
+    // (2, -1) -> (1, 2): retail's `z` arm keeps the source's minus sign,
+    // not the textbook plus.
+    const std::array<float, 3> turned =
+        rm::cybranBuildBeamTarget(8.0f, 16.0f, 4.0f, kPi / 2.0f, 0.0f, 0.75f, 0.5f, 0.25f);
+    CHECK(turned[0] == Approx(1.0f));
+    CHECK(turned[1] == Approx(8.0f));
+    CHECK(turned[2] == Approx(2.0f));
+    // The collision offset lifts the box: `Random()*sy + CollisionOffsetY`.
+    const std::array<float, 3> lifted =
+        rm::cybranBuildBeamTarget(8.0f, 16.0f, 4.0f, 0.0f, 3.0f, 0.75f, 0.5f, 0.25f);
+    CHECK(lifted[1] == Approx(11.0f));
+}

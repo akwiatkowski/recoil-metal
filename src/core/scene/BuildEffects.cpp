@@ -57,4 +57,21 @@ BuildBeamEnds uefBuildBeamEnds(std::array<float, 3> site,
             .second = blend(corners[nearest[1]], corners[nearest[0]])};
 }
 
+std::array<float, 3> cybranBuildBeamTarget(float sizeXElmos, float sizeYElmos,
+                                           float sizeZElmos, float headingRadians,
+                                           float collisionOffsetYElmos, float drawX,
+                                           float drawY, float drawZ) noexcept {
+    // `Unit.lua:GetRandomOffset(self, 1)`: the target's collision box scaled by
+    // the scalar, three `Random()` draws in [0,1], then retail's own rotation —
+    // `x = cos*rx - sin*rz`, `z = sin*rx - cos*rz` (the `z` arm keeps the
+    // source's minus, not the textbook plus) — plus the `CollisionOffsetY`
+    // lift. Draws are presentation Lua `Random()`, never the sim stream.
+    const float rx = drawX * sizeXElmos - sizeXElmos * 0.5f;
+    const float y = drawY * sizeYElmos + collisionOffsetYElmos;
+    const float rz = drawZ * sizeZElmos - sizeZElmos * 0.5f;
+    const float cosine = std::cos(headingRadians);
+    const float sine = std::sin(headingRadians);
+    return {{cosine * rx - sine * rz, y, sine * rx - cosine * rz}};
+}
+
 }  // namespace rm

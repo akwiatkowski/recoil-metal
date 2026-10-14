@@ -14,9 +14,23 @@ struct BuildBeamEnds {
 /// sweeps them past each other every 0.6 seconds. Extents are the blueprint's
 /// full MeshExtents values.
 [[nodiscard]] BuildBeamEnds uefBuildBeamEnds(std::array<float, 3> site,
-                                             std::array<float, 3> builder,
-                                             float extentX, float extentY,
-                                             float extentZ, float progress,
+                                             std::array<float, 3> builder, float extentX,
+                                             float extentY, float extentZ, float progress,
                                              float seconds) noexcept;
+
+/// Cybran's per-bone beam end (`CreateCybranBuildBeams` in retail
+/// `lua/EffectUtilities.lua`): `unitBeingBuilt:GetPosition()` plus
+/// `Unit.lua:GetRandomOffset` at scalar 1 — the target's `SizeX/SizeY/SizeZ`
+/// (elmos here) scaled, three unit draws, rotated by the builder heading with
+/// retail's own signs (`x = cos*rx - sin*rz`, `z = sin*rx - cos*rz`), and the
+/// `CollisionOffsetY` lift. `draws` are three presentation-Lua uniforms in
+/// [0,1]; `headingRadians` is the builder's yaw; `collisionOffsetYElmos` is zero
+/// when the blueprint states no offset. Returns the offset from the target pad.
+[[nodiscard]] std::array<float, 3> cybranBuildBeamTarget(float sizeXElmos, float sizeYElmos,
+                                                         float sizeZElmos, float headingRadians,
+                                                         float collisionOffsetYElmos,
+                                                         float drawX, float drawY,
+                                                         float drawZ) noexcept;
+
 
 }  // namespace rm

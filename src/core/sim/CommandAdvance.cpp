@@ -2453,11 +2453,13 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         const unitdef::UnitDef* captor = catalog.def(store.typeAt(command.unit.index));
         const unitdef::UnitDef* victim = catalog.def(store.typeAt(command.target.index));
         const MoveState& targetMotion = store.motion()[command.target.index];
+        // `C-239`: an attached CHILD is refused, but an attached PARENT is
+        // admitted — its children price into the budget and transfer along.
         if (captor == nullptr || victim == nullptr || !captor->isBuilder()
             || !captor->hasCategory("CAPTURE") || victim->hasCategory("COMMAND")
             || targetMotion.airborne
             || (targetMotion.submersible && targetMotion.submerged)
-            || targetMotion.attached || !store.childrenOf(command.target).empty()) {
+            || targetMotion.attached) {
             return false;
         }
         const Transform& at = store.transforms()[command.unit.index];

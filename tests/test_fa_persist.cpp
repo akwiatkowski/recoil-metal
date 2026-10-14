@@ -280,6 +280,85 @@ TEST_CASE("C-006/C-154: an idle save resumes to an identical hash stream",
     }
 }
 
+TEST_CASE("C-426: a save with intel configured resumes the recon picture", "[fa-persist]") {
+    // C-426: the grids persist by reference and re-stamp from unit positions,
+    // so the recon history (retained contacts, seen-ever latches, brownout
+    // recovery) is what the save must carry. Save WITH it, restore it, and
+    // the continued hash stream matches tick by tick.
+    Scenario live;
+    rm::unitdef::UnitDef dish = tankDef();
+    dish.name = "test_dish";
+    dish.visionRadiusElmos = 80.0f;  // 10 ogrids at the scale-2 vision grid (C-076)
+    dish.radarRadiusElmos = 400.0f;  // 100 ogrids at the scale-4 radar grid (C-076)
+    (void)live.spawn(dish, 300, 300, 0);
+    rm::unitdef::UnitDef quiet = tankDef();
+    quiet.name = "test_quiet";
+    const rm::sim::UnitId enemy = live.spawn(quiet, 500, 300, 1);
+    // Two alliances (free-for-all seats each army in its own), sized to the
+    // field like the app's own configureIntel (SceneBuild.cpp).
+    live.scene.intel.configure(2, rm::sim::fxFromFloat(live.field.widthElmos()),
+                               rm::sim::fxFromFloat(live.field.depthElmos()),
+                               rm::sim::VisionStyle::ForgedAlliance);
+    auto runner = live.runner();
+
+    int tick = 0;
+    REQUIRE(rm::app::issueMove(live.scene, enemy, 0, static_cast<rm::TickIndex>(tick),
+                               rm::sim::fxFromFloat(600.0f), rm::sim::fxFromFloat(300.0f)));
+    for (; tick < 40; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0);
+    }
+    // The enemy sat inside the dish's radar for the whole run: alliance 0
+    // holds a retained contact the hash reads.
+    REQUIRE_FALSE(runner.match.intel->retainedRadarContacts(0).empty());
+
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+        .tick = static_cast<rm::TickIndex>(tick),
+        .random = runner.match.random.snapshot(),
+        .pathServiceBeats = runner.pathService.serviceBeats(),
+        .units = live.scene.store.snapshot(),
+        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+        .pathService = runner.pathService.snapshot(),
+        .intel = runner.match.intel->snapshot()}));
+    REQUIRE(saved);
+    REQUIRE(saved->intel.has_value());
+
+    Scenario resumed;
+    (void)resumed.registerType(dish);
+    (void)resumed.registerType(quiet);
+    resumed.scene.store = rm::sim::UnitStore{saved->units};
+    resumed.scene.intel.configure(2, rm::sim::fxFromFloat(resumed.field.widthElmos()),
+                                  rm::sim::fxFromFloat(resumed.field.depthElmos()),
+                                  rm::sim::VisionStyle::ForgedAlliance);
+    auto continued = resumed.runner();
+    saved->economyArmies->restore(continued.match, resumed.scene.economies,
+                                  resumed.scene.commandersEver);
+    continued.match.random = rm::sim::RandomStream{saved->random};
+    continued.pathService.restoreServiceBeats(saved->pathServiceBeats);
+    const auto gridFor = [&](rm::sim::UnitId unit) -> std::shared_ptr<const rm::sim::PassabilityGrid> {
+        if (!resumed.scene.store.alive(unit)) return nullptr;
+        const auto type = static_cast<std::size_t>(resumed.scene.store.typeAt(unit.index));
+        return std::shared_ptr<const rm::sim::PassabilityGrid>(
+            &continued.passability.gridFor(resumed.scene, type), [](const rm::sim::PassabilityGrid*) {});
+    };
+    continued.pathService.restore(*saved->pathService, gridFor);
+    continued.match.pathService = &continued.pathService;
+    continued.match.intel->restore(*saved->intel);
+    // C-426: the grids persist by reference, so the restore clears them and
+    // the next update re-stamps from the restored units — prime once so the
+    // first hash compares re-stamped grids, not empty ones.
+    continued.match.intel->update(resumed.scene.store, resumed.scene.catalog,
+                                  continued.match.armies, nullptr);
+
+    for (int step = 0; step < 300; ++step) {
+        INFO("continuation tick " << tick);
+        REQUIRE(rm::sim::hashMatch(live.scene.store, runner.match)
+                == rm::sim::hashMatch(resumed.scene.store, continued.match));
+        (void)rm::app::advanceMatch(runner, tick, 0);
+        (void)rm::app::advanceMatch(continued, tick, 0);
+        ++tick;
+    }
+}
+
 TEST_CASE("C-150/C-151: the recorded command log replays to the identical match",
           "[fa-persist]") {
     // §1.3's criterion, player-facing: the log a match leaves behind is the

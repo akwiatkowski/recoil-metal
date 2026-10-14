@@ -323,7 +323,7 @@ excluded from the headline.
 | [`FA-WEAPONS`](#fa-weapons---targeting-weapons-and-projectiles) | Targeting, weapons, projectiles | `WP-27`-`28` | 99% | 85% | 100% | Universal leading in (`55c31de`, `06390d1`) — radar keeps its error; manual silo-launch orders landed under FA-MISSILES; the C-157 engineer reclaim/capture target exemption is wired (`IsTargetExempt` deferred). |
 | [`FA-TRANSPORT`](#fa-transport---attachments-cargo-and-ferries) | Attachments, cargo, ferries | `WP-25` | 87% | 47% | 100% | Full cargo stack in and retail-validated: capacity/attach-cost from shipped blueprints (UEA0107: 10 slots, class2=2, class3=4), load/unload, ferry, auto-embark, carrier-death (`c538105`). Attach-bone retail observation landed (`2c3e7f8`, C-198): cargo hangs from Attachpoint bones. Next is the unload beacon's exact retail semantics. |
 | [`FA-MISSILES`](#fa-missiles---silos-missiles-and-interception) | Silos, missiles, interception | `WP-29` | 75% | 45% | 100% | Manual missile-launch orders in with UI wiring and tests (`8d33735`); interceptor lead landed earlier; the silo build queue with assist links is in (`f41445e`). Strategic-nuke silos now launch — `siloLaunched()` asked `damage > 0` and a nuke's authored `Damage` is 0 (the warhead is `NukeInner/OuterRingDamage`), so the gate now asks `harmful()`. C-171 zig-zag weave implemented: `MaxZigZag`/`ZigZagFrequency` parsed, serial re-roll from the match stream, tapered triangle oscillation. The returned-missile friendly-fire channel is in: `redirectMissile` flips `CollideFriendly`/`DamageFriendly`/`DamageSelf` (the Lua's RedirectingSta…; redirect cooldown landed 2026-10-14 (`redirectCooldownTicks` + `faWaitSeconds` bias, URL0303 1/sec = 11 ticks)te), the sweep admits the source side, and the impact path damages it including the launcher — SaveState v39 carries the flag and the weave schedule. Redirect cooldown landed: `redirectCooldownTicks` applies the `faWaitSeconds` bias at import (URL0303 1/sec = 11 ticks at 10 Hz; non-positive rate = no wait). Remaining: `0x005DEAD0` name. |
-| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 82% | 55% | 100% | Ordinary bubbles and personal UnitShield boxes share the collidable shield path; `CollisionCenter*`/`CollisionSize*` drive box containment and sweeps. The shield script-bit toggle is in (`C-350`): off stops absorbing and regenerating while keeping `OffHealth`; on gates absorption for the recharge time and resumes at kept health (`rechargeRestoresFull`, SaveState v36). Remaining: retail-validation, not gaps (`C-428` closes the handicap numeric + DamageFriendly channel; `C-396` the armour multiplier; `C-397` bounds WP-32). |
+| [`FA-DAMAGE`](#fa-damage---damage-death-and-shields) | Damage, death, shields | `WP-30`-`32` | 82% | 55% | 100% | Ordinary bubbles and personal UnitShield boxes share the collidable shield path; `CollisionCenter*`/`CollisionSize*` drive box containment and sweeps. The shield script-bit toggle is in (`C-350`): off stops absorbing and regenerating while keeping `OffHealth`; on gates absorption for the recharge time and resumes at kept health (`rechargeRestoresFull`, SaveState v36). **Implemented 2026-10-14 (C-396/C-428 shield-handicap half):** per-shield absorbed value now includes the owner's-army handicap divide `/(h+1)` alongside the owner's armour multiplier — retail runs each shield through `DealDamage` (`0x0073dbc0`), so a handicapped owner's bubble absorbs divided damage (`Combat.cpp`, `tests/test_shield.cpp:"a handicapped owner's bubble absorbs divided damage"`; focused shield/bubble 39/39 green, full ctest 2144/2144 green). Remaining: DamageFriendly death-blast/redirect channel and `C-397` WP-32 script-policy bound. |
 | [`FA-INTEL`](#fa-intel---vision-radar-sonar-omni-cloak-stealth-jamming) | Vision, radar, sonar, omni, cloak, stealth, jamming | `WP-33` | 70% | 35% | 100% | **Analyzed 2026-09-18 (C-276–C-285):** no temporal blip expiry; stale contacts die by confirmed-dead/ally/last-reference reaping. Counter-intel is a post-coverage flag filter (omni unmaskable; cloak anti-vision; stealth anti-radar/sonar; fields projected as grids). Sonar detects submerged, water-vision identifies. Jammer fakes are fixed random offsets that track the jammer. Recon DBs are per-army, intel sharing is flag-level ally OR. Lua `OnIntelChange` and `OnDetectedBy` events mapped; `IntelWatchThread` disables intel on brownout. The intel/stealth/cloak script-bit toggles are in (`C-350`): the placement cache keys on the script-bit mask, so a toggle withdraws senses and fields without waiting for the emitter to move. **Implemented 2026-10-14 (C-277 blip-parity closeout):** `automaticTrackPosition` lays a reloading turret at the same deterministic blip the shot will use (radar/sonar; truth for sightings/explicit attacks), sonar muzzles aim at the blip (`Combat.cpp`, `test_combat.cpp` turret + sonar-aim tests green; full ctest 2126/2126 green). **Implemented 2026-10-14 (C-277 blip-parity, bomb-drop):** the automatic `needToComputeBombDrop` release point leads from the deterministic blip for radar/sonar contacts — `blip + velocity × PredictAheadForBombDrop` — truth for sightings/explicit attacks (`Combat.cpp` fire pass, tested in `test_combat.cpp`; focused green, full ctest green modulo concurrent-edit flakes that pass on rerun). |
 | [`FA-PROGRESS`](#fa-progress---enhancements-veterancy-and-special-units) | Enhancements, veterancy, special units | `WP-34`-`36` | 60% | 35% | 100% | **Analyzed 2026-09-18 (C-251–C-265, C-376–C-381):** WP-34 fully specified — `EnhanceTask.lua` state machine (Stopping→Enhancing→Done), `GetResourceConsumed`-driven progress, `GetConstructEconomyModel` cost, slot/prereq rules, UI replace = two `UNITCOMMAND_Script` clear=true commands (`XxxRemove` then new) → `ClearCommandQueue` `0x006f4d50`, cancellation = `OnWorkFail` no refund, registry = `SimUnitEnhancements` in schook `SimSync.lua`, mutation = per-script `CreateEnhancement` overrides. WP-35 closed: `OnBrainUnitVeterancyLevel` scenario triggers only, Regen buffs overwrite direct `SetRegenRate`, zero native veterancy surface. WP-36: all experimental abilities shipped Lua — GC claw is `TractorThread` slider+`AttachBoneTo`+`Kill` (native-drag refuted), Megalith eggs via `CConstructionEggUnit`, Paragon deficit loop, Ythotha→Othuy spawn, Salem transform, Scathis rotators. **Implemented:** `C-436` milestone ratchet — `EnhancementProgress` events at 0.25/0.5/0.75 edge-triggered on the pre-tick fraction (funded ticks only, finish is the install not a fourth milestone; `Enhancement.cpp`, tested in `test_fa_progress.cpp`). **Implemented 2026-10-14 (C-450 mod-compat half):** milestones carry the `OnBuildProgress(oldProg,newProg)` 3-arg shape — `Event.progressBefore/After` hold the pre/post-tick fractions (`Unit.lua:1731`, `EnhanceTask.lua:66`) and the FAF bridge dispatches `unit:OnBuildProgress` on the enhanced unit's script (base no-op, mods override; tested in `test_fa_progress.cpp` + `test_faf_ai.cpp`). **C-450 saturation/NaN closed 2026-10-14 (no-sentinel ruling):** retail's zero-demand→0.0 feeds only the `obtained > 0` funded guard, already replicated Lua-side; the multiplier sites (intel/shields, `C-161`/`C-071`) keep 1 as the neutral element and a fixed-point NaN would poison them — current shape accepted, no further work. **Implemented 2026-10-14 (C-252/C-454 AIRESULT):** the native script-task dispatcher writes the `SetAIResult` outcome (`0x0062a040`) into the task state's `aiResult` cell — Done reports Success (1), Abort Fail (2), untouched stays Unknown (0) — visible to `OnDestroy` and save/load (`CommandAdvance.cpp`, tested in `test_script_task.cpp`). |
 | [`FA-TERRAIN`](#fa-terrain---mutable-terrain-and-craters) | Mutable terrain and craters | `WP-37` | 65% | 15% | 100% | **Analyzed 2026-09-18 (C-286–C-292):** `FlattenMapRect` writes uniform u16 elevation, dirty render heightfield, re-seats Land/Seabed entities — no pathing/ogrid. Wrecks use footprint-less `DefaultWreckage_prop.bp` and never block; `Physics.BlockPath` is a dead key. Terrain types gate pathing only via `Blocking` flag; `Slippery`/`Bumpiness`/`HealthEffectPerSecond` are dead. Scorch is visual-only, 28 corpus files, gated on `layer=='Land'`/`targetType=='Terrain'|'Prop'`, no underwater. **Implemented:** non-lethal impact scorch via `impactMarks` on `ProjectileImpact` Terrain/Prop events (C-291/C-292 tested), wreck marks as permanent `Feature` records, no height/type mutation on damage. **Implemented 2026-10-14 (C-290 size axis):** blast-sized impact scorch — `Event.blastRadiusElmos` carries the shot's damage radius from `resolvePendingImpact` through `noteImpactMark` to the decal projection, drawn 1:1 over the blast area (legacy 2.5-elmo mark for blast-less direct hits; hash-neutral, water/unit gates unchanged). **Implemented 2026-10-14 (C-290 lifetime axis):** marks carry their app tick and each retires at its own bit-derived point inside retail's 300–600 s scorch spread — 300 s floor plus a 0..300 s position-bit offset (splitmix32, no sim RNG; replay-identical; hash-neutral, wreck marks stay permanent). Implemented 2026-10-14 (C-290 rotation axis): per-mark 0..2pi fan angle from position bits (splitmix32, no sim RNG; replay-identical). Remaining: texture variety (FA-PRESENT), beam `ScorchThread` trails and per-weapon decal tables (FA-LUA script hosting). |
@@ -547,8 +547,15 @@ run make test and make verify before updating FA-CMD.
 progress on the way in), the concurrent-captor refcount, funded progress,
 transfer identity, cancellation, replay and save/load. Transfer parity now
 also carries installed enhancements and the shield on/off toggle
-(`SimUtils.lua:68-132`'s `CreateEnhancement`/`EnableShield` restores).
-Transport-attachment transfer stays open per the spec's boundary. The
+(`SimUtils.lua:68-132`'s `CreateEnhancement`/`EnableShield` restores), plus
+attached children end to end (`C-239`, `0x0060B521`-`0x0060B6AA`): a top-level
+attached parent is admitted (an attached child still takes no task of its
+own), each live child's own tick budget and build energy price into the
+total, and the transfer re-hangs the moved children on the replacement
+(`tests/test_capture.cpp:"a capture prices an attached child's costs onto
+the parent's budget"`, `[capture]`/`[fa-econ]` 35 cases green; full ctest
+green (3 pre-existing skips; the earlier `C-426` persist failure was a
+stale-tree artifact from concurrent edits, green in isolation and on rerun). The
 [minimum retail Capture specification](capture-implementation-spec.md) corrects
 earlier readings: the captor supplies the cost method, attached target children add
 costs, and `Unit+0x690` counts active capture tasks.
@@ -1058,8 +1065,14 @@ tests, run the full suite and golden replay, and update FA-UI.
 **Current slice:** UEF construction now emits its paired blue-white streams from every authored
 `General.BuildBones.BuildEffectBones` model bone to the nearest two top corners of the target's
 `Physics.MeshExtents` cube. The endpoints descend with progress and exchange places every 0.6
-seconds, matching `EffectUtilities.lua:227-303`; stalled work emits nothing. Other factions keep
-the existing centre stream until their authored construction styles land.
+seconds, matching `EffectUtilities.lua:227-303`; stalled work emits nothing. **Cybran landed
+2026-10-14:** each `BuildEffectBones` bone streams red to the pad plus `Unit.lua:GetRandomOffset`
+(target `SizeX`/`SizeZ` box at scalar 1, builder-heading rotation with retail's own signs,
+`CollisionOffsetY` lift, retargeted every 0.2 s per `CreateCybranBuildBeams`); draws from a
+frame-keyed splitmix32 stream, sim hash untouched (`tests/test_build_effects.cpp`,
+`src/core/scene/BuildEffects.cpp`, `src/app/Interface.cpp`; `UnitDef` keeps
+`sizeXElmos`/`sizeZElmos`/`collisionOffsetYElmos`, URL0107's 0.15 ogrids). Aeon/Seraphim keep
+the existing centre stream until their authored styles land.
 
 Weapon effects now resolve from the original Lua declarations — projectile and unit
 scripts, faction classes, `EffectTemplates.lua`, `defaultcollisionbeams.lua` — executed in an
@@ -1097,7 +1110,7 @@ to smooth. Reload/charge animation and retail's full manipulator host remain
 separate gaps (Striker turret/recoil, XSL0111 reload, UAB4201 unpack,
 UEB2302 telescope are the corpus probes).
 
-**Largest gap:** remaining reload/charge animation, faction-specific build
+**Largest gap:** remaining reload/charge animation, Aeon/Seraphim build
 effects, and native emitter flags (resistance, alignment and water gating).
 Audio still omits some filter/RPC curves and dynamic music. Projectile mesh
 blueprint LODs are loaded; absent retail mesh assets retain their strips.
@@ -1111,22 +1124,27 @@ offscreen capture, preserve the sim hash, and update WP-41 and FA-PRESENT.
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume
 
-**Current slice:** SaveState v37 retains all older readers and adds the path
-service's queues, counters and in-flight flow fields plus the intel recon
-history (retained contacts, seen-ever latches, brownout recovery) as two
-nullable trailing sections. A saved FlowField reduces to its expansion count —
-the deterministic Dijkstra replays it on restore — and intel grids re-stamp
-from unit positions on the first update. A mid-order save now resumes to an
-identical hash stream for 300 ticks (tested — `[fa-persist]`).
+**Current slice:** the recon-history envelope now has its continued-hash proof
+(`C-426`, tested — `[fa-persist]`): a mid-order save with intel configured
+carries the recon snapshot (retained contacts, seen-ever latches, brownout
+recovery, explored bitmaps, fog flags), the restore re-stamps the grids from
+the restored units on the next update — `C-426` pins that no cell store is
+needed, the grids persist by reference — and the resumed match hashes
+identically for 300 ticks. A v52 decode-bound fix landed with it: the
+explored-cell count guarded `24` minimum bytes per cell where each cell is
+one `u8` (`SaveState.cpp:readIntel`), rejecting every save that carried a
+nonempty explored bitmap. SaveState v37 retains all older readers; a saved
+FlowField reduces to its expansion count — the deterministic Dijkstra replays
+it on restore.
 
-**Largest gap:** this is not yet a general mid-combat app save. External input,
-the opponent VM and the intel grids/emitter placements remain outside the
-envelope. Replay is a separate compatibility boundary.
+**Largest gap:** this is not yet a general mid-combat app save. External input
+and the opponent VM remain outside the envelope. Replay is a separate
+compatibility boundary.
 
 ```text
-/goal Continue the pool-by-pool envelope: intel grids and emitter placements next,
-each with its continued-hash proof. Keep external input and replay transport
-separate, preserve old readers, and update WP-44 and FA-PERSIST.
+/goal Continue the pool-by-pool envelope: emitter placements next with their
+continued-hash proof. Keep external input and replay transport separate,
+preserve old readers, and update WP-44 and FA-PERSIST.
 ```
 
 ## Maintenance Contract

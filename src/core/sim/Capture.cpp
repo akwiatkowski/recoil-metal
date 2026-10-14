@@ -51,9 +51,13 @@ bool capturableTarget(UnitIndex captor, UnitId target, const UnitStore& store,
         return false;
     }
     const MoveState& targetMotion = store.motion()[target.index];
+    // `C-239` (`SimUtils.lua:58-62`): only TOP-LEVEL units take a task — an
+    // attached child is never admitted on its own. An attached PARENT is:
+    // the cost loop prices its live children onto the budget and the
+    // transfer carries them along.
     if (targetMotion.airborne
         || (targetMotion.submersible && targetMotion.submerged)
-        || targetMotion.attached || !store.childrenOf(target).empty()) {
+        || targetMotion.attached) {
         return false;
     }
     return hostilePair(captor, target, store, armies);
@@ -203,9 +207,19 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
         if (found != captures.end() && found->target == target) {
             found->armyIndex = motion[captor].armyIndex;
             found->inReach = inReach;
-            found->demand = funded && targetDef != nullptr
-                ? captureDemand(targetDef->buildCostEnergy, found->workTicks)
-                : Resources{};
+            // Same `C-239` sum as the fresh-task budget: the parent's energy
+            // plus every live child's, spread over the settled total.
+            Mag keptEnergy = targetDef != nullptr ? targetDef->buildCostEnergy : Mag{};
+            for (const UnitId child : store.childrenOf(target)) {
+                if (!store.alive(child) || !store.health()[child.index].alive()) {
+                    continue;
+                }
+                const unitdef::UnitDef* childDef = catalog.def(store.typeAt(child.index));
+                if (childDef != nullptr) {
+                    keptEnergy = keptEnergy + childDef->buildCostEnergy;
+                }
+            }
+            found->demand = funded ? captureDemand(keptEnergy, found->workTicks) : Resources{};
             continue;
         }
         if (found != captures.end()) {
@@ -226,19 +240,34 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
             }
             captures.erase(found);
         }
-        // A fresh task: budget from the target's blueprint and the captor's
-        // effective rate, like a construction records its own at order time.
-        // Retargeting starts over rather than inheriting progress.
+        // A fresh task: budget from the target's blueprint plus each live
+        // attached child's own budget (`C-239`, `0x0060B521`-`0x0060B666`:
+        // one getter call per child through the SAME captor method), and the
+        // whole build energy cost spread over that total (`0x0060B66C`-
+        // `0x0060B6AA`). Retargeting starts over rather than inheriting.
         const Mag ratePerTick = effectiveBuildPerTick(store, catalog, captor);
-        const int budget = targetDef != nullptr
-            ? captureWorkTicks(targetDef->buildTime == Mag{} && !targetDef->buildTimeSpecified
-                                   ? Mag::fromInt(kMissingCaptureBuildTime)
-                                   : targetDef->buildTime,
-                               ratePerTick, ticksPerSecond)
-            : 1;
-        const Resources demand = funded && targetDef != nullptr
-            ? captureDemand(targetDef->buildCostEnergy, budget)
-            : Resources{};
+        const auto ownTicks = [&](const unitdef::UnitDef* def) {
+            return def != nullptr
+                ? captureWorkTicks(def->buildTime == Mag{} && !def->buildTimeSpecified
+                                       ? Mag::fromInt(kMissingCaptureBuildTime)
+                                       : def->buildTime,
+                                   ratePerTick, ticksPerSecond)
+                : 1;
+        };
+        int budget = ownTicks(targetDef);
+        Mag totalEnergy = targetDef != nullptr ? targetDef->buildCostEnergy : Mag{};
+        for (const UnitId child : store.childrenOf(target)) {
+            if (!store.alive(child) || !store.health()[child.index].alive()) {
+                continue;
+            }
+            const unitdef::UnitDef* childDef = catalog.def(store.typeAt(child.index));
+            budget += ownTicks(childDef);
+            if (childDef != nullptr) {
+                totalEnergy = totalEnergy + childDef->buildCostEnergy;
+            }
+        }
+        const Resources demand =
+            funded ? captureDemand(totalEnergy, budget) : Resources{};
         captures.push_back(CaptureWork{.armyIndex = motion[captor].armyIndex,
                                        .captor = captor,
                                        .target = target,
@@ -386,7 +415,20 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
     motion.armyIndex = armyIndex;
     motion.moving = false;
     motion.path.clear();
+    // `C-239`/`SimUtils.lua:58-62`: the transfer takes the top-level unit
+    // and its live children together — snapshot the child handles first and
+    // detach them, since `kill` below destroys whatever is still attached.
+    const std::vector<UnitId> cargo = store.childrenOf(unit);
+    for (const UnitId child : cargo) {
+        (void)store.detach(child);
+    }
     store.kill(unit);
+    for (const UnitId child : cargo) {
+        if (!store.alive(child)) {
+            continue;
+        }
+        (void)transferUnitArmy(store, child, armyIndex, events, siloAmmo, enhancements);
+    }
     const UnitId replacement = store.spawn(UnitStore::Spawn{
         .type = type,
         .transform = transform,
@@ -400,7 +442,6 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
     if (shieldToggledOff) {
         (void)store.setScriptBitDisabled(replacement, 0, true);
     }
-    // And the match-side records that keyed on the old handle follow it:
     // Lua restores silo ammo and in-flight enhancement work onto the
     // replacement, so a transferred silo keeps its stockpile and a
     // half-built enhancement keeps its progress.
@@ -412,6 +453,16 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
     for (EnhancementWork& work_ : enhancements) {
         if (work_.owner == unit) {
             work_.owner = replacement;
+        }
+    }
+    // Re-hang the transferred children on the replacement: each child moved
+    // under the new army above (`transferUnitArmy` replaced it in its own
+    // slot), and retail's native re-attachment keeps the tree together.
+    for (const UnitId child : cargo) {
+        const UnitId current = store.idAt(child.index);
+        if (store.alive(current) && store.motion()[current.index].armyIndex == armyIndex
+            && !store.motion()[current.index].attached) {
+            (void)store.attach(replacement, current);
         }
     }
     emit(events, Event{.kind = EventKind::UnitCreated,

@@ -559,6 +559,14 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // The vertical axis the radius above throws away. Kept for sight: an eye is on top of the
     // unit and the sight model was reading the ground under it. See `UnitDef::sizeYElmos`.
     def.sizeYElmos = numberOr(*parsed, "SizeY", 0.0f) * scmap::kElmosPerOgrid;
+    // The plan axes `collisionRadiusElmos` discards and the `GetRandomOffset`
+    // lift: retail `lua/Unit.lua` scales the target's `SizeX/SizeZ` box and
+    // adds `CollisionOffsetY` (URL0107: 0.15 ogrids). Ogrids to elmos like
+    // every other length.
+    def.sizeXElmos = sizeX * scmap::kElmosPerOgrid;
+    def.sizeZElmos = sizeZ * scmap::kElmosPerOgrid;
+    def.collisionOffsetYElmos =
+        numberOr(*parsed, "CollisionOffsetY", 0.0f) * scmap::kElmosPerOgrid;
 
     // `C-265`: a spawned unit's self-destruct timer — the Othuy's 30 s.
     def.lifetimeSeconds = numberOr(*parsed, "Lifetime", 0.0f);

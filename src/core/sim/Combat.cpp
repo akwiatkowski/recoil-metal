@@ -3175,9 +3175,14 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
             // shield.lua:100-108 asks the OWNER for its armour multiplier. A shield has no
             // synthetic armour class of its own; two generators under the same blast can
             // therefore take different amounts from the same damage type.
-            const Mag incoming = damage.against(catalog->armorOf(store.typeAt(slot)));
-            if (incoming <= Mag{}) {
-                continue;
+            // `C-396`: the per-shield value already includes owner-armour AND handicap —
+            // retail runs each shield through `DealDamage` (`0x0073dbc0`), whose
+            // `amount/=(1+h)` divide (`C-428`) reads the TARGET's army, here the
+            // owner's. Fixed-point `Mag` has no division, so halve by ratio.
+            Mag incoming = damage.against(catalog->armorOf(store.typeAt(slot)));
+            if (const Army* ownerArmy = armyFor(armyAt(store, slot), armies);
+                ownerArmy != nullptr && ownerArmy->handicap > 0) {
+                incoming = incoming * Fx::fromRatio(1, ownerArmy->handicap + 1);
             }
             const std::array<Fx, 3> shieldAt = shieldCentre(shield, transforms[slot]);
             if (areaBlast) {

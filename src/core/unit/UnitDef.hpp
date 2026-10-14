@@ -237,6 +237,21 @@ struct UnitDef {
     /// behaviour — a silent default that changes nothing rather than a guess.
     float sizeYElmos = 0.0f;
 
+    /// The collision box's plan axes in elmos — root `SizeX`/`SizeZ`, the same
+    /// pair `collisionRadiusElmos` keeps only the larger half of. `Unit.lua`'s
+    /// `GetRandomOffset` scales THIS box (`CreateCybranBuildBeams` in retail
+    /// `lua/EffectUtilities.lua` warps each bone's beam end into it every
+    /// 0.2 s), so the box is stored whole rather than re-derived from a
+    /// radius that threw the smaller axis away. Zero when unauthored.
+    float sizeXElmos = 0.0f;
+    float sizeZElmos = 0.0f;
+
+    /// Root `CollisionOffsetY` in elmos — `GetRandomOffset`'s lift
+    /// (`Random()*sy + CollisionOffsetY`, e.g. URL0107's 0.15 ogrids). Zero
+    /// when unauthored, which reads as pad level and changes nothing.
+    float collisionOffsetYElmos = 0.0f;
+
+
     /// `C-244`: `SizeX × SizeY × SizeZ × AverageDensity` — the mass the air
     /// controller's cargo ratio divides into. `AverageDensity` is a root key
     /// (default 0.49 t/m³, authored on 18 units, all transports); the sizes are

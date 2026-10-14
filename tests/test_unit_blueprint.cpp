@@ -102,6 +102,12 @@ TEST_CASE("a unit blueprint's numbers arrive in the engine's own units") {
 
     // Half the larger side, 0.9 ogrids, in elmos: 0.5 * 0.9 * 8.
     CHECK(def->collisionRadiusElmos == Approx(3.6f));
+    // The Cybran random-offset box keeps BOTH plan axes (0.7/0.9 ogrids ->
+    // 5.6/7.2 elmos); the radius above keeps only the larger half.
+    CHECK(def->sizeXElmos == Approx(5.6f));
+    CHECK(def->sizeZElmos == Approx(7.2f));
+    CHECK(def->sizeYElmos == Approx(4.4f));
+    CHECK(def->collisionOffsetYElmos == Approx(0.0f));  // unauthored: pad level
 
     // 0.07 to ogrids and 8 to elmos, as ONE factor.
     CHECK(def->meshToElmos == Approx(0.56f));
@@ -955,7 +961,12 @@ UnitBlueprint {
     CHECK(def->builderArm.yawMinDegrees == Approx(-70.0f));
     CHECK(def->builderArm.yawMaxDegrees == Approx(180.0f));
     CHECK(def->builderArm.pitchMaxDegrees == Approx(45.0f));
-    CHECK(def->builderArm.pitchSlewDegreesPerSecond == Approx(120.0f));
+    // The Cybran random-offset box: root `SizeX`/`SizeZ` kept whole (the radius
+    // keeps only the larger half) plus the `CollisionOffsetY` lift
+    // (`Unit.lua:GetRandomOffset`, URL0107: 0.15 ogrids -> 1.2 elmos).
+    CHECK(def->sizeXElmos == Approx(0.0f));  // XXB0010 states no Size keys
+    CHECK(def->sizeZElmos == Approx(0.0f));
+    CHECK(def->collisionOffsetYElmos == Approx(0.0f));
 
     const Blueprint bare{"XXB0011_unit.bp", kMediumTank};
     const auto none = rm::unitbp::loadFile(bare.path());

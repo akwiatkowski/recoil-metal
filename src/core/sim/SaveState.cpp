@@ -1481,7 +1481,7 @@ void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state,
         state->explored.resize(exploredAlliances);
         for (auto& cells : state->explored) {
             std::size_t count{};
-            if (!r.count(count, 24)) return false;
+            if (!r.count(count, 1)) return false;
             cells.resize(count);
             for (std::uint8_t& cell : cells) {
                 if (!r.u8(cell)) return false;

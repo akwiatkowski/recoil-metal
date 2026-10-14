@@ -957,8 +957,85 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
                 }
             }
         }
+        // Cybran's per-bone beams (`CreateCybranBuildBeams`, retail
+        // `lua/EffectUtilities.lua`): each `BuildEffectBones` bone streams to
+        // the pad plus `GetRandomOffset` — the target's `SizeX/SizeZ` box at
+        // scalar 1, rotated by the builder heading. Draws come from a
+        // frame-keyed splitmix32 stream (C-297: presentation only, never the
+        // sim RNG), retargeted every 0.2 s like retail's `WaitSeconds(0.2)`.
+        bool emittedCybran = false;
+        if (!emittedUefPair && faction == rm::sim::Faction::Cybran && def != nullptr
+            && builderDef != nullptr && !builderDef->buildEffectBones.empty()
+            && def->sizeXElmos > 0.0f && def->sizeZElmos > 0.0f
+            && work.builder.index < scene.drawIndexOf.size()) {
+            const rm::SelectionEntry where = scene.drawIndexOf[work.builder.index];
+            if (where.batch < scene.batches.size() && where.batch < scene.drawScratch.size()
+                && where.batch < scene.drawSlotOf.size()
+                && where.instance < scene.drawScratch[where.batch].size()
+                && where.instance < scene.drawSlotOf[where.batch].size()
+                && scene.drawSlotOf[where.batch][where.instance] == work.builder.index) {
+                const rm::UnitBatch& batch = scene.batches[where.batch];
+                if (batch.model != nullptr) {
+                    const rm::UnitInstance& drawn = scene.drawScratch[where.batch][where.instance];
+                    const float heading = rm::sim::radiansFromBrad(from.heading);
+                    const std::uint32_t epoch =
+                        static_cast<std::uint32_t>(seconds / 0.2f);  // s, retail re-warp cadence
+                    std::uint32_t boneIndex = 0;
+                    for (const std::string& name : builderDef->buildEffectBones) {
+                        const auto bone = std::find_if(
+                            batch.model->bones.begin(), batch.model->bones.end(),
+                            [&name](const rm::ModelBone& candidate) {
+                                return candidate.name == name;
+                            });
+                        if (bone == batch.model->bones.end()) {
+                            ++boneIndex;
+                            continue;
+                        }
+                        const std::size_t flat = static_cast<std::size_t>(
+                            std::distance(batch.model->bones.begin(), bone));
+                        rm::BoneTransform rest{};
+                        rest.translation = bone->globalOffset;
+                        if (flat < batch.builderAim.boneFlags.size()) {
+                            rest.translation = rm::applyBuilderAim(
+                                rest.translation, batch.builderAim.boneFlags[flat],
+                                batch.builderAim,
+                                rm::BuilderAimAngles{.yaw = drawn.builderYaw,
+                                                     .pitch = drawn.builderPitch});
+                        }
+                        const std::array<float, 3> origin =
+                            rm::boneWorldPosition(rest, {.position = drawn.position,
+                                                         .rotationX = drawn.rotationX,
+                                                         .rotationY = drawn.rotationY,
+                                                         .rotationZ = drawn.rotationZ,
+                                                         .scale = drawn.scale});
+                        // Three draws per bone per epoch from one 32-bit stream:
+                        // the epoch and bone select the word, golden-ratio steps
+                        // decorrelate the axes. Deterministic per frame, hash-free.
+                        constexpr std::uint32_t kGolden = 0x9E3779B1u;
+                        const std::uint32_t word =
+                            (epoch * 3u + boneIndex * 3u) * kGolden ^ 0x85EBCA6Bu;
+                        const auto draw = [word](std::uint32_t step) {
+                            std::uint32_t bits = word + step * kGolden;
+                            bits ^= bits >> 16;  // splitmix32 finaliser
+                            bits *= 0x7FEB352Du;
+                            bits ^= bits >> 15;
+                            return static_cast<float>(static_cast<double>(bits) / 4294967296.0);
+                        };
+                        const std::array<float, 3> offset = rm::cybranBuildBeamTarget(
+                            def->sizeXElmos, def->sizeYElmos, def->sizeZElmos, heading,
+                            def->collisionOffsetYElmos, draw(0), draw(1), draw(2));
+                        const float padY = field.heightAtWorld(x, z);
+                        appendBuildBeam(particles, origin,
+                                        {{x + offset[0], padY + offset[1], z + offset[2]}},
+                                        energy);
+                        emittedCybran = true;
+                        ++boneIndex;
+                    }
+                }
+            }
+        }
 
-        if (!emittedUefPair) {
+        if (!emittedUefPair && !emittedCybran) {
             appendBuildBeam(particles, {{fx, fy + 4.0f, fz}}, {{x, toY, z}}, energy);
         }
     }

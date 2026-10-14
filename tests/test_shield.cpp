@@ -524,6 +524,28 @@ TEST_CASE("each shield uses its owner's armour multiplier for absorption") {
     CHECK(roster.health(structure).shield.current == rm::sim::Mag{});
     CHECK(rm::test::asFloat(roster.health(target).current) == Approx(95.0f));
 }
+TEST_CASE("a handicapped owner's bubble absorbs divided damage") {
+    // `C-396`: each shield's absorbed value already includes owner-armour AND
+    // handicap — retail runs the shield itself through `DealDamage`
+    // (`0x0073dbc0`), whose divide uses the target's (here the owner's) army.
+    // Handicap 1 halves the 40-point blast to 20 absorbed, the hull beneath
+    // staying fully covered either way.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId sheltered = roster.add(targetType, 20.0f, 0.0f, 1, 100.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    armies[1].handicap = 1;
+
+    (void)rm::sim::damageArea(
+        rm::test::at(20, 0, 0), rm::sim::Fx{}, rm::sim::Mag::fromInt(40),
+        0, roster.store, armies, {}, nullptr, &roster.catalog);
+
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(80.0f));
+    CHECK(rm::test::asFloat(roster.health(sheltered).current) == Approx(100.0f));
+}
+
 
 TEST_CASE("a projectile impact reaches the same bubble gate") {
     rm::test::Roster roster;

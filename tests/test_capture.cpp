@@ -302,6 +302,38 @@ TEST_CASE("capture intake refuses the inadmissible", "[capture]") {
     CHECK(f.capture(captor, enemy));
 }
 
+TEST_CASE("a capture prices an attached child's costs onto the parent's budget", "[capture]") {
+    // `C-239` (`0x0060B521`-`0x0060B6AA`, `capture-implementation-spec.md`):
+    // attached live units add their individual costs and tick budgets to the
+    // captor's task, and the demands are divided by the total work budget.
+    // `SimUtils.lua:58-62` only ever takes top-level units, so the child
+    // itself is still refused its own task.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId carrier = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    const UnitId cargo = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.roster.store.attach(carrier, cargo));
+    CHECK(f.capture(captor, carrier));     // top-level parent: admitted with priced children
+    CHECK_FALSE(f.capture(captor, cargo)); // attached child: no budget of its own
+    f.tick(3);
+    REQUIRE(f.captures.size() == 1);
+    // Parent (100 work, 200 energy) plus one identical child: 50 + 50 ticks
+    // at 400 / 100 = 4 energy a beat — the same per-beat rate, twice as long.
+    CHECK(f.captures[0].workTicks == 100);
+    CHECK(rm::test::asFloat(f.captures[0].demand.energy) == Catch::Approx(4.0f).margin(0.01f));
+    f.tick(120);
+    // The transfer carried the attachment: both replacements stand under the
+    // captor's army, the child still hung on its parent.
+    CHECK_FALSE(f.roster.store.alive(carrier));
+    const UnitId newCarrier = f.roster.store.idAt(carrier.index);
+    const UnitId newCargo = f.roster.store.idAt(cargo.index);
+    REQUIRE(f.roster.store.alive(newCarrier));
+    REQUIRE(f.roster.store.alive(newCargo));
+    CHECK(f.roster.store.motion()[newCarrier.index].armyIndex == 0);
+    CHECK(f.roster.store.motion()[newCargo.index].armyIndex == 0);
+    CHECK(f.roster.store.parentOf(newCargo) == newCarrier);
+}
+
 TEST_CASE("an unfunded capture holds its progress until the economy pays", "[capture]") {
     Fixture f;
     f.economies[0].stored.energy = rm::sim::Mag{};
