@@ -19,7 +19,7 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
-#include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <limits>
@@ -256,8 +256,11 @@ int runWindowed(const Session& session) {
         // that digit; a bare digit recalls it, pruned of the dead at recall rather than
         // eagerly — a group is a note about intent, and the note outliving some of its units
         // is normal. An empty recall is a no-op rather than a deselect: fat-fingering '4'
-        // must not throw away the army under the cursor.
         std::array<std::vector<rm::sim::UnitId>, 10> controlGroups;
+        // `C-336`'s double-tap zoom (`selection.lua`): the last recalled digit
+        // and its `GetSystemTimeSeconds`, in seconds — the second recall of the
+        // same digit within 1.0 s moves the camera to the recalled group.
+        rm::ControlGroupTap groupTap;
         std::optional<rm::sim::CommandKind> armedCommand;
 
         // The overhead view the camera returns to when space is released. Captured at the start,
@@ -298,7 +301,7 @@ int runWindowed(const Session& session) {
         std::size_t econPage = 0;
         rm::ui::EconomyWindowView econView;
         bool econSliderHeld = false;
-        window.onKey([&window, &selected, &controlGroups, &units, &armedCommand, restPitch,
+        window.onKey([&window, &selected, &controlGroups, &groupTap, &units, &armedCommand, restPitch,
                       restYaw, &runnerForKeys, &armedOption, &arrayDragging,
                       &cancelledLeftGesture, &arrayDragAnchor, &alertCursor,
                       &tracking, &map, &econOpen, &econFocus, &econView,
@@ -641,6 +644,28 @@ int runWindowed(const Session& session) {
                         rm::applySelectionSet<rm::sim::UnitId>(group, immobileFactory);
                     if (!recalled.empty()) {
                         selected = recalled;
+                        // `C-336`'s double-tap: the same digit twice within 1.0 s
+                        // (`selection.lua`'s `GetSystemTimeSeconds` diff) zooms to
+                        // the group's centroid — `UIZoomTo`. Wall clock here is
+                        // the UI's `GetSystemTimeSeconds`, not sim ticks.
+                        const double now = std::chrono::duration<double>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count();
+                        if (rm::controlGroupZoom(groupTap, *digit, now)) {
+                            float cx = 0.0f, cz = 0.0f;
+                            for (const rm::sim::UnitId id : recalled) {
+                                const rm::sim::Transform& at =
+                                    units.store.transforms()[id.index];
+                                cx += rm::sim::fxToFloat(at.x);
+                                cz += rm::sim::fxToFloat(at.z);
+                            }
+                            cx /= static_cast<float>(recalled.size());
+                            cz /= static_cast<float>(recalled.size());
+                            tracking.clear();
+                            window.camera().target = simd_make_float3(
+                                cx, map->field.heightAtWorld(cx, cz), cz);
+                            std::printf("group %zu: zoomed to %zu unit(s)\n",
+                                        *digit, recalled.size());
+                        }
                     }
                 }
             }

@@ -352,6 +352,11 @@ struct UnitDef {
     /// `AI.GuardReturnRadius` sits beside it in the file and is deliberately NOT read:
     /// the loader-level scan in `C-183` proved retail never reads it either.
     sim::Fx guardScanRadiusElmos{};
+    /// `AI.GuardFormationName` — the formation script retail's
+    /// `TransportGenerateWaitingFormationForUnits` (`0x005eca10`) uses for the
+    /// ferry waiting ring (`C-199`). No shipped blueprint states it (swept
+    /// 2026-10-14), so the engine default is the Guard ring below.
+    std::string guardFormationName;
 
     // --- intel -------------------------------------------------------------
     //

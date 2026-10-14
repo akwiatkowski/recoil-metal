@@ -631,3 +631,58 @@ TEST_CASE("C-345: a second self-destruct order cancels the countdown",
     }
     CHECK(roster.store.alive(unit));
 }
+TEST_CASE("C-210: a civilian army stands outside the victory verdict",
+          "[fa-match]") {
+    // `victory.lua` skips civilian brains in every arm of the poll
+    // (`ArmyIsCivilian`): a civilian army keeps its commander while the two
+    // real armies fight, and neither its survival nor its commander's death
+    // decides anything — the verdict belongs to the non-civilian survivors.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex commander = roster.addType(commanderDef());
+    const UnitId civ = roster.add(commander, 0.0f, 0.0f, 2, 12000.0f);
+    const UnitId theirs = roster.add(commander, 400.0f, 0.0f, 1, 12000.0f);
+    (void)roster.add(commander, 800.0f, 0.0f, 0, 12000.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(3);
+    armies[2].civilian = true;  // `Scenario.Armies` marks `NEUTRAL_CIVILIAN`
+    std::vector<rm::sim::Economy> economies(3);
+    std::vector<rm::sim::Projectile> projectiles;
+    const std::vector<int> commandersEver{1, 1, 1};
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .commandersEver = commandersEver};
+    const rm::sim::TickRate rate{};
+    const rm::TickCount pollTicks = rate.ticks(rm::sim::seconds(3.0f));
+    const rm::TickCount confirmTicks = rate.ticks(rm::sim::seconds(15.0f));
+
+    // Army 1 falls at the first poll. The civilian commander's survival does
+    // not stop army 0 winning alone — it is not in the survivor set.
+    roster.health(theirs).current = rm::sim::Mag{};
+    for (rm::TickCount tick = 0; tick < pollTicks; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    REQUIRE(armies[1].defeated);
+    CHECK_FALSE(armies[2].defeated);
+    CHECK(match.pendingWinner.has_value());
+    CHECK(*match.pendingWinner == armies[0].alliance);
+
+    // The window confirms with the civilian still standing.
+    TickReport report{};
+    for (rm::TickCount tick = 0; tick < confirmTicks && !report.matchEnded; ++tick) {
+        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    REQUIRE(match.over);
+    CHECK(report.winner == armies[0].alliance);
+
+    // And the civilian losing its own commander afterwards changes nothing:
+    // it was never defeated, never a survivor, never the verdict.
+    roster.health(civ).current = rm::sim::Mag{};
+    for (rm::TickCount tick = 0; tick < pollTicks; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    CHECK_FALSE(armies[2].defeated);
+}

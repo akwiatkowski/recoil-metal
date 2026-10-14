@@ -55,7 +55,25 @@ void updateTransports(UnitStore& store, const UnitCatalog& catalog, const Terrai
 
 /// How far a unit counts as "sent to the ferry" from the beacon, in elmos —
 /// an order destination inside the ring marks the unit as waiting to board.
+/// `kFerryPickupRadius`: 10 elmos, the sim's long-standing pickup-ring radius
+/// (predates this slice; no authored source — `C-199` names no distance).
 inline constexpr Fx kFerryPickupRadius = Fx::fromInt(10);
+
+/// The ferry waiting ring (`C-199`): `TransportGenerateWaitingFormationForUnits`
+/// (`0x005eca10`) builds a formation anchored at the transport, using the
+/// carrier blueprint's `GuardFormationName` as the script. No shipped
+/// blueprint states the key, so the engine default — retail's Guard ring
+/// (`lua/formations.lua: GuardFormation`, `sizeMult = 3` elmos, first five
+/// slots per ring, naval rings at 8) — is the layout: staging spot `i`
+/// (zero-based among the carrier's current waiters) sits at radius `3 + 3 ×
+/// (i / 5)` elmos around the beacon, at bearing `i / current-ring-size` of a
+/// transportable same-army unit holding an order into the beacon's ring, in
+/// slot order — the same scan the Loading phase boards from.
+[[nodiscard]] std::array<Fx, 2> ferryStagingSpot(const UnitStore& store,
+                                                 const UnitCatalog& catalog,
+                                                 UnitId carrier,
+                                                 UnitIndex waiter,
+                                                 std::array<Fx, 2> beacon) noexcept;
 
 /// Whether `carrier` could ever take `cargo`: the class fits the capacity and
 /// the attach table at all — regardless of what is already aboard.

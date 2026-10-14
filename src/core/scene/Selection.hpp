@@ -156,6 +156,39 @@ applySelectionSet(std::span<const std::type_identity_t<Id>> stored, Pred&& isImm
     }
     return mobile.empty() ? factories : mobile;
 }
+/// `C-336`: the double-tap zoom retail's `ApplySelectionSet` owns
+/// (`lua/ui/game/selection.lua`): recalling the same digit twice within
+/// 1.0 s (`GetSystemTimeSeconds` diff, seconds) asks for `UIZoomTo` on the
+/// group. A stale last name is forgotten first; the zoom consumes the tap,
+/// so a third press is a fresh single. Owns the last-digit/last-time pair
+/// the session threads through its recall — the camera itself stays with
+/// the caller, like `+goto`.
+struct ControlGroupTap {
+    /// Last recalled digit, cleared by a zoom or by a >1.0 s gap (seconds).
+    std::optional<std::size_t> lastDigit;
+    /// `GetSystemTimeSeconds` of the last recall, in seconds.
+    double lastTime = 0.0;
+};
+
+/// Retail's 1.0 s double-tap window (`selection.lua`'s `diffTime > 1.0`).
+inline constexpr double kControlGroupDoubleTapSeconds = 1.0;
+
+/// Records a recall of `digit` at `nowSeconds` and reports whether the caller
+/// should zoom to the recalled group.
+[[nodiscard]] inline bool controlGroupZoom(ControlGroupTap& tap, std::size_t digit,
+                                           double nowSeconds) noexcept {
+    if (nowSeconds - tap.lastTime > kControlGroupDoubleTapSeconds) {
+        tap.lastDigit.reset();
+    }
+    tap.lastTime = nowSeconds;
+    if (tap.lastDigit == digit) {
+        tap.lastDigit.reset();
+        return true;
+    }
+    tap.lastDigit = digit;
+    return false;
+}
+
 
 /// `C-367`: the `UI_SelectByCategory` modifier flags, closed alphabet —
 /// `+add +nearest +idle +inview +goto +excludeengineers` — as data rather than

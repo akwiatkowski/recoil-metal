@@ -212,3 +212,18 @@ TEST_CASE("select-by-category applies the retail modifier flags in order") {
     CHECK_FALSE(run({}).goTo);
 }
 
+TEST_CASE("a control-group double-tap within a second asks for a zoom") {
+    // `C-336`: retail's `ApplySelectionSet` (`selection.lua`) zooms to the
+    // group when the same digit is recalled twice within 1.0 s
+    // (`GetSystemTimeSeconds` diffs against `1.0`; a stale last name is
+    // forgotten first), and records the digit otherwise. Times are seconds.
+    rm::ControlGroupTap tap;
+    CHECK_FALSE(rm::controlGroupZoom(tap, 4, 10.0));
+    CHECK(rm::controlGroupZoom(tap, 4, 10.5));
+    // The zoom consumes the tap: a third press starts a fresh single.
+    CHECK_FALSE(rm::controlGroupZoom(tap, 4, 10.7));
+    // A different digit never zooms; a stale same digit neither.
+    CHECK_FALSE(rm::controlGroupZoom(tap, 5, 10.8));
+    CHECK_FALSE(rm::controlGroupZoom(tap, 5, 12.9));
+}
+

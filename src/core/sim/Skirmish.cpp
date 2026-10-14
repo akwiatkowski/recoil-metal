@@ -1155,7 +1155,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         const bool alliedVictoryRequested =
             survivors <= 1
             || std::ranges::all_of(match.armies, [](const Army& army) {
-                   return army.defeated || army.requestingAlliedVictory;
+                   // Civilians are not in `stillAlive` (`C-210`): no consent needed.
+                   return army.defeated || army.civilian || army.requestingAlliedVictory;
                });
         // A team wins when it is the only ALLIANCE left, even if several
         // allied armies survived. `survivorCount <= 1` left a successful
@@ -1171,7 +1172,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         const bool mutualDraw =
             !terminal && survivors > 0
             && std::ranges::all_of(match.armies, [](const Army& army) {
-                   return army.defeated || army.offeringDraw;
+                   // Civilians neither offer nor block a mutual draw (`C-210`).
+                   return army.defeated || army.civilian || army.offeringDraw;
                });
         if (match.victoryMode != VictoryMode::Sandbox
             && (survivors == 0 || mutualDraw)) {
@@ -1193,7 +1195,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 // alliance counts — not only when the verdict does.
                 std::uint64_t survivorMask = 0;
                 for (const Army& army : match.armies) {
-                    if (!army.defeated && army.index < 64) {
+                    // Civilians are not in `stillAlive` (`C-210`): excluded from the set.
+                    if (!army.defeated && !army.civilian && army.index < 64) {
                         survivorMask |= std::uint64_t{1} << army.index;
                     }
                 }

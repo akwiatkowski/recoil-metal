@@ -700,6 +700,15 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, army.requestingAlliedVictory);
         }
     }
+    // `civilian` (`C-210`) joins the stream only once some army is civilian, so a
+    // match with no civilians hashes exactly as before.
+    if (std::ranges::any_of(match.armies,
+                          [](const Army& army) { return army.civilian; })) {
+        for (const Army& army : match.armies) {
+            feed(h, army.civilian);
+        }
+    }
+
 
 
     if (match.pathService != nullptr) {

@@ -75,10 +75,12 @@ bool isCommanderId(std::string_view blueprintId) noexcept {
 }
 
 std::size_t applyDefeats(std::vector<Army>& armies, std::span<const int> survivalUnits,
-                          std::span<const int> commandersEver, bool requireCommanderEver) {
+                         std::span<const int> commandersEver, bool requireCommanderEver) {
     std::size_t newlyDefeated = 0;
     for (Army& army : armies) {
-        if (army.defeated) {
+        // `victory.lua` skips civilian brains in the defeat arm (`ArmyIsCivilian`,
+        // `C-210`): `NEUTRAL_CIVILIAN` is never defeated, whatever it fields.
+        if (army.defeated || army.civilian) {
             continue;
         }
         const auto i = static_cast<std::size_t>(army.index);
@@ -96,7 +98,9 @@ std::size_t applyDefeats(std::vector<Army>& armies, std::span<const int> surviva
 std::optional<int> winningAlliance(const std::vector<Army>& armies) noexcept {
     std::optional<int> survivor;
     for (const Army& army : armies) {
-        if (army.defeated) {
+        // Civilians are not in `stillAlive` (`C-210`): their survival never
+        // blocks a win and their fall never causes one.
+        if (army.defeated || army.civilian) {
             continue;
         }
         if (survivor && *survivor != army.alliance) {
@@ -131,8 +135,10 @@ std::vector<Army> freeForAll(std::size_t armyCount) {
 }
 
 std::size_t survivorCount(const std::vector<Army>& armies) noexcept {
-    return static_cast<std::size_t>(
-        std::ranges::count_if(armies, [](const Army& army) { return !army.defeated; }));
+    // Civilians are not survivors (`C-210`): a standing civilian army never
+    // blocks the draw count or the allied-victory gate.
+    return static_cast<std::size_t>(std::ranges::count_if(
+        armies, [](const Army& army) { return !army.defeated && !army.civilian; }));
 }
 
 bool commands(const Player& player, int army) noexcept {

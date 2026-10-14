@@ -459,6 +459,8 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             sim::fxFromFloat(numberOr(*ai, "StagingPlatformScanRadius", 0.0f)
                              * scmap::kElmosPerOgrid);
         def.refuelingMultiplier = numberOr(*ai, "RefuelingMultiplier", 0.0f);
+        def.guardFormationName =
+            std::string{ai->stringAt("GuardFormationName").value_or("")};
     }
 
     // --- winged flight -------------------------------------------------------

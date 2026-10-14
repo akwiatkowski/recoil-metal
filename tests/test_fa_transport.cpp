@@ -468,6 +468,91 @@ TEST_CASE("C-183: a transport guarding a ferry beacon flies its route",
     REQUIRE(head != nullptr);
     CHECK(head->kind() == CommandKind::Guard);
 }
+TEST_CASE("C-183: a bingo-fuel guard ferry docks at a staging pad instead of flying dry",
+          "[fa-transport]") {
+    // The ladder order made retail-obvious (`C-183`: refuel/staging outranks
+    // the ferry rung): a thirsty transport guarding a FERRYBEACON diverts to a
+    // pad in reach and docks, instead of flying the beacon route on an empty
+    // tank. Refuelling to full and resuming the loop is the staging rung's own
+    // contract, pinned in `[guard][airstaging]`; this rung pins the diversion.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex beaconType = roster.addType(beaconDef());
+    UnitDef padDef;
+    padDef.name = "test_pad";
+    padDef.categories = {"AIRSTAGINGPLATFORM", "STRUCTURE"};  // sorted for hasCategory
+    padDef.collisionRadiusElmos = 24.0f;
+    padDef.refuelingMultiplier = 10.0f;  // UEB5202 states 50; 10 refuels a test tank in ticks
+    padDef.stagingScanRadiusElmos = rm::sim::fxFromFloat(400.0f);  // pad-owned reach, `C-225`
+    padDef.transport.dockingSlots = 1;
+    const rm::UnitTypeIndex padType = roster.addType(padDef);
+
+    const UnitId transport = landedTransport(roster, transportType, 40.0f, 30.0f);
+    // Bingo tank with a fast drain, so the staging rung outranks the ferry
+    // rung on the first beat: the fuel the ferry legs burn only sharpens it.
+    roster.motion(transport).fuelRatio = Fx::fromRatio(3, 100);
+    roster.motion(transport).fuelDrainPerTick = Fx::fromRatio(1, 100);
+    const UnitId beacon = roster.add(beaconType, 30.0f, 30.0f, 0, 10.0f);
+    const UnitId pad = roster.add(padType, 55.0f, 55.0f, 0, 500.0f);
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+
+    REQUIRE(rm::sim::applyCommand(moveIssue(beacon, 80.0f, 80.0f, 1), roster.store,
+                                  roster.catalog, players, armies, terrain, gridFor,
+                                  roster.rate)
+                .accepted.size()
+            == 1);
+    REQUIRE(rm::sim::applyCommand(
+                CommandIssue{.source = 0,
+                             .id = rm::commandId(0, 2),
+                             .player = 0,
+                             .kind = CommandKind::Guard,
+                             .units = {transport},
+                             .target = beacon},
+                roster.store, roster.catalog, players, armies, terrain, gridFor,
+                roster.rate)
+                .accepted.size()
+            == 1);
+
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    bool docked = false;
+    bool refueled = false;
+    bool relaunched = false;
+    bool resumed = false;
+    for (int i = 0; i < 12000 && !resumed; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        docked = docked || roster.store.parentOf(transport) == pad;
+        refueled = refueled || (docked && roster.motion(transport).fuelRatio > Fx::fromRatio(3, 100));
+        relaunched = relaunched
+                     || (docked && !roster.store.parentOf(transport).has_value()
+                         && roster.motion(transport).fuelRatio >= Fx::fromInt(1));
+        if (relaunched && !resumed) {
+            // One beat after leaving the deck the ferry drive owns the tick
+            // again — the guard-ferry anchor is set and the route continues.
+            const rm::sim::QueuedCommand* live =
+                roster.store.orders()[transport.index].active();
+            resumed = live != nullptr && live->transportAnchor().has_value();
+        }
+    }
+
+    CHECK(docked);  // the staging rung owned a leg of the ferry route
+    CHECK(refueled);  // the pad's multiplier filled the tank, not the bare ground rate
+    CHECK(relaunched);  // full tank: off the deck with the guard order still heading it
+    CHECK(resumed);  // and the ferry drive picked the route back up afterwards
+    const rm::sim::QueuedCommand* head = roster.store.orders()[transport.index].active();
+    REQUIRE(head != nullptr);
+    CHECK(head->kind() == CommandKind::Guard);
+}
+
 
 TEST_CASE("C-198: cargo hangs from its class's nearest free attach bone",
           "[fa-transport]") {
@@ -601,6 +686,76 @@ TEST_CASE("C-199: the pickup is an assignment — a parked unit is left alone",
     CHECK_FALSE(roster.motion(parked).attached);
     CHECK(roster.store.alive(parked));
     CHECK(rm::sim::fxToFloat(roster.transform(parked).x) == Approx(35.0f).margin(10.0f));
+}
+TEST_CASE("C-199: waiting units stage onto the carrier-anchored ring",
+          "[fa-transport]") {
+    // `TransportGenerateWaitingFormationForUnits` (`0x005eca10`) builds a
+    // formation anchored at the transport using the carrier's
+    // `GuardFormationName` — retail's Guard ring (`lua/formations.lua:
+    // `GuardFormation`, `sizeMult = 3` elmos, first five slots per ring).
+    // `ferryStagingSpot` is the sim's ring: waiter `i` stages at radius
+    // `3 + 3 × (i / 5)` elmos around the beacon, at bearing `i / ring-size`
+    // of a full turn, in slot order. Two waiters take opposite sides of the
+    // ring; a unit with no beacon order is not a waiter and keeps the hull.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const UnitId transport = landedTransport(roster, transportType, 30.0f, 30.0f);
+    const UnitId first = roster.add(cargoType, 36.0f, 30.0f, 0, 500.0f);
+    const UnitId second = roster.add(cargoType, 30.0f, 42.0f, 0, 500.0f);
+    const UnitId parked = roster.add(cargoType, 33.0f, 30.0f, 0, 500.0f);
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+
+    REQUIRE(rm::sim::applyCommand(
+                CommandIssue{.source = 0,
+                             .id = rm::commandId(0, 1),
+                             .player = 0,
+                             .kind = CommandKind::Ferry,
+                             .units = {transport},
+                             .targetX = rm::sim::fxFromFloat(80.0f),
+                             .targetZ = rm::sim::fxFromFloat(80.0f)},
+                roster.store, roster.catalog, players, armies, terrain, gridFor,
+                roster.rate)
+                .accepted.size()
+            == 1);
+    REQUIRE(rm::sim::applyCommand(moveIssue(first, 30.0f, 30.0f, 2), roster.store,
+                                  roster.catalog, players, armies, terrain, gridFor,
+                                  roster.rate)
+                .accepted.size()
+            == 1);
+    REQUIRE(rm::sim::applyCommand(moveIssue(second, 30.0f, 30.0f, 3), roster.store,
+                                  roster.catalog, players, armies, terrain, gridFor,
+                                  roster.rate)
+                .accepted.size()
+            == 1);
+
+    const std::array<rm::sim::Fx, 2> beacon{rm::sim::fxFromFloat(30.0f),
+                                           rm::sim::fxFromFloat(30.0f)};
+    const std::array<rm::sim::Fx, 2> firstSpot = rm::sim::ferryStagingSpot(
+        roster.store, roster.catalog, transport, first.index, beacon);
+    const std::array<rm::sim::Fx, 2> secondSpot = rm::sim::ferryStagingSpot(
+        roster.store, roster.catalog, transport, second.index, beacon);
+    // First waiter takes bearing zero: (30, 33) — 3 elmos off the beacon.
+    CHECK(rm::sim::fxToFloat(firstSpot[0]) == Approx(30.0f).margin(0.01f));
+    CHECK(rm::sim::fxToFloat(firstSpot[1]) == Approx(33.0f).margin(0.01f));
+    // Second waiter takes the opposite side: (30, 27) — distinct, same ring.
+    CHECK(rm::sim::fxToFloat(secondSpot[0]) == Approx(30.0f).margin(0.01f));
+    CHECK(rm::sim::fxToFloat(secondSpot[1]) == Approx(27.0f).margin(0.01f));
+    // The parked unit holds no beacon order: not a waiter, keeps the hull.
+    const std::array<rm::sim::Fx, 2> parkedSpot = rm::sim::ferryStagingSpot(
+        roster.store, roster.catalog, transport, parked.index, beacon);
+    CHECK(parkedSpot[0] == roster.transform(transport).x);
+    CHECK(parkedSpot[1] == roster.transform(transport).z);
 }
 
 TEST_CASE("C-199: a unit reordered off the beacon is not waited on",

@@ -124,7 +124,7 @@ using AirState = MoveState::AirState;
     if (dx * dx + dz * dz > kFerryPickupRadius * kFerryPickupRadius) {
         return false;
     }
-    const QueuedCommand* head = store.orders()[slot].active();
+    const QueuedCommand* head = store.orders()[slot].current();
     if (head == nullptr) {
         return false;
     }
@@ -134,6 +134,84 @@ using AirState = MoveState::AirState;
 }
 
 } // namespace
+/// The zero-based waiter index: how many live transportable same-army units
+/// holding an order into the beacon's ring sort before `waiter` in slot order.
+/// Returns -1 when `waiter` itself is not waiting — the caller keeps the hull.
+[[nodiscard]] int waiterIndex(const UnitStore& store, const UnitCatalog& catalog,
+                              UnitId carrier, UnitIndex waiter,
+                              std::array<Fx, 2> beacon) noexcept {
+    const MoveState& carrierMotion = store.motion()[carrier.index];
+    int index = 0;
+    bool found = false;
+    for (UnitIndex other = 0; other < store.slotCount(); ++other) {
+        if (other == carrier.index || !store.slotAlive(other)
+            || store.motion()[other].attached
+            || store.motion()[other].armyIndex != carrierMotion.armyIndex) {
+            continue;
+        }
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(other));
+        if (def == nullptr || !def->transportable()) {
+            continue;
+        }
+        if (!waitingAtBeacon(store, other, beacon)
+            && !inboundToBeacon(store, catalog, other, beacon, carrier)) {
+            continue;
+        }
+        if (other == waiter) {
+            found = true;
+            break;
+        }
+        ++index;
+    }
+    return found ? index : -1;
+}
+
+/// How many waiters share this beacon — the ring the staging angle divides.
+[[nodiscard]] int waiterCount(const UnitStore& store, const UnitCatalog& catalog,
+                             UnitId carrier, std::array<Fx, 2> beacon) noexcept {
+    const MoveState& carrierMotion = store.motion()[carrier.index];
+    int count = 0;
+    for (UnitIndex other = 0; other < store.slotCount(); ++other) {
+        if (other == carrier.index || !store.slotAlive(other)
+            || store.motion()[other].attached
+            || store.motion()[other].armyIndex != carrierMotion.armyIndex) {
+            continue;
+        }
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(other));
+        if (def == nullptr || !def->transportable()) {
+            continue;
+        }
+        if (waitingAtBeacon(store, other, beacon)
+            || inboundToBeacon(store, catalog, other, beacon, carrier)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::array<Fx, 2> ferryStagingSpot(const UnitStore& store, const UnitCatalog& catalog,
+                                  UnitId carrier, UnitIndex waiter,
+                                  std::array<Fx, 2> beacon) noexcept {
+    const Transform& at = store.transforms()[carrier.index];
+    const int index = waiterIndex(store, catalog, carrier, waiter, beacon);
+    if (index < 0) {
+        return {at.x, at.z};
+    }
+    // Retail's Guard ring (`lua/formations.lua: GuardFormation`): the first
+    // five slots share radius 3 elmos, the next five radius 6, and so on —
+    // `sizeMult` starts at 3 and grows 3 per five. A fixed-point circle needs
+    // no trig: bearing `index / ringSize` of a full turn is the regular
+    // polygon, and `fxSin`/`fxCos` already speak Brad.
+    const int ring = index / 5;
+    const int inRing = index % 5;
+    const int ringStart = ring * 5;
+    const int ringSize = std::min(5, waiterCount(store, catalog, carrier, beacon) - ringStart);
+    const Fx radius = Fx::fromInt(3 * (ring + 1));
+    const auto bearing =
+        static_cast<Brad>(std::int64_t{inRing} * kBradFullTurn / std::max(1, ringSize));
+    return {beacon[0] + fxSin(bearing) * radius, beacon[1] + fxCos(bearing) * radius};
+}
+
 
 bool canEverCarry(const unitdef::UnitDef& carrier, const unitdef::UnitDef& cargo) noexcept {
     // `C-225`: a CARRIER's storage pool takes aircraft only — the retail
@@ -574,6 +652,25 @@ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terra
             if (!waitingAtBeacon(store, other, beacon)) {
                 continue;
             }
+            // Stage first, board when close: an in-ring waiter outside sling
+            // reach takes its waiting-formation spot (`0x005eca10`, `C-199`)
+            // instead of piling onto the hull. The spot is the waiter's own:
+            // index and ring size recompute from the live waiter set, so the
+            // squad spreads around the beacon in slot order. The beacon move
+            // stays at the head throughout — it IS the assignment — so the
+            // next tick still counts this waiter and its spot is stable.
+            {
+                const Transform& waiterAt = store.transforms()[other];
+                const Fx gap = groundDistanceElmos(positionOf(waiterAt),
+                                                   positionOf(at));
+                if (gap > loadReach(store.motion()[slot], store.motion()[other])) {
+                    const std::array<Fx, 2> spot =
+                        ferryStagingSpot(store, catalog, self, other, beacon);
+                    (void)routeToward(other, spot[0], spot[1], store, terrain,
+                                      gridForType);
+                    continue;
+                }
+            }
             if (attachCargo(store, catalog, *carrierDef, self, store.idAt(other))) {
                 // The order that brought it here — a Move to the beacon — is
                 // fulfilled by the pickup, so its queue head retires.
@@ -586,11 +683,6 @@ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terra
                     }
                 }
                 continue;
-            }
-            // In the ring but out of sling reach: converge on the carrier the
-            // way retail's transport-anchored waiting formation does.
-            if (!store.motion()[other].moving) {
-                (void)routeToward(other, at.x, at.z, store, terrain, gridForType);
             }
         }
         if (store.childrenOf(self).empty()) {

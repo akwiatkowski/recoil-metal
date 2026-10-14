@@ -117,6 +117,12 @@ struct Army {
     /// part.
     bool defeated = false;
 
+    /// `Scenario.Armies` `NEUTRAL_CIVILIAN` (`C-210`): `victory.lua` skips these
+    /// brains in every arm of the poll (`ArmyIsCivilian`) — they are never
+    /// defeated, never survivors, and never the verdict.
+    bool civilian = false;
+
+
     /// `victory.lua`'s `OfferingDraw` (`SimUtils.SetOfferDraw`): when every
     /// surviving army offers, the match ends in a draw immediately.
     bool offeringDraw = false;
