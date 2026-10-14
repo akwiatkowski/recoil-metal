@@ -153,9 +153,11 @@ namespace {
 inline constexpr float kImpactMarkRadiusElmos = 2.5f;  // elmos (legacy blast-less mark)
 inline constexpr int kImpactMarkSegments = 12;
 /// Retail scorch lifetime floor in seconds (`defaultexplosions.lua` C-290:
-/// lifetime 300-600); marks retire at the floor, converted through the tick
-/// rate rather than a tick literal. Presentation only — never hashed.
-inline constexpr float kImpactMarkLifetimeSeconds = 300.0f;  // s (C-290)
+/// lifetime 300-600); each mark retires at its own point in the spread,
+/// derived from the mark's own position bits like the rotation angle below —
+/// replay-identical, off the sim RNG (C-297). Presentation only, never hashed.
+inline constexpr float kImpactMarkLifetimeSecondsMin = 300.0f;  // s (C-290 floor)
+inline constexpr float kImpactMarkLifetimeSecondsWidth = 300.0f;  // s (C-290 600-300 spread)
 /// Retail rotates every scorch by 0..2pi (`defaultexplosions.lua` C-290). The
 /// engine has no texture to orient — the fan is rotationally symmetric — so the
 /// angle buys per-mark variety, not fidelity. Derived from the mark's own bits
@@ -176,6 +178,27 @@ inline constexpr float kImpactMarkLifetimeSeconds = 300.0f;  // s (C-290)
     return static_cast<float>(static_cast<double>(bits) / 4294967296.0
                               * 6.283185307179586);  // rad, 0..2pi (C-290)
 }
+/// Each mark's own retirement point inside retail's 300-600 s scorch spread
+/// (`defaultexplosions.lua` C-290): floor plus a 0..300 s offset from the
+/// mark's own position bits — the same splitmix32 stream as the rotation
+/// angle, replay-identical and off the sim RNG (C-297). Ticks, via the tick
+/// rate rather than a tick literal. Presentation only, never hashed.
+[[nodiscard]] rm::TickIndex impactMarkLifetime(float x, float z) noexcept {
+    std::uint32_t bits = static_cast<std::uint32_t>(std::llround(
+                             static_cast<double>(x) * 4096.0))  // 1/4096 elmo
+                         * 0x9E3779B1u
+                       ^ static_cast<std::uint32_t>(std::llround(
+                             static_cast<double>(z) * 4096.0))  // 1/4096 elmo
+                             * 0x85EBCA6Bu;
+    bits ^= bits >> 16;  // splitmix32 finaliser
+    bits *= 0x7FEB352Du;
+    bits ^= bits >> 15;
+    const float unit = static_cast<float>(static_cast<double>(bits) / 4294967296.0);  // 0..1
+    const float seconds = kImpactMarkLifetimeSecondsMin  // s (C-290)
+                          + unit * kImpactMarkLifetimeSecondsWidth;  // s (C-290 spread)
+    return gAppTickRate.ticks(rm::sim::seconds(seconds));  // ticks (C-290)
+}
+
 } // namespace
 
 void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
@@ -191,16 +214,16 @@ void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
 
 void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field,
                         rm::TickIndex now) {
-    const rm::TickIndex lifetime =
-        gAppTickRate.ticks(rm::sim::seconds(kImpactMarkLifetimeSeconds));  // ticks (C-290)
     // Ageing is time, not new marks: sweep expired scorch before the
     // revision early-out, or a quiet battlefield keeps drawing stale marks
     // forever. Single pass — the size change tells whether the revision moved.
+    // Each mark retires at its own point in retail's 300-600 s spread (C-290),
+    // derived from the mark's own bits like the rotation angle.
     const std::size_t before = scene.impactMarks.size();
     scene.impactMarks.erase(
         std::remove_if(scene.impactMarks.begin(), scene.impactMarks.end(),
-                       [now, lifetime](const UnitScene::ImpactMark& mark) {
-                           return now >= mark.tick + lifetime;
+                       [now](const UnitScene::ImpactMark& mark) {
+                           return now >= mark.tick + impactMarkLifetime(mark.x, mark.z);
                        }),
         scene.impactMarks.end());
     if (scene.impactMarks.size() != before) {

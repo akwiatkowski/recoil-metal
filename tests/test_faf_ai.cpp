@@ -3475,3 +3475,33 @@ TEST_CASE("FAF air flyby clamps to retail's 5-elmo map margin",
     INFO(ai.lastError());
     REQUIRE(ok);
 }
+TEST_CASE("C-418: the Artillery slot needs ARTILLERY and STRATEGIC together",
+          "[faf][ai][threat-query]") {
+    // C-418 (`0x0071cf00` prologue): the f[9] Artillery slot's category bit-id
+    // is ARTILLERY+STRATEGIC — a conjunction, not ARTILLERY alone. A mobile
+    // heavy artillery piece (ARTILLERY without STRATEGIC, e.g. UEL0304) writes
+    // its total nowhere near f[9]; the Mavor (both, e.g. UEB2302) does.
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 2, base = 'NormalMain', markers = {} })
+        local brain = __rm_faf.brains[0]
+        assert(brain.IMAPConfig.IMAPSize == 32 and brain.IMAPConfig.Rings == 2)
+        -- UEL0304 mobile artillery: ARTILLERY but not STRATEGIC, surface 24.
+        __rm_faf_type('MOBART', {'LAND', 'MOBILE', 'ARTILLERY'}, {s=24})
+        -- UEB2302 Mavor: ARTILLERY and STRATEGIC, economy 1190.
+        __rm_faf_type('MAVOR', {'STRUCTURE', 'ARTILLERY', 'STRATEGIC'}, {e=1190})
+        brain.snap.enemies = {
+            {bp='MOBART', x=250,z=0,__cats=__rm_faf.cats.MOBART},
+            {bp='MAVOR', x=260,z=0,__cats=__rm_faf.cats.MAVOR},
+        }
+        assert(brain:GetThreatAtPosition({0,0,0},1,true,'Artillery') == 1190,
+            'only the STRATEGIC artillery writes f[9]')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}

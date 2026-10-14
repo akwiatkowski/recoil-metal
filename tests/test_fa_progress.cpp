@@ -388,6 +388,74 @@ TEST_CASE("C-376: an enhancement waits for the unit to stand still before work "
     CHECK(job.scene.store.enhancements()[acu.index].at("LCH") == "AdvancedEngineering");
 }
 
+TEST_CASE("C-252: a paused enhancement holds its progress, bills nothing, and resumes",
+          "[fa-progress][enhancement]") {
+    // `EnhanceTask.lua`'s `Enhancing.TaskTick` returns `Wait` while `IsPaused()`:
+    // the order stands, the bar freezes, the bank is untouched, and unpausing
+    // resumes the same row — the unpaused half of C-252's stationary+unpaused
+    // gate, through the same ToggleProduction sink a click uses.
+    Scenario job;
+    const auto acu = job.spawn(commanderDef(), 300, 300);
+    auto runner = job.runner();
+    int tick = 0;
+
+    REQUIRE(issueEnhancement(job, acu, static_cast<rm::TickIndex>(tick), "AdvancedEngineering"));
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+    REQUIRE(job.scene.enhancementWork.size() == 1);
+
+    // One funded beat moves the bar off full time.
+    job.scene.economies[0].stored = {rm::test::mag(100.0f), rm::test::mag(1000.0f)};
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+    CHECK(rm::test::asFloat(job.scene.enhancementWork[0].buildTimeRemaining) < 8.0f);
+
+    // The player's hold: ToggleProduction on the enhancing commander — a builder,
+    // so the pause cell is live for it.
+    const auto togglePause = [&] {
+        return rm::app::submitCommand(job.scene, rm::sim::CommandIssue{
+            .tick = static_cast<rm::TickIndex>(tick),
+            .phase = rm::sim::CommandPhase::PreTick,
+            .source = static_cast<rm::CommandSource>(0),
+            .player = 0,
+            .kind = rm::sim::CommandKind::ToggleProduction,
+            .units = {acu},
+        }).has_value();
+    };
+    REQUIRE(togglePause());
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+    REQUIRE(job.scene.store.productionPaused(acu));
+
+    // Held, not cancelled: the order stands and the row survives.
+    CHECK_FALSE(job.scene.store.orders()[acu.index].empty());
+    REQUIRE(job.scene.enhancementWork.size() == 1);
+    const float held = rm::test::asFloat(job.scene.enhancementWork[0].buildTimeRemaining);
+
+    // Funded beats while held advance nothing, bill nothing, and fire no
+    // milestones — each frame is checked because the queue opens a new one
+    // every tick.
+    job.scene.economies[0].stored = {rm::test::mag(100.0f), rm::test::mag(1000.0f)};
+    for (int i = 0; i < 4; ++i) {
+        (void)rm::app::advanceMatch(runner, tick++, 0);
+        REQUIRE(job.scene.enhancementWork.size() == 1);
+        CHECK(rm::test::asFloat(job.scene.enhancementWork[0].buildTimeRemaining)
+              == Catch::Approx(held));
+        CHECK(job.scene.events.count(rm::sim::EventKind::EnhancementProgress) == 0);
+    }
+    CHECK(rm::test::asFloat(job.scene.economies[0].stored.mass) >= 100.0f);
+    CHECK(rm::test::asFloat(job.scene.economies[0].stored.energy) >= 1000.0f);
+
+    // Releasing the hold resumes the same row to a normal install.
+    REQUIRE(togglePause());
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+    CHECK_FALSE(job.scene.store.productionPaused(acu));
+    job.scene.economies[0].stored = {rm::test::mag(100.0f), rm::test::mag(1000.0f)};
+    for (int i = 0; i < 14 && !job.scene.enhancementWork.empty(); ++i) {
+        (void)rm::app::advanceMatch(runner, tick++, 0);
+    }
+    REQUIRE(job.scene.enhancementWork.empty());
+    CHECK(job.scene.store.enhancements()[acu.index].at("LCH") == "AdvancedEngineering");
+}
+
 TEST_CASE("C-254: a dead unit's enhancement registry entry leaves with it",
           "[fa-progress][enhancement]") {
     // `SimUnitEnhancements[id]` is live unit state: `Unit::OnKilled` drops the

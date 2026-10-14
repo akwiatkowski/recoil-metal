@@ -200,46 +200,77 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
     }
     lua_pop(lua, 1);
 
-    // First dispatch for this (unit, task). Load the source.
-    // `tasks` lives on the host table (`-2`), not the instances subtable (`-1`).
+    // First dispatch for this (unit, task). Load the source. `tasks` lives on
+    // the host table (`-2`), not the instances subtable (`-1`). When the name
+    // has no registration, fall through to `C-388` (`0x00629530`): sprintf
+    // `/lua/sim/tasks/<TaskName>.lua` through the VFS, and on a miss load
+    // `/lua/sim/ScriptTask.lua` (`ScriptTask.lua` fallback). Both branches run
+    // the same `C-311` hook concat below, so only the resolved path differs.
+    // `C-388`'s fallback load is silent here: the retail diagnostic (`Can't
+    // find task %s, using ScriptTask directly`) is a log line, and the host's
+    // `errors()` channel is reserved for hard failures.
+    std::string fallbackPath;  // nonempty when the resolved path came from C-388
     lua_getfield(lua, -2, "tasks");
     if (lua_isnil(lua, -1)) {
-        impl_->errors.emplace_back(std::string{"unknown task: "} + std::string{task});
-        lua_pop(lua, 3);
-        return out;
+        lua_pop(lua, 1);
+        fallbackPath = std::string{"/lua/sim/tasks/"} + std::string{task} + ".lua";
+    } else {
+        lua_pushlstring(lua, task.data(), task.size());
+        lua_gettable(lua, -2);
+        if (lua_isnil(lua, -1)) {
+            lua_pop(lua, 2);  // registration miss, host table
+            fallbackPath = std::string{"/lua/sim/tasks/"} + std::string{task} + ".lua";
+        }
     }
-    lua_pushlstring(lua, task.data(), task.size());
-    lua_gettable(lua, -2);
-    if (lua_isnil(lua, -1)) {
-        impl_->errors.emplace_back(std::string{"unknown task: "} + std::string{task});
-        lua_pop(lua, 4);
-        return out;
+    std::string effectiveSource;
+    std::string effectiveChunkName;
+    std::string resolvedPath;  // VFS path that actually supplied the chunk
+    if (!fallbackPath.empty()) {
+        // Both miss shapes above restored [host, instances]; re-fetch `tasks`
+        // so every path below enters load/pcall with [host, instances, tasks],
+        // matching the pre-existing pops after `pcall` (which drop `tasks`).
+        lua_getfield(lua, -2, "tasks");
+        if (!content_.read(fallbackPath)) {
+            fallbackPath = "/lua/sim/tasks/ScriptTask.lua";
+        }
+        const auto bytes = content_.read(fallbackPath);
+        if (!bytes) {
+            impl_->errors.emplace_back(std::string{"unknown task: "} + std::string{task});
+            lua_pop(lua, 3);
+            return out;
+        }
+        resolvedPath = fallbackPath;
+        effectiveChunkName = "@" + fallbackPath;
+    } else {
+        lua_getfield(lua, -1, "source");
+        const std::string source = toString(lua, -1);
+        lua_pop(lua, 1);
+        lua_getfield(lua, -1, "modulePath");
+        const std::string modulePath = lua_isnil(lua, -1) ? std::string{} : toString(lua, -1);
+        lua_pop(lua, 2);  // modulePath value, registration table; [host, instances, tasks]
+        if (!modulePath.empty()) {
+            resolvedPath = modulePath;
+            effectiveChunkName = "@" + modulePath;
+        } else {
+            effectiveSource = source;
+            effectiveChunkName = "@rm:registered";
+        }
     }
-    lua_getfield(lua, -1, "source");
-    const std::string source = toString(lua, -1);
-    lua_pop(lua, 1);
-    lua_getfield(lua, -1, "modulePath");
-    const std::string modulePath = lua_isnil(lua, -1) ? std::string{} : toString(lua, -1);
-    lua_pop(lua, 2);  // modulePath, registration table
-
-    // Source resolution: a VFS-backed module path reads through `content` (lets a test
-    // ship a real `<bpid>_script.lua` file from disk); an empty modulePath runs the
-    // inlined `source`.
-    std::string effectiveSource = source;
-    std::string effectiveChunkName = "@rm:registered";
-    if (!modulePath.empty()) {
+    if (resolvedPath.empty()) {
+        // Inlined-source registration: nothing to read from the VFS.
+    } else {
         // `C-311` (`SCR_LuaDoFileConcat`): the base file plus every registered
         // hookdir's copy of the same path load as ONE chunk, so a hook shares
         // the original's locals and environment; order is base, then hookdirs
         // in registration order (`/schook` first, then `__active_mods`).
-        const auto bytes = content_.read(modulePath);
+        const auto bytes = content_.read(resolvedPath);
         if (!bytes) {
-            impl_->errors.emplace_back("missing module: " + modulePath);
+            impl_->errors.emplace_back("missing module: " + resolvedPath);
             lua_pop(lua, 2);
             return out;
         }
         std::string concatenated{reinterpret_cast<const char*>(bytes->data()), bytes->size()};
-        for (const std::string& hookPath : content_.hooksFor(modulePath)) {
+        for (const std::string& hookPath : content_.hooksFor(resolvedPath)) {
             if (const auto hookBytes = content_.read(hookPath)) {
                 concatenated.push_back('\n');
                 concatenated.append(reinterpret_cast<const char*>(hookBytes->data()),
@@ -247,7 +278,6 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
             }
         }
         effectiveSource = rm::ai::rewriteLegacyLua(concatenated);
-        effectiveChunkName = "@" + modulePath;
     }
     if (effectiveSource.empty()) {
         impl_->errors.emplace_back("registration has no source nor modulePath");

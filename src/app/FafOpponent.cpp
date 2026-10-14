@@ -96,6 +96,16 @@ function __rm_faf_threat(u, threatType)
         return tags and tags.AIR and (t.a or 0) or 0
     end
     if threatType == 'AntiAir' then return t.a or 0 end
+    -- C-418 (`0x0071cf00` prologue): the f[9] Artillery category bit-id is the
+    -- ARTILLERY+STRATEGIC conjunction, so the bare-sandbox fallback needs both
+    -- tags — mirroring ThreatGrid::addBlip's gate.
+    if threatType == 'Artillery' then
+        local tags = __rm_faf.cats[u.bp]
+        if tags and tags.ARTILLERY and tags.STRATEGIC then
+            return (t.s or 0) + (t.a or 0) + (t.u or 0) + (t.e or 0)
+        end
+        return 0
+    end
     if threatType == 'Sub' or threatType == 'AntiSub' or threatType == 'Naval' then
         return t.u or 0
     end
@@ -4033,6 +4043,8 @@ void FafOpponent::advance(rm::TickIndex tick) {
             .isExperimental = def->hasCategory("EXPERIMENTAL"),
             .isCommander = def->hasCategory("COMMAND"),
             .isArtillery = def->hasCategory("ARTILLERY"),
+            // C-418: f[9] Artillery needs the ARTILLERY+STRATEGIC conjunction.
+            .isStrategic = def->hasCategory("STRATEGIC"),
             .isStructure = def->hasCategory("STRUCTURE"),
             .isExtractor = def->hasCategory("MASSEXTRACTION"),
         });

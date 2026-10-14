@@ -145,7 +145,11 @@ void ThreatGrid::addBlip(SThreat& record, const ThreatBlip& blip) noexcept {
     // Aggregate slots take the blip's TOTAL (`0x71d27b`–`0x71d405`): a blip contributes
     // to every category slot it qualifies for — a commander is both COMMAND and, on most
     // blueprints, carries no ARTILLERY, so the flags are independent adds, not a switch.
-    if (blip.isArtillery) {
+    // C-418 (`0x0071cf00` prologue): the f[9] Artillery category bit-id is the
+    // ARTILLERY+STRATEGIC conjunction (e.g. UEB2302 Mavor carries both; mobile
+    // UEL0304 artillery is ARTILLERY without STRATEGIC), so the slot needs both
+    // flags — not ARTILLERY alone.
+    if (blip.isArtillery && blip.isStrategic) {
         record[static_cast<std::size_t>(ThreatSlot::Artillery)] += total;
     }
     if (blip.isAir) {

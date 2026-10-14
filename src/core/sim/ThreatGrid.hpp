@@ -96,7 +96,8 @@ struct ThreatBlip {
     bool isAir = false;         // AIR category      -> total into f[6]
     bool isExperimental = false;// EXPERIMENTAL      -> total into f[7]
     bool isCommander = false;   // COMMAND           -> total into f[8]
-    bool isArtillery = false;   // ARTILLERY         -> total into f[9]
+    bool isArtillery = false;   // ARTILLERY         -> total into f[9] with STRATEGIC (C-418)
+    bool isStrategic = false;   // STRATEGIC         -> f[9] needs ARTILLERY+STRATEGIC (C-418)
     bool isStructure = false;   // STRUCTURE         -> total into f[2] unless extractor
     bool isExtractor = false;   // MASSEXTRACTION    -> excluded from f[2]
     bool seen = false;          // refreshed by observe(); swept by the next distribute

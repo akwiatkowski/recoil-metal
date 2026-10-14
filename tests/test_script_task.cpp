@@ -1069,3 +1069,67 @@ TEST_CASE("enhancement stat mods override range, rate, and damage", "[enhancemen
     CHECK(weaponDamageModFor(roster.store, roster.catalog, unit.index, gun)
           == Mag{});
 }
+TEST_CASE("C-388: ScriptHost resolves TaskName by sprintf path with ScriptTask.lua fallback") {
+    // `C-388` (`0x00629530`): the loader reads `TaskName`, sprintfs
+    // `/lua/sim/tasks/%s.lua`, and on a miss logs `Can't find task %s, using
+    // ScriptTask directly` then loads `/lua/sim/ScriptTask.lua`. The host must
+    // resolve an unregistered task name through the VFS the same way, with the
+    // same `C-311` hook concat on both branches.
+    const auto runTask = [](rm::vfs::Vfs& content, std::string_view task) {
+        rm::app::ScriptHost host{content};
+        const auto field = flatField();
+        const rm::sim::Terrain terrain{field};
+        const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+        rm::test::Roster roster;
+        rm::unitdef::UnitDef def;
+        def.name = "c388_probe";
+        const auto type = roster.addType(def);
+        const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+        auto armies = rm::sim::freeForAll(1);
+        std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+        REQUIRE(rm::sim::applyCommand(
+            rm::sim::CommandIssue{.source = 0,
+                                  .id = roster.store.allocateCommandId(0).value(),
+                                  .player = 0,
+                                  .kind = rm::sim::CommandKind::Script,
+                                  .units = {unit},
+                                  .scriptTask = std::string{task}},
+            roster.store, roster.catalog, players, armies, terrain,
+            [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+            nullptr, &host));
+        const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+        REQUIRE(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                       nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                       nullptr, &host) == 1);
+        CHECK(roster.store.orders()[unit.index].empty());
+        return host.errors().empty();
+    };
+    const std::filesystem::path scratch = std::filesystem::temp_directory_path()
+        / "rm-script-host-c388";
+    std::filesystem::remove_all(scratch);
+    std::filesystem::create_directories(scratch / "lua/sim/tasks");
+    {
+        std::ofstream direct(scratch / "lua/sim/tasks/C388Named.lua");
+        direct << "TypeClass = Class({}) {\n"
+                  "  TaskTick = function(self, result) return -1 end,\n"
+                  "}\n";
+    }
+    {
+        rm::vfs::Vfs content;
+        content.mountDirectory(scratch);
+        CHECK(runTask(content, "C388Named"));
+    }
+    std::filesystem::remove(scratch / "lua/sim/tasks/C388Named.lua");
+    {
+        std::ofstream fallback(scratch / "lua/sim/tasks/ScriptTask.lua");
+        fallback << "TypeClass = Class({}) {\n"
+                    "  TaskTick = function(self, result) return -1 end,\n"
+                    "}\n";
+    }
+    {
+        rm::vfs::Vfs content;
+        content.mountDirectory(scratch);
+        CHECK(runTask(content, "C388Missing"));
+    }
+    std::filesystem::remove_all(scratch);
+}

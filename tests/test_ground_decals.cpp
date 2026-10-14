@@ -534,24 +534,51 @@ TEST_CASE("impact marks carry deterministic rotation", "[decals]") {
         CHECK(scene.wreckDecals[i].position[2] == Approx(replay.wreckDecals[i].position[2]));
     }
 }
-TEST_CASE("impact marks expire at retail's scorch lifetime", "[decals]") {
-    // Retail scorch lives 300-600 s (`defaultexplosions.lua` C-290); the
-    // projection retires marks at the 300 s lower bound, derived through
-    // the tick rate rather than a literal so multi-rate runs agree.
+TEST_CASE("impact marks expire inside retail's scorch lifetime spread", "[decals]") {
+    // Retail scorch lives 300-600 s (`defaultexplosions.lua` C-290); each
+    // mark retires at its own bit-derived point inside the spread (see the
+    // spread test below). The invariant here: nothing retires before the
+    // 300 s floor, nothing survives the 600 s ceiling — derived through the
+    // tick rate rather than a literal so multi-rate runs agree.
     const HeightField field = flatAt(64, 0);
     const rm::sim::TickRate rate{};
-    const rm::TickIndex fresh =
-        rate.ticks(rm::sim::seconds(300.0f)) - 1;  // ticks, s (C-290)
-    const rm::TickIndex stale = rate.ticks(rm::sim::seconds(300.0f));  // ticks, s (C-290)
+    const rm::TickIndex floor = rate.ticks(rm::sim::seconds(300.0f));  // ticks, s (C-290)
+    const rm::TickIndex ceiling = rate.ticks(rm::sim::seconds(600.0f));  // ticks, s (C-290)
     rm::app::UnitScene scene;
     rm::app::noteImpactMark(scene, 10.0f, 20.0f, 0.0f, 0);
-    rm::app::refreshWreckDecals(scene, field, fresh);
+    rm::app::refreshWreckDecals(scene, field, floor - 1);
     CHECK(scene.wreckDecals.size() == rm::wreckVertexCount(12));
-    rm::app::refreshWreckDecals(scene, field, stale);
+    rm::app::refreshWreckDecals(scene, field, ceiling);
     CHECK(scene.wreckDecals.empty());
 }
-
-
+TEST_CASE("impact marks retire across retail's scorch lifetime spread", "[decals]") {
+    // Retail scorch lives 300-600 s, not a flat 300 s (`defaultexplosions.lua`
+    // C-290). Each mark retires at its own point in the spread, derived from
+    // the mark's own bits (splitmix32, like the rotation axis) — replay-stable
+    // and off the sim RNG (C-297), presentation only.
+    const HeightField field = flatAt(64, 0);
+    const rm::sim::TickRate rate{};
+    const rm::TickIndex floor = rate.ticks(rm::sim::seconds(300.0f));  // ticks, s (C-290)
+    const rm::TickIndex ceiling = rate.ticks(rm::sim::seconds(600.0f));  // ticks, s (C-290)
+    bool sawEarlyRetire = false;
+    bool sawLateSurvivor = false;
+    for (int i = 0; i < 512; ++i) {
+        rm::app::UnitScene scene;
+        rm::app::noteImpactMark(scene, static_cast<float>(i), static_cast<float>(i) * 1.7f, 0.0f, 0);
+        rm::app::refreshWreckDecals(scene, field, floor);
+        const bool aliveAtFloor = !scene.wreckDecals.empty();
+        rm::app::refreshWreckDecals(scene, field, ceiling);
+        const bool aliveAtCeiling = !scene.wreckDecals.empty();
+        // Nothing outlives the ceiling; nothing retires before the floor.
+        CHECK_FALSE(aliveAtCeiling);
+        sawEarlyRetire = sawEarlyRetire || !aliveAtFloor;
+        sawLateSurvivor = sawLateSurvivor || aliveAtFloor;
+    }
+    // The spread is real in both directions: some marks retire at the floor,
+    // some survive past it.
+    CHECK(sawEarlyRetire);
+    CHECK(sawLateSurvivor);
+}
 
 
 TEST_CASE("impact marks rotate past their cap", "[decals]") {
