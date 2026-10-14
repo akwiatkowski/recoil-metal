@@ -196,6 +196,10 @@ public:
     /// the Environment's wave layers. Without it the water keeps its analytic ripple —
     /// the stand-in this call exists to retire.
     void setWaterWaveTexture(const dds::Texture& normal);
+    /// The water tint ramp (`textures/engine/waterramp.dds`), sampled by the terrain
+    /// shader's ApplyWaterColor port (terrain.fx:359-367). Without it the terrain
+    /// keeps its analytic tint — the stand-in this call exists to retire.
+    void setWaterRampTexture(const dds::Texture& ramp);
 
     // The fog of war: which squares of the map the viewer's side can see (ADR-037).
     //
@@ -884,6 +888,16 @@ private:
         int normals = -1;
         /// Which family's channel layout the fragment shader should read.
         bool supremeCommanderShading = false;
+        /// Retail's faction-fragment pick (UnitBatch::shaderVariant): 0 base, 1 Aeon,
+        /// 2 Seraphim, 3 wreckage, 4 Metal, 5 Insect. Stamped into the instances'
+        /// team-colour alpha at upload, read back by `unitFragment`.
+        unsigned shaderVariant = 0;
+        /// Per-blueprint view-ramp LUT (Seraphim), engine-global aniso (Metal) and
+        /// insect (Insect) texture indices, or -1 when unbound. Bound at
+        /// kUnitLutTextureIndex; the shader keeps its procedural stand-in at -1.
+        int lookup = -1;
+        int anisoLookup = -1;
+        int insectLookup = -1;
 
         // Animation, baked at upload. boneBuffer holds poseCount consecutive
         // poses of boneStrideBytes each, and stays immutable for the batch's
@@ -1106,6 +1120,7 @@ private:
     float waterLevel_ = 0.0f;
     Environment environment_{};
     MTL::Texture* waterWaves_ = nullptr;
+    MTL::Texture* waterRamp_ = nullptr;  // owned; null until setWaterRampTexture
     bool reflectionsEnabled_ = true;
     bool stratumNormalsEnabled_ = true;
     bool propsVisible_ = true;

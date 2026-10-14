@@ -654,6 +654,14 @@ struct UnitDef {
     bool hasLod1 = false;
     std::string lod1Albedo;   ///< `LODs[2].AlbedoName`, or empty to share the fine albedo
     std::string lod1Spec;     ///< `LODs[2].SpecularName`, same fallback
+    /// `LODs[1].ShaderName` — 'Seraphim', 'Insect', 'Metal', 'Aeon' or 'Unit'
+    /// (mesh.fx techniques). Decides the fragment port the batch draws; empty
+    /// when the blueprint names no LODs (civilians, wrecks), which draw base.
+    std::string lodShaderName;
+    /// `LODs[1].LookupName` — the per-blueprint view-ramp LUT
+    /// (`/textures/environment/Falloff_seraphim_lookup.dds` on Seraphim builds,
+    /// mesh.fx:2663 `falloffSampler`). Empty for every other faction.
+    std::string lodLookupName;
 
     /// `Display.PlaceholderMeshName` — a bare unit id ("UEC1101") naming the
     /// stand-in mesh to draw when the unit's own LODs name nothing. The civilian

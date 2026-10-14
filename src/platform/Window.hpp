@@ -243,6 +243,8 @@ public:
 
     /// The map's wave-normal texture. See Renderer::setWaterWaveTexture.
     void setWaterWaveTexture(const dds::Texture& normal);
+    /// The water tint ramp. See Renderer::setWaterRampTexture.
+    void setWaterRampTexture(const dds::Texture& ramp);
 
     /// Where to draw it this frame, in authored HUD points. See Renderer::setMinimapRect.
     void setMinimapRect(float x, float y, float width, float height) noexcept;

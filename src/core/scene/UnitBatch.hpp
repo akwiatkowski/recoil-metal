@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace rm {
@@ -25,6 +26,49 @@ struct TexturePair {
     [[nodiscard]] friend bool operator==(const TexturePair&, const TexturePair&) = default;
 };
 
+/// Retail's faction-fragment pick as the `unitFragment` variant the batch draws:
+/// 0 base `NormalMappedPS`, 1 Aeon `AeonPS`, 2 Seraphim `UnitFalloffPS`,
+/// 3 `WreckagePS`, 4 Metal `NormalMappedMetalPS`, 5 Insect `NormalMappedInsectPS`
+/// (effects/mesh.fx techniques). The blueprint's `ShaderName` wins when stated;
+/// wrecks keep variant 3 even when their blueprint says otherwise (retail retargets
+/// only `ShaderName` at wreck extraction, and the wreck mesh still shades wrecked).
+/// Otherwise the FA id's second letter is the fallback the renderer used before
+/// `ShaderName` was plumbed (UEL/UAL/URL/XSL) — kept so bare meshes without a
+/// blueprint still shade by faction. Case-insensitive; unknown draws base.
+[[nodiscard]] inline unsigned shaderVariantFor(std::string_view shaderName,
+                                              std::string_view modelName) noexcept {
+    if (modelName.find("_wreck") != std::string::npos) {
+        return 3;
+    }
+    if (!shaderName.empty()) {
+        const char c = static_cast<char>(shaderName[0] | 0x20);
+        switch (c) {
+        case 'a':
+            return 1;
+        case 's':
+            return 2;
+        case 'm':
+            return 4;
+        case 'i':
+            return 5;
+        default:
+            return 0;
+        }
+    }
+    if (modelName.size() < 2) {
+        return 0;
+    }
+    switch (modelName[1]) {
+    case 'A':
+    case 'a':
+        return 1;
+    case 'S':
+    case 's':
+        return 2;
+    default:
+        return 0;
+    }
+}
 // One model and the instances to draw it at — the unit of work a renderer
 // takes. Neither the model nor the instances are owned: they belong to whoever
 // loaded them and must outlive the upload call, which is the only thing that
@@ -41,6 +85,23 @@ struct UnitBatch {
     /// Optional Supreme Commander `_NormalsTS` texture. Kept outside TexturePair because
     /// Recoil's native batching contract remains exactly its authored two-texture pair.
     int normals = -1;
+    /// Retail's faction-fragment pick from `Display.Mesh.LODs[1].ShaderName`
+    /// ('Seraphim', 'Insect', 'Metal', 'Aeon', 'Unit'; empty draws base). Stamped
+    /// into the instances' team-colour alpha at upload (UnitRenderer.mm), so one
+    /// fragment reads per-instance channels — variants 4/5 ride here too.
+    /// 0 base NormalMappedPS, 1 Aeon, 2 Seraphim, 3 wreckage, 4 Metal, 5 Insect.
+    unsigned shaderVariant = 0;
+    /// The per-blueprint view-ramp LUT (`Display.Mesh.LODs[1].LookupName`,
+    /// mesh.fx:2663 `falloffSampler`) as a texture index, or -1 when unbound.
+    /// Only Seraphim builds name one; Metal/Insect LUTs are engine-global and
+    /// ride their own batch fields below.
+    int lookup = -1;
+    /// Engine-global aniso LUT (`textures/engine/anisotropiclookup.dds`,
+    /// mesh.fx:2546-2547 `anisotropicSampler`), bound for Metal batches (variant 4).
+    int anisoLookup = -1;
+    /// Engine-global insect LUT (`textures/engine/insectlookup.dds`,
+    /// mesh.fx:3053-3054 `insectSampler`), bound for Insect batches (variant 5).
+    int insectLookup = -1;
 
     // Optional animation to play. Its bones are matched to the model's by name,
     // so a mismatched pair moves only what it can rather than knotting the

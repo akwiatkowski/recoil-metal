@@ -46,6 +46,9 @@ void applyGround(Target& target, const LoadedMap& map) {
     if (map.waterWaves.width > 0 && map.waterWaves.height > 0) {
         target.setWaterWaveTexture(map.waterWaves);
     }
+    if (map.waterRamp.width > 0 && map.waterRamp.height > 0) {
+        target.setWaterRampTexture(map.waterRamp);
+    }
     if (map.environment) {
         target.setEnvironment(*map.environment);
     }

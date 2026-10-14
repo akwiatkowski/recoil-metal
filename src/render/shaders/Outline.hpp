@@ -301,6 +301,7 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
                              texture2d<float> shading [[texture(1)]],
                              texture2d<float> normals [[texture(2)]],
                              texturecube<float> environment [[texture(3)]],
+                             texture2d<float> unitLut [[texture(4)]],
                              depth2d<float> shadowMap [[texture(13)]],
                              sampler texSampler [[sampler(0)]],
                              sampler shadowSampler [[sampler(2)]]) {
@@ -469,19 +470,27 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
             // FULL shadow — `light = sunAmbient + (1-sunAmbient)*shadowFill` —
             // whatever the shadow map says. Flagged, not fixed: matching
             // retail's look means matching its darkness here.
-            // The view ramp is procedural, not a texture: retail samples
-            // `falloffSampler` (mesh.fx:2663) — a per-blueprint LUT
-            // (`Falloff_seraphim_lookup.dds`, Blueprints.lua:630, Seraphim
-            // builds only) this renderer never uploads — so `fallOff.rgb`
-            // becomes a grazing sheen `pow(1-NdotV, 2)` tinted by the diffuse
-            // alpha, and `fallOff.a` gates the environment the same way the
-            // LUT's alpha does (mesh.fx:2671). The highlight keeps retail's
-            // own warm coeff and pow9 (mesh.fx:2668).
+            // The view ramp is retail's own texture when bound: `fallOff =
+            // tex2D(falloffSampler, float2(NdotV, material.x))` (mesh.fx:2662-2663)
+            // where `NdotV = pow(1-dot(view, N), 0.6)` and the row is the
+            // per-blueprint `LookupName` (`Falloff_seraphim_lookup.dds`,
+            // XSL0101_unit.bp Display.Mesh.LODs). Unbound (`hasUnitLut == 0`)
+            // the procedural stand-in below answers: `fallOff.rgb` becomes a
+            // grazing sheen `pow(1-NdotV, 2)` tinted by the diffuse alpha, and
+            // `fallOff.a` gates the environment the same way the LUT's alpha
+            // does (mesh.fx:2671). The V coordinate retail feeds is the
+            // per-vertex `colorLookup` (UnitFalloffVS); the .scm carries no such
+            // channel, so v = 0.5 reads the ramp's middle row. The highlight keeps
+            // retail's own warm coeff and pow9 (mesh.fx:2668).
             const float seraFacing = saturate(dot(normalize(V), N));
             const float seraNdotV = pow(1.0 - seraFacing, 0.6);
-            const float3 seraSheen =
+            const float3 seraProcedural =
                 pow(1.0 - seraFacing, 2.0) * tex1.a;
-            const float seraGate = saturate(seraNdotV);
+            const float4 seraFalloff = u.hasUnitLut > 0.5
+                ? unitLut.sample(texSampler, float2(seraNdotV, 0.5))
+                : float4(seraProcedural, saturate(seraNdotV));
+            const float3 seraSheen = seraFalloff.rgb;
+            const float seraGate = seraFalloff.a;
             const float seraAmount = saturate(dot(reflect(L, N), V));
             const float3 seraAdditive =
                 float3(0.5, 0.6, 0.7) * pow(seraAmount, 9.0) * tex2.g;
@@ -532,6 +541,66 @@ fragment float4 unitFragment(UnitOut in [[stage_in]],
                 wreckColour *= wreckSpec.b * 2.0;
             }
             return float4(wreckColour, 0.01);
+        }
+        if (variant > 3.5 && variant < 4.5) {
+            // METAL, from `effects/mesh.fx`'s NormalMappedMetalPS (mesh.fx:2534-2562).
+            // Same skeleton as the base shader with one substitution: the ADDITIVE
+            // Phong lobe is the aniso LUT, not a pow — `anisoLookup =
+            // float2(dot(reflect(sun, N), -view), dotLightNormal)` (mesh.fx:2546),
+            // `anisoAmount = tex2D(anisotropicSampler, anisoLookup)` (mesh.fx:2547),
+            // `phongAdditive = anisoAmount * spec.g + (0.5 * spec.r * env, 0)`
+            // (mesh.fx:2551). Unbound the lobe falls back to the base pow2 term,
+            // so a Metal without its LUT still highlights. Note the reflection is
+            // NOT doubled here (mesh.fx:2551 `0.5 *` vs base `2 *`), and the light
+            // is the SHARED ComputeLight the base path already computed above.
+            const float metalRefl = saturate(dot(reflect(-L, N), V));
+            const float4 metalAniso = u.hasUnitLut > 0.5
+                ? unitLut.sample(texSampler, float2(metalRefl, rawNdotL))
+                : float4(kSupComPhongCoeff * pow(metalRefl, 2.0), 1.0);
+            const float3 metalAdditive = metalAniso.rgb * tex2.g
+                + 0.5 * tex2.r
+                      * environment.sample(texSampler, reflect(-V, N)).rgb;
+            const float metalEmissive = kSupComGlowMultiplier * tex2.b;
+            float3 blast = float3(0.0);
+            for (uint blastB = 0; blastB < 3; ++blastB) {
+                float blastDist = length(u.blastPos[blastB].xyz - in.world);
+                float blastAtten =
+                    saturate(1.0 - blastDist / max(u.blastPos[blastB].w, 0.001));
+                blast += u.blastColour[blastB].rgb * u.blastColour[blastB].a
+                    * blastAtten * blastAtten;
+            }
+            return float4(albedo * (metalEmissive + light) + metalAdditive + blast,
+                          tex2.b + 0.01);
+        }
+        if (variant > 4.5 && variant < 5.5) {
+            // INSECT, from `effects/mesh.fx`'s NormalMappedInsectPS (mesh.fx:3041-3071).
+            // Metal's twin with two deltas: the additive is ALSO masked by
+            // `(1 - spec.a)` (mesh.fx:3059), and the diffuse light is DOUBLED
+            // (`2 * sunDiffuse * ...`, mesh.fx:3062). Same LUT coordinates as Metal
+            // (mesh.fx:3053-3054), same fallback when unbound.
+            const float insectRefl = saturate(dot(reflect(-L, N), V));
+            const float4 insectAniso = u.hasUnitLut > 0.5
+                ? unitLut.sample(texSampler, float2(insectRefl, rawNdotL))
+                : float4(kSupComPhongCoeff * pow(insectRefl, 2.0), 1.0);
+            const float3 insectAdditive = (insectAniso.rgb * tex2.g
+                + 0.5 * tex2.r
+                      * environment.sample(texSampler, reflect(-V, N)).rgb)
+                * (1.0 - tex2.a);
+            const float insectEmissive = kSupComGlowMultiplier * tex2.b;
+            float3 insectLight = u.sunColour * saturate(dot(N, L)) * sun * 2.0
+                + u.sunAmbience;
+            insectLight = u.lightingMultiplier * insectLight
+                + (1.0 - insectLight) * u.shadowFill;
+            float3 blast = float3(0.0);
+            for (uint blastB = 0; blastB < 3; ++blastB) {
+                float blastDist = length(u.blastPos[blastB].xyz - in.world);
+                float blastAtten =
+                    saturate(1.0 - blastDist / max(u.blastPos[blastB].w, 0.001));
+                blast += u.blastColour[blastB].rgb * u.blastColour[blastB].a
+                    * blastAtten * blastAtten;
+            }
+            return float4(albedo * (insectEmissive + insectLight) + insectAdditive
+                              + blast, tex2.b + 0.01);
         }
         const float phongAmount = phongAmountBase;
         const float3 phongAdditive = kSupComPhongCoeff * pow(phongAmount, 2.0) * tex2.g;

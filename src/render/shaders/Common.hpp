@@ -70,6 +70,7 @@ struct Uniforms {
     float hasWaterWaves;
     float hasUnitNormals;
     float buildGridStep;
+    float hasWaterRamp;  // 1 when the WaterRamp tint LUT is bound (terrain.fx:359-367)
     // Explosion lights: the brightest live flashes, as point lights. xyz the
     // current position, w the reach in elmos; rgb the flash colour, a intensity.
     // Appended at the end like every field here — the C++ twin must match exactly.
@@ -80,8 +81,10 @@ struct Uniforms {
     // the end like every field here — the C++ twin must match exactly. Zero on maps
     // that state none (Scmap.hpp default), which kills both terms cleanly.
     float4 specularColour;
+    // 1 when the batch's faction LUT is bound at texture slot 4 (mesh.fx
+    // falloff/aniso/insect samplers). Appended at the END like every field here.
+    float hasUnitLut;
 };
-
 // World-anchored placement grid. Derivatives keep lines a pixel wide and fade
 // cells that become too small to resolve, avoiding a bright moire at map zoom.
 static float3 buildGridColour(float3 colour, float2 worldXZ, float step) {
@@ -412,10 +415,10 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
                                 depth2d<float> shadowMap [[texture(13)]],
                                 array<texture2d<float>, 9> layerNormals [[texture(15)]],
                                 texture2d<float> fogMask [[texture(24)]],
+                                texture2d<float> waterRamp [[texture(25)]],
                                 sampler groundSampler [[sampler(0)]],
                                 sampler splatSampler [[sampler(1)]],
                                 sampler shadowSampler [[sampler(2)]]) {
-    // The reflection pass clips everything below the water: a mirror cannot
     // show the seabed, and without this the reflection is of the ground under
     // the water rather than the world above it.
     if (in.world.y < u.clipBelowY) {
@@ -551,18 +554,28 @@ fragment float4 terrainFragment(VertexOut in [[stage_in]],
 
     // Underwater ground takes the water's colour (terrain.fx:359-367,
     // ApplyWaterColor: `lerp(inColor, wcolor.rgb, wcolor.a)` sampling WaterRamp at
-    // the UtilityTextureC.g depth). No WaterRamp asset is staged in-repo and
-    // UtilityTextureC was never loaded, so the tint is analytic: the water surface
-    // colour the map already states, by the same lerp weight the water shader uses
-    // (`waterColourLerp`, the constant the engine's depth clamp collapses to —
-    // see Content.cpp), gated on world height below the water level. `hasWater`
-    // guards it: an SMF map leaves waterLevel at its 0 default while its terrain
-    // runs negative, and without the flag every valley would read as a seabed.
+    // the UtilityTextureC.g depth). The ramp (`textures/engine/waterramp.dds`) is a
+    // 1D strip uploaded as Nx1: the u coordinate carries the depth exactly like
+    // retail's tex1D, sampled LINEAR like its CLAMP/LINEAR sampler (shader-metal-port.md
+    // §1.2). Depth here is height-derived (waterLevel - world.y, elmos); 0.02/elmo
+    // maps the ~50-elmo visible band onto 0..1. Without the asset (`hasWaterRamp == 0`)
+    // the tint is analytic:
+    // the water surface colour the map already states, by the same lerp weight the
+    // water shader uses (`waterColourLerp`, the constant the engine's depth clamp
+    // collapses to — see Content.cpp), gated on world height below the water level.
+    // `hasWater` guards it: an SMF map leaves waterLevel at its 0 default while its
+    // terrain runs negative, and without the flag every valley would read as a seabed.
     // QUIRK preserved: retail tints by TEXTURE depth (UtilityTextureC.g), which
     // can lag the true height; ours keys on height directly and agrees wherever
     // the two agree — the shorelines.
     if (in.world.y < u.waterLevel) {
-        colour = mix(colour, u.waterSurfaceColour, u.waterColourLerp);
+        if (u.hasWaterRamp > 0.5) {
+            const float rampDepth = saturate((u.waterLevel - in.world.y) * 0.02);
+            const float4 wcolor = waterRamp.sample(groundSampler, float2(rampDepth, 0.5));
+            colour = mix(colour, wcolor.rgb, wcolor.a);
+        } else {
+            colour = mix(colour, u.waterSurfaceColour, u.waterColourLerp);
+        }
     }
 
     // FOG OF WAR (ADR-037). Ground the viewer's side cannot see is darkened, not blacked

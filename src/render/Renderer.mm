@@ -503,6 +503,7 @@ Renderer::~Renderer() {
     if (constructionInstanceBuffer_ != nullptr) constructionInstanceBuffer_->release();
     releaseSplat();
     if (groundTexture_ != nullptr) groundTexture_->release();
+    if (waterRamp_ != nullptr) waterRamp_->release();
     if (environmentCube_ != nullptr) environmentCube_->release();
     if (fogTexture_ != nullptr) fogTexture_->release();
     groundSampler_->release();
@@ -1221,6 +1222,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         .hasWaterWaves = waterWaves_ != nullptr ? 1.0f : 0.0f,
         // Same eight-elmo pitch as sim::snapToBuildGrid.
         .buildGridStep = buildGrid_ && override == nullptr ? 8.0f : 0.0f,
+        .hasWaterRamp = waterRamp_ != nullptr ? 1.0f : 0.0f,
     };
     // Explosion lights, refreshed per frame from the uploaded particles. Zero
     // intensity is off, so every pass shares the same fill and a quiet frame
@@ -1271,6 +1273,10 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
         // is undefined, and `hasFog` already gates whether the sample is used.
         encoder->setFragmentTexture(fogTexture_ != nullptr ? fogTexture_ : groundTexture_,
                                     kFogTextureIndex);
+        // Same fallback rule as the fog slot: the shader names the ramp
+        // unconditionally, and `hasWaterRamp` gates whether the sample is used.
+        encoder->setFragmentTexture(waterRamp_ != nullptr ? waterRamp_ : groundTexture_,
+                                    kWaterRampTextureIndex);
         encoder->setFragmentSamplerState(groundSampler_, kGroundSamplerIndex);
         encoder->setFragmentSamplerState(splatSampler_, kSplatSamplerIndex);
         encoder->setFragmentTexture(shadowMap_, kShadowTextureIndex);
@@ -1433,6 +1439,26 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             // bind this optional Supreme Commander slot per batch.
             encoder->setFragmentTexture(normals != nullptr ? normals : groundTexture_,
                                         kUnitNormalsTextureIndex);
+            // The faction LUT: Seraphim's per-blueprint view ramp, Metal's aniso
+            // table, Insect's insect table (mesh.fx falloff/aniso/insect samplers).
+            // Same always-bound rule as every slot here — `hasUnitLut` gates
+            // whether the sample is used, and the procedural stand-ins answer
+            // when no LUT resolved (-1).
+            MTL::Texture* unitLut = nullptr;
+            if (batch.lookup >= 0
+                && static_cast<std::size_t>(batch.lookup) < unitTextures_.size()) {
+                unitLut = unitTextures_[static_cast<std::size_t>(batch.lookup)];
+            } else if (batch.anisoLookup >= 0
+                       && static_cast<std::size_t>(batch.anisoLookup)
+                              < unitTextures_.size()) {
+                unitLut = unitTextures_[static_cast<std::size_t>(batch.anisoLookup)];
+            } else if (batch.insectLookup >= 0
+                       && static_cast<std::size_t>(batch.insectLookup)
+                              < unitTextures_.size()) {
+                unitLut = unitTextures_[static_cast<std::size_t>(batch.insectLookup)];
+            }
+            encoder->setFragmentTexture(unitLut != nullptr ? unitLut : groundTexture_,
+                                        kUnitLutTextureIndex);
 
             // Per batch, not per pair: which family's channel layout to read is
             // a property of the MODEL, and two models could share a texture pair
@@ -1442,6 +1468,7 @@ void Renderer::encodeScene(MTL::CommandBuffer* commandBuffer, MTL::RenderPassDes
             unitUniforms.hasTexture = diffuse != nullptr ? 1.0f : 0.0f;
             unitUniforms.hasTexture2 = shading != nullptr ? 1.0f : 0.0f;
             unitUniforms.hasUnitNormals = normals != nullptr ? 1.0f : 0.0f;
+            unitUniforms.hasUnitLut = unitLut != nullptr ? 1.0f : 0.0f;
             unitUniforms.supremeCommanderShading = batch.supremeCommanderShading ? 1.0f : 0.0f;
             unitUniforms.alphaIsOpacity = batch.alphaIsOpacity ? 1.0f : 0.0f;
             encoder->setFragmentBytes(&unitUniforms, sizeof(unitUniforms), kUniformBufferIndex);

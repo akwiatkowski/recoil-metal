@@ -73,6 +73,14 @@ struct VfsUnit {
     std::string albedoPath;
     std::string shadingPath;
     std::string normalsPath;
+    /// `Display.Mesh.LODs[1].ShaderName` — 'Seraphim', 'Insect', 'Metal', 'Aeon' or
+    /// 'Unit' (empty when the blueprint names no LODs, e.g. civilians). Decides the
+    /// `mesh.fx` fragment port the batch draws (`UnitFalloffPS`, aniso, ...).
+    std::string shaderName;
+    /// `Display.Mesh.LODs[1].LookupName` — the per-blueprint view-ramp LUT
+    /// (`/textures/environment/Falloff_seraphim_lookup.dds` on Seraphim builds).
+    /// Empty for every other faction; Metal/Insect LUTs are engine-global.
+    std::string lookupPath;
     /// `Display.Tarmacs` present and non-empty — the gate `CreateTarmac`
     /// (defaultunits.lua:78) checks before stamping the footprint (`C-289`).
     /// Parsed here rather than carried on `UnitDef`, which the blueprint

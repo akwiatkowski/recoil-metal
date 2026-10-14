@@ -252,6 +252,13 @@ void Renderer::setWaterWaveTexture(const dds::Texture& normal) {
     waterWaves_ = uploadTexture(normal, "water waves");
 }
 
+void Renderer::setWaterRampTexture(const dds::Texture& ramp) {
+    if (waterRamp_ != nullptr) {
+        waterRamp_->release();
+    }
+    waterRamp_ = uploadTexture(ramp, "water ramp");
+}
+
 void Renderer::setSplat(std::span<const SplatLayer> layers, const dds::Texture& maskA,
                         const dds::Texture& maskB) {
     releaseSplat();

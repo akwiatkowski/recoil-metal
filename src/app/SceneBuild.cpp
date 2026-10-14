@@ -595,6 +595,30 @@ resolveAttachBones(const rm::Model& model, const rm::unitdef::UnitDef& def) {
     return content.contains(literal) ? literal : std::string{};
 }
 
+/// Fills a batch's faction-fragment variant and its LUT texture indices from the
+/// resolved unit: `ShaderName` decides the branch, `LookupName` the per-blueprint
+/// view ramp (Seraphim), and the two engine-global LUTs go to Metal/Insect.
+/// The registry dedupes: one upload serves every batch that names the same path.
+/// A miss resolves to -1 and the shader keeps its procedural stand-in — a Seraphim
+/// without its ramp still draws, exactly like a unit without its albedo.
+void fillUnitLuts(rm::UnitBatch& batch, UnitScene& scene, const rm::vfs::Vfs& content,
+                  const VfsUnit& unit) {
+    batch.shaderVariant =
+        rm::shaderVariantFor(unit.shaderName, scene.models.back().name);
+    if (!unit.lookupPath.empty()) {
+        batch.lookup =
+            scene.textures.resolve(content, unit.lookupPath, "lookup ramp");
+    }
+    // Engine-global LUTs, resolved once and shared: `textures/engine/…` inside
+    // textures.scd (mesh.fx:62-63 `anisotropicTexture`/`insectTexture`).
+    if (batch.shaderVariant == 4) {
+        batch.anisoLookup = scene.textures.resolve(
+            content, "textures/engine/anisotropiclookup.dds", "aniso lookup");
+    } else if (batch.shaderVariant == 5) {
+        batch.insectLookup = scene.textures.resolve(
+            content, "textures/engine/insectlookup.dds", "insect lookup");
+    }
+}
 /// The texture convention against the BLUEPRINT's directory, not the mesh's.
 ///
 /// A `MeshName` can point at a different unit's files — the Megalith's LOD0 is
@@ -715,6 +739,11 @@ resolveAttachBones(const rm::Model& model, const rm::unitdef::UnitDef& def) {
         resolved.normalsPath =
             unitTextureInVfs(blueprintPath, kScmNormalsSuffix, content);
     }
+    // Retail's faction-fragment pick and its per-blueprint view-ramp LUT ride the
+    // blueprint, not the mesh: `Display.Mesh.LODs[1].ShaderName/LookupName`
+    // (XSL0101_unit.bp names both on every LOD entry; the loader keeps LOD0's).
+    resolved.shaderName = resolved.def.lodShaderName;
+    resolved.lookupPath = resolved.def.lodLookupName;
     return resolved;
 }
 
@@ -874,6 +903,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 .unpackOneshot = unpack != nullptr,
                 .animationDrivenByInstance = walk != nullptr,
             });
+            fillUnitLuts(scene.batches.back(), scene, content, *unit);
             batchForFaction.emplace(army.faction, scene.batches.size() - 1);
             scaleForFaction.emplace(army.faction, unit->def.meshToElmos);
 
@@ -1068,6 +1098,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             .unpackOneshot = unpack != nullptr,
             .animationDrivenByInstance = walk != nullptr,
         });
+        fillUnitLuts(scene.batches.back(), scene, content, *unit);
         scene.definitions.push_back(unit->def);
         resolveMuzzleBones(scene.definitions.back(), scene.models.back());
         const rm::UnitTypeIndex type =
@@ -1131,6 +1162,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                             .telescopeDistanceElmos = turretLod.telescopeDistanceElmos,
                             .telescopeReturnPerTick = turretLod.telescopeReturnPerTick,
                         });
+                        fillUnitLuts(scene.batches.back(), scene, content, *unit);
                         scene.lodOfType[type] = UnitScene::LodLevel{
                             .batch = scene.batches.size() - 1,
                             .cutoffElmos =
@@ -2067,6 +2099,18 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             .unpackAnimation = unpack,
             .unpackOneshot = unpack != nullptr,
         });
+        // A bare mesh names no blueprint, so no `ShaderName`: the variant falls
+        // back to the model's own faction letter (UEL/UAL/URL/XSL) and no LUT
+        // binds — the shader keeps its procedural stand-ins.
+        if (fromContent) {
+            fillUnitLuts(scene.batches.back(), scene, content, *fromContent);
+        } else if (def) {
+            scene.batches.back().shaderVariant =
+                rm::shaderVariantFor(def->lodShaderName, scene.models.back().name);
+        } else {
+            scene.batches.back().shaderVariant = rm::shaderVariantFor(
+                std::string_view{}, scene.models.back().name);
+        }
         scene.setBatchForType(type, scene.batches.size() - 1);
     }
 

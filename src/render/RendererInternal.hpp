@@ -126,6 +126,7 @@ struct TerrainUniforms {
     float hasWaterWaves;
     float hasUnitNormals;
     float buildGridStep;  ///< zero when disarmed; otherwise the placement grid pitch in elmos
+    float hasWaterRamp;   ///< 1 when the WaterRamp tint LUT is bound (terrain.fx:359-367)
 
     /// Explosion lights, mirroring the MSL tail exactly: xyz position, w reach;
     /// rgb colour, a intensity. Zero intensity is off.
@@ -136,6 +137,11 @@ struct TerrainUniforms {
     /// lobe, .w how much of it reaches the alpha the bloom chain reads. Appended
     /// at the END, same rule as every field above.
     simd_float4 specularColour;
+
+    /// 1 when the batch's faction LUT is bound at kUnitLutTextureIndex (mesh.fx
+    /// falloff/aniso/insect samplers). Appended at the END after specularColour,
+    /// so every offset above — including the sibling's hasWaterRamp — is untouched.
+    float hasUnitLut;
 };
 
 static_assert(offsetof(TerrainUniforms, buildGridStep) == 536);
@@ -169,13 +175,18 @@ static_assert(offsetof(TerrainUniforms, fogWidthElmos) == 488, "and stays in the
 static_assert(offsetof(TerrainUniforms, fogDepthElmos) == 492, "filling it exactly");
 static_assert(offsetof(TerrainUniforms, waveRepeats) == 496,
               "the wave block starts on the fresh 16-byte slot after the fog block");
-static_assert(sizeof(TerrainUniforms) == 656,
+static_assert(sizeof(TerrainUniforms) == 672,
               "the wave block and its flags occupy three 16-byte slots, then six "
-              "blast float4s take six more, then one specular float4");
+              "blast float4s take six more, one specular float4, and the unit-LUT "
+              "flag its own 16-byte slot (a lone float still aligns the struct to 16)");
 static_assert(offsetof(TerrainUniforms, blastPos) == 544,
               "blast lights start on the fresh slot after buildGridStep");
 static_assert(offsetof(TerrainUniforms, hasUnitNormals) == 532,
               "unit normal availability packs beside the water-wave flag");
+static_assert(offsetof(TerrainUniforms, hasWaterRamp) == 540,
+              "water-ramp flag fills the slot's padding; blastPos must not move");
+static_assert(offsetof(TerrainUniforms, hasUnitLut) == 656,
+              "unit-LUT flag starts the fresh slot after specularColour");
 static_assert(offsetof(TerrainUniforms, fogColour) == 288, "the map block follows the matrices");
 // A float3 is sixteen bytes AND sixteen-aligned, so the float after one does
 // NOT pack into its tail — it starts a fresh slot and the next float3 realigns
@@ -331,6 +342,9 @@ constexpr NS::UInteger kSplatNormalBaseIndex = 15;
 
 /// The fog of war mask: one texel per square of the viewer's vision grid, past the normals.
 constexpr NS::UInteger kFogTextureIndex = 24;
+/// The water tint ramp (`textures/engine/waterramp.dds`): the first free terrain-fragment
+/// slot after the fog mask (splat layers 3..12, splat normals 15..23, fog 24).
+constexpr NS::UInteger kWaterRampTextureIndex = 25;
 
 /// Ring vertices the buffer holds per frame in flight.
 ///
@@ -364,6 +378,12 @@ constexpr NS::UInteger kShadingTextureIndex = 1;
 constexpr NS::UInteger kUnitNormalsTextureIndex = 2;
 /// The map-authored environment cube sampled by retail's `mesh.fx` unit material.
 constexpr NS::UInteger kUnitEnvironmentTextureIndex = 3;
+/// The faction LUT for the batch being drawn: Seraphim's per-blueprint view ramp
+/// (`LookupName`, mesh.fx:2663 `falloffSampler`), Metal's `anisotropiclookup.dds`
+/// (mesh.fx:2547) or Insect's `insectlookup.dds` (mesh.fx:3054). Rebound per batch
+/// like the normal map — the unit pipeline's slots 0..3 are taken (diffuse,
+/// shading, normals, environment cube) and 13 is the shadow map.
+constexpr NS::UInteger kUnitLutTextureIndex = 4;
 constexpr NS::UInteger kGroundSamplerIndex = 0;
 /// The repeating sampler the splat layers need — see where it is created.
 constexpr NS::UInteger kSplatSamplerIndex = 1;

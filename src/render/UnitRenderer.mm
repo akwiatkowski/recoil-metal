@@ -38,32 +38,21 @@ namespace rm {
 using namespace render_detail;  // NOLINT(google-build-using-namespace)
 namespace {
 // Which `unitFragment` branch a batch draws: 0 base `NormalMappedPS`, 1 Aeon
-// `AeonPS`, 2 Seraphim `UnitFalloffPS`, 3 `WreckagePS`. Retail picks per
-// blueprint (`ShaderName` in the mesh blueprint); the renderer only sees the
-// model file, so the faction comes from the FA id's second letter — UEL/UAL/
-// URL/XSL land units are UEF/Aeon/Cybran/Seraphim — and UEF/Cybran correctly
-// stay 0 (retail shades both with the base shader). Guarded to SupCom models:
-// a Recoil name happens to hit these letters by coincidence. Wreck meshes
-// share their live mesh's file (Blueprints.lua `ExtractWreckageBlueprint`
-// only retargets `ShaderName`), so variant 3 never fires yet — the branch
-// compiles and waits on `ShaderName` plumbing through `UnitBatch`.
-[[nodiscard]] unsigned unitShaderVariantFor(const Model& model) noexcept {
-    if (model.family != Family::SupremeCommander || model.name.size() < 2) {
+// `AeonPS`, 2 Seraphim `UnitFalloffPS`, 3 `WreckagePS`, 4 Metal
+// `NormalMappedMetalPS`, 5 Insect `NormalMappedInsectPS` (effects/mesh.fx
+// techniques). Retail picks per blueprint (`ShaderName` in the mesh blueprint's
+// LOD entries); the batch carries it as `shaderVariant` (UnitBatch.hpp), filled
+// from `ShaderName` with the FA id's second letter as fallback — UEL/UAL/URL/
+// XSL land units are UEF/Aeon/Cybran/Seraphim, and UEF/Cybran correctly stay 0.
+// Guarded to SupCom models: a Recoil name happens to hit these letters by
+// coincidence. Stamped into the instances' team-colour alpha (see `unitFragment`'s
+// variant selector): 1.0f is every authored team's alpha (TeamColours.hpp), so
+// `1 + v/255` keeps the rgb tint byte-identical while smuggling 0..5 past upload.
+[[nodiscard]] unsigned unitShaderVariantFor(const UnitBatch& batch) noexcept {
+    if (batch.model == nullptr || batch.model->family != Family::SupremeCommander) {
         return 0;
     }
-    if (model.name.find("_wreck") != std::string::npos) {
-        return 3;
-    }
-    switch (model.name[1]) {
-    case 'A':
-    case 'a':
-        return 1;
-    case 'S':
-    case 's':
-        return 2;
-    default:
-        return 0;
-    }
+    return batch.shaderVariant > 5 ? 0 : batch.shaderVariant;
 }
 
 // Variant per SOURCE batch index, filled by `setUnits` beside
@@ -394,6 +383,10 @@ void Renderer::setUnits(std::span<const dds::Texture> textures, std::span<const 
         GpuUnitBatch uploaded;
         uploaded.textures = batch.textures;
         uploaded.normals = batch.normals;
+        uploaded.shaderVariant = unitShaderVariantFor(batch);
+        uploaded.lookup = batch.lookup;
+        uploaded.anisoLookup = batch.anisoLookup;
+        uploaded.insectLookup = batch.insectLookup;
         uploaded.supremeCommanderShading = model.family == Family::SupremeCommander;
         uploaded.animationDrivenByInstance = batch.animationDrivenByInstance;
         uploaded.unpackOneshot = unpackOneshot;
@@ -446,14 +439,13 @@ void Renderer::setUnits(std::span<const dds::Texture> textures, std::span<const 
 
         batchForSourceIndex_[index] = unitBatches_.size();
         unitBatches_.push_back(uploaded);
-        // The fragment branch this batch draws. Stamped into the instances'
-        // team-colour alpha (see `unitFragment`'s variant selector): 1.0f is
-        // every authored team's alpha (TeamColours.hpp), so `1 + v/255` keeps
-        // the rgb tint byte-identical while smuggling 0..3 past the upload.
+        // The fragment branch this batch draws — see the helper above for the
+        // stamp encoding (`1 + v/255`, variants 0..5 now that Metal and Insect
+        // ride the same channel Aeon/Seraphim always have).
         // Wreck jitter rides the green channel the same way (`fract` of it in
         // the shader reads back the age) — zero here, real ages arrive via
         // `setInstances` once wreck draws exist.
-        unitVariantForSource[index] = unitShaderVariantFor(model);
+        unitVariantForSource[index] = uploaded.shaderVariant;
         if (uploaded.instanceBuffer != nullptr && !batch.instances.empty()) {
             const float stamped = 1.0f + static_cast<float>(unitVariantForSource[index]) / 255.0f;
             auto* slots = static_cast<std::byte*>(uploaded.instanceBuffer->contents());

@@ -329,6 +329,17 @@ namespace rm::app {
             }
         }
     }
+    // The water tint ramp (`textures/engine/waterramp.dds`, 1152 B), sampled by the
+    // terrain shader's ApplyWaterColor port (terrain.fx:359-367). A miss keeps the
+    // analytic tint — see the water-tint block in the MSL below.
+    if (const std::optional<std::vector<std::byte>> bytes =
+            content.read("textures/engine/waterramp.dds")) {
+        if (auto ramp = rm::dds::load(*bytes)) {
+            loaded.waterRamp = std::move(*ramp);
+            std::printf("  water: ramp textures/engine/waterramp.dds (%ux%u)\n",
+                        loaded.waterRamp.width, loaded.waterRamp.height);
+        }
+    }
 
     std::printf("  sky/water: fog (%.2f %.2f %.2f), surface (%.2f %.2f %.2f),"
                 " fresnel %.2f^%.2f\n",

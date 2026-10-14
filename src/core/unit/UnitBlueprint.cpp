@@ -968,6 +968,13 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
                 def.modelPath = std::string{*named};
             }
             def.lodCutoff = numberOr(lods->items.front(), "LODCutoff", 0.0f);
+            // Retail's faction-shader pick lives on EVERY LOD entry (XSL0101_unit.bp:
+            // each names `ShaderName = 'Seraphim'` beside its `LookupName`), and all
+            // entries of one blueprint agree — so the first carries the batch's answer.
+            def.lodShaderName =
+                std::string{lods->items.front().stringAt("ShaderName").value_or("")};
+            def.lodLookupName =
+                std::string{lods->items.front().stringAt("LookupName").value_or("")};
             if (lods->items.size() > 1) {
                 def.hasLod1 = true;
                 def.lod1Albedo =
