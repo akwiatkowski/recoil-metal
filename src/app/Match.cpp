@@ -1304,7 +1304,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                                             const rm::scenario::ScenarioOptions& scenarioOptions) {
     if (!scene.enhancementTasks) {
         scene.enhancementTasks = std::make_unique<rm::sim::EnhancementTasks>(
-            scene.store, scene.catalog, scene.enhancementWork);
+            scene.store, scene.catalog, scene.enhancementWork, nullptr, &scene.events);
     }
     MatchRunner runner{
         .scene = scene,
@@ -1765,8 +1765,13 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                        || event.impactType == rm::sim::ImpactType::Prop)) {
             // Non-lethal ground hits scorch too: a battle that only marks its kills
             // forgets most of what happened there. Water and shields leave no mark.
+            // Sized from the shot's blast radius (`defaultexplosions.lua` C-290):
+            // the event carries the base damage profile's blast, zero when the
+            // shot is a direct hit with no area damage.
             noteImpactMark(scene, rm::sim::fxToFloat(event.at[0]),
-                           rm::sim::fxToFloat(event.at[2]));
+                           rm::sim::fxToFloat(event.at[2]),
+                           rm::sim::fxToFloat(event.blastRadiusElmos),
+                           static_cast<rm::TickIndex>(tickIndex));
         } else if (event.kind == rm::sim::EventKind::WeaponFired) {
             // The kick: a full slide the tick the shot leaves — retail's
             // `SetSpeed(-1)` instant goal (defaultweapons.lua:276). Gated on
@@ -1814,8 +1819,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                         scene.armies[static_cast<std::size_t>(owner)],
                         scene.store.transforms()[death.ref.index].heading);
     }
-    refreshWreckDecals(scene, runner.field);
-
+    refreshWreckDecals(scene, runner.field, static_cast<rm::TickIndex>(tickIndex));
     // What finished this tick BECOMES A UNIT: an extractor that is done stands on its
     // deposit, a factory stands by the base, and a tank rolls off the factory floor.
     //

@@ -86,7 +86,6 @@ SiloAmmo makeSiloAmmo(UnitId owner, std::size_t weapon, bool nukeWeapon, int cap
                     .costPerTick = {.mass = Mag::fromRaw(projectileCost.mass.raw() / total),
                                     .energy = Mag::fromRaw(projectileCost.energy.raw() / total)}};
 }
-
 MissileRedirect makeMissileRedirect(UnitId owner, Fx radiusElmos,
                                      int cooldownTicks) noexcept {
     return MissileRedirect{.owner = owner, .radiusElmos = radiusElmos,

@@ -282,11 +282,17 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// shot at things across the map it had no way of knowing were there. `intel` may be null,
 /// which restores exactly that behaviour and is what a scene with no fog of war gets.
 ///
-/// SIGHT OR RADAR. A radar contact acquires its real live UnitId but, until visually identified,
-/// competes at the worst priority row; `fireWeapons` alone turns its projectile point of aim into
-/// the deterministic blip. Sonar and retained/dead radar contacts never enter this live-unit
-/// selection path.
-/// A unit some engineer is un-building this tick, and whose side that engineer is on.
+/// SIGHT, RADAR, OR SONAR. A radar or sonar contact acquires its real live UnitId but, until visually
+/// identified, competes at the worst priority row; `fireWeapons` turns its projectile point of aim
+/// into the deterministic blip — the same estimate the shot will use, so aim and fire cannot
+/// disagree about where the contact is. `tick`/`rate` drive the blip's drift; the default is
+/// the tick-0 blip, deterministic but not yet wandering.
+[[nodiscard]] std::array<Fx, 3> automaticTrackPosition(
+    UnitId target, int fromArmy, const UnitStore& store, const UnitCatalog& catalog,
+    std::span<const Army> armies, const Intel* intel = nullptr, TickIndex tick = 0,
+    TickRate rate = TickRate{}) noexcept;
+/// A radar-only contact competes at its deterministic blip position (`radarBlipPosition`),
+/// not at truth: acquisition inherits the same uncertainty the muzzle already aims with.
 ///
 /// Retail's `IsTargetExempt` (C-157, reject step 11 of `FindBestEnemy`): a candidate that an
 /// own-side engineer is reclaiming or capturing can neither become nor remain the incumbent

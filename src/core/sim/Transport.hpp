@@ -77,6 +77,13 @@ inline constexpr Fx kFerryPickupRadius = Fx::fromInt(10);
 [[nodiscard]] bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
                                const unitdef::UnitDef& carrier,
                                UnitId carrierId, UnitId cargo) noexcept;
+/// Parks `aircraft` ON the staging pad's nearest free `Attachpoint` bone
+/// (`C-456`): the bone's rest offset from the pad origin is the parking spot —
+/// its X/Z the deck position, its Y the landing-site height — and the real
+/// bone index rides the attachment record. False when the pad resolves no
+/// bones (caller keeps the berth-grid fallback) or none is free.
+[[nodiscard]] bool dockOnStagingBone(UnitStore& store, const UnitCatalog& catalog,
+                                    UnitId pad, UnitId aircraft) noexcept;
 
 /// Sets every child down around the carrier — in deterministic ring order on
 /// the deck for transports, or airborne at the carrier's position for a

@@ -76,7 +76,8 @@ void appendShieldSphere(std::vector<DecalVertex>& out, std::array<float, 3> cent
 }
 
 void appendWreckMark(std::vector<DecalVertex>& out, const HeightField& field,
-                     std::array<float, 3> centre, float radiusElmos, int segments) {
+                     std::array<float, 3> centre, float radiusElmos, int segments,
+                     float rotationRadians) {
     if (!(radiusElmos > 0.0f) || segments < 3) {
         return;
     }
@@ -101,8 +102,8 @@ void appendWreckMark(std::vector<DecalVertex>& out, const HeightField& field,
     out.reserve(out.size() + wreckVertexCount(segments));
     const float step = 2.0f * std::numbers::pi_v<float> / static_cast<float>(segments);
     for (int i = 0; i < segments; ++i) {
-        const float a0 = step * static_cast<float>(i);
-        const float a1 = step * static_cast<float>(i + 1);
+        const float a0 = rotationRadians + step * static_cast<float>(i);
+        const float a1 = rotationRadians + step * static_cast<float>(i + 1);
 
         // A FAN, one triangle per segment, all sharing the centre. The centre vertex is
         // recomputed rather than hoisted only in the sense that it is copied — its height is

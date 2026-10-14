@@ -1263,6 +1263,43 @@ TEST_CASE("torpedoes acquire sonar contacts, surface guns do not", "[intel][nava
                     .has_value());
 }
 
+TEST_CASE("a turret tracks a radar-only contact at its blip, not truth") {
+    // The goal's last truth leak: `nearestTarget` scores at the blip and the
+    // muzzle aims at the blip, but a mounted barrel laying its ring during
+    // reload tracked the target's true position. A radar contact must lay at
+    // the same deterministic estimate the shot will use (`C-277` family).
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon weapon = directFire(10.0f, 500.0f);
+    UnitDef gunner = gunnerDef(weapon);
+    gunner.radarRadiusElmos = 400.0f;  // vision stays zero: radar-only contact
+    (void)roster.add(roster.addType(gunner), 0.0f, 0.0f, 0, 100.0f);
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 0.0f, 150.0f, 1, 100.0f);
+
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, target.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Radar);
+
+    // A radar blip lays the barrel at the blip; a sighting lays it at truth.
+    const std::array<rm::sim::Fx, 3> laid = rm::sim::automaticTrackPosition(
+        target, 0, roster.store, roster.catalog, armies, &intel);
+    const auto [blipX, blipZ] = rm::sim::radarBlipPosition(
+        target, roster.transform(target).x, roster.transform(target).z, 0,
+        roster.rate);
+    CHECK(laid[0] == blipX);
+    CHECK(laid[2] == blipZ);
+    CHECK(laid[1] == roster.transform(target).y);
+    // The error is real: at least one axis differs from truth.
+    CHECK((laid[0] != roster.transform(target).x
+           || laid[2] != roster.transform(target).z));
+}
+
 TEST_CASE("automatic projectile fire aims at a live radar contact's deterministic blip") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;
@@ -1282,6 +1319,61 @@ TEST_CASE("automatic projectile fire aims at a live radar contact's deterministi
     intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
                     rm::sim::VisionStyle::ForgedAlliance);
     intel.update(roster.store, roster.catalog, armies, nullptr);
+
+    constexpr rm::TickIndex tick = 3;
+    std::vector<Projectile> shots;
+    REQUIRE(rm::sim::aimAtTargets(roster.store, roster.catalog, armies, &intel, nullptr, nullptr,
+                                  tick, roster.rate)
+            == 1);
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate,
+                                  nullptr, &intel, nullptr, tick)
+            == 1);
+    REQUIRE(shots.size() == 1);
+    REQUIRE(roster.health(shooter).automaticTargets[0] == target);
+
+    const auto [blipX, blipZ] = rm::sim::radarBlipPosition(
+        target, roster.transform(target).x, roster.transform(target).z, tick, roster.rate);
+    const Projectile expected = rm::sim::launch(
+        rm::sim::positionOf(roster.transform(shooter)),
+        {blipX, roster.transform(target).y, blipZ}, weapon, 0, roster.rate,
+        roster.catalog.weaponRates(roster.store.typeAt(shooter.index), 0).muzzlePerTick,
+        roster.catalog.weaponRates(roster.store.typeAt(shooter.index), 0).damage, shooter);
+    CHECK(shots.front().velocity == expected.velocity);
+}
+
+TEST_CASE("automatic projectile fire aims at a live sonar contact's deterministic blip") {
+    // A submerged hull is a sonar contact, never sighted (`C-490`: sonar sets
+    // RECON_Sonar, never LOSNow). Acquisition already scores it at its blip;
+    // the muzzle must aim with the same uncertainty retail's radar fire does —
+    // truth never enters the shot, only the blip does.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon weapon = directFire(10.0f, 500.0f);
+    weapon.leadTarget = false;  // isolate the blip from the C-171 lead
+    weapon.targetPriorities = {{"NAVAL"}};
+    weapon.targetsSubmerged = true;
+    UnitDef gunner = gunnerDef(weapon);
+    gunner.sonarRadiusElmos = 500.0f;  // sonar only: vision and radar stay zero
+    const UnitId shooter =
+        roster.add(roster.addType(gunner), 0.0f, 0.0f, 0, 100.0f);
+    roster.motion(shooter).turnPerTick = rm::sim::kBradHalfTurn;
+
+    UnitDef hull = targetDef();
+    hull.name = "hull";
+    hull.categories = {"NAVAL"};
+    const UnitId target =
+        roster.add(roster.addType(hull), 0.0f, 100.0f, 1, 100.0f);
+    roster.motion(target).submersible = true;
+    roster.motion(target).submerged = true;
+
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(1024), rm::sim::Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, target.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Sonar);
 
     constexpr rm::TickIndex tick = 3;
     std::vector<Projectile> shots;

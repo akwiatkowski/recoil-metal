@@ -518,7 +518,6 @@ struct MissileRedirect {
 [[nodiscard]] SiloAmmo makeSiloAmmo(UnitId owner, std::size_t weapon, bool nukeWeapon,
                                     int capacity, Resources projectileCost, Mag buildTime,
                                     Mag buildPerTick) noexcept;
-
 /// Creates one redirector component from already-bound blueprint values (`C-088`).
 /// The cooldown arrives in ticks: the rate-to-ticks conversion is content-side work
 /// done once at load, and the sim never sees the float again (PLAN2.md §5.1).

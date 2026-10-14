@@ -615,8 +615,8 @@ struct Contact {
 };
 
 /// Classifies one real unit with the same cloak, stealth-field, omni and free-intel rules used
-/// by the contact list. Automatic targeting accepts `Seen` and `Radar`: an unidentified radar
-/// return competes at the worst priority rank, while sonar remains anonymous and untargetable.
+/// by the contact list. Automatic targeting accepts `Seen`, `Radar`, and `Sonar`: an unidentified
+/// radar or sonar return competes at the worst priority rank, aimed at its deterministic blip.
 ///
 /// OMNI RESOLVES TO `Radar`, NOT `Seen` (`C-280`): it bypasses every counter-intel flag but
 /// does not identify — an omni-only contact is a blip that never latches `seenEver`, exactly

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <numbers>
+#include <cstdint>
 
 namespace rm::app {
 
@@ -149,29 +150,75 @@ void setAppTickRate(std::uint32_t ticksPerSecond) {
 namespace {
 /// One impact's scorch: a boot-print, not a crater — the wrecks own the drama and
 /// hundreds of these share the ground. Twelve segments keeps a full cap cheap.
-inline constexpr float kImpactMarkRadiusElmos = 2.5f;
+inline constexpr float kImpactMarkRadiusElmos = 2.5f;  // elmos (legacy blast-less mark)
 inline constexpr int kImpactMarkSegments = 12;
+/// Retail scorch lifetime floor in seconds (`defaultexplosions.lua` C-290:
+/// lifetime 300-600); marks retire at the floor, converted through the tick
+/// rate rather than a tick literal. Presentation only — never hashed.
+inline constexpr float kImpactMarkLifetimeSeconds = 300.0f;  // s (C-290)
+/// Retail rotates every scorch by 0..2pi (`defaultexplosions.lua` C-290). The
+/// engine has no texture to orient — the fan is rotationally symmetric — so the
+/// angle buys per-mark variety, not fidelity. Derived from the mark's own bits
+/// (splitmix32 on the position hash), never the sim RNG (C-297): the same mark
+/// draws the same angle on every replay. Radians (C-290's `2*math.pi` range).
+[[nodiscard]] float impactMarkRotation(float x, float z) noexcept {
+    std::uint32_t bits = static_cast<std::uint32_t>(std::llround(
+                             static_cast<double>(x) * 4096.0))  // 1/4096 elmo
+                         * 0x9E3779B1u
+                       ^ static_cast<std::uint32_t>(std::llround(
+                             static_cast<double>(z) * 4096.0))  // 1/4096 elmo
+                             * 0x85EBCA6Bu;
+    bits ^= bits >> 16;  // splitmix32 finaliser
+    bits *= 0x7FEB352Du;
+    bits ^= bits >> 15;
+    bits *= 0x846CA68Bu;
+    bits ^= bits >> 16;
+    return static_cast<float>(static_cast<double>(bits) / 4294967296.0
+                              * 6.283185307179586);  // rad, 0..2pi (C-290)
+}
 } // namespace
 
-void noteImpactMark(UnitScene& scene, float x, float z) {
+void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
+                    rm::TickIndex tick) {
     if (scene.impactMarks.size() >= UnitScene::kMaxImpactMarks) {
         scene.impactMarks.erase(scene.impactMarks.begin(),
                                 scene.impactMarks.begin() + 64);
     }
-    scene.impactMarks.push_back(UnitScene::ImpactMark{.x = x, .z = z});
+    scene.impactMarks.push_back(UnitScene::ImpactMark{
+        .tick = tick, .x = x, .z = z, .blastRadiusElmos = blastRadiusElmos});
     ++scene.impactMarksRevision;
 }
 
-void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field) {
-    // The REVISION, not the count: reclaim removes wrecks now, and "one added, one
-    // removed" leaves the count where it was while the ground has changed twice. Dead
-    // slots are skipped for the same reason — a reclaimed wreck is clean ground, and
-    // drawing it would advertise mass that is not there.
+void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field,
+                        rm::TickIndex now) {
+    const rm::TickIndex lifetime =
+        gAppTickRate.ticks(rm::sim::seconds(kImpactMarkLifetimeSeconds));  // ticks (C-290)
+    // Ageing is time, not new marks: sweep expired scorch before the
+    // revision early-out, or a quiet battlefield keeps drawing stale marks
+    // forever. Single pass — the size change tells whether the revision moved.
+    const std::size_t before = scene.impactMarks.size();
+    scene.impactMarks.erase(
+        std::remove_if(scene.impactMarks.begin(), scene.impactMarks.end(),
+                       [now, lifetime](const UnitScene::ImpactMark& mark) {
+                           return now >= mark.tick + lifetime;
+                       }),
+        scene.impactMarks.end());
+    if (scene.impactMarks.size() != before) {
+        ++scene.impactMarksRevision;
+        // The old projection still holds the retired discs: drop them here
+        // rather than appending the survivors beside them below.
+        scene.wreckDecals.clear();
+    }
+    // The REVISION, not the count (unchanged): a removal above bumps it, so
+    // a sweep that retired nothing still early-outs on a quiet tick.
     if (scene.features.revision() == scene.wreckDecalsFrom
         && scene.impactMarksRevision == scene.impactDecalsFrom) {
         return;
     }
     scene.wreckDecals.clear();
+    // The REVISION, not the count: reclaim removes wrecks now, and "one added, one
+    // removed" leaves the count where it was while the ground has changed twice. Dead
+    // slots are skipped for the same reason — a reclaimed wreck is clean ground, and
     for (rm::UnitIndex slot = 0; slot < scene.features.size(); ++slot) {
         if (!scene.features.slotAlive(slot)) {
             continue;
@@ -189,12 +236,17 @@ void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field) {
                             rm::sim::fxToFloat(wreck.radiusElmos)
                                 * rm::kWreckMarkRadiusFactor);
     }
-    // Impact scorch beside the wrecks: small dark discs where shots hit ground that
-    // killed nothing. Twelve segments, not thirty-two — a bombardment leaves hundreds
-    // and nobody inspects one up close.
+    // Impact scorch beside the wrecks: dark discs where shots hit ground that
+    // killed nothing. Sized from the shot's blast radius, so an artillery
+    // strike reads bigger than a rifle hit (`defaultexplosions.lua` C-290).
+    // Wreck marks stay permanent: the corpse is the record, and reclaim
+    // removes it. Twelve segments, not thirty-two — a bombardment leaves
+    // hundreds and nobody inspects one up close.
     for (const UnitScene::ImpactMark& mark : scene.impactMarks) {
-        rm::appendWreckMark(scene.wreckDecals, field, {mark.x, 0.0f, mark.z},
-                            kImpactMarkRadiusElmos, kImpactMarkSegments);
+        const float radius = mark.blastRadiusElmos > 0.0f ? mark.blastRadiusElmos
+                                                          : kImpactMarkRadiusElmos;
+        rm::appendWreckMark(scene.wreckDecals, field, {mark.x, 0.0f, mark.z}, radius,
+                            kImpactMarkSegments, impactMarkRotation(mark.x, mark.z));
     }
     scene.wreckDecalsFrom = scene.features.revision();
     scene.impactDecalsFrom = scene.impactMarksRevision;

@@ -537,6 +537,41 @@ namespace {
         .buildPerTick=pace});
     return true;
 }
+/// How far along the enhancement is, 0..1 — the same widened-shift arithmetic
+/// `Construction::fraction` uses (`Economy.hpp`): `Mag` operands, `Fx` result,
+/// spelled out because no operator mixes the two by design.
+[[nodiscard]] Fx enhancementFraction(const EnhancementWork& work) noexcept {
+    if (work.totalBuildTime <= Mag{}) {
+        return kFxOne;
+    }
+    const FxWide done = (work.totalBuildTime - work.buildTimeRemaining).raw();
+    return Fx::fromRaw(saturate((done << kFxFractionalBits) / work.totalBuildTime.raw()));
+}
+/// `C-436`'s `LastProgress` ratchet: retail's `Enhancing.TaskTick` fires
+/// `OnBuildProgress` at 0.25/0.50/0.75, edge-triggered on the pre-tick
+/// fraction. An unfunded beat advances nothing, so `before == after` and the
+/// loop below reports nothing — the funded-only guard falls out of the edge
+/// test rather than needing its own branch.
+void emitEnhancementCrossings(const EnhancementWork& work, Fx before, UnitId unit,
+                              int army, std::array<Fx, 3> at, EventQueue* events) {
+    // Quarter boundaries as fixed point from the start — a `float` constant
+    // here would trip tools/check_no_sim_floats.sh, and fromRatio(1,4) is
+    // exact in Q18.14 anyway (4096 raw), so nothing is lost.
+    static constexpr std::array kQuarters{Fx::fromRatio(1, 4), Fx::fromRatio(1, 2),
+                                          Fx::fromRatio(3, 4)};
+    const Fx after = enhancementFraction(work);
+    for (const Fx boundary : kQuarters) {
+        if (before < boundary && after >= boundary) {
+            emit(events, Event{.kind = EventKind::EnhancementProgress,
+                               .unit = unit,
+                               .army = army,
+                               .amount = Mag::fromRaw(boundary.raw()),
+                               .progressBefore = before,
+                               .progressAfter = after,
+                               .at = at});
+        }
+    }
+}
 } // namespace
 void EnhancementTasks::onCreate(UnitId, std::string_view,
     std::span<const std::uint8_t>, ScriptTaskState&) {
@@ -569,7 +604,17 @@ std::int32_t EnhancementTasks::taskTick(UnitId unit, std::string_view task,
         }
         return static_cast<std::int32_t>(ScriptTaskStatus::NextBeat);
     }
+    const Fx before = enhancementFraction(*work);
     advanceEnhancement(*work);
+    // `C-436`: the `LastProgress` ratchet — quarter milestones edge-triggered
+    // on the pre-tick fraction. This is also the read that keeps `events_`
+    // live: the queue is only ever non-null where a runner bound it.
+    if (events_ != nullptr) {
+        const Transform& at = store_.transforms()[unit.index];
+        emitEnhancementCrossings(*work, before, unit,
+                                store_.motion()[unit.index].armyIndex,
+                                {at.x, at.y, at.z}, events_);
+    }
     if (!work->finished()) return static_cast<std::int32_t>(ScriptTaskStatus::NextBeat);
     return static_cast<std::int32_t>(
         installEnhancement(store_, catalog_, unit, name,

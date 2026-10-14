@@ -206,7 +206,6 @@ enum class ScriptDispatch : std::uint8_t {
     Waiting,
     Finished,
     Aborted,
-    Delay,
 };
 
 struct ScriptDispatchResult {
@@ -220,8 +219,7 @@ struct ScriptDispatchResult {
 /// and an adapter that returns Repeat forever has authored an infinite simulation task. Hiding
 /// that bug behind an arbitrary cap would make the resulting match depend on our chosen number.
 [[nodiscard]] ScriptDispatchResult dispatchScriptTask(CommandQueue& orders,
-                                                       ScriptTaskHost& host,
-                                                       bool endOfBeat) {
+                                                       ScriptTaskHost& host) {
     QueuedCommand* command = orders.currentMutable();
     if (command == nullptr || command->kind() != CommandKind::Script) {
         return {};
@@ -255,10 +253,16 @@ struct ScriptDispatchResult {
             continue;
         }
         if (result == static_cast<std::int32_t>(ScriptTaskStatus::Done)) {
+            // `C-252`/`C-454`: the native `SetAIResult` write (`0x0062a040`) —
+            // a finished task reports `AIRESULT.Success` (1), an aborted one
+            // `AIRESULT.Fail` (2, `Unknown`=0 is the untouched default). The
+            // value rides the task state so `OnDestroy` and save/load see it.
+            state.aiResult = 1;
             (void)orders.finish();
             return {.state = ScriptDispatch::Finished, .created = created};
         }
         if (result == static_cast<std::int32_t>(ScriptTaskStatus::Abort) || result < -4) {
+            state.aiResult = 2;
             (void)orders.abort();
             return {.state = ScriptDispatch::Aborted, .created = created};
         }
@@ -266,9 +270,14 @@ struct ScriptDispatchResult {
             state.suspended = true;
             return {.created = created};
         }
+        // `C-478` corrects `C-451`'s arm labeling: retail's true -4 Delay arm
+        // (`0x0040934c`[0]) just returns -2 — Delay normalizes to Suspend inside
+        // TaskTick and the Tick driver performs the single suspend-ring insert.
+        // `C-306`'s "requeue at far end of current pass" stays refuted: no
+        // end-of-beat re-tick, only an explicit resume runs the task again.
         if (result == static_cast<std::int32_t>(ScriptTaskStatus::Delay)) {
-            return {.state = endOfBeat ? ScriptDispatch::Waiting : ScriptDispatch::Delay,
-                    .created = created};
+            state.suspended = true;
+            return {.created = created};
         }
         if (result > static_cast<std::int32_t>(ScriptTaskStatus::NextBeat)) {
             state.sleepBeats = static_cast<std::uint32_t>(result - 1);
@@ -338,7 +347,6 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                              std::span<const PassabilityGrid* const> gridForTypeSubmerged,
                              std::vector<EnhancementWork>* enhancements) {
     std::size_t started = 0;
-    std::vector<UnitIndex> delayedScripts;
     if (guardWork != nullptr) {
         guardWork->clear();
     }
@@ -438,13 +446,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                         return;
                     }
                     const ScriptDispatchResult result =
-                        dispatchScriptTask(orders[slot], *scriptTasks, false);
+                        dispatchScriptTask(orders[slot], *scriptTasks);
                     started += static_cast<std::size_t>(result.created);
                     if (result.state == ScriptDispatch::Finished) {
                         continue;
-                    }
-                    if (result.state == ScriptDispatch::Delay) {
-                        delayedScripts.push_back(slot);
                     }
                     return;
                 }
@@ -728,12 +733,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 continue;
             }
             const ScriptDispatchResult result =
-                dispatchScriptTask(orders[slot], *scriptTasks, false);
+                dispatchScriptTask(orders[slot], *scriptTasks);
             if (result.state == ScriptDispatch::Finished) {
                 startPending();
                 serviceBuilds();
-            } else if (result.state == ScriptDispatch::Delay) {
-                delayedScripts.push_back(slot);
             }
             continue;
         }
@@ -1061,16 +1064,22 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     orderTo(store.motion()[slot], terrain, padAt.x, padAt.z);
                     continue;
                 }
-                // Dock on a deterministic berth — a two-column grid at half the
-                // pad's radius — so the attach can capture the offset.
-                const std::size_t berth = store.childrenOf(pad).size();
-                const Fx half = store.motion()[pad.index].radiusElmos * Fx::fromRatio(1, 2);
-                Transform& place = store.transforms()[slot];
-                place.x = padAt.x + Fx::fromInt(static_cast<int>(berth % 2) * 2 - 1) * half;
-                place.z = padAt.z + Fx::fromInt(static_cast<int>((berth / 2) % 2) * 2 - 1) * half;
-                place.y = padAt.y + fxFromFloat(padDef->sizeYElmos);
-                teardownMovement(store.motion()[slot]);
-                (void)store.attach(pad, self);
+                // `C-456`: the pad's `Attachpoint` bones are the parking spots — the
+                // aircraft lands ON the nearest free bone, the bone's Y its
+                // landing-site height. No resolved bones (or none free) keeps the
+                // berth-grid fallback below.
+                if (!dockOnStagingBone(store, catalog, pad, self)) {
+                    // Dock on a deterministic berth — a two-column grid at half the
+                    // pad's radius — so the attach can capture the offset.
+                    const std::size_t berth = store.childrenOf(pad).size();
+                    const Fx half = store.motion()[pad.index].radiusElmos * Fx::fromRatio(1, 2);
+                    Transform& place = store.transforms()[slot];
+                    place.x = padAt.x + Fx::fromInt(static_cast<int>(berth % 2) * 2 - 1) * half;
+                    place.z = padAt.z + Fx::fromInt(static_cast<int>((berth / 2) % 2) * 2 - 1) * half;
+                    place.y = padAt.y + fxFromFloat(padDef->sizeYElmos);
+                    teardownMovement(store.motion()[slot]);
+                    (void)store.attach(pad, self);
+                }
             }
             // Docked on a pad: refuel, and relaunch when the tank reads full.
             const std::optional<UnitId> parent = store.parentOf(self);
@@ -1851,22 +1860,6 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         (void)orders[slot].finish();
         currentMotion.pathPhaseCellsX = 0;
         startPending();
-    }
-
-    // Status -4 resumes after every unit has had its ordinary command-dispatch turn. A second
-    // -4 waits for the next beat rather than spinning forever at the end-of-beat boundary.
-    if (scriptTasks != nullptr) {
-        for (const UnitIndex slot : delayedScripts) {
-            if (!store.slotAlive(slot)) {
-                continue;
-            }
-            QueuedCommand* command = orders[slot].activeMutable();
-            if (command == nullptr || command->kind() != CommandKind::Script
-                || command->scriptState().suspended) {
-                continue;
-            }
-            (void)dispatchScriptTask(orders[slot], *scriptTasks, true);
-        }
     }
     return started;
 }

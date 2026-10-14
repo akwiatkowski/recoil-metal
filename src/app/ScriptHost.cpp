@@ -228,16 +228,25 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
     std::string effectiveSource = source;
     std::string effectiveChunkName = "@rm:registered";
     if (!modulePath.empty()) {
+        // `C-311` (`SCR_LuaDoFileConcat`): the base file plus every registered
+        // hookdir's copy of the same path load as ONE chunk, so a hook shares
+        // the original's locals and environment; order is base, then hookdirs
+        // in registration order (`/schook` first, then `__active_mods`).
         const auto bytes = content_.read(modulePath);
         if (!bytes) {
             impl_->errors.emplace_back("missing module: " + modulePath);
             lua_pop(lua, 2);
             return out;
         }
-        const std::string translated =
-            rm::ai::rewriteLegacyLua({reinterpret_cast<const char*>(bytes->data()),
-                                       bytes->size()});
-        effectiveSource = translated;
+        std::string concatenated{reinterpret_cast<const char*>(bytes->data()), bytes->size()};
+        for (const std::string& hookPath : content_.hooksFor(modulePath)) {
+            if (const auto hookBytes = content_.read(hookPath)) {
+                concatenated.push_back('\n');
+                concatenated.append(reinterpret_cast<const char*>(hookBytes->data()),
+                                    hookBytes->size());
+            }
+        }
+        effectiveSource = rm::ai::rewriteLegacyLua(concatenated);
         effectiveChunkName = "@" + modulePath;
     }
     if (effectiveSource.empty()) {

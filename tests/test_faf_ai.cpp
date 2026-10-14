@@ -3321,9 +3321,15 @@ TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
         function meta:OnNotAnimTerrainCollision(bone, x, y, z)
             __rm_faf.calls[#__rm_faf.calls + 1] = 'terrainEnd'
         end
+        -- C-450: the mod-compat hook — `EnhanceTask.lua:66` calls
+        -- `unit:OnBuildProgress(LastProgress, current)`, old then new.
+        function meta:OnBuildProgress(oldProg, newProg)
+            __rm_faf.calls[#__rm_faf.calls + 1] =
+                'progress:' .. tostring(oldProg) .. ':' .. tostring(newProg)
+        end
     )"));
 
-    const std::array<rm::sim::Event, 10> events{{
+    const std::array<rm::sim::Event, 11> events{{
         {.kind = rm::sim::EventKind::IntelChanged, .unit = enemy, .army = 0,
          .intelType = static_cast<std::uint8_t>(rm::sim::IntelType::Radar),
          .intelValue = true},
@@ -3350,7 +3356,12 @@ TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
          .army = 0,
          .at = {rm::sim::fxFromFloat(10), rm::sim::Fx{},
                 rm::sim::fxFromFloat(100)}},
-    }};
+        // C-450: the enhancement milestone reaches the unit's own script as
+        // `OnBuildProgress(oldProg, newProg)` — pre-tick then post-tick.
+        {.kind = rm::sim::EventKind::EnhancementProgress, .unit = own, .army = 0,
+         .amount = rm::sim::magFromFloat(0.5f),
+         .progressBefore = rm::sim::Fx::fromRatio(3, 8),
+         .progressAfter = rm::sim::Fx::fromRatio(1, 2)}}};
     opponent.observe(world, events);
 
     INFO(ai.lastError());
@@ -3368,5 +3379,99 @@ TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
         assert(c[8] == 'anim:3', 'OnAnimCollision with the bone index')
         assert(c[9] == 'terrain:100.0', 'OnAnimTerrainCollision with the contact point')
         assert(c[10] == 'terrainEnd', 'OnNotAnimTerrainCollision on the leaving edge')
+        assert(c[11] == 'progress:0.375:0.5', 'OnBuildProgress with old then new fraction')
     )"));
+}
+TEST_CASE("FAF air scouts release must-scout areas on the flyby pass",
+          "[faf][ai][scouting]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 2, base = 'NormalMain', markers = {},
+            scoutSites = {{x=2000, z=2000, high=false}} })
+        local brain = __rm_faf.brains[0]
+        local builders = {}
+        for _, item in ipairs(brain.builders) do
+            if item.spec.BuilderName:find('Scout') then table.insert(builders, item) end
+        end
+        brain.builders = builders
+        __rm_faf_type('AIRSCOUT', {'MOBILE', 'AIR', 'SCOUT', 'TECH1'})
+        __rm_faf_scout_route = function(h, x, z) return {{x, z}} end
+        local scout = {h=__rm_faf_handle(1, 1), bp='AIRSCOUT', x=0, z=0, idle=true,
+            __cats=__rm_faf.cats.AIRSCOUT, vision=100}
+        local snap = {tick=0, units={scout}, occupied={}, underway={}, enemies={},
+            mass=500, energy=5000, massStorage=500, energyStorage=5000,
+            massIncome=10, energyIncome=100, massRequested=1, energyRequested=1,
+            massUsage=1, energyUsage=1, structuresUnderway=0, mobileUnderway=0}
+        brain:AddScoutArea({1000, 0, 1000})
+        local orders = __rm_faf_decide(0, snap)
+        assert(#orders == 1, 'checkout flies')
+        local dx, dz = orders[1].x, orders[1].z
+        -- Retail breaks the pass within 125 elmos of the flyby destination
+        -- (platoon.lua AirScoutingAI: VDist2Sq(vec, scout) < 15625): the area
+        -- is untagged and removed mid-route, not held until arrival.
+        scout.x, scout.z = dx, dz
+        scout.idle = false; snap.tick = 10
+        assert(#__rm_faf_decide(0, snap) == 0, 'no re-dispatch mid-route')
+        assert(#brain.InterestList.MustScout == 0, 'the flown pass drops the area')
+        -- The freed scout returns to the rotation on its next idle pass.
+        scout.idle = true; snap.tick = 20
+        orders = __rm_faf_decide(0, snap)
+        assert(#orders == 1, 'the freed scout rejoins the rotation')
+        -- A scout that reaches within 25 elmos of the marker itself breaks too
+        -- (VDist3(scout, targetArea) < 25), even off the flyby line.
+        brain:AddScoutArea({3000, 0, 3000})
+        scout.idle = true; snap.tick = 30
+        orders = __rm_faf_decide(0, snap)
+        assert(#orders == 1, 'second checkout flies')
+        scout.x, scout.z = 3010, 3000
+        scout.idle = false; snap.tick = 40
+        assert(#__rm_faf_decide(0, snap) == 0, 'still no re-dispatch mid-route')
+        assert(#brain.InterestList.MustScout == 0, 'the reached marker drops the area')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+TEST_CASE("FAF air flyby clamps to retail's 5-elmo map margin",
+          "[faf][ai][scouting]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 2, base = 'NormalMain', markers = {},
+            scoutSites = {{x=2000, z=2000, high=false}} })
+        local brain = __rm_faf.brains[0]
+        local builders = {}
+        for _, item in ipairs(brain.builders) do
+            if item.spec.BuilderName:find('Scout') then table.insert(builders, item) end
+        end
+        brain.builders = builders
+        __rm_faf_type('AIRSCOUT', {'MOBILE', 'AIR', 'SCOUT', 'TECH1'})
+        __rm_faf_scout_route = function(h, x, z) return {{x, z}} end
+        -- Retail clamps the DoAirScoutVecs destination 5 elmos inside the map
+        -- edge (platoon.lua:1264-1267: size minus 5), not the 40-elmo intel
+        -- margin the ordinary flyby clamp uses. A 75-ogrid (600-elmo) forward
+        -- push from a corner marker lands far outside, so retail's exact
+        -- margin is observable: the order must clear 4096 minus 40.
+        local scout = {h=__rm_faf_handle(1, 1), bp='AIRSCOUT', x=2048, z=2048, idle=true,
+            __cats=__rm_faf.cats.AIRSCOUT, vision=100}
+        local snap = {tick=0, units={scout}, occupied={}, underway={}, enemies={},
+            mass=500, energy=5000, massStorage=500, energyStorage=5000,
+            massIncome=10, energyIncome=100, massRequested=1, energyRequested=1,
+            massUsage=1, energyUsage=1, structuresUnderway=0, mobileUnderway=0}
+        brain:AddScoutArea({4050, 0, 4050})
+        local orders = __rm_faf_decide(0, snap)
+        assert(#orders == 1, 'corner checkout flies')
+        assert(orders[1].x > 4056 and orders[1].z > 4056,
+            'flyby destination honors the exact 5-elmo margin, not 40')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
 }

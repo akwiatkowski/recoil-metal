@@ -777,8 +777,16 @@ struct UnitScene {
     /// Capped: oldest drop out as new ones land, or a long bombardment grows this
     /// without bound. Drawn by refreshWreckDecals beside the wreck scorch.
     struct ImpactMark {
+        /// App tick the shot landed on, so the projection can retire the
+        /// mark at retail's scorch lifetime. App-side (presentation), never
+        /// hashed — the sim stays bit-identical.
+        TickIndex tick = 0;
         float x = 0.0f;
         float z = 0.0f;
+        /// The shot's blast radius in elmos (`Combat.hpp` C-290: retail scales
+        /// scorch by explosion size). Zero for a direct hit with no blast.
+        /// Carried so the projection draws the scorch over the blast area.
+        float blastRadiusElmos = 0.0f;
     };
     static constexpr std::size_t kMaxImpactMarks = 512;
     std::vector<ImpactMark> impactMarks;
@@ -1620,12 +1628,20 @@ void setAppTickRate(std::uint32_t ticksPerSecond);
 
 [[nodiscard]] rm::sim::Transform transformAt(const std::array<float, 3>& position, float yaw);
 
-/// Rebuilds the wreck decals from the features, if any have been added since the last time.
-void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field);
-
-/// Records one non-lethal ground hit for the scorch projection. Drops the oldest
-/// sixty-four past the cap — amortised, so a bombardment tick does no per-hit shifting.
-void noteImpactMark(UnitScene& scene, float x, float z);
+/// Rebuilds the wreck decals from the features, if any have been added since the
+/// last time. Retires impact marks older than retail's 300 s scorch floor
+/// (`defaultexplosions.lua` C-290), derived through the tick rate, not a tick
+/// literal. `now` defaults to 0 so existing callers project without ageing
+/// anything out — every mark stamped at tick 0 or later then reads as fresh.
+void refreshWreckDecals(UnitScene& scene, const HeightField& field, TickIndex now = 0);
+/// Records one non-lethal ground hit for the scorch projection, stamped with
+/// the app tick so the projection can retire it at retail's scorch lifetime.
+/// Drops the oldest sixty-four past the cap — amortised, so a bombardment
+/// tick does no per-hit shifting. `blastRadiusElmos` sizes the scorch from
+/// the shot (`defaultexplosions.lua` C-290); zero keeps the legacy 2.5-elmo
+/// mark for a blast-less direct hit.
+void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos = 0.0f,
+                    TickIndex tick = 0);
 
 [[nodiscard]] rm::data::OpeningStep stepForRole(const rm::data::Opening& opening,
                                                 rm::unitdef::Role role);

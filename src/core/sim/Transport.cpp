@@ -240,6 +240,55 @@ bool hasRoomFor(const UnitStore& store, const UnitCatalog& catalog, UnitId carri
     return used + cost <= carrierDef->transportCapacity();
 }
 
+bool dockOnStagingBone(UnitStore& store, const UnitCatalog& catalog, UnitId pad,
+                       UnitId aircraft) noexcept {
+    // `C-456`: `CUnitRefuel::TaskTick` (0x00627f60) parks the aircraft on the
+    // pad bone's rest offset — X/Z the deck spot, the bone's Y the landing-site
+    // height written straight into `mover+0x64` — keyed by TransportClass.
+    // Nearest free bone wins (deterministic: lowest rest distance, then bone
+    // index) so two bingo guards do not stack on one hook. No resolved bones
+    // means false, and the caller keeps its berth-grid fallback.
+    if (!store.alive(pad) || !store.alive(aircraft) || store.parentOf(aircraft)) {
+        return false;
+    }
+    const std::span<const UnitCatalog::AttachBone> bones =
+        catalog.attachBones(store.typeAt(pad.index));
+    if (bones.empty()) {
+        return false;
+    }
+    const Transform& padAt = store.transforms()[pad.index];
+    const Transform& jet = store.transforms()[aircraft.index];
+    const UnitCatalog::AttachBone* best = nullptr;
+    Fx bestDist{};
+    for (const UnitCatalog::AttachBone& bone : bones) {
+        if (boneHasChild(store, pad, bone)) {
+            continue;
+        }
+        // Ground distance from the aircraft to the bone's world spot, in elmos:
+        // the pad heading is identity for a structure, so rest X/Z add straight.
+        const Fx dx = (padAt.x + bone.rest[0]) - jet.x;
+        const Fx dz = (padAt.z + bone.rest[2]) - jet.z;
+        const Fx dist = dx * dx + dz * dz;
+        if (best == nullptr || dist < bestDist
+            || (dist == bestDist && bone.bone < best->bone)) {
+            best = &bone;
+            bestDist = dist;
+        }
+    }
+    if (best == nullptr) {
+        return false;
+    }
+    const std::array<Fx, 2> world = rotateByHeading(padAt.heading, {best->rest[0], best->rest[2]});
+    Transform& at = store.transforms()[aircraft.index];
+    at.x = padAt.x + world[0];
+    at.z = padAt.z + world[1];
+    at.y = padAt.y + best->rest[1];
+    return store.attach(pad, aircraft,
+                        UnitStore::AttachBones{.parent = best->bone,
+                                               .parentRest = {best->rest[0], best->rest[2]},
+                                               .parentRestHeight = best->rest[1]});
+}
+
 bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
                  const unitdef::UnitDef& carrier, UnitId carrierId,
                  UnitId cargo) noexcept {

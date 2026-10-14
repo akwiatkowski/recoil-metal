@@ -32,6 +32,8 @@ std::string_view eventKindName(EventKind kind) noexcept {
         return "construction-finished";
     case EventKind::ConstructionProgress:
         return "construction-progress";
+    case EventKind::EnhancementProgress:
+        return "enhancement-progress";
     case EventKind::UnitVeteranPromoted:
         return "unit-veteran-promoted";
     case EventKind::TeamDefeated:
@@ -91,6 +93,7 @@ std::string_view eventKindName(EventKind kind) noexcept {
 bool operator==(const Event& a, const Event& b) noexcept {
     return a.kind == b.kind && a.unit == b.unit && a.instigator == b.instigator && a.builder == b.builder
            && a.army == b.army && a.amount == b.amount && a.at == b.at
+           && a.progressBefore == b.progressBefore && a.progressAfter == b.progressAfter
            && a.impactType == b.impactType && a.to == b.to && a.markerId == b.markerId
            && a.tauntIndex == b.tauntIndex && a.markerAction == b.markerAction
            && a.text == b.text;

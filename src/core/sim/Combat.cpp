@@ -1070,6 +1070,7 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
 /// so the blip's contribution is positional error, never a hidden step. A shot at a led
 /// blip lands at the predicted true point displaced by the blip's own wander — radar fire
 /// is a bit less certain than sighted fire, which is the whole point of the model.
+
 [[nodiscard]] std::array<Fx, 3> automaticProjectileAimPosition(
     UnitId target, std::array<Fx, 3> from, int fromArmy, const unitdef::Weapon& weapon,
     Fx muzzlePerTick, const UnitStore& store, const UnitCatalog& catalog,
@@ -1078,9 +1079,15 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
     std::array<Fx, 3> aim = position;
     if (intel != nullptr) {
         const Army* mine = armyFor(fromArmy, armies);
-        if (mine != nullptr
-            && contactKindForUnit(mine->alliance, target.index, store, catalog, armies, *intel)
-                   == ContactKind::Radar) {
+        // A sonar contact is never sighted (`C-490`: sonar sets RECON_Sonar,
+        // never LOSNow), so its muzzle inherits the same blip uncertainty
+        // radar fire already uses — truth never enters the shot (96 elmos
+        // per `LosHandler.h:322`).
+        const std::optional<ContactKind> kind =
+            mine != nullptr ? contactKindForUnit(mine->alliance, target.index, store, catalog, armies,
+                                                 *intel)
+                            : std::nullopt;
+        if (kind == ContactKind::Radar || kind == ContactKind::Sonar) {
             const auto [x, z] = radarBlipPosition(target, position[0], position[2], tick, rate);
             aim = {x, position[1], z};
         }
@@ -1162,6 +1169,27 @@ void consumeSiloAmmo(const UnitId owner, const unitdef::Weapon& weapon,
 }
 
 } // namespace
+
+/// A barrel waiting on its reload tracks the same estimate the shot will use — a radar or
+/// sonar contact's blip, truth for a sighting or with no intel. Unled: the ring lays on
+/// the contact, it does not lead it (`C-277` counter-intel family; blip error per `LosHandler.h:322`, 96 elmos).
+[[nodiscard]] std::array<Fx, 3> automaticTrackPosition(
+    UnitId target, int fromArmy, const UnitStore& store, const UnitCatalog& catalog,
+    std::span<const Army> armies, const Intel* intel, TickIndex tick, TickRate rate) noexcept {
+    const std::array<Fx, 3> position = positionOf(store.transforms()[target.index]);
+    if (intel != nullptr) {
+        const Army* mine = armyFor(fromArmy, armies);
+        if (mine != nullptr) {
+            const std::optional<ContactKind> kind = contactKindForUnit(
+                mine->alliance, target.index, store, catalog, armies, *intel);
+            if (kind == ContactKind::Radar || kind == ContactKind::Sonar) {
+                const auto [x, z] = radarBlipPosition(target, position[0], position[2], tick, rate);
+                return {x, position[1], z};
+            }
+        }
+    }
+    return position;
+}
 
 std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                                       UnitIndex shooter,
@@ -2145,11 +2173,17 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     : (w < health.automaticTargets.size() ? health.automaticTargets[w]
                                                           : UnitId{});
                 if (store.alive(tracked)) {
+                    // Automatic fire lays the same blip the shot will use — a radar
+                    // contact's barrel tracks its wander, not truth. Explicit
+                    // attacks keep truth: the order names the hull, not the blip.
+                    const std::array<Fx, 3> laid = hasExplicitAttack
+                        ? positionOf(transforms[tracked.index])
+                        : automaticTrackPosition(tracked, army, store, catalog,
+                                                 armies, intel, tick, rate);
                     const UnitCatalog::WeaponRates& trackRates =
                         catalog.weaponRates(store.typeAt(slot), w);
                     const auto [wantYaw, wantPitch] =
-                        mountSolve(mount, transforms[slot],
-                                   positionOf(transforms[tracked.index]));
+                        mountSolve(mount, transforms[slot], laid);
                     MoveState& own = motions[slot];
                     own.turretYaw =
                         slewBrad(own.turretYaw, wantYaw, trackRates.turretYawPerTick);
@@ -2162,8 +2196,7 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     // volley, ninety degrees of catch-up across a minute.
                     if (mount.dual) {
                         const auto [wantYaw2, wantPitch2] = mountSolveDual(
-                            mount, transforms[slot],
-                            positionOf(transforms[tracked.index]), own.turretYaw);
+                            mount, transforms[slot], laid, own.turretYaw);
                         own.turretYaw2 = slewBrad(own.turretYaw2, wantYaw2,
                                                   trackRates.turretYawPerTick);
                         own.turretPitch2 = slewBrad(own.turretPitch2, wantPitch2,
@@ -3723,6 +3756,7 @@ void resolvePendingImpact(Projectile& shot, UnitStore& store,
                      .amount = shot.damage.base,
                      .at = shot.position,
                      .impactType = shot.pendingImpact,
+                     .blastRadiusElmos = shot.damageRadiusElmos,
                      .visualId = shot.visualId,
                      .visualDirection = shot.velocity,
                  });

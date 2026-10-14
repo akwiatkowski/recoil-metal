@@ -20,5 +20,14 @@ sim::Seconds faWaitSeconds(sim::Seconds authored) noexcept {
     const float tenths = std::floor(authored.value * 10.0f) + 1.0f;
     return sim::seconds(tenths / 10.0f);
 }
+int redirectCooldownTicks(sim::TickRate rate, float shotsPerSecond) noexcept {
+    // Lua-timed: `WaitSeconds(1 / rate)` carries simInit.lua's `n * 10 + 1` bias, applied in
+    // seconds at import so the correction is rate-independent. A non-positive rate is no wait
+    // at all — the spawn sites already refuse to build a redirector for one.
+    if (shotsPerSecond <= 0.0f) {
+        return 0;
+    }
+    return static_cast<int>(rate.ticks(faWaitSeconds(sim::seconds(1.0f / shotsPerSecond))));
+}
 
 } // namespace rm::unitdef

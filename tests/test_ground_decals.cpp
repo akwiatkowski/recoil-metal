@@ -6,7 +6,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "core/scene/GroundDecals.hpp"
+#include "core/sim/TickRate.hpp"
 
 #include "app/Scene.hpp"
 
@@ -475,6 +475,84 @@ TEST_CASE("impact marks draw scorch beside the wrecks", "[decals]") {
     rm::app::refreshWreckDecals(scene, field);
     CHECK(scene.wreckDecals.size() == 2 * rm::wreckVertexCount(12));
 }
+TEST_CASE("impact marks cover the blast that made them", "[decals]") {
+    // Retail scorches by blast size (`defaultexplosions.lua` C-290): a bigger
+    // explosion leaves a bigger mark. Ours carries the shot's damage radius
+    // on the mark and draws it 1:1 — the scorch covers the blast area, with
+    // no invented multiplier (retail's x3/x4 need explosion-scale content
+    // this engine does not parse). A direct hit with no blast keeps the
+    // legacy 2.5-elmo boot-print.
+    const HeightField field = flatAt(64, 0);
+    rm::app::UnitScene direct;
+    rm::app::UnitScene blast;
+    rm::app::noteImpactMark(direct, 10.0f, 20.0f, 0.0f);
+    rm::app::noteImpactMark(blast, 10.0f, 20.0f, 12.0f);
+    rm::app::refreshWreckDecals(direct, field);
+    rm::app::refreshWreckDecals(blast, field);
+    const auto extent = [](const std::vector<DecalVertex>& out) {
+        float far = 0.0f;
+        for (const DecalVertex& vertex : out) {
+            const float dx = vertex.position[0] - 10.0f;
+            const float dz = vertex.position[2] - 20.0f;
+            far = std::max(far, std::sqrt(dx * dx + dz * dz));
+        }
+        return far;
+    };
+    CHECK(extent(direct.wreckDecals) == Approx(2.5f));
+    CHECK(extent(blast.wreckDecals) == Approx(12.0f));
+}
+TEST_CASE("impact marks carry deterministic rotation", "[decals]") {
+    // Retail rotates every scorch by a random 0..2pi angle (`defaultexplosions.lua`
+    // C-290: `GetRandomFloat(0,2*math.pi)` in both `CreateScorchMarkSplat` and
+    // `CreateScorchMarkDecal`). Ours derives the angle from the mark's own bits —
+    // presentation-only, no sim RNG spent (C-297) — so a replay draws identically.
+    const HeightField field = flatAt(64, 0);
+    rm::app::UnitScene scene;
+    rm::app::noteImpactMark(scene, 10.0f, 20.0f);
+    rm::app::noteImpactMark(scene, 30.0f, 40.0f);
+    rm::app::refreshWreckDecals(scene, field);
+    const auto rimAngle = [](const std::vector<DecalVertex>& out, std::size_t base,
+                             float cx, float cz) {
+        const float dx = out[base + 1].position[0] - cx;
+        const float dz = out[base + 1].position[2] - cz;
+        return std::atan2(dz, dx);
+    };
+    const std::size_t stride = rm::wreckVertexCount(12);
+    REQUIRE(scene.wreckDecals.size() == 2 * stride);
+    // Different marks land at different angles: no shared axis-aligned fan.
+    CHECK(rimAngle(scene.wreckDecals, 0, 10.0f, 20.0f)
+          != Approx(rimAngle(scene.wreckDecals, stride, 30.0f, 40.0f)));
+    // The same marks rebuilt draw bit-identically: rotation is a pure function
+    // of the mark, not a draw off any RNG stream.
+    rm::app::UnitScene replay;
+    rm::app::noteImpactMark(replay, 10.0f, 20.0f);
+    rm::app::noteImpactMark(replay, 30.0f, 40.0f);
+    rm::app::refreshWreckDecals(replay, field);
+    REQUIRE(replay.wreckDecals.size() == scene.wreckDecals.size());
+    for (std::size_t i = 0; i < scene.wreckDecals.size(); ++i) {
+        CHECK(scene.wreckDecals[i].position[0] == Approx(replay.wreckDecals[i].position[0]));
+        CHECK(scene.wreckDecals[i].position[2] == Approx(replay.wreckDecals[i].position[2]));
+    }
+}
+TEST_CASE("impact marks expire at retail's scorch lifetime", "[decals]") {
+    // Retail scorch lives 300-600 s (`defaultexplosions.lua` C-290); the
+    // projection retires marks at the 300 s lower bound, derived through
+    // the tick rate rather than a literal so multi-rate runs agree.
+    const HeightField field = flatAt(64, 0);
+    const rm::sim::TickRate rate{};
+    const rm::TickIndex fresh =
+        rate.ticks(rm::sim::seconds(300.0f)) - 1;  // ticks, s (C-290)
+    const rm::TickIndex stale = rate.ticks(rm::sim::seconds(300.0f));  // ticks, s (C-290)
+    rm::app::UnitScene scene;
+    rm::app::noteImpactMark(scene, 10.0f, 20.0f, 0.0f, 0);
+    rm::app::refreshWreckDecals(scene, field, fresh);
+    CHECK(scene.wreckDecals.size() == rm::wreckVertexCount(12));
+    rm::app::refreshWreckDecals(scene, field, stale);
+    CHECK(scene.wreckDecals.empty());
+}
+
+
+
 
 TEST_CASE("impact marks rotate past their cap", "[decals]") {
     rm::app::UnitScene scene;

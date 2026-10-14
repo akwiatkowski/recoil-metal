@@ -10,7 +10,7 @@
 #include "app/SceneBuild.hpp"
 #include "core/lua/LuaTable.hpp"
 #include "core/sim/Combat.hpp"
-#include "core/sim/Enhancement.hpp"
+#include "core/sim/Events.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/StateHash.hpp"
 #include "core/sim/SaveState.hpp"
@@ -639,4 +639,88 @@ TEST_CASE("C-261: a finished crab egg hatches its Economy.BuildUnit and is "
     }
     CHECK(job.scene.features.size() == 0);
     CHECK(runner.unitsDestroyed == 0);
+}
+
+TEST_CASE("C-436: an enhancement fires quarter-progress milestones on funded ticks only",
+          "[fa-progress][enhancement]") {
+    // `EnhanceTask.lua`'s `LastProgress` ratchet: `OnBuildProgress` fires at
+    // 0.25/0.50/0.75, edge-triggered on the pre-tick fraction — an unfunded
+    // tick advances nothing and reports nothing, and the finish itself is not
+    // a fourth milestone.
+    Scenario job;
+    const auto acu = job.spawn(commanderDef(), 300, 300);
+    auto runner = job.runner();
+    int tick = 0;
+
+    REQUIRE(issueEnhancement(job, acu, static_cast<rm::TickIndex>(tick), "AdvancedEngineering"));
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+    REQUIRE(job.scene.enhancementWork.size() == 1);
+
+    // Starved: no funding means no progress and no milestones.
+    job.scene.economies[0].stored = {rm::sim::Mag{}, rm::sim::Mag{}};
+    for (int i = 0; i < 3; ++i) (void)rm::app::advanceMatch(runner, tick++, 0);
+    CHECK(job.scene.events.count(rm::sim::EventKind::EnhancementProgress) == 0);
+    REQUIRE(job.scene.enhancementWork.size() == 1);
+
+    // Funded: 8 work units at 1/tick cross the quarters on ticks 2, 4 and 6.
+    // Each `advanceMatch` opens a new event frame, so the milestones are
+    // collected tick by tick rather than counted at the end.
+    std::size_t milestones = 0;
+    std::vector<float> amounts;
+    job.scene.economies[0].stored = {rm::test::mag(100.0f), rm::test::mag(1000.0f)};
+    for (int i = 0; i < 12 && !job.scene.enhancementWork.empty(); ++i) {
+        (void)rm::app::advanceMatch(runner, tick++, 0);
+        for (const rm::sim::Event& event : job.scene.events.all()) {
+            if (event.kind != rm::sim::EventKind::EnhancementProgress) continue;
+            ++milestones;
+            amounts.push_back(rm::test::asFloat(event.amount));
+            CHECK(event.unit == acu);
+            CHECK(event.army == 0);
+        }
+    }
+    REQUIRE(job.scene.enhancementWork.empty());
+    CHECK(milestones == 3);
+    REQUIRE(amounts.size() == 3);
+    CHECK(amounts[0] == Catch::Approx(0.25f));
+    CHECK(amounts[1] == Catch::Approx(0.5f));
+    CHECK(amounts[2] == Catch::Approx(0.75f));
+}
+
+TEST_CASE("C-450/OnBuildProgress: enhancement milestones carry the retail call shape",
+          "[fa-progress][enhancement]") {
+    // Retail's mod-compat shape is `unit:OnBuildProgress(oldProg, newProg)`
+    // (`Unit.lua:1731`, `EnhanceTask.lua:66`): the pre-tick `LastProgress`
+    // fraction and the post-tick fraction, not just the boundary crossed.
+    // Mods override the hook, so the sim must carry both fractions (0..1) to
+    // the dispatcher.
+    Scenario job;
+    const auto acu = job.spawn(commanderDef(), 300, 300);
+    auto runner = job.runner();
+    int tick = 0;
+
+    REQUIRE(issueEnhancement(job, acu, static_cast<rm::TickIndex>(tick), "AdvancedEngineering"));
+    (void)rm::app::advanceMatch(runner, tick++, 0);
+    REQUIRE(job.scene.enhancementWork.size() == 1);
+
+    // 8 work units at 1 unit/tick: quarters fall on ticks 2, 4 and 6, with
+    // one funded tick (0.125) between the pre-tick edge and each boundary.
+    job.scene.economies[0].stored = {rm::test::mag(100.0f), rm::test::mag(1000.0f)};
+    std::vector<std::pair<float, float>> calls;
+    for (int i = 0; i < 12 && !job.scene.enhancementWork.empty(); ++i) {
+        (void)rm::app::advanceMatch(runner, tick++, 0);
+        for (const rm::sim::Event& event : job.scene.events.all()) {
+            if (event.kind != rm::sim::EventKind::EnhancementProgress) continue;
+            calls.emplace_back(rm::test::asFloat(event.progressBefore),
+                               rm::test::asFloat(event.progressAfter));
+            CHECK(event.unit == acu);
+        }
+    }
+    REQUIRE(job.scene.enhancementWork.empty());
+    REQUIRE(calls.size() == 3);
+    CHECK(calls[0].first == Catch::Approx(0.125f));
+    CHECK(calls[0].second == Catch::Approx(0.25f));
+    CHECK(calls[1].first == Catch::Approx(0.375f));
+    CHECK(calls[1].second == Catch::Approx(0.5f));
+    CHECK(calls[2].first == Catch::Approx(0.625f));
+    CHECK(calls[2].second == Catch::Approx(0.75f));
 }

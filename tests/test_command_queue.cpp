@@ -2807,6 +2807,41 @@ TEST_CASE("a bingo air guard docks on the pad, refuels at its rate, and relaunch
     REQUIRE(store.orders()[guard.index].active() != nullptr);
     CHECK(store.orders()[guard.index].active()->kind() == CommandKind::Guard);
 }
+TEST_CASE("C-456: a bingo guard docks on the pad's nearest free attach bone",
+          "[guard][airstaging]") {
+    // Retail keys pad docking on the pad's `Attachpoint` bones (`CUnitRefuel::TaskTick`
+    // 0x00627f60 via IAiTransport +0x54/+0x5c): the aircraft parks ON the bone, with the
+    // bone's Y as its landing-site height — not a berth-grid slot at sizeY.
+    StagingScene scene{flatField()};
+    // Two hooks on the pad, in model-space elmos: +x and -x of the origin, 6 up.
+    const std::array<rm::sim::UnitCatalog::AttachBoneSpec, 2> bones{{
+        {.bone = 7, .cargoClass = 1, .rest = {6.0f, 6.0f, 0.0f}},
+        {.bone = 8, .cargoClass = 1, .rest = {-6.0f, 6.0f, 0.0f}},
+    }};
+    scene.roster.catalog.setAttachBones(scene.padType, bones);
+    // Hovering over the pad: inside its 24-elmo radius plus the dock reach.
+    const UnitId guard = scene.addGuard(48.0f, 40.0f);
+    const UnitId guardee = scene.roster.add(scene.guardeeType, 44.0f, 140.0f, 0, 100.0f);
+    const UnitId pad = scene.roster.add(scene.padType, 40.0f, 40.0f, 0, 500.0f);
+    REQUIRE(scene.apply(CommandIssue{.source = 0, .id = rm::commandId(0, 6), .player = 0,
+                                     .kind = CommandKind::Guard, .units = {guard},
+                                     .target = guardee}));
+
+    scene.tick();
+
+    const rm::sim::UnitStore& store = scene.roster.store;
+    REQUIRE(store.parentOf(guard).has_value());
+    CHECK(*store.parentOf(guard) == pad);
+    // Parked ON the +x hook: pad origin plus the bone rest offset, heading zero.
+    CHECK(store.transforms()[guard.index].x - store.transforms()[pad.index].x
+          == rm::sim::Fx::fromInt(6));
+    CHECK(store.transforms()[guard.index].z - store.transforms()[pad.index].z
+          == rm::sim::Fx{});
+    CHECK(store.transforms()[guard.index].y - store.transforms()[pad.index].y
+          == rm::sim::Fx::fromInt(6));
+    // And the attachment records the real bone index, not a slot number.
+    CHECK(store.attachmentBonesOf(guard).parent == 7);
+}
 
 TEST_CASE("a pad with no free slot leaves the bingo guard holding", "[guard][airstaging]") {
     StagingScene scene{flatField()};

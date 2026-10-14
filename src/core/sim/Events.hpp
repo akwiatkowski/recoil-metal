@@ -90,6 +90,15 @@ enum class EventKind : std::uint8_t {
     /// the site, `instigator` the builder. One event per boundary per beat —
     /// a sacrifice or a fast assist can cross two at once and reports both.
     ConstructionProgress,
+    /// An enhancement's fraction crossed a quarter boundary — retail's
+    /// `EnhanceTask` `OnBuildProgress` at 0.25/0.5/0.75, edge-triggered on the
+    /// pre-tick fraction via the `LastProgress` ratchet (`C-436`,
+    /// `EnhanceTask.lua`, `Unit.lua:1731` — the base hook is a no-op kept for
+    /// mod compat). `unit` is the enhanced unit, `amount` the boundary
+    /// crossed, `at` where it stands. Funded ticks only: an unfunded beat
+    /// advances nothing and reports nothing, and the finish at 1.0 is the
+    /// install itself, not a fourth milestone.
+    EnhancementProgress,
     /// A unit reached a new veterancy level. `amount` is the level it reached, 1 through 5,
     /// as a whole number — the one kind whose amount is a count rather than a quantity of
     /// health, because there is nowhere else for it to go and a separate field used by one
@@ -270,6 +279,13 @@ struct Event {
     /// How much, where the kind has an amount: incoming post-mitigation damage for
     /// `UnitDamaged`.
     Mag amount{};
+    /// The pre- and post-tick progress fractions (0..1) behind a progress
+    /// milestone — retail's `OnBuildProgress(oldProg, newProg)` 3-arg shape
+    /// (`Unit.lua:1731`, `EnhanceTask.lua:66`, `C-450`'s mod-compat half).
+    /// `amount` stays the boundary crossed (0.25/0.5/0.75); the fractions say
+    /// what the hook would have received. Zero for every other kind.
+    Fx progressBefore{};
+    Fx progressAfter{};
 
     /// Where it happened. Carried rather than looked up, because for a death the unit's slot is
     /// about to be recycled and for an impact there is no unit at all.
@@ -281,6 +297,12 @@ struct Event {
 
     /// Native impact classification for `ProjectileImpact`; `Invalid` for every other event.
     ImpactType impactType = ImpactType::Invalid;
+
+    /// The shot's blast radius in elmos on a `ProjectileImpact` (`C-290`:
+    /// retail sizes scorch from the explosion). Copied at impact like the
+    /// other presentation metadata; zero for a direct hit with no blast.
+    /// Hash-neutral: presentation only, like `visualId`.
+    Fx blastRadiusElmos{};
 
     /// Presentation metadata copied before a shooter can die or its slot be reused.
     std::string visualId;

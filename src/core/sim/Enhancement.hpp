@@ -203,8 +203,9 @@ class EnhancementTasks final : public ScriptTaskHost {
 public:
     EnhancementTasks(UnitStore& store, const UnitCatalog& catalog,
                      std::vector<EnhancementWork>& work,
-                     std::vector<SiloAmmo>* siloAmmo = nullptr)
-        : store_(store), catalog_(catalog), work_(work), siloAmmo_(siloAmmo) {}
+                     std::vector<SiloAmmo>* siloAmmo = nullptr,
+                     EventQueue* events = nullptr)
+        : store_(store), catalog_(catalog), work_(work), siloAmmo_(siloAmmo), events_(events) {}
     ~EnhancementTasks() override = default;
     EnhancementTasks(const EnhancementTasks&) = delete;
     EnhancementTasks& operator=(const EnhancementTasks&) = delete;
@@ -218,5 +219,6 @@ private:
     const UnitCatalog& catalog_;
     std::vector<EnhancementWork>& work_;
     std::vector<SiloAmmo>* siloAmmo_ = nullptr;
+    EventQueue* events_ = nullptr;
 };
 } // namespace rm::sim

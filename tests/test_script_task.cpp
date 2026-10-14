@@ -54,9 +54,8 @@ public:
 
     std::int32_t taskTick(rm::sim::UnitId, std::string_view task,
                           std::span<const std::uint8_t>,
-                          rm::sim::ScriptTaskState& state) override {
+                          rm::sim::ScriptTaskState&) override {
         events.push_back("tick:" + std::string{task});
-        ++state.aiResult;
         REQUIRE_FALSE(results.empty());
         const std::int32_t result = results.front();
         results.pop_front();
@@ -68,6 +67,7 @@ public:
                    rm::sim::ScriptTaskState& state) override {
         events.push_back("destroy:" + std::string{task});
         destroyedState = state.opaque;
+        destroyedAiResult = state.aiResult;
     }
 
     std::deque<std::int32_t> results;
@@ -75,7 +75,10 @@ public:
     rm::sim::UnitId createdUnit{};
     std::vector<std::uint8_t> seenCommandData;
     std::vector<std::uint8_t> destroyedState;
+    std::int32_t destroyedAiResult = 0;
+
 };
+
 
 struct Fixture {
     Fixture() : terrain(field), grid(rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f)) {
@@ -120,6 +123,31 @@ struct Fixture {
     RecordingTasks tasks;
     std::uint32_t nextId = 1;
 };
+TEST_CASE("C-252/C-454: a finished script task reports Success, an aborted one Fail") {
+    // `C-252`: `EnhanceTask`'s `OnDestroy` reports `AIRESULT.Success/Fail`;
+    // `C-454` names the values (Success=1, Fail=2, writer `SetAIResult`
+    // `0x0062a040`). The native host owns the write: the dispatcher's
+    // terminal outcome lands in the task state's `aiResult` cell.
+    Fixture done;
+    done.tasks.results = {
+        static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Done),
+    };
+    REQUIRE(done.issue("EnhanceTask"));
+    CHECK(done.advance() == 1);
+    CHECK(done.roster.store.orders()[done.unit.index].empty());
+    CHECK(done.tasks.events.back() == "destroy:EnhanceTask");
+    CHECK(done.tasks.destroyedAiResult == 1);
+
+    Fixture failed;
+    failed.tasks.results = {
+        static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Abort),
+    };
+    REQUIRE(failed.issue("EnhanceTask"));
+    CHECK(failed.advance() == 1);
+    CHECK(failed.roster.store.orders()[failed.unit.index].empty());
+    CHECK(failed.tasks.events.back() == "destroy:EnhanceTask");
+    CHECK(failed.tasks.destroyedAiResult == 2);
+}
 
 } // namespace
 
@@ -138,7 +166,7 @@ TEST_CASE("script tasks repeat, sleep, finish, and destroy through native dispat
         fixture.roster.store.orders()[fixture.unit.index].active()->scriptState();
     CHECK(sleeping.created);
     CHECK(sleeping.sleepBeats == 1);
-    CHECK(sleeping.aiResult == 2);
+    CHECK(sleeping.aiResult == 0);
     CHECK(sleeping.opaque == std::vector<std::uint8_t>{0xCA, 0xFE});
     CHECK(fixture.tasks.seenCommandData == std::vector<std::uint8_t>{1, 2, 3});
 
@@ -156,6 +184,33 @@ TEST_CASE("script tasks repeat, sleep, finish, and destroy through native dispat
     CHECK(fixture.tasks.destroyedState == std::vector<std::uint8_t>{0xCA, 0xFE});
 }
 
+TEST_CASE("C-478: script-task Delay normalizes to Suspend inside dispatch") {
+    // `C-478` corrects `C-451`'s arm labeling: the true -4 Delay arm
+    // (`0x0040934c`[0]) just returns -2 — Delay normalizes to Suspend inside
+    // TaskTick and the Tick driver performs the single suspend-ring insert.
+    // `C-306`'s "requeue at far end of current pass" stays refuted: a Delay
+    // parks the task suspended with NO end-of-beat re-tick, exactly like a
+    // Suspend, and only an explicit resume lets it run again.
+    Fixture fixture;
+    fixture.tasks.results = {
+        static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Delay),
+        static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Abort),
+    };
+
+    REQUIRE(fixture.issue("EnhanceTask"));
+    CHECK(fixture.advance() == 1);
+    rm::sim::QueuedCommand* active =
+        fixture.roster.store.orders()[fixture.unit.index].activeMutable();
+    REQUIRE(active != nullptr);
+    CHECK(active->scriptState().suspended);
+    CHECK(fixture.tasks.events.size() == 3); // pre-create, create, one tick — no end-of-beat re-tick
+
+    active->scriptState().suspended = false;
+    CHECK(fixture.advance() == 0);
+    CHECK(fixture.roster.store.orders()[fixture.unit.index].empty());
+    CHECK(fixture.tasks.events.back() == "destroy:EnhanceTask");
+}
+
 TEST_CASE("script task delay, suspension, resumption, and abort preserve lifecycle") {
     Fixture fixture;
     fixture.tasks.results = {
@@ -170,9 +225,13 @@ TEST_CASE("script task delay, suspension, resumption, and abort preserve lifecyc
         fixture.roster.store.orders()[fixture.unit.index].activeMutable();
     REQUIRE(active != nullptr);
     CHECK(active->scriptState().suspended);
-    CHECK(fixture.tasks.events.size() == 4); // pre-create, create, ordinary tick, end-of-beat tick
+    CHECK(fixture.tasks.events.size() == 3); // pre-create, create, one tick — C-478: Delay parks, no end-of-beat re-tick
 
     active->scriptState().suspended = false;
+    CHECK(fixture.advance() == 0);
+    CHECK(fixture.roster.store.orders()[fixture.unit.index].active() != nullptr);
+    CHECK(fixture.tasks.events.back() == "tick:EnhanceTask"); // resumed: Suspend result parks again
+    fixture.roster.store.orders()[fixture.unit.index].activeMutable()->scriptState().suspended = false;
     CHECK(fixture.advance() == 0);
     CHECK(fixture.roster.store.orders()[fixture.unit.index].empty());
     CHECK(fixture.tasks.events.back() == "destroy:EnhanceTask");
@@ -404,6 +463,70 @@ TEST_CASE("C-318: a registered ScriptModule/ScriptClass fires OnPreCreate, OnCre
     CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
                                  nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
                                  nullptr, &host) == 0);
+    CHECK(roster.store.orders()[unit.index].empty());
+    CHECK(host.errors().empty());
+
+    std::filesystem::remove_all(scratch);
+}
+
+TEST_CASE("C-311: ScriptHost concatenates the base task with its hook copies") {
+    // `C-311` (`SCR_LuaDoFileConcat`, `0x004d4de0`): every load collects the
+    // base file plus every registered hookdir's copy of the same path and
+    // `lua_load`s them as ONE chunk — a hook shares the original's locals and
+    // environment. The sim task host must do the same when its modulePath
+    // resolves through the VFS, in hook registration order.
+    const std::filesystem::path scratch = std::filesystem::temp_directory_path()
+        / "rm-script-host-c311";
+    std::filesystem::create_directories(scratch / "lua/sim/tasks");
+    std::filesystem::create_directories(scratch / "schook/lua/sim/tasks");
+    {
+        std::ofstream base(scratch / "lua/sim/tasks/C311Probe.lua");
+        base << "local seen = {}\n"
+                "function seen:TaskTick(result)\n"
+                "  return 1\n"
+                "end\n"
+                "TypeClass = Class(seen) {\n"
+                "  TaskTick = seen.TaskTick,\n"
+                "}\n";
+    }
+    {
+        std::ofstream hook(scratch / "schook/lua/sim/tasks/C311Probe.lua");
+        hook << "TypeClass.TaskTick = function(self, result) return -1 end\n";
+    }
+
+    rm::vfs::Vfs content;
+    content.mountDirectory(scratch);
+    content.addHookDirectory("/schook");
+    rm::app::ScriptHost host{content};
+    host.registerTask("C311Probe", rm::app::ScriptTaskRegistration{
+        .modulePath = "/lua/sim/tasks/C311Probe.lua",
+    });
+
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c311_probe";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "C311Probe"},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    REQUIRE(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                   nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                   nullptr, &host) == 1);
     CHECK(roster.store.orders()[unit.index].empty());
     CHECK(host.errors().empty());
 

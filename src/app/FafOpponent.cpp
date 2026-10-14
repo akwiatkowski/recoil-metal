@@ -2188,7 +2188,29 @@ function __rm_faf_decide(army, snap)
     for _, u in ipairs(snap.units) do living[u.h] = u end
     for h, assignment in pairs(brain.scoutAssignments) do
         local u = living[h]
-        if not u or (u.idle and not u.scoutingBusy and (snap.tick or 0) > assignment.tick) then
+        local release = false
+        -- Retail air scouts break the pass within 125 elmos of the flyby
+        -- destination (VDist2Sq(vec, scout) < 15625) or within 25 elmos of the
+        -- marker itself (VDist3(scout, targetArea) < 25), so the area is
+        -- untagged and removed mid-route instead of held until the scout idles
+        -- (platoon.lua AirScoutingAI). Distances are elmos; the squared form
+        -- matches retail's own comparison. Land sweeps keep arrival semantics.
+        if assignment.mustScout and u and assignment.airFlyby then
+            local fx, fz = assignment.airFlyby.x, assignment.airFlyby.z
+            local mdx, mdz = u.x - fx, u.z - fz
+            local mpx, mpz = u.x - assignment.airFlyby.mx, u.z - assignment.airFlyby.mz
+            if mdx * mdx + mdz * mdz < 15625 or mpx * mpx + mpz * mpz < 625 then
+                for i, loc in ipairs(brain.InterestList.MustScout) do
+                    if loc == assignment.mustScout then
+                        table.remove(brain.InterestList.MustScout, i)
+                        break
+                    end
+                end
+                brain.scoutAssignments[h] = nil
+                release = true
+            end
+        end
+        if not release and (not u or (u.idle and not u.scoutingBusy and (snap.tick or 0) > assignment.tick)) then
             -- Retail drops the reached area and frees a dead scout's tag, so the
             -- next pass checks the area out again (platoon.lua AirScoutingAI).
             if assignment.mustScout then
@@ -2332,11 +2354,14 @@ function __rm_faf_decide(army, snap)
                         local length = math.sqrt(dx*dx+dz*dz)
                         if length == 0 then dx,dz,length = 1,0,1 end
                         local side = u.h % 2 == 0 and 1 or -1
-                        -- DoAirScoutVecs: vision-radius lateral offset and 75 ogrids forward.
+                        -- DoAirScoutVecs: vision-radius lateral offset and 75 ogrids forward,
+                        -- clamped 5 elmos inside the map edge (platoon.lua:1264-1267:
+                        -- `dest > size - 5`). Distances are elmos; the 75-ogrid push
+                        -- arrives as 600 elmos (75 * 8 elmos per ogrid, Scmap.hpp).
                         x = x + dz/length*u.vision*side + dx/length*75*8
                         z = z - dx/length*u.vision*side + dz/length*75*8
-                        x = math.max(40, math.min(brain.mapSize[1]-40,x))
-                        z = math.max(40, math.min(brain.mapSize[2]-40,z))
+                        x = math.max(5, math.min(brain.mapSize[1]-5,x))
+                        z = math.max(5, math.min(brain.mapSize[2]-5,z))
                     end
                     local route = __rm_faf_scout_route(u.h,x,z,brain.IMAPConfig.IMAPSize*8,brain.IMAPConfig.Rings)
                     -- platoon.lua:1225-1228 always issues the destination, even when
@@ -2375,7 +2400,8 @@ function __rm_faf_decide(army, snap)
                                 and brain.InterestList.HighPriority
                                 or brain.InterestList.LowPriority)
                         end
-                        brain.scoutAssignments[u.h] = {site=site, name=item.spec.BuilderName, tick=snap.tick or 0, mustScout=site.mustLoc}
+                        local flyby = air and {x=x, z=z, mx=site.x, mz=site.z} or nil
+                        brain.scoutAssignments[u.h] = {site=site, name=item.spec.BuilderName, tick=snap.tick or 0, mustScout=site.mustLoc, airFlyby=flyby}
                         table.insert(decisions, {kind='scout',builder=u.h,x=x,z=z,route=route,name=item.spec.BuilderName})
                         return true
                     end
@@ -3253,6 +3279,35 @@ void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> ev
         case rm::sim::EventKind::FailedBeingCaptured:
             if (event.army == army_) callUnit(event.unit, "OnFailedBeingCaptured", event.instigator);
             break;
+        case rm::sim::EventKind::EnhancementProgress: {
+            // `C-450`'s mod-compat half: `EnhanceTask.lua:66` calls
+            // `unit:OnBuildProgress(LastProgress, current)` — old then new
+            // fraction — on the enhanced unit's own script. The base hook is
+            // a no-op (`Unit.lua:1731`); mods override it, so the call ships
+            // the event's two carried fractions. Fractions are 0..1 ratios
+            // in elmos, matching every other Lua number the bridge pushes.
+            if (event.army != army_) break;
+            const int top = lua_gettop(lua);
+            unitFor(event.unit);
+            if (lua_isnil(lua, -1)) {
+                lua_settop(lua, top);
+                break;
+            }
+            lua_getfield(lua, -1, "OnBuildProgress");
+            if (!lua_isfunction(lua, -1)) {
+                lua_settop(lua, top);
+                break;  // no override installed: a no-op, like retail's base hook
+            }
+            lua_pushvalue(lua, -2);  // self
+            lua_pushnumber(lua, rm::sim::fxToFloat(event.progressBefore));
+            lua_pushnumber(lua, rm::sim::fxToFloat(event.progressAfter));
+            if (lua_pcall(lua, 3, 0, 0) != LUA_OK) {
+                std::printf("faf-opponent: OnBuildProgress failed: %s\n",
+                            lua_tostring(lua, -1));
+            }
+            lua_settop(lua, top);
+            break;
+        }
         case rm::sim::EventKind::AnimCollision:
             if (event.army == army_)
                 callUnitBone(event.unit, "OnAnimCollision", event.bone, event.at);

@@ -171,9 +171,13 @@ inline constexpr float kWreckMarkRadiusFactor = 2.2f;
 // Permanent, unlike the order marker. A wreck IS the record of what happened here, and a
 // battlefield that tidied itself up would lose exactly the information a player wants
 // afterwards. There is no `age`, and a caller keeps them until the scene is torn down.
+// `rotationRadians` spins the fan's first spoke: retail rotates every scorch by a
+// random 0..2pi angle (`defaultexplosions.lua` C-290). The caller owns the angle —
+// the projection derives it from the mark, so no sim RNG is spent (C-297).
+// Zero keeps the legacy axis-aligned fan.
 void appendWreckMark(std::vector<DecalVertex>& out, const HeightField& field,
                      std::array<float, 3> centre, float radiusElmos,
-                     int segments = kRingSegments);
+                     int segments = kRingSegments, float rotationRadians = 0.0f);
 
 /// Vertices one wreck mark contributes: one triangle per segment, since a filled disc is a
 /// fan rather than a band.

@@ -59,4 +59,11 @@ namespace rm::unitdef {
 /// confused with a tick count (§5.1).
 [[nodiscard]] sim::Seconds faWaitSeconds(sim::Seconds authored) noexcept;
 
+/// The missile-redirect cooldown, in ticks, for an authored `RedirectRateOfFire` in shots
+/// per second (`C-088`). Retail's `RedirectingState.Main` waits
+/// `WaitSeconds(1 / RedirectRateOfFire)` (`defaultantiprojectile.lua`), which is Lua-timed:
+/// the `faWaitSeconds` bias applies, so URL0303's 1/sec is 11 ticks at 10 Hz, not 10.
+/// Content-side work done once at load.
+[[nodiscard]] int redirectCooldownTicks(sim::TickRate rate, float shotsPerSecond) noexcept;
+
 } // namespace rm::unitdef

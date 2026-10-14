@@ -9,6 +9,7 @@
 #include "core/model/Scm.hpp"
 #include "core/model/Sca.hpp"
 #include "core/unit/BarNames.hpp"
+#include "core/unit/FaDuration.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 #include "core/sim/BuildOrder.hpp"
 
@@ -990,11 +991,13 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             }
             // A missile redirector (`Defense.AntiMissile`, URL0303, `C-088`) — one per unit,
             // created alongside the silo records above. The rate-to-ticks conversion is
-            // content-side work done once here, at load (PLAN2.md §5.1).
+            // content-side work done once here, at load (PLAN2.md §5.1). Lua-timed, so the
+            // `WaitSeconds` +1-tick bias applies (`redirectCooldownTicks`, `C-088`): URL0303's
+            // 1/sec is 11 ticks at 10 Hz, not 10.
             if (def->antiMissileRadiusElmos > rm::sim::Fx{}
                 && def->antiMissileRatePerSecond > 0.0f) {
-                const int cooldown = static_cast<int>(gAppTickRate.ticks(
-                    rm::sim::Seconds{1.0f / def->antiMissileRatePerSecond}));
+                const int cooldown = rm::unitdef::redirectCooldownTicks(
+                    gAppTickRate, def->antiMissileRatePerSecond);
                 scene.redirects.push_back(
                     rm::sim::makeMissileRedirect(id, def->antiMissileRadiusElmos, cooldown));
             }
@@ -1320,11 +1323,12 @@ static void stampTarmacAt(UnitScene& scene, rm::UnitTypeIndex type,
              .energy = gun.projectileTraits.buildCostEnergy},
             gun.projectileTraits.buildTime, buildPerTick));
     }
-    // A missile redirector (`Defense.AntiMissile`, URL0303, `C-088`) — see above.
+    // A missile redirector (`Defense.AntiMissile`, URL0303, `C-088`) — Lua-timed, so the
+    // `WaitSeconds` +1-tick bias applies (`redirectCooldownTicks`): 11 ticks at 10 Hz.
     if (def.antiMissileRadiusElmos > rm::sim::Fx{}
         && def.antiMissileRatePerSecond > 0.0f) {
-        const int cooldown = static_cast<int>(
-            gAppTickRate.ticks(rm::sim::Seconds{1.0f / def.antiMissileRatePerSecond}));
+        const int cooldown =
+            rm::unitdef::redirectCooldownTicks(gAppTickRate, def.antiMissileRatePerSecond);
         scene.redirects.push_back(
             rm::sim::makeMissileRedirect(id, def.antiMissileRadiusElmos, cooldown));
     }
