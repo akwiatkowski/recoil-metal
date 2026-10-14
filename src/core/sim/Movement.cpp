@@ -423,6 +423,16 @@ Fx wingedLift(Fx need, Fx speedRatio, Fx liftFactor, Fx heightAbove, Fx elevatio
     }
     return cap;
 }
+Fx podElevationAdjustment(Fx spanElmos, Fx draw01) noexcept {
+    // The retail draw (`0x006bed29`-`0x006bed79`) whitens one RNG word through
+    // xorshift and scales a float difference by `2.3283064e-10` (`0xaa2b60`):
+    // a uniform [0, 1) fraction times the span. Fixed point throughout — the
+    // float scale is `2^-32` to the digit shown, so the multiply-then-shift
+    // below is the same value without leaving the sim's arithmetic.
+    const Fx clamped = draw01 < Fx{} ? Fx{} : (draw01 >= Fx::fromInt(1) ? Fx{} : draw01);
+    return spanElmos * clamped;
+}
+
 
 /// One lane's share of the movement tick: every unit's state moves forward.
 ///

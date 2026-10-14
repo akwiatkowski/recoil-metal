@@ -2080,3 +2080,22 @@ TEST_CASE("C-244: carried mass halves the lift and turn gains, never KMove",
     CHECK(rm::sim::fxToFloat(turning[0].airYawVelocity)
           == Approx(2.0 * rm::sim::fxToFloat(turning[1].airYawVelocity)).margin(0.01));
 }
+
+TEST_CASE("a POD-category flyer spawns with a nonzero elevation adjustment") {
+    // `C-247`/`C-455` (`0x006bec05`-`0x006bed79`): retail's only nonzero writer of
+    // `CUnitMotion+0x9c` sits behind an `EntityCategoryContains(POD)` branch. An
+    // ordinary flyer keeps the zero init; a POD unit (UEA0001 engineering drone,
+    // `build/re-fa/corpus/units/units/UEA0001/UEA0001_unit.bp:84`) draws a random
+    // adjustment that the lift law and landing target both add to `Elevation`.
+    rm::unitdef::UnitDef drone;
+    drone.name = "UEA0001";
+    drone.motion = rm::unitdef::MotionType::Air;
+    drone.elevationElmos = 3.0f;
+    drone.categories = {"AIR", "MOBILE", "POD"};
+    const rm::sim::MoveState ordinary = rm::app::motionFor(drone, 0);
+    CHECK(ordinary.airElevationAdjustment != rm::sim::Fx{});
+    rm::unitdef::UnitDef jet = drone;
+    jet.name = "UEA0101";
+    jet.categories = {"AIR", "MOBILE"};
+    CHECK(rm::app::motionFor(jet, 0).airElevationAdjustment == rm::sim::Fx{});
+}

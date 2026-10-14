@@ -344,6 +344,36 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
         motion.airElevation = def.elevationElmos > 0.0f
             ? rm::sim::fxFromFloat(def.elevationElmos)
             : rm::sim::kAirClearanceElmos;
+        // `C-247`/`C-455` (`0x006bec05`-`0x006bed79`): the only nonzero writer of
+        // `CUnitMotion+0x9c` sits behind an `EntityCategoryContains(POD)` branch.
+        // The draw whitens one sim-RNG word (xorshift at `0x006bed29`-`0x006bed50`,
+        // masks `0xff3a58ad`/`0xffffdf8c`) and scales a per-unit float span by
+        // `2.3283064e-10` (`0xaa2b60`, i.e. 2^-32): a uniform fraction of the
+        // span. The spawn seam owns no RNG stream, so the fraction is a
+        // deterministic FNV-1a hash of the unit's own blueprint name — one
+        // constant per blueprint, distinct per POD unit, replay-identical, and
+        // off the live sim stream (`C-297`). Ordinary aircraft keep zero.
+        if (def.hasCategory("POD")) {
+            // FNV-1a over the blueprint name, folded to 32 bits: the high and
+            // low halves xor-whitened the way the retail xorshift whitens its
+            // word. `2^-32` per digit of `0xaa2b60` — the fraction below is
+            // the retail uniform draw in fixed point.
+            std::uint64_t nameHash = 1469598103934665603ull;
+            for (const char byte : def.name) {
+                nameHash = (nameHash ^ static_cast<std::uint64_t>(byte)) * 1099511628211ull;
+            }
+            const std::uint32_t folded =
+                static_cast<std::uint32_t>(nameHash >> 32)
+                ^ static_cast<std::uint32_t>(nameHash & 0xffffffffu);
+            // `folded / 2^32` in Q18.14 without leaving fixed point: the top
+            // 14 bits of the 32-bit draw. (`fromRatio(folded>>1, 2^31-1)`
+            // saturates — both shifted operands exceed int32 — so the scale
+            // is done as a narrowing shift here, not a ratio.)
+            const rm::sim::Fx draw01 =
+                rm::sim::Fx::fromRaw(static_cast<std::int32_t>(folded >> 18));
+            motion.airElevationAdjustment =
+                rm::sim::podElevationAdjustment(rm::sim::Fx::fromInt(1), draw01);
+        }
         motion.idleLandThreshold = def.airAutoLandTimeSec > 0.0f
             ? static_cast<std::uint32_t>(def.airAutoLandTimeSec
                                          * static_cast<float>(gAppTickRate.ticksPerSecond()))

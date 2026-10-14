@@ -455,6 +455,47 @@ TEST_CASE("a counted projectile with an empty silo does not launch") {
     }
 }
 
+/// One silo record on `owner`'s tactical slot holding `stored` rounds.
+[[nodiscard]] rm::sim::SiloAmmo ammoRow(UnitId owner, int stored) {
+    return rm::sim::SiloAmmo{.owner = owner, .weapon = 0, .stored = stored, .capacity = 7};
+}
+
+TEST_CASE("an empty counted silo does not even acquire incoming missiles") {
+    // C-511/C-423 (ART-E001 `0x005DEAD0` via callgraph census): the third `HasSiloAmmo`
+    // site is a silo-target-acquire helper — an empty counted silo does not even scan for
+    // incoming missiles. The fire-branch gate (`C-242`/`C-085`) already holds the shot;
+    // this pins the acquisition side: the hull holds its heading rather than tracking a
+    // shot the weapon cannot answer.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Weapon interceptor = directFire(10.0f, 300.0f);
+    interceptor.targetsProjectiles = true;
+    interceptor.countedProjectile = true;
+    interceptor.turreted = false;
+    Roster roster;
+    const UnitId gunner =
+        roster.add(roster.addType(gunnerDef(interceptor)), 0.0f, 0.0f, 0, 100.0f);
+    roster.motion(gunner).turnPerTick = roster.rate.bradPerTick(1.0f);
+    roster.motion(gunner).moving = false;
+    // Due +X at 100 elmos, inside the 300-elmo reach: a bearing of pi/2 off a hull at 0.
+    std::vector<Projectile> shots{{.position = rm::test::at(100, 4, 0),
+                                   .firedByArmy = 1, .ticksRemaining = 10}};
+    const auto aim = [&](const std::vector<rm::sim::SiloAmmo>& ammo) {
+        return rm::sim::aimAtTargets(roster.store, roster.catalog, armies, nullptr, &shots,
+                                     nullptr, 0, roster.rate, {}, ammo);
+    };
+
+    SECTION("an empty tube holds the hull") {
+        CHECK(aim({{ammoRow(gunner, 0)}}) == 0);
+        CHECK(roster.transform(gunner).heading == rm::Brad{0});
+    }
+
+
+    SECTION("a loaded tube tracks") {
+        CHECK(aim({{ammoRow(gunner, 1)}}) == 1);
+        CHECK(roster.transform(gunner).heading == 1043);
+    }
+}
+
 TEST_CASE("point defence rejects friendly projectiles") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;
@@ -1590,6 +1631,57 @@ TEST_CASE("automatic targeting scores radar-only contacts at their blip, not tru
     REQUIRE(acquired.has_value());
     CHECK(*acquired == far); // truth-nearer loses: identity survives, rank follows the blip
 }
+TEST_CASE("automatic bomb-drop release leads from the blip, not truth",
+          "[intel][targeting]") {
+    // The remaining automatic-targeting truth leak: `nearestTarget` scores at
+    // the blip and the muzzle aims at the blip, but a bomb-drop release point
+    // (`C-224` `PredictAheadForBombDrop`) is led from the target's true
+    // position. A radar-only contact must release from the same deterministic
+    // estimate the shot will use (`C-277` family; 96 elmos per LosHandler.h:322).
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon bomb = directFire(10.0f, 500.0f);
+    bomb.needToComputeBombDrop = true;
+    bomb.bombDropThreshold = rm::test::fx(400.0f);
+    UnitDef bomber = gunnerDef(bomb);
+    bomber.radarRadiusElmos = 400.0f; // vision stays zero: radar-only contact
+    bomber.airPredictAheadForBombDropSec = 2.0f;
+    (void)roster.add(roster.addType(bomber), 0.0f, 0.0f, 0, 100.0f);
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
+    roster.motion(target).stepX = rm::test::fx(4.0f);
+
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, target.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Radar);
+
+    std::vector<Projectile> shots;
+    const std::size_t fired = rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                                   roster.rate, nullptr, &intel);
+    REQUIRE(fired == 1);
+    REQUIRE(shots.size() == 1);
+
+    // Release point led from the blip: blip + velocity x PredictAheadForBombDrop.
+    const auto [blipX, blipZ] = rm::sim::radarBlipPosition(
+        target, roster.transform(target).x, roster.transform(target).z, 0, roster.rate);
+    const rm::TickCount lead = roster.rate.ticks(rm::sim::seconds(2.0f));
+    const rm::sim::Fx leadFx = rm::sim::Fx::fromInt(static_cast<std::int32_t>(lead));
+    const rm::sim::Fx stepX = roster.motion(target).stepX;
+    const rm::sim::Fx stepZ = roster.motion(target).stepZ;
+    CHECK(shots[0].aimPoint[0] == blipX + stepX * leadFx);
+    CHECK(shots[0].aimPoint[2] == blipZ + stepZ * leadFx);
+    // The error is real: at least one axis differs from the truth-led release.
+    CHECK((shots[0].aimPoint[0]
+               != roster.transform(target).x + stepX * leadFx
+           || shots[0].aimPoint[2]
+                  != roster.transform(target).z + stepZ * leadFx));
+}
+
 
 TEST_CASE("automatic targeting does not acquire sonar-only contacts") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);

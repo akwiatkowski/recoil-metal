@@ -73,6 +73,7 @@ namespace {
     def.speedElmosPerSecond = 6.0f;
     def.elevationElmos = -12.0f;
     def.diveSurfaceSpeedElmosPerSecond = 8.0f;
+    def.collisionRadiusElmos = 2.0f;  // a hull with no radius opts out of collision entirely
     def.commandCaps = {"RULEUCC_Dive"};
     def.commandCapsDeclared = true;
     def.health = rm::sim::Mag::fromInt(1000);
@@ -881,4 +882,35 @@ TEST_CASE("C-324: spawn layer derives from the motion class, never authored",
     rm::sim::tick(roster.store.transforms(), roster.store.motion(), terrain);
     CHECK(roster.motion(drowned).seabed);          // else-branch: under the waterline
     CHECK(rm::sim::fxToFloat(roster.transform(marker).y) == Approx(80.0f));
+}
+
+TEST_CASE("C-170: a surface splash still wets a submerged hull under the blast", "[fa-navy]") {
+    // `C-170`'s classifier keys the impact on the blast POINT's depth, not the
+    // victim's layer: a depth charge going off at the waterline over a diving
+    // boat is an underwater event for everything the sphere reaches. The
+    // player sees the sub take the hit even though the shell never touched it.
+    // Fired through the area-blast path (Surface|Air `Both` mask, the same
+    // call a depth-charge impact resolves through), so the test pins the
+    // sphere-vs-box geometry reaching down through the water column.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);  // waterline at 80
+    rm::test::Roster roster;
+    const UnitDef ship = shipDef();
+    const UnitDef sub = subDef();
+    const rm::UnitTypeIndex shipType = roster.addType(ship);
+    const rm::UnitTypeIndex subType = roster.addType(sub);
+    const UnitId gunboat = spawnDef(roster, shipType, ship, 300.0f, 300.0f, 0);
+    const UnitId boat = spawnDef(roster, subType, sub, 300.0f, 300.0f, 1);
+    rm::sim::tick(roster.store.transforms(), roster.store.motion(), terrain);
+    REQUIRE(roster.motion(boat).submerged);
+    // Detonate at the waterline directly over the submerged keel: the sphere
+    // reaches 20 elmos down to the hull riding at 68.
+    const std::array<Fx, 3> at{rm::sim::fxFromFloat(300.0f), rm::sim::fxFromFloat(80.0f),
+                               rm::sim::fxFromFloat(300.0f)};
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    const rm::sim::Mag dealt = rm::sim::damageArea(
+        at, Fx::fromInt(20), rm::sim::Mag::fromInt(100), 0, roster.store, armies,
+        gunboat, nullptr, &roster.catalog);
+    CHECK(rm::test::asFloat(roster.health(boat).current) == Catch::Approx(900.0f));
+    CHECK(dealt == rm::sim::Mag::fromInt(100));
 }

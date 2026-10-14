@@ -371,7 +371,8 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                            std::span<const Army> armies, const Intel* intel = nullptr,
                            const std::vector<Projectile>* projectiles = nullptr,
                            const PlayableRect* playableRect = nullptr, TickIndex tick = 0,
-                           TickRate rate = TickRate{}, std::span<const WorkClaim> claims = {});
+                           TickRate rate = TickRate{}, std::span<const WorkClaim> claims = {},
+                           std::span<const SiloAmmo> siloAmmo = {});
 
 /// Advances reloads, picks targets, and appends the shots fired this tick.
 ///

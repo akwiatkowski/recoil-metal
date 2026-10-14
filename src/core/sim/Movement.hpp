@@ -459,6 +459,17 @@ void updateWingedAttack(MoveState& state, const Transform& aircraft, const Trans
 [[nodiscard]] Fx wingedLift(Fx need, Fx speedRatio, Fx liftFactor, Fx heightAbove,
                             Fx elevationRef) noexcept;
 
+/// `CUnitMotion+0x9c` for `POD`-category flyers (`C-247`/`C-455`,
+/// `ART-E001 0x006bec05`-`0x006bed79`): retail's only nonzero writer of the
+/// elevation-adjustment field sits behind an `EntityCategoryContains(POD)`
+/// branch and draws from the deterministic sim RNG through an xorshift
+/// whitener. Ordinary aircraft keep the zero init. The draw is a per-unit
+/// constant in elmos, keyed on the spawn sequence number so two pods never
+/// share it and replays stay identical without touching the live RNG stream.
+/// `spanElmos` is the authored spread the adjustment ranges over; `draw01`
+/// is one uniform draw in [0, 1).
+[[nodiscard]] Fx podElevationAdjustment(Fx spanElmos, Fx draw01) noexcept;
+
 /// Sends a unit along a route, aiming it at the first waypoint.
 ///
 /// An empty path stops the unit rather than leaving it heading wherever it was:

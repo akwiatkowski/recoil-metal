@@ -1139,7 +1139,7 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
 /// ammunition. A counted weapon with NO silo record still fires — `HasSiloAmmo` is true
 /// when the unit has no silo object (`C-085`).
 [[nodiscard]] bool siloGateOpen(const UnitId owner, const unitdef::Weapon& weapon,
-                                std::span<SiloAmmo> siloAmmo) noexcept {
+                                std::span<const SiloAmmo> siloAmmo) noexcept {
     if (!weapon.countedProjectile) {
         return true;
     }
@@ -1740,7 +1740,7 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                            std::span<const Army> armies, const Intel* intel,
                            const std::vector<Projectile>* projectiles,
                            const PlayableRect* playableRect, TickIndex tick, TickRate rate,
-                           std::span<const WorkClaim> claims) {
+                           std::span<const WorkClaim> claims, std::span<const SiloAmmo> siloAmmo) {
     const std::span<Transform> transforms = store.transforms();
     const std::span<const MoveState> motion = store.motion();
     const std::span<const Health> healths = store.health();
@@ -1804,6 +1804,13 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
             std::optional<std::array<Fx, 3>> candidatePosition;
             std::optional<UnitId> candidateUnit;
             if (weapon.targetsProjectiles) {
+                // `C-511`/`C-423`: the third `HasSiloAmmo` site (`0x005DEAD0`) is a
+                // silo-target-acquire helper — an empty counted silo does not even scan
+                // for incoming missiles, so the hull holds for a shot the weapon cannot
+                // answer. A counted weapon with no silo record still acquires (`C-085`).
+                if (weapon.countedProjectile && !siloGateOpen(store.idAt(slot), weapon, siloAmmo)) {
+                    continue;
+                }
                 if (projectiles != nullptr) {
                     if (const Projectile* candidate = nearestProjectileTarget(
                             from, motion[slot].armyIndex, weapon, *projectiles, armies)) {
@@ -2374,15 +2381,32 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             const std::array<Fx, 3> to = [&] {
                 if (weapon.needToComputeBombDrop) {
                     // `C-224`: the release point — the target's position led by
-                    // the firer's `PredictAheadForBombDrop` seconds. The
-                    // `BombDropThreshold` gate below, not the range/arc
-                    // envelope, decides when the bomb leaves.
+                    // the firer's `PredictAheadForBombDrop` seconds. Automatic
+                    // fire leads from the deterministic blip for a radar/sonar
+                    // contact (`C-277` family; 96 elmos per `LosHandler.h:322`),
+                    // from truth for a sighting or an explicit attack — the
+                    // same estimate the shot will use, so aim and fire agree.
+                    // Units: blip and step in elmos, lead in ticks. No sim RNG.
                     const std::array<Fx, 3> exact = positionOf(transforms[target->index]);
                     const Fx lead = Fx::fromInt(static_cast<std::int32_t>(
                         rate.ticks(seconds(def->airPredictAheadForBombDropSec))));
-                    return std::array<Fx, 3>{exact[0] + motions[target->index].stepX * lead,
-                                             exact[1],
-                                             exact[2] + motions[target->index].stepZ * lead};
+                    std::array<Fx, 3> base = exact;
+                    if (!hasExplicitAttack && intel != nullptr) {
+                        const Army* mine = armyFor(army, armies);
+                        const std::optional<ContactKind> kind =
+                            mine != nullptr
+                                ? contactKindForUnit(mine->alliance, target->index, store,
+                                                     catalog, armies, *intel)
+                                : std::nullopt;
+                        if (kind == ContactKind::Radar || kind == ContactKind::Sonar) {
+                            const auto [blipX, blipZ] = radarBlipPosition(
+                                *target, exact[0], exact[2], tick, rate);
+                            base = {blipX, exact[1], blipZ};
+                        }
+                    }
+                    return std::array<Fx, 3>{base[0] + motions[target->index].stepX * lead,
+                                             base[1],
+                                             base[2] + motions[target->index].stepZ * lead};
                 }
                 if (!hasExplicitAttack && !weapon.beam) {
                     return automaticProjectileAimPosition(
