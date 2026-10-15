@@ -109,6 +109,16 @@ private:
     struct Instance {
         std::uint32_t self = 0;
     };
+    // `C-228` task natives (`0x0062a1b0`… `0x0062a040`, `C-436`): `GetUnit`
+    // hands the instance its owning unit table, `SetAIResult` records the
+    // 0..3 result the dispatcher's `aiResult` state carries, and the `Enhance`
+    // family carries the `EnhanceTask.lua:11-80` `Stopping`/`Enhancing` beats.
+    // All file-local in the .cpp; the entry points below wire them per dispatch.
+    void pushTaskNatives(rm::sim::UnitId unit, const std::string& taskKey,
+                         rm::sim::ScriptTaskState* state);
+    void clearTaskNatives();
+    void bindTaskNatives(rm::sim::UnitId unit, const std::string& taskKey,
+                         rm::sim::ScriptTaskState* state);
 
     [[nodiscard]] Instance ensureInstance(rm::sim::UnitId unit, std::string_view task,
                                           rm::sim::ScriptTaskState& state,

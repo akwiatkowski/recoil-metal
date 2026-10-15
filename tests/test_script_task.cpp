@@ -1196,6 +1196,90 @@ TEST_CASE("C-388: ScriptHost resolves TaskName by sprintf path with ScriptTask.l
     }
     std::filesystem::remove_all(scratch);
 }
+TEST_CASE("C-228: ScriptHost binds GetUnit/SetAIResult so the shipped EnhanceTask runs") {
+    // `C-228` (`/lua/sim/tasks/EnhanceTask.lua:11-80`): the shipped task's first
+    // two beats touch ONLY four natives — `self:GetUnit():SetWorkProgress(0)`,
+    // `:SetUnitState('Enhancing'/'Upgrading',true)`, `IsMobile`+`IsMoving` on
+    // the `Stopping` beat, and `:OnWorkBegin(Enhancement)` before `Repeat`
+    // (`ChangeState` → `Stopping`). The host currently binds no task natives,
+    // so the real file dies in `OnCreate` with `attempt to call a nil value
+    // (method 'GetUnit')` and the queue retires at once. This case runs the
+    // shipped-syntax task through `ensureInstance` + `taskTick` and requires
+    // the `Stopping` beat to admit an immobile unit — the task's own `Repeat`
+    // result proves the natives ran; a missing binding retires the queue Done.
+    rm::vfs::Vfs content;
+    rm::app::ScriptHost host{content};
+    host.registerTask("EnhanceProbe", rm::app::ScriptTaskRegistration{
+        .source =
+            "TASKSTATUS = { Done = -1, Suspend = -2, Abort = -3, Delay = -4,"
+            " Repeat = 0, Wait = 1 }\n"
+            "AIRESULT = { Unknown = 0, Success = 1, Fail = 2, Ignored = 3 }\n"
+            "EnhanceTask = Class({}) {\n"
+            "  OnCreate = function(self, commandData)\n"
+            "    self.CommandData = commandData\n"
+            "    self:GetUnit():SetWorkProgress(0.0)\n"
+            "    self:GetUnit():SetUnitState('Enhancing', true)\n"
+            "    self:GetUnit():SetUnitState('Upgrading', true)\n"
+            "    self.LastProgress = 0\n"
+            "    ChangeState(self, self.Stopping)\n"
+            "  end,\n"
+            "  Stopping = State {\n"
+            "    TaskTick = function(self)\n"
+            "      local unit = self:GetUnit()\n"
+            "      if unit:IsMobile() and unit:IsMoving() then\n"
+            "        unit:GetNavigator():AbortMove()\n"
+            "        return TASKSTATUS.Wait\n"
+            "      else\n"
+            "        unit:OnWorkBegin(self.CommandData.Enhancement)\n"
+            "        ChangeState(self, self.Enhancing)\n"
+            "        return TASKSTATUS.Repeat\n"
+            "      end\n"
+            "    end,\n"
+            "  },\n"
+            "  Enhancing = State {\n"
+            "    TaskTick = function(self) return 1 end,\n"
+            "  },\n"
+            "}\n"
+            "TypeClass = EnhanceTask\n",
+    });
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "enhance_probe";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+    const std::vector<std::uint8_t> data{static_cast<std::uint8_t>('E')};
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "EnhanceProbe",
+                              .scriptData = data},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    // `OnCreate` must survive the natives (a nil `GetUnit` retires the queue
+    // Done here instead); the `Stopping` beat then returns `Repeat` (0), which
+    // the dispatcher loops into the `Enhancing` beat's `Wait` (1) on the same
+    // advance. Waiting — not empty — proves the shipped shape ran.
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                 nullptr, &host) == 1);
+    CHECK_FALSE(roster.store.orders()[unit.index].empty());
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                 nullptr, &host) == 0);
+    for (const auto& err : host.errors()) WARN("lua: " << err);
+    CHECK(host.errors().empty());
+}
+
 
 TEST_CASE("C-313: ScriptHost publishes __active_mods and hook-concats mod task copies") {
     // `C-313` (`0x0052fece`): `__active_mods` is built natively from

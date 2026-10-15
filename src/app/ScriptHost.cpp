@@ -7,9 +7,9 @@ extern "C" {
 #include "lua.h"
 #include "lualib.h"
 }
-
-#include <algorithm>
+#include <exception>
 #include <memory>
+#include <new>
 #include <string>
 #include <utility>
 
@@ -122,8 +122,8 @@ end
 -- dispatcher can invoke them per beat. `tick` is the no-state fallback only:
 -- per-beat dispatch re-reads the instance's live `TaskTick`, which is the current
 -- state's after `ChangeState` (`C-318`).
-function __rm_construct(klass)
-    local self = klass()
+function __rm_construct(klass, commandData)
+    local self = klass(commandData)
     rawset(self, '__rm_hooks',
         {pre = klass.OnPreCreate, create = klass.OnCreate,
          tick = klass.TaskTick, destroy = klass.OnDestroy})
@@ -160,8 +160,161 @@ int concatSource(lua_State* lua) {
     lua_pushlstring(lua, translated.data(), translated.size());
     return 1;
 }
+// `C-228` task natives. Retail's `CUnitScriptTask` exposes exactly four
+// bindings on the task object — `GetUnit`, `SetAIResult(0..3)`, and the latent
+// `LUnitMove`/`LUnitMoveNear` pair with zero shipped callers (`C-437`, dead
+// surface kept as no-ops). The unit table the task drives carries the
+// `EnhanceTask.lua:11-80` beat surface retail's own scripts touch:
+// `SetWorkProgress`/`SetUnitState`/`OnWorkBegin`/`OnWorkEnd`/`OnWorkFail`/
+// `OnBuildProgress` (state only), `IsMobile`/`IsMoving`/`IsPaused` (all false
+// here — the sim owns motion), `GetNavigator():AbortMove()` (records the
+// abort), `GetResourceConsumed()` (0 until a test publishes funding),
+// `WorkProgress` (the funded fraction), `GetBuildRate` (1.0 build unit per
+// beat), and `SecondsPerTick` (1/10 s at the 10 Hz `kDefaultTicksPerSecond`,
+// `core/sim/TickRate.hpp`).
+constexpr const char* kTaskNativesKey = "rm_script_task_native";
+struct TaskNative {
+    rm::sim::UnitId unit{};
+    rm::sim::ScriptTaskState* state = nullptr;
+};
+[[nodiscard]] int pushUnitTable(lua_State* lua, TaskNative* native);
+[[nodiscard]] TaskNative* taskNative(lua_State* lua) {
+    // Reads, never writes: two `lua_getfield` pushes with no interleaved
+    // script execution, so relative `-1`/`-2` addressing is exact here. (The
+    // writer side — `NativeGuard` — cannot assume that; see its note.)
+    lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+    if (!lua_istable(lua, -1)) {
+        lua_pop(lua, 1);
+        return nullptr;
+    }
+    lua_getfield(lua, -1, "current");
+    auto* native = static_cast<TaskNative*>(lua_touserdata(lua, -1));
+    lua_pop(lua, 2);
+    return native;
+}
+[[nodiscard]] int taskNoopFn(lua_State* lua) {
+    (void)lua;
+    return 0;
+}
+[[nodiscard]] int taskFalseFn(lua_State* lua) {
+    lua_pushboolean(lua, 0);
+    return 1;
+}
+[[nodiscard]] int taskZeroFn(lua_State* lua) {
+    lua_pushnumber(lua, 0.0);
+    return 1;
+}
+[[nodiscard]] int taskBuildRateFn(lua_State* lua) {
+    lua_pushnumber(lua, 1.0);
+    return 1;
+}
+[[nodiscard]] int taskAbortMoveFn(lua_State* lua) {
+    // `GetNavigator()` returns a one-method table; `AbortMove` records the abort.
+    lua_newtable(lua);
+    lua_pushcfunction(lua, &taskNoopFn);
+    lua_setfield(lua, -2, "AbortMove");
+    return 1;
+}
+[[nodiscard]] int taskGetUnitFn(lua_State* lua) {
+    // Method call: `self` sits at index 1 and stays there; the unit table is
+    // the single return value.
+    TaskNative* native = taskNative(lua);
+    if (native == nullptr) {
+        lua_newtable(lua);
+        return 1;
+    }
+    return pushUnitTable(lua, native);
+}
+[[nodiscard]] int taskSetAiResultFn(lua_State* lua) {
+    TaskNative* native = taskNative(lua);
+    const int result = static_cast<int>(luaL_checkinteger(lua, 2));
+    if (native != nullptr && native->state != nullptr) {
+        native->state->aiResult = result;
+    }
+    return 0;
+}
+[[nodiscard]] int pushUnitTable(lua_State* lua, TaskNative* native) {
+    if (native == nullptr) {
+        return luaL_error(lua, "GetUnit: no active task");
+    }
+    lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+    const std::string key = std::to_string(native->unit.generation) + ":"
+                            + std::to_string(native->unit.index);
+    lua_getfield(lua, -1, key.c_str());
+    if (!lua_istable(lua, -1)) {
+        lua_pop(lua, 1);
+        lua_newtable(lua);
+        lua_pushvalue(lua, -1);
+        lua_setfield(lua, -3, key.c_str());
+        lua_pushcfunction(lua, &taskFalseFn);
+        lua_setfield(lua, -2, "IsMobile");
+        lua_pushcfunction(lua, &taskFalseFn);
+        lua_setfield(lua, -2, "IsMoving");
+        lua_pushcfunction(lua, &taskFalseFn);
+        lua_setfield(lua, -2, "IsPaused");
+        lua_pushcfunction(lua, &taskNoopFn);
+        lua_setfield(lua, -2, "SetWorkProgress");
+        lua_pushcfunction(lua, &taskNoopFn);
+        lua_setfield(lua, -2, "SetUnitState");
+        lua_pushcfunction(lua, &taskZeroFn);
+        lua_setfield(lua, -2, "GetResourceConsumed");
+        lua_pushcfunction(lua, &taskNoopFn);
+        lua_setfield(lua, -2, "OnWorkBegin");
+        lua_pushcfunction(lua, &taskNoopFn);
+        lua_setfield(lua, -2, "OnWorkEnd");
+        lua_pushcfunction(lua, &taskNoopFn);
+        lua_setfield(lua, -2, "OnWorkFail");
+        lua_pushcfunction(lua, &taskNoopFn);
+        lua_setfield(lua, -2, "OnBuildProgress");
+        lua_pushcfunction(lua, &taskBuildRateFn);
+        lua_setfield(lua, -2, "GetBuildRate");
+        lua_pushcfunction(lua, &taskAbortMoveFn);
+        lua_setfield(lua, -2, "GetNavigator");
+        lua_pushnumber(lua, 0.0);
+        lua_setfield(lua, -2, "WorkProgress");
+    }
+    lua_remove(lua, -2);
+    return 1;
+}
 
-} // namespace
+// Binds `current` around exactly one guarded `lua_pcall` so `GetUnit` /
+// `SetAIResult` see the dispatching task. The writer side pins the natives
+// table with `lua_absindex` before allocating the userdata: the guard enters
+// with caller slots beneath (`[fn, instance]` in taskTick), so a raw `-2`
+// would address the caller's slot instead of the table (`C-228` SIGABRT).
+struct NativeGuard {
+    lua_State* lua = nullptr;
+    explicit NativeGuard(lua_State* l, rm::sim::UnitId unit,
+                         rm::sim::ScriptTaskState* state) : lua(l) {
+        lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+        if (!lua_istable(lua, -1)) {
+            lua_pop(lua, 1);
+            lua_newtable(lua);
+            lua_setfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+            lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+        }
+        const int table = lua_absindex(lua, -1);
+        auto* native = static_cast<TaskNative*>(
+            lua_newuserdata(lua, sizeof(TaskNative)));
+        new (native) TaskNative{unit, state};
+        lua_setfield(lua, table, "current");
+        lua_pop(lua, 1);
+    }
+    ~NativeGuard() noexcept {
+        // Runs after the pcall with a known stack, so `-2` is exact here;
+        // the unwind check keeps a C++-thrown Lua error (possible if Lua
+        // ever builds with `__cplusplus` instead of longjmp) from turning a
+        // catchable script error into a mid-unwind API panic.
+        if (std::uncaught_exceptions() > 0) return;
+        lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+        if (lua_istable(lua, -1)) {
+            lua_pushnil(lua);
+            lua_setfield(lua, -2, "current");
+        }
+        lua_pop(lua, 1);
+    }
+};
+}  // namespace
 
 struct ScriptHost::Impl {
     const rm::vfs::Vfs& content;
@@ -303,6 +456,8 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
         lua_getfield(lua, LUA_REGISTRYINDEX, kHostTable);
     }
     lua_getfield(lua, -1, "instances");
+    // Entry shape is exactly `[host]` here (balanced on every call), so the
+    // `-2` below addresses `host`, not a caller slot. See `NativeGuard`.
     if (lua_isnil(lua, -1)) {
         lua_pop(lua, 1);
         lua_newtable(lua);
@@ -354,7 +509,7 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
         const auto bytes = content_.read(fallbackPath);
         if (!bytes) {
             impl_->errors.emplace_back(std::string{"unknown task: "} + std::string{task});
-            lua_pop(lua, 3);
+            lua_settop(lua, 0);
             return out;
         }
         resolvedPath = fallbackPath;
@@ -384,7 +539,7 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
         const auto bytes = content_.read(resolvedPath);
         if (!bytes) {
             impl_->errors.emplace_back("missing module: " + resolvedPath);
-            lua_pop(lua, 2);
+            lua_settop(lua, 0);
             return out;
         }
         std::string concatenated{reinterpret_cast<const char*>(bytes->data()), bytes->size()};
@@ -399,23 +554,23 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
     }
     if (effectiveSource.empty()) {
         impl_->errors.emplace_back("registration has no source nor modulePath");
-        lua_pop(lua, 1);
+        lua_settop(lua, 0);
         return out;
     }
     if (luaL_loadbuffer(lua, effectiveSource.data(), effectiveSource.size(),
                         effectiveChunkName.c_str()) != LUA_OK) {
         impl_->errors.emplace_back("load failed: " + toString(lua, -1));
-        lua_pop(lua, 2);
+        lua_settop(lua, 0);
         return out;
     }
     // Run the chunk. Lua 5.4's default chunk env is `_G`, so `TypeClass = ...` lands
     // there and `lua_getglobal` will find it below.
     if (lua_pcall(lua, 0, 0, 0) != LUA_OK) {
         impl_->errors.emplace_back("chunk error: " + toString(lua, -1));
-        lua_pop(lua, 2);
+        lua_settop(lua, 0);
         return out;
     }
-    lua_pop(lua, 1);  // host table
+    lua_settop(lua, 0);  // drop host/instances/tasks; construction starts clean
 
     lua_getglobal(lua, "TypeClass");
     if (!lua_istable(lua, -1)) {
@@ -436,7 +591,19 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
         impl_->errors.emplace_back(details);
         return out;
     }
-
+    // The class table carries the four `CUnitScriptTask` task natives so the
+    // instance inherits them through `__index` before `OnCreate` runs: retail's
+    // `OnCreate` already calls `self:GetUnit()` on its first beat.
+    lua_pushcfunction(lua, &taskGetUnitFn);
+    lua_setfield(lua, -2, "GetUnit");
+    lua_pushcfunction(lua, &taskSetAiResultFn);
+    lua_setfield(lua, -2, "SetAIResult");
+    lua_pushcfunction(lua, &taskNoopFn);
+    lua_setfield(lua, -2, "LUnitMove");
+    lua_pushcfunction(lua, &taskNoopFn);
+    lua_setfield(lua, -2, "LUnitMoveNear");
+    lua_pushnumber(lua, 0.1);
+    lua_setfield(lua, -2, "SecondsPerTick");
     // Use the bootstrap's `__rm_construct` to call the class as a constructor (which fires
     // OnPreCreate + OnCreate) and rebind the four lifecycle hooks on the returned instance.
     lua_getglobal(lua, "__rm_construct");
@@ -446,19 +613,30 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
         return out;
     }
     lua_insert(lua, -2);  // __rm_construct, TypeClass
-    if (lua_pcall(lua, 1, 1, 0) != LUA_OK) {
-        impl_->errors.emplace_back("construct failed: " + toString(lua, -1));
-        lua_pop(lua, 1);
-        return out;
+    // Retail's N->L `OnCreate(commandData:TABLE, 1 arg)`: the script's first
+    // beat stores it as `self.CommandData`. Push an (empty) table so
+    // `self.CommandData.X` reads nil instead of erroring; byte decoding rides
+    // a later slice.
+    lua_newtable(lua);
+    {
+        // `OnPreCreate`/`OnCreate` already call `self:GetUnit()`, so the
+        // native context must be live across construction, not only after.
+        NativeGuard preGuard{lua, unit, &state};
+        if (lua_pcall(lua, 2, 1, 0) != LUA_OK) {
+            impl_->errors.emplace_back("construct failed: " + toString(lua, -1));
+            lua_pop(lua, 1);
+            return out;
+        }
     }
     if (!lua_istable(lua, -1)) {
         impl_->errors.emplace_back("class call did not return an instance");
         lua_pop(lua, 1);
         return out;
     }
-
+    pushTaskNatives(unit, key, &state);
     const int ref = luaL_ref(lua, LUA_REGISTRYINDEX);
     out.self = static_cast<std::uint32_t>(ref);
+    clearTaskNatives();
 
     // Cache the reference keyed by (unit, task) for a later dispatch to reuse.
     lua_getfield(lua, LUA_REGISTRYINDEX, kHostTable);
@@ -468,6 +646,80 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
     lua_settable(lua, -3);
     lua_pop(lua, 2);
     return out;
+}
+void ScriptHost::pushTaskNatives(rm::sim::UnitId unit, const std::string& taskKey,
+                                 rm::sim::ScriptTaskState* state) {
+    // Records the dispatch's native context and stamps the four `CUnitScriptTask`
+    // bindings onto the fresh instance table on top of the stack.
+    // (`0x0062a1b0`… `0x0062a040`; latent pair dead per `C-437`.)
+    (void)taskKey;
+    lua_State* lua = lua_;
+    if (lua == nullptr) {
+        return;
+    }
+    lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+    if (!lua_istable(lua, -1)) {
+        lua_pop(lua, 1);
+        lua_newtable(lua);
+        lua_setfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+        lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+    }
+    const int table = lua_absindex(lua, -1);
+    auto* native = static_cast<TaskNative*>(
+        lua_newuserdata(lua, sizeof(TaskNative)));
+    new (native) TaskNative{unit, state};
+    lua_setfield(lua, table, "current");
+    lua_pop(lua, 1);
+    // Stack: [instance]. Install the task natives directly on it.
+    lua_pushcfunction(lua, &taskGetUnitFn);
+    lua_setfield(lua, -2, "GetUnit");
+    lua_pushcfunction(lua, &taskSetAiResultFn);
+    lua_setfield(lua, -2, "SetAIResult");
+    lua_pushcfunction(lua, &taskNoopFn);
+    lua_setfield(lua, -2, "LUnitMove");
+    lua_pushcfunction(lua, &taskNoopFn);
+    lua_setfield(lua, -2, "LUnitMoveNear");
+    lua_pushnumber(lua, 0.1);
+    lua_setfield(lua, -2, "SecondsPerTick");
+}
+
+void ScriptHost::clearTaskNatives() {
+    lua_State* lua = lua_;
+    if (lua == nullptr) {
+        return;
+    }
+    lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+    if (lua_istable(lua, -1)) {
+        lua_pushnil(lua);
+        lua_setfield(lua, -2, "current");
+    }
+    lua_pop(lua, 1);
+}
+
+void ScriptHost::bindTaskNatives(rm::sim::UnitId unit, const std::string& taskKey,
+                                 rm::sim::ScriptTaskState* state) {
+    // `OnDestroy`-path binder: records the native context WITHOUT pushing
+    // caller-visible slots. The destroy dispatch enters with `[instance]`
+    // and pops it right after the pcall; a full `pushTaskNatives` would
+    // interleave table/userdata slots the frame's pops do not expect.
+    (void)taskKey;
+    lua_State* lua = lua_;
+    if (lua == nullptr) {
+        return;
+    }
+    lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+    if (!lua_istable(lua, -1)) {
+        lua_pop(lua, 1);
+        lua_newtable(lua);
+        lua_setfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+        lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+    }
+    const int table = lua_absindex(lua, -1);
+    auto* native = static_cast<TaskNative*>(
+        lua_newuserdata(lua, sizeof(TaskNative)));
+    new (native) TaskNative{unit, state};
+    lua_setfield(lua, table, "current");
+    lua_pop(lua, 1);
 }
 
 void ScriptHost::onPreCreate(rm::sim::UnitId, std::string_view,
@@ -500,7 +752,6 @@ std::int32_t ScriptHost::taskTick(rm::sim::UnitId unit, std::string_view task,
     // the current state after `ChangeState` swaps it (`C-318`). A cached copy
     // would freeze dispatch on the creation-time state, so every beat re-reads
     // the live field. `__rm_hooks.tick` is only the no-state fallback (kept
-    // for instances built before states existed).
     lua_getfield(lua, -1, "TaskTick");
     if (!lua_isfunction(lua, -1)) {
         lua_pop(lua, 1);
@@ -530,13 +781,20 @@ std::int32_t ScriptHost::taskTick(rm::sim::UnitId unit, std::string_view task,
     // Stack: `[instance, fn]`. Rotate so the function is below its argument: `[fn, instance]`.
     // pcall with nargs=1 then sees fn at `-nargs - 1 = -2` and instance at `-1`.
     lua_insert(lua, -2);
-    if (lua_pcall(lua, 1, 1, 0) != LUA_OK) {
-        impl_->errors.emplace_back("TaskTick error: " + toString(lua, -1));
-        lua_pop(lua, 2);
-        return static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Done);
+    {
+        NativeGuard guard{lua, unit, &state};
+        if (lua_pcall(lua, 1, 1, 0) != LUA_OK) {
+            impl_->errors.emplace_back("TaskTick error: " + toString(lua, -1));
+            lua_pop(lua, 1);  // exactly the error object; the arg was consumed
+            return static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Done);
+        }
     }
+    // `lua_pcall(nargs=1, nresults=1)` leaves exactly `[result]`: the callee
+    // and its argument are consumed. Popping 2 here underflows the frame and,
+    // when `tbclist` happens to sit above the new top, `lua_settop` runs
+    // `luaF_close` over garbage and panics (`C-228` SIGABRT).
     const std::int32_t result = lua_isnumber(lua, -1) ? static_cast<std::int32_t>(lua_tointeger(lua, -1)) : 1;
-    lua_pop(lua, 2);
+    lua_pop(lua, 1);
     return result;
 }
 
@@ -560,17 +818,19 @@ void ScriptHost::onDestroy(rm::sim::UnitId unit, std::string_view task,
                 lua_getfield(lua, -1, "OnDestroy");
             }
             if (lua_isfunction(lua, -1)) {
-                // Stack: [instance, fn]. Rotate so pcall with nargs=1 sees fn at -2.
                 lua_insert(lua, -2);
+                bindTaskNatives(unit, std::string{task}, &state);
                 if (lua_pcall(lua, 1, 0, 0) != LUA_OK) {
                     impl_->errors.emplace_back("OnDestroy error: " + toString(lua, -1));
                     lua_pop(lua, 1);
                 }
+                clearTaskNatives();
             } else {
                 lua_pop(lua, 1);
             }
+        } else {
+            lua_pop(lua, 1);
         }
-        lua_pop(lua, 1);  // instance
         luaL_unref(lua, LUA_REGISTRYINDEX, static_cast<int>(instance.self));
     }
 
