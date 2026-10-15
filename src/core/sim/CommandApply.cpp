@@ -366,6 +366,31 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     }
     return 7;
 }
+/// ART-S007 `GrowthFormation`'s sub half (formations.lua:709-721) sails submerged
+/// hulls in their own blocks on the same sea-counter beats: three-wide up to nine
+/// (`ThreeWideSubGrowthFormation`, 2 rows of 3, formations.lua:534-539), five-wide
+/// past that — both `FiveWideSubGrowthFormation` (3 rows of 5, formations.lua:541-547)
+/// and `SevenWideSubGrowthFormation` (4 rows of 5, formations.lua:549-557) lay five
+/// columns, so the 25/49 beats re-fill rather than widen. AttackMove's sub half
+/// (formations.lua:654-666) is the 5/7/9-wide split at ten and twenty-five
+/// (`FiveWideSubGrowthFormation` reused at 656, `SevenWideSubAttackFormation` 3 rows
+/// of 7 at 659, `NineWideSubAttackFormation` 4 rows of 9 at 662-665). Widths feed the
+/// same `BlockBuilderLand` slot geometry, anchor, facing and retry path as land.
+[[nodiscard]] std::size_t subFormationWidth(std::size_t hulls, bool attack) noexcept {
+    if (attack) {
+        if (hulls <= 10) {
+            return 5;
+        }
+        if (hulls <= 25) {
+            return 7;
+        }
+        return 9;
+    }
+    if (hulls <= 9) {
+        return 3;
+    }
+    return 5;
+}
 
 [[nodiscard]] const std::shared_ptr<SharedCommand>& ensureSharedCommand(
     const Command& command, CommandSource source, CommandId id, std::uint32_t count,
@@ -874,19 +899,27 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     std::ranges::stable_sort(formationMembers, {}, formationClass);
     // Retail routes each layer class through its own blocks (`GrowthFormation`
     // formations.lua:679-723, `AttackFormation` formations.lua:622-668): land
-    // hulls through the land widths, surface hulls through the naval ones.
-    // A surface hull is the `surfaceWater` motion flag `Roster` derives from
-    // `MotionType::Water`; subs keep the land block until their own split lands.
+    // hulls through the land widths, surface hulls through the naval ones, and
+    // submerged hulls through the sub blocks. A surface hull is the `surfaceWater`
+    // motion flag; a submerged hull is the `submersible` flag `SceneBuild` derives
+    // from `MotionType::SurfacingSub`.
     const bool allSurfaceWater = std::ranges::all_of(formationMembers, [&](UnitId unit) {
         return store.motion()[unit.index].surfaceWater;
     });
-    const std::size_t formationWidth = allSurfaceWater
-                                           ? navalFormationWidth(formationMembers.size(),
-                                                                 isAttackOrder)
-                                           : (isAttackOrder
-                                                  ? attackFormationWidth(formationMembers.size())
-                                                  : growthFormationWidth(
-                                                        formationMembers.size()));
+    const bool allSubmerged = std::ranges::all_of(formationMembers, [&](UnitId unit) {
+        return store.motion()[unit.index].submersible;
+    });
+    const std::size_t formationWidth = allSubmerged
+                                           ? subFormationWidth(formationMembers.size(),
+                                                               isAttackOrder)
+                                           : (allSurfaceWater
+                                                  ? navalFormationWidth(
+                                                        formationMembers.size(), isAttackOrder)
+                                                  : (isAttackOrder
+                                                         ? attackFormationWidth(
+                                                               formationMembers.size())
+                                                         : growthFormationWidth(
+                                                               formationMembers.size())));
     // The formation's facing. Retail carries it on the wire command as an orientation
     // quaternion (`C-151`, `CDecoder::DecodeCommandData` +0x3c..+0x48) that the engine
     // applies to the Lua `FormationPos` offsets — the script itself returns unrotated

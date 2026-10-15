@@ -387,8 +387,11 @@ TEST_CASE("the motion class decides where a unit may go, since the file does not
     };
 
     for (const Case& c : cases) {
+        // `C-218 (3)`: a class with `MaxSpeed == 0` reads as `None`, so every
+        // mobile class states a nonzero speed here — the table pins the class
+        // mapping, the (3) case pins the zero gate.
         const std::string source = std::string{"UnitBlueprint { SizeX = 1, SizeZ = 1, Physics = { "}
-                                 + "MotionType = '" + std::string{c.motion} + "' } }";
+                                 + "MotionType = '" + std::string{c.motion} + "', MaxSpeed = 1 } }";
         const Blueprint bp{"X_unit.bp", source};
         const auto def = rm::unitbp::loadFile(bp.path());
         REQUIRE(def.has_value());
@@ -1500,4 +1503,34 @@ TEST_CASE("C-224: TightTurnMultiplier parses with a 1 default when unauthored") 
     const auto none = rm::unitbp::loadFile(bare.path());
     REQUIRE(none.has_value());
     CHECK(none->airTightTurnMultiplier == Catch::Approx(1.0f));
+}
+TEST_CASE("C-218 (3): a stated motion class with MaxSpeed 0 reads as immobile") {
+    // `C-218`'s third explicit-0-vs-absent site (`fa-exe-analysis-plan.md`, corroborated
+    // by `RUnitBlueprint::IsMobile` being literally `bp[0x290] != 0`): retail forces
+    // `Physics.MotionType` to `RULEUMT_None` when `MaxSpeed == 0`, so an explicit zero
+    // is indistinguishable from an absent key. A mod blueprint stating a motion class
+    // but no speed is a structure wearing a mover's class, not a mover. Currently
+    // fails: the stated class survives with a zero speed.
+    const Blueprint zero{"XXB0801_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 0 },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto still = rm::unitbp::loadFile(zero.path());
+    REQUIRE(still.has_value());
+    CHECK(still->motion == MotionType::None);
+    CHECK_FALSE(still->isMobile());
+    CHECK(still->speedElmosPerSecond == 0.0f);
+    // Absence agrees: no MaxSpeed key is the same immobile answer.
+    const Blueprint absent{"XXB0802_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land' },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto gone = rm::unitbp::loadFile(absent.path());
+    REQUIRE(gone.has_value());
+    CHECK(gone->motion == MotionType::None);
+    CHECK_FALSE(gone->isMobile());
 }

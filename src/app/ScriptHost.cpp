@@ -8,6 +8,7 @@ extern "C" {
 #include "lualib.h"
 }
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -192,11 +193,16 @@ void ScriptHost::setActiveMods(std::vector<rm::vfs::ActiveMod> mods) {
     // `C-313` (`0x0052fece`): retail builds `__active_mods` natively from
     // `gameInfo.GameMods`, so the host owns the table and Lua reads it. Order
     // is `before`/`after` uid constraints, uid-alphabetical otherwise
-    // (`mods.lua` `ModComp`). Ticks here are 100 ms (`TickRate` 10 Hz,
+    // (`mods.lua` `ModComp`). `ui_only` mods never reach the sim session —
+    // the user session appends them separately — so the sim table carries
+    // sim mods only. Ticks here are 100 ms (`TickRate` 10 Hz,
     // `core/sim/TickRate.hpp`); retail's 10 Hz sim clock is the same source
     // the `WaitTicks(n)` `n-1` scheduler quirk (`C-305`) is measured against.
     lua_State* lua = lua_;
     if (lua == nullptr) return;
+    mods.erase(std::remove_if(mods.begin(), mods.end(),
+                              [](const rm::vfs::ActiveMod& mod) { return mod.uiOnly; }),
+               mods.end());
     const std::vector<rm::vfs::ActiveMod> ordered = rm::vfs::orderActiveMods(std::move(mods));
     lua_newtable(lua);
     int index = 0;

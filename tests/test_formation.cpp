@@ -315,3 +315,83 @@ TEST_CASE("a grouped naval attack-move uses naval attack widths", "[formation]")
     CHECK(front == 5);
     CHECK(back == 1);
 }
+
+TEST_CASE("a grouped sub move sails its own growth blocks", "[formation]") {
+    // Retail `GrowthFormation` (ART-S007 lua/formations.lua:709-721) sails
+    // submerged hulls in their own blocks: up to nine subs fill a three-wide
+    // block (`ThreeWideSubGrowthFormation`, formations.lua:534-539), so a
+    // four-sub group move holds three on the anchor line with one trailing —
+    // where the land `FourWide` block would hold all four abreast.
+    Fixture fix;
+    rm::unitdef::UnitDef subDef;
+    subDef.name = "test_sub";
+    subDef.categories = {"MOBILE", "NAVAL", "SUBMERSIBLE"};
+    subDef.motion = rm::unitdef::MotionType::SurfacingSub;
+    const rm::UnitTypeIndex sub = fix.roster.addType(subDef);
+    std::vector<UnitId> group;
+    for (int i = 0; i < 4; ++i) {
+        const UnitId id = fix.roster.add(sub, 200.0f,
+                                         200.0f + 10.0f * static_cast<float>(i),
+                                         0, 500.0f);
+        fix.roster.store.motion()[id.index].submersible = true;
+        group.push_back(id);
+    }
+    const rm::sim::ApplyCommandResult result = fix.issueMove(group, 900.0f, 215.0f);
+    REQUIRE(result.accepted == group);
+
+    std::size_t front = 0;
+    std::size_t back = 0;
+    for (const UnitId member : group) {
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        const float x = rm::test::asFloat(entries.front().targetX());
+        if (x == Catch::Approx(900.0f).margin(0.01f)) {
+            ++front;
+        } else if (x == Catch::Approx(892.0f).margin(0.01f)) {
+            ++back;
+        }
+    }
+    CHECK(front == 3);
+    CHECK(back == 1);
+}
+
+TEST_CASE("a grouped sub attack-move sails its own attack blocks", "[formation]") {
+    // Retail `AttackFormation` (ART-S007 lua/formations.lua:654-666) sails
+    // submerged hulls in their own blocks too: up to ten subs fill a five-wide
+    // block (the `FiveWideSubGrowthFormation` reuse, formations.lua:656), so a
+    // six-sub group attack-move holds five on the anchor line with one trailing
+    // — where the land `TwoRow` eight-wide block would hold all six abreast.
+    Fixture fix;
+    rm::unitdef::UnitDef subDef;
+    subDef.name = "test_sub";
+    subDef.categories = {"MOBILE", "NAVAL", "SUBMERSIBLE"};
+    subDef.motion = rm::unitdef::MotionType::SurfacingSub;
+    const rm::UnitTypeIndex sub = fix.roster.addType(subDef);
+    std::vector<UnitId> group;
+    for (int i = 0; i < 6; ++i) {
+        const UnitId id = fix.roster.add(sub, 200.0f,
+                                         200.0f + 10.0f * static_cast<float>(i),
+                                         0, 500.0f);
+        fix.roster.store.motion()[id.index].submersible = true;
+        group.push_back(id);
+    }
+    const rm::sim::ApplyCommandResult result =
+        fix.issueMove(group, 900.0f, 225.0f, CommandKind::AttackMove);
+    REQUIRE(result.accepted == group);
+
+    std::size_t front = 0;
+    std::size_t back = 0;
+    for (const UnitId member : group) {
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        CHECK(entries.front().kind() == CommandKind::AttackMove);
+        const float x = rm::test::asFloat(entries.front().targetX());
+        if (x == Catch::Approx(900.0f).margin(0.01f)) {
+            ++front;
+        } else if (x == Catch::Approx(892.0f).margin(0.01f)) {
+            ++back;
+        }
+    }
+    CHECK(front == 5);
+    CHECK(back == 1);
+}

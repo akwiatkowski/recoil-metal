@@ -1299,3 +1299,72 @@ TEST_CASE("C-311: ScriptHost import and doscript concatenate hook copies") {
 
     std::filesystem::remove_all(scratch);
 }
+TEST_CASE("C-313: ScriptHost keeps ui_only mods out of the sim session") {
+    // `C-313` (`lua/mods.lua`): the sim session carries only sim mods —
+    // `ui_only` entries are appended separately in the user session. A UI
+    // mod's hook copy must not concatenate into a sim task chunk, and its
+    // entry must not appear in the sim's `__active_mods`.
+    const std::filesystem::path scratch = std::filesystem::temp_directory_path()
+        / "rm-script-host-c313-uionly";
+    std::filesystem::remove_all(scratch);
+    std::filesystem::create_directories(scratch / "stock/lua/sim/tasks");
+    std::filesystem::create_directories(scratch / "UiMod/hook/lua/sim/tasks");
+    {
+        std::ofstream base(scratch / "stock/lua/sim/tasks/C313Ui.lua");
+        base << "G_c313uimods = __active_mods\n"
+                "TypeClass = Class({}) {\n"
+                "  TaskTick = function(self, result)\n"
+                "    if G_c313uimods == nil then return -1 end\n"
+                "    if G_c313uimods[1] ~= nil then return 1 end\n"
+                "    if G_c313uihooked == true then return 1 end\n"
+                "    return -1\n"
+                "  end,\n"
+                "}\n";
+    }
+    {
+        std::ofstream hook(scratch / "UiMod/hook/lua/sim/tasks/C313Ui.lua");
+        hook << "G_c313uihooked = true\n";
+    }
+    rm::vfs::Vfs content;
+    content.mountDirectory(scratch / "stock");
+    rm::vfs::ActiveMod mod;
+    mod.uid = "uimod";
+    mod.name = "UiMod";
+    mod.location = scratch / "UiMod";
+    mod.uiOnly = true;
+    REQUIRE(content.mountMod(mod));
+    // A caller-side UI mod mount must not join the sim hook concat.
+    CHECK(content.hooksFor("/lua/sim/tasks/C313Ui.lua").empty());
+    rm::app::ScriptHost host{content};
+    host.setActiveMods({mod});
+    host.registerTask("C313Ui", rm::app::ScriptTaskRegistration{
+        .modulePath = "/lua/sim/tasks/C313Ui.lua",
+    });
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c313_ui";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "C313Ui"},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    REQUIRE(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                   nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                   nullptr, &host) == 1);
+    CHECK(roster.store.orders()[unit.index].empty());
+    CHECK(host.errors().empty());
+    std::filesystem::remove_all(scratch);
+}

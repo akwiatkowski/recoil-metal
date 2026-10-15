@@ -315,7 +315,16 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.buildOnLand = flagAt(*caps, "LAYER_Land");
         def.buildOnWater = flagAt(*caps, "LAYER_Water");
     }
-    def.motion = *motion;
+    // `C-218 (3)`: retail forces `Physics.MotionType` to `RULEUMT_None` when
+    // `MaxSpeed == 0` (`fa-exe-analysis-plan.md`; `RUnitBlueprint::IsMobile` is
+    // literally `bp[0x290] != 0`), so an explicit zero is indistinguishable from
+    // an absent key. A class with no speed is a structure wearing a mover's
+    // class, not a mover — force it to `None` before anything derives from it.
+    // Census over the 568 shipped blueprints: every mover states nonzero speed
+    // and only XSC9002/XRO4001 state `None` with a speed, so no shipped unit
+    // changes class under this rule.
+    const float rawMaxSpeedOgrids = numberOr(*physics, "MaxSpeed", 0.0f);
+    def.motion = rawMaxSpeedOgrids == 0.0f ? unitdef::MotionType::None : *motion;
     def.canFly = (def.motion == unitdef::MotionType::Air);
 
     // Ogrids per second to elmos per second. Aircraft cruise with `Air.MaxAirspeed`;
@@ -327,8 +336,8 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     const lua::Value* air = parsed->path("Air");
     const float authoredSpeed =
         def.motion == unitdef::MotionType::Air && air != nullptr
-            ? numberOr(*air, "MaxAirspeed", numberOr(*physics, "MaxSpeed", 0.0f))
-            : numberOr(*physics, "MaxSpeed", 0.0f);
+            ? numberOr(*air, "MaxAirspeed", rawMaxSpeedOgrids)
+            : rawMaxSpeedOgrids;
     def.speedElmosPerSecond = authoredSpeed * scmap::kElmosPerOgrid;
 
     // Degrees per second to radians. No 65536 and no tick rate: this family

@@ -63,6 +63,26 @@ constexpr const char* kProbe[] = {
 
 } // namespace
 
+// Retail `Unit:IsIdleState` (`0x006cc5a0`, idle state at `Unit+0x4B4`): the
+// scouting plans poll it every pass (platoon.lua AirScoutingAI/LandScoutingAI).
+// The snapshot already computes `idle` per unit, so the binding reads it back.
+TEST_CASE("FAI: idle units report IsIdleState from the snapshot flag",
+          "[faf][ai][idle]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    const bool ok = ai.eval(R"(
+        __rm_faf_type('URA0101', {'MOBILE', 'AIR', 'SCOUT'})
+        local idle = setmetatable({ bp = 'URA0101', idle = true }, __rm_faf.unitMeta)
+        local busy = setmetatable({ bp = 'URA0101', idle = false }, __rm_faf.unitMeta)
+        assert(idle:IsIdleState() == true, 'a snapshot-idle scout is idle')
+        assert(busy:IsIdleState() == false, 'a tasked scout is not idle')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
 // C-453: `Unit:GetAttacker` (`0x006cb910`) is one of two native leaves on the
 // AI-manager boundary — a per-unit attacker handle bound to its owner.
 TEST_CASE("C-453: unit GetAttacker returns an attacker bound to its unit",
@@ -3552,4 +3572,40 @@ TEST_CASE("C-418: the Artillery slot needs ARTILLERY and STRATEGIC together",
     )");
     INFO(ai.lastError());
     REQUIRE(ok);
+}
+TEST_CASE("ui_only mods never reach the sim sandbox", "[faf][ai][mods]") {
+    // `C-313` (`lua/mods.lua`): `ui_only` mods are appended in the user
+    // session, never the sim's. The sandbox hosts sim Lua, so a UI-only mod
+    // contributes no hookdir to the `C-311` concat and no `__active_mods`
+    // entry — its payload stays invisible to sim imports.
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "rm_faf_uionly_test";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root / "lua");
+    {
+        std::ofstream out{root / "lua/base.lua"};
+        out << "base_loaded = true\n";
+    }
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+    const std::filesystem::path modDir = root.parent_path() / "rm_faf_uionly_mod";
+    std::filesystem::create_directories(modDir / "hook/lua", ec);
+    {
+        std::ofstream out{modDir / "hook/lua/base.lua"};
+        out << "ui_hook_loaded = true\n";
+    }
+    rm::vfs::ActiveMod mod{.uid = "ui-only", .name = "UiOnly",
+                           .location = modDir.string()};
+    mod.uiOnly = true;
+    ai.setActiveMods({mod});
+    REQUIRE(ai.eval("assert(#__active_mods == 0)"));
+    REQUIRE(ai.import("/lua/base.lua"));
+    REQUIRE(ai.eval(R"(
+        local m = import('/lua/base.lua')
+        assert(m.base_loaded and m.ui_hook_loaded == nil)
+    )"));
+    CHECK_FALSE(ai.content().contains("/mods/rm_faf_uionly_mod/hook/lua/base.lua"));
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::remove_all(modDir, ec);
 }

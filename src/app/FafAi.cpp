@@ -1778,7 +1778,13 @@ void FafAi::setActiveMods(std::vector<rm::vfs::ActiveMod> mods) {
         return;
     }
 
-    // `C-313`: the order `gameInfo.GameMods` carries — `before`/`after` uid
+    // `C-313` (`lua/mods.lua`): `ui_only` mods never reach the sim session —
+    // the user session appends them separately. The sandbox hosts sim Lua,
+    // so it keeps sim mods only: no mount, no hookdir, no table entry.
+    mods.erase(std::remove_if(mods.begin(), mods.end(),
+                              [](const rm::vfs::ActiveMod& mod) { return mod.uiOnly; }),
+               mods.end());
+    // The order `gameInfo.GameMods` carries — `before`/`after` uid
     // constraints, uid-alphabetical otherwise.
     sandbox->activeMods = rm::vfs::orderActiveMods(std::move(mods));
 

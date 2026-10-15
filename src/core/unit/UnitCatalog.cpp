@@ -392,8 +392,13 @@ std::size_t UnitCatalog::loadBlueprints(const vfs::Vfs& content,
 
     // `C-314`: then every active mod's `.bp` files under its `/mods/<name>`
     // mount, in `__active_mods` order — before `ModBlueprints` would run, which
-    // is the hook this store's `store` already models.
+    // is the hook this store's `store` already models. `C-313`
+    // (`lua/mods.lua`): `ui_only` mods never reach the sim session, so the
+    // sim blueprint pass skips their `.bp` files too.
     for (const vfs::ActiveMod& mod : mods) {
+        if (mod.uiOnly) {
+            continue;
+        }
         scan(vfs::modMountPoint(mod));
     }
     return stored;

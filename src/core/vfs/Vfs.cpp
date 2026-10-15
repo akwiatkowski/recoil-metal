@@ -390,9 +390,12 @@ bool Vfs::mountMod(const ActiveMod& mod) {
     } else if (std::filesystem::is_regular_file(mod.location, ec)) {
         mounted = mountArchiveAt(mountPoint, mod.location);
     }
-    if (mounted) {
+    if (mounted && !mod.uiOnly) {
         // `C-312`: the mount spec's `hook` list drives SCR_AddHookDirectory —
-        // for a mod that is its hookdir under the mount point.
+        // for a mod that is its hookdir under the mount point. `C-313`
+        // (`lua/mods.lua`): `ui_only` mods never reach the sim session — the
+        // user session appends them separately — so a sim `mountMod` mounts
+        // their files but registers no hookdir for the `C-311` concat.
         addHookDirectory(modHookDirectory(mod));
     }
     return mounted;

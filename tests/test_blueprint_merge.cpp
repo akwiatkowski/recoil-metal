@@ -289,3 +289,35 @@ TEST_CASE("C-314: the mod pass scans /mods/<name> after the fixed dirs",
 
     std::filesystem::remove_all(root, ec);
 }
+TEST_CASE("C-313: the sim blueprint pass skips ui_only mods", "[blueprint][merge]") {
+    // `C-313` (`lua/mods.lua`): `ui_only` mods never reach the sim session,
+    // so `loadBlueprints` — the sim side of `C-314`'s mod pass — skips their
+    // `.bp` files. A UI-only balance overlay must not move sim stats.
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "rm_bp_uionly_test";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    const auto write = [&](const std::filesystem::path& path, std::string_view text) {
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream out{path};
+        out << text;
+    };
+    write(root / "stock/units/UEL0201/UEL0201_unit.bp",
+          "UnitBlueprint { Economy = { BuildCostMass = 100, BuildTime = 50 } }");
+    write(root / "mods/UiTweak/units/uel0201_tweak.bp",
+          "UnitBlueprint { BlueprintId = 'uel0201', Merge = true,\n"
+          "  Economy = { BuildCostMass = 1 } }");
+    rm::vfs::Vfs vfs;
+    vfs.mountDirectory(root / "stock");
+    rm::vfs::ActiveMod mod{.uid = "ui-tweak", .name = "UiTweak",
+                           .location = (root / "mods/UiTweak").string()};
+    mod.uiOnly = true;
+    REQUIRE(vfs.mountMod(mod));
+    rm::unit::UnitCatalog catalog;
+    const std::size_t stored = catalog.loadBlueprints(vfs, {mod});
+    CHECK(stored == 1);
+    const rm::lua::Value* bp = catalog.find(rm::unit::BlueprintGroup::Unit, "uel0201");
+    REQUIRE(bp != nullptr);
+    CHECK(bp->path("Economy", "BuildCostMass")->number == 100.0);
+    std::filesystem::remove_all(root, ec);
+}

@@ -185,6 +185,12 @@ __rm_faf.unitMeta = {
             if state == 'Enhancing' then return u.enhancing == true end
             return false
         end,
+        -- Retail `Unit:IsIdleState` (`0x006cc5a0`, idle state at `Unit+0x4B4`):
+        -- the scouting plans poll it every pass (platoon.lua AirScoutingAI at
+        -- line 1229, LandScoutingAI; reclaim/assist loops too). The snapshot
+        -- already computes `idle` per unit (C++: stationary and no queued
+        -- enhancement), so the binding reads the flag back.
+        IsIdleState = function(u) return u.idle ~= false end,
         -- Retail's `Entity:IsPaused`/`SetPaused`, read by `Platoon:PlatoonDisband`
         -- (platoon.lua:322-324) when it releases a platoon's units. Snapshot units
         -- are never paused; the flag is per-table so a pause survives the pass.
