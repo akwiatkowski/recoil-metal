@@ -650,6 +650,34 @@ TEST_CASE("impact marks rotate past their cap", "[decals]") {
           == Approx(600.0f - static_cast<float>(scene.impactMarks.size())));
     CHECK(scene.impactMarks.back().x == Approx(599.0f));
 }
+TEST_CASE("impact marks record retail's LOD pick", "[decals]") {
+    // Both scorch paths pass `GetRandomFloat(200,350)` as the LOD arg
+    // (`defaultexplosions.lua:211,215` C-290). Ours records the pick from the
+    // mark's own bits — replay-identical, off the sim RNG (C-297) — so the
+    // future FA-PRESENT LOD projection culls what retail would have culled.
+    rm::app::UnitScene scene;
+    rm::app::noteImpactMark(scene, 10.0f, 20.0f, 8.0f);
+    REQUIRE(scene.impactMarks.size() == 1);
+    CHECK(scene.impactMarks[0].lod >= 200);
+    CHECK(scene.impactMarks[0].lod <= 350);
+
+    // The spread is real across marks, and replay-identical per mark.
+    int lo = 351;
+    int hi = 199;
+    for (int i = 0; i < 64; ++i) {
+        rm::app::UnitScene probe;
+        rm::app::noteImpactMark(probe, static_cast<float>(i) * 1.3f,
+                                static_cast<float>(i) * 0.7f, 8.0f);
+        lo = std::min(lo, probe.impactMarks[0].lod);
+        hi = std::max(hi, probe.impactMarks[0].lod);
+    }
+    CHECK(hi - lo >= 50);
+
+    rm::app::UnitScene replay;
+    rm::app::noteImpactMark(replay, 10.0f, 20.0f, 8.0f);
+    CHECK(replay.impactMarks[0].lod == scene.impactMarks[0].lod);
+}
+
 
 TEST_CASE("a chamfered square cuts its corners at 45 degrees", "[selection-square]") {
     const auto field = flatAt(64, 0);

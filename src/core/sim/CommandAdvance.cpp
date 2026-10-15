@@ -718,7 +718,14 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             continue;
         }
         MoveState& activeMotion = store.motion()[slot];
-        const bool wingedAttack = current->kind() == CommandKind::Attack
+        // `C-412` (`Air+0x79`): `HoverOverAttack` selects retail's alternate
+        // `0x6c4f00` solver path — it does NOT bypass the state machine the way a
+        // non-winged aircraft does, it just never ENTERS it. The CZAR chases its
+        // target through the ordinary ground-style range gate below instead of
+        // running `updateWingedAttack`'s eight states.
+        const bool hoverAttack = activeMotion.canFly && activeMotion.airWinged
+                              && activeMotion.airHoverOverAttack;
+        const bool wingedAttack = !hoverAttack && current->kind() == CommandKind::Attack
                                && current->target().generation != 0
                                && store.alive(current->target())
                                && activeMotion.canFly && activeMotion.airWinged;
@@ -1446,7 +1453,12 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 MoveState& chase = store.motion()[slot];
                 const Transform& mine = store.transforms()[slot];
                 const Transform& theirs = store.transforms()[head->target().index];
-                if (head->kind() == CommandKind::Attack && chase.canFly && chase.airWinged) {
+                // `C-412` (`Air+0x79`): a hover-attack flyer (the CZAR) never enters
+                // the winged state machine — it falls through to the ordinary
+                // range gate below, holding inside weapon reach instead of running
+                // attack states 1-7.
+                if (head->kind() == CommandKind::Attack && chase.canFly && chase.airWinged
+                    && !chase.airHoverOverAttack) {
                     if (random == nullptr) {
                         throw std::logic_error("winged attacks require the match random stream");
                     }
@@ -1982,8 +1994,22 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                 if (!candidate) {
                     continue;
                 }
-                const Fx distance =
-                    groundDistanceElmos(from, positionOf(store.transforms()[candidate->index]));
+                // Automatic acquisition scores at the blip (`C-277` family; 96 elmos per
+                // `LosHandler.h:322`), so this inter-weapon rank reads the same
+                // estimate: a radar/sonar contact competes from its deterministic
+                // blip, a sighting (or intel-less caller) from truth. Distances in
+                // elmos. Identity is untouched — the winner is still the found UnitId.
+                const Transform& sight = store.transforms()[candidate->index];
+                std::array<Fx, 3> aimAt{positionOf(sight)};
+                if (intel != nullptr) {
+                    const std::optional<ContactKind> kind =
+                        mine != nullptr ? contactKindForUnit(mine->alliance, candidate->index, store, catalog, armies, *intel) : std::nullopt;
+                    if (kind == ContactKind::Radar || kind == ContactKind::Sonar) {
+                        const auto [blipX, blipZ] = radarBlipPosition(*candidate, sight.x, sight.z, tick, rate);
+                        aimAt = {blipX, sight.y, blipZ};
+                    }
+                }
+                const Fx distance = groundDistanceElmos(from, aimAt);
                 if (!nearest || distance < nearestDistance
                     || (distance == nearestDistance && candidate->index < nearest->index)) {
                     nearest = candidate;

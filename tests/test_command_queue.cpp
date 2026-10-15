@@ -2530,6 +2530,46 @@ TEST_CASE("a winged entity attack enters head-on then tail-chase inside the 30 d
     CHECK(flight.airCombatState == rm::sim::MoveState::AirCombatState::None);
     CHECK_FALSE(flight.makingAttackRun());
 }
+TEST_CASE("a HoverOverAttack flyer holds range instead of running the winged states") {
+    // `C-412` (`Air+0x79`, the UAA0310 CZAR): `HoverOverAttack` selects retail's
+    // alternate `0x6c4f00` solver path — it reads the flag once and never enters
+    // the eight-state machine (`updateWingedAttack`). The CZAR chases through
+    // the ordinary range gate instead: out of reach it routes, in reach it
+    // holds, and its combat state stays None throughout. Currently fails: the
+    // flag is never consulted, so the CZAR runs head-on like a fighter.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef czar = fighterDef();
+    czar.motion = rm::unitdef::MotionType::Air;
+    czar.airWinged = true;
+    const rm::UnitTypeIndex czarType = roster.addType(czar);
+    const rm::UnitTypeIndex targetType = roster.addType(walkerDef());
+    const UnitId czarId = roster.add(czarType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId target = roster.add(targetType, 40.0f, 120.0f, 1, 100.0f);
+    rm::sim::MoveState& flight = roster.motion(czarId);
+    flight.canFly = true;
+    flight.airWinged = true;
+    flight.airHoverOverAttack = true;
+    flight.airState = rm::sim::MoveState::AirState::Top;
+    flight.airMaxSpeedElmosPerSec = rm::sim::Fx::fromInt(160);
+    rm::sim::RandomStream random{std::uint32_t{1}};
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+    Command attack = moveTo(40.0f, 120.0f, czarId);
+    attack.kind = CommandKind::Attack;
+    attack.target = target;
+    REQUIRE(rm::sim::applyCommand(attack, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, roster.rate));
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+        nullptr, nullptr, nullptr, nullptr, nullptr, {}, nullptr, nullptr, nullptr, nullptr, &random);
+    CHECK(flight.airCombatState == rm::sim::MoveState::AirCombatState::None);
+    CHECK_FALSE(flight.makingAttackRun());
+}
+
 
 TEST_CASE("a recycled slot does not inherit the dead unit's route") {
     // The tombstone rule applied to orders. A corpse keeps its arrays so the death blast can
@@ -3248,4 +3288,81 @@ TEST_CASE("a guard prefers its blip-nearer prey over its truth-nearer one", "[in
         roster.rate);
     REQUIRE(prey.has_value());
     CHECK(*prey == far);  // truth-nearer loses: identity survives, rank follows the blip
+}
+TEST_CASE("an attack-move prefers its blip-nearer prey over its truth-nearer one", "[intel][targeting]") {
+    // FA-INTEL (`C-277` family; 96 elmos per `LosHandler.h:322`): each weapon
+    // acquires at its deterministic blip, but `updateAggressiveOrders` ranks
+    // its per-weapon winners at truth. Two guns that each own one prey — and
+    // whose preys flip order under the wander — must interrupt for the
+    // blip-nearer one. Identity survives, rank follows the blip.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef moverDef;
+    moverDef.name = "attacker";
+    moverDef.categories = {"LAND"};
+    moverDef.speedElmosPerSecond = 20.0f;
+    rm::unitdef::Weapon landGun;
+    landGun.label = "land gun";
+    landGun.role = rm::unitdef::WeaponRole::DirectFire;
+    landGun.targetPriorities = {{"LAND"}};
+    landGun.targetRestrictOnlyAllow = std::vector<std::string>{"LAND"};
+    landGun.damage = rm::sim::magFromFloat(10.0f);
+    landGun.maxRange = rm::sim::fxFromFloat(500.0f);
+    landGun.rateOfFire = 1.0f;
+    rm::unitdef::Weapon navalGun = landGun;
+    navalGun.label = "naval gun";
+    navalGun.targetPriorities = {{"NAVAL"}};
+    navalGun.targetRestrictOnlyAllow = std::vector<std::string>{"NAVAL"};
+    moverDef.weapons.push_back(landGun);
+    moverDef.weapons.push_back(navalGun);
+    moverDef.radarRadiusElmos = 500.0f;  // vision stays zero: every contact is radar-only
+    const rm::UnitTypeIndex moverType = roster.addType(moverDef);
+    rm::unitdef::UnitDef landDef;
+    landDef.name = "land enemy";
+    landDef.categories = {"LAND"};
+    rm::unitdef::UnitDef navalDef;
+    navalDef.name = "naval enemy";
+    navalDef.categories = {"NAVAL"};
+    const UnitId mover = roster.add(moverType, 0.0f, 0.0f, 0, 100.0f);
+    const UnitId near = roster.add(roster.addType(landDef), 0.0f, 150.0f, 1, 100.0f);
+    const UnitId far = roster.add(roster.addType(navalDef), 0.0f, 170.0f, 1, 100.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, near.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Radar);
+    REQUIRE(rm::sim::contactKindForUnit(0, far.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Radar);
+    // Truth always ranks the nearer prey first; the blip wanders up to 96 elmos,
+    // so some tick ranks them the other way round. The search is deterministic:
+    // the blip is a pure function of unit, tick and rate.
+    rm::TickIndex flipTick = 0;
+    bool flipped = false;
+    for (rm::TickIndex tick = 0; tick < 400 && !flipped; ++tick) {
+        const auto [nearX, nearZ] = rm::sim::radarBlipPosition(
+            near, roster.transform(near).x, roster.transform(near).z, tick, roster.rate);
+        const auto [farX, farZ] = rm::sim::radarBlipPosition(
+            far, roster.transform(far).x, roster.transform(far).z, tick, roster.rate);
+        if (farX * farX + farZ * farZ < nearX * nearX + nearZ * nearZ) {
+            flipTick = tick;
+            flipped = true;
+        }
+    }
+    REQUIRE(flipped);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+    Command attackMove = moveTo(500.0f, 0.0f, mover);
+    attackMove.kind = CommandKind::AttackMove;
+    REQUIRE(rm::sim::applyCommand(attackMove, roster.store, roster.catalog, players, armies, terrain, grid, roster.rate));
+    (void)rm::sim::updateAggressiveOrders(roster.store, roster.catalog, armies, terrain, grids,
+                                          roster.rate, &intel, nullptr, flipTick);
+    REQUIRE(roster.store.orders()[mover.index].current() != nullptr);
+    CHECK(roster.store.orders()[mover.index].current()->target() == far);
 }

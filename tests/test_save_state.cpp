@@ -620,6 +620,24 @@ TEST_CASE("a current save round-trips winged-flight state", "[save-state]") {
     CHECK(back.airTightTurnMultiplier == motion.airTightTurnMultiplier);
     CHECK(SaveState::encode(*restored) == bytes);
 }
+TEST_CASE("a current save round-trips the hover-attack flag", "[save-state]") {
+    // `C-412` (`Air+0x79`, SaveState v57): the CZAR's hover-attack flag is
+    // spawn-copied controller state, so a mid-attack save must carry it or a
+    // restored CZAR runs the winged states. Pre-v57 decodes false — the
+    // unauthored default retail implies anyway.
+    rm::sim::UnitStore original;
+    const auto czar = original.spawn({});
+    original.motion()[czar.index].canFly = true;
+    original.motion()[czar.index].airHoverOverAttack = true;
+    RandomStream random{std::uint32_t{1}};
+    const auto bytes =
+        SaveState::encode({.tick = 42, .random = random.snapshot(), .units = original.snapshot()});
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    CHECK(restored->units.motion[czar.index].airHoverOverAttack);
+    CHECK(SaveState::encode(*restored) == bytes);
+}
+
 
 TEST_CASE("a current save round-trips attachment bones", "[save-state]") {
     rm::sim::UnitStore original;

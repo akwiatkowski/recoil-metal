@@ -198,6 +198,7 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
         feed(h, motion.airYawVelocity);
         feed(h, motion.airCirclingTurnMult);
         feed(h, motion.airTightTurnMultiplier);
+        feed(h, motion.airHoverOverAttack);
         feed(h, motion.velocity);
         feed(h, motion.altitudeRef);
         feed(h, motion.fuelRatio);

@@ -1507,6 +1507,34 @@ TEST_CASE("C-224: TightTurnMultiplier parses with a 1 default when unauthored") 
     REQUIRE(none.has_value());
     CHECK(none->airTightTurnMultiplier == Catch::Approx(1.0f));
 }
+TEST_CASE("C-412: HoverOverAttack parses with a false default when unauthored") {
+    // `C-412` (`Air+0x79`, schema `0x00527d5c` "Whether unit should hover over the
+    // target directly to attack... used for cases like the C.Z.A.R"): the UAA0310
+    // CZAR authors true, ordinary winged aircraft omit it, and an absent key
+    // defaults to false — ordinary attacks keep the state machine. Currently
+    // fails: the key is never read, so the authored true decodes as false.
+    const Blueprint authored{"XXB0714_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true, HoverOverAttack = true },
+            SizeX = 0.8, SizeY = 1, SizeZ = 1,
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(authored.path());
+    REQUIRE(def.has_value());
+    CHECK(def->airHoverOverAttack);
+    const Blueprint bare{"XXB0715_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true },
+            SizeX = 0.8, SizeY = 0.25, SizeZ = 1.4,
+        }
+    )"};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK_FALSE(none->airHoverOverAttack);
+}
+
 TEST_CASE("C-218 (3): a stated motion class with MaxSpeed 0 reads as immobile") {
     // `C-218`'s third explicit-0-vs-absent site (`fa-exe-analysis-plan.md`, corroborated
     // by `RUnitBlueprint::IsMobile` being literally `bp[0x290] != 0`): retail forces

@@ -793,6 +793,12 @@ struct UnitScene {
         /// rotation angle — replay-identical, off the sim RNG (C-297), so the
         /// future FA-PRESENT texture projection samples what retail drew.
         int textureIndex = 0;
+        /// Retail's LOD pick for this scorch (`defaultexplosions.lua:211,215`
+        /// C-290): both paths pass `GetRandomFloat(200,350)`. Derived from the
+        /// mark's own position bits like the rotation angle — replay-identical,
+        /// off the sim RNG (C-297), so the future FA-PRESENT LOD projection
+        /// culls what retail would have culled.
+        int lod = 200;
     };
     static constexpr std::size_t kMaxImpactMarks = 512;
     std::vector<ImpactMark> impactMarks;

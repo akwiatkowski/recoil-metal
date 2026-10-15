@@ -525,6 +525,9 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.airMinChangeSec = std::max(0.0f, numberOr(*airBlock, "RandomMinChangeCombatStateTime", 3.0f));
         def.airMaxChangeSec = std::max(0.0f, numberOr(*airBlock, "RandomMaxChangeCombatStateTime", 6.0f));
         def.airBreakOffNearTarget = flagAt(*airBlock, "BreakOffIfNearNewTarget");
+        // `HoverOverAttack` (`C-412`, `Air+0x79`, schema `0x00527d5c`): the CZAR-style
+        // hover-attack flag — only the UAA0310 CZAR states it, false otherwise.
+        def.airHoverOverAttack = flagAt(*airBlock, "HoverOverAttack");
         // Retail derives a missing MinAirspeed from MaxAirspeed before publishing the
         // blueprint (`C-217`). Both Air speeds are ogrids/s.
         def.airMinSpeedElmosPerSecond =

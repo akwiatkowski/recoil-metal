@@ -361,6 +361,10 @@ struct MoveState {
     Fx airMinSpeedElmosPerSec{};
     Fx airAttackElevation{};
     bool airWinged = false;
+    /// `Air.HoverOverAttack` (`C-412`, `Air+0x79`): the CZAR-style hover-attack
+    /// flag — selects retail's alternate `0x6c4f00` solver path instead of the
+    /// winged `0x6c4960` state machine. Spawn-copied, saved (v57), hashed.
+    bool airHoverOverAttack = false;
 
     /// `Physics.Elevation` in elmos (`C-245`): the height above the terrain reference the
     /// lift law chases, and the height a slow flyer climbs HALF of, straight up, before it

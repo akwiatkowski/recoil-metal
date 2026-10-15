@@ -173,6 +173,16 @@ class UnitStore;
 bool creditKill(UnitStore& store, const UnitCatalog& catalog, UnitId killer,
                 EventQueue* events);
 
+/// Adds a scripted batch of kills and promotes through every cleared threshold.
+///
+/// The `AddKills` batch shape (`lua/sim/Unit.lua:3084-3106`, `C-437`): engine
+/// kills already count through `creditKill`, so this is the script-only path.
+/// Returns how many levels were gained (0 when already at the ceiling or when
+/// the batch clears nothing); each level applies the same promotion (regen
+/// erase, max-health recompute, brain event) as a per-kill step.
+int grantScriptedKills(UnitStore& store, const UnitCatalog& catalog, UnitId unit, int kills,
+                       EventQueue* events);
+
 /// Heals every damaged unit by its regeneration rate for one tick.
 ///
 /// Hull regeneration only — bubbles are `tickShields`, which has a delay and a recharge that a

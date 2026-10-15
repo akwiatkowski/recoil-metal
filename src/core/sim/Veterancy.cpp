@@ -22,6 +22,46 @@ namespace {
     return slot < motion.size() ? motion[slot].armyIndex : -1;
 }
 
+/// Promotes one level: regen-write erase (`C-258` incoherence), max-health
+/// recompute from the blueprint base with heal-by-increase (`C-028`/`C-029`),
+/// and the brain-notification event (`C-257`/`C-437`: brain sees final stats).
+void promoteOneLevel(UnitStore& store, const UnitCatalog& catalog, UnitId unit, UnitIndex slot,
+                     Health& health, const unitdef::UnitDef* def, EventQueue* events) {
+    ++health.veterancy.level;
+    // `C-258`: promotion applies the veteran `Regen` buff, and a buff event
+    // recomputes the regen rate — erasing any standing `SetRegenRate` write or
+    // `RevertRegenRate` suppression. The incoherence is retail's: a promoted
+    // commander quietly loses its Nano-Repair System rate.
+    health.regenWrite = Health::RegenWrite::None;
+
+    // THE PROMOTION ITSELF (`C-028`, `C-029`). Recomputed from the blueprint maximum rather
+    // than scaled from the current one, which is what stops the levels compounding — the
+    // single most consequential detail in this feature.
+    if (def != nullptr && def->health > Mag{}) {
+        const Mag previousMaximum = health.maximum;
+        health.maximum = veterancyMaxHealth(def->health + enhancementHealthAdd(store, catalog, slot), health.veterancy.level);
+        if (health.maximum > previousMaximum) {
+            // Retail heals by exactly the increase (`Buff.lua`'s `AdjustHealth(unit, val -
+            // oldmax)`), so a unit promoted mid-fight is rewarded now rather than over the
+            // next minute of regeneration.
+            health.current += health.maximum - previousMaximum;
+        } else {
+            // The shrinking branch cannot be reached by promotion, since the multiplier only
+            // rises. It is here because retail has it and because a blueprint-driven
+            // threshold table would make it reachable; clamping is what it does.
+            health.current = std::min(health.current, health.maximum);
+        }
+    }
+
+    emit(events, Event{
+                     .kind = EventKind::UnitVeteranPromoted,
+                     .unit = unit,
+                     .army = armyOf(store, slot),
+                     .amount = Mag::fromInt(health.veterancy.level),
+                     .at = positionOf(store.transforms()[slot]),
+                 });
+}
+
 } // namespace
 
 bool creditKill(UnitStore& store, const UnitCatalog& catalog, UnitId killer,
@@ -70,40 +110,43 @@ bool creditKill(UnitStore& store, const UnitCatalog& catalog, UnitId killer,
         || health.veterancy.kills < thresholds[static_cast<std::size_t>(next)]) {
         return false;
     }
-    health.veterancy.level = next + 1;
-    // `C-258`: promotion applies the veteran `Regen` buff, and a buff event
-    // recomputes the regen rate — erasing any standing `SetRegenRate` write or
-    // `RevertRegenRate` suppression. The incoherence is retail's: a promoted
-    // commander quietly loses its Nano-Repair System rate.
-    health.regenWrite = Health::RegenWrite::None;
-
-    // THE PROMOTION ITSELF (`C-028`, `C-029`). Recomputed from the blueprint maximum rather
-    // than scaled from the current one, which is what stops the levels compounding — the
-    // single most consequential detail in this feature.
-    if (def != nullptr && def->health > Mag{}) {
-        const Mag previousMaximum = health.maximum;
-        health.maximum = veterancyMaxHealth(def->health + enhancementHealthAdd(store, catalog, slot), health.veterancy.level);
-        if (health.maximum > previousMaximum) {
-            // Retail heals by exactly the increase (`Buff.lua`'s `AdjustHealth(unit, val -
-            // oldmax)`), so a unit promoted mid-fight is rewarded now rather than over the
-            // next minute of regeneration.
-            health.current += health.maximum - previousMaximum;
-        } else {
-            // The shrinking branch cannot be reached by promotion, since the multiplier only
-            // rises. It is here because retail has it and because a blueprint-driven
-            // threshold table would make it reachable; clamping is what it does.
-            health.current = std::min(health.current, health.maximum);
-        }
-    }
-
-    emit(events, Event{
-                     .kind = EventKind::UnitVeteranPromoted,
-                     .unit = killer,
-                     .army = armyOf(store, slot),
-                     .amount = Mag::fromInt(health.veterancy.level),
-                     .at = positionOf(store.transforms()[slot]),
-                 });
+    promoteOneLevel(store, catalog, killer, slot, health, def, events);
     return true;
+}
+
+int grantScriptedKills(UnitStore& store, const UnitCatalog& catalog, UnitId unit, int kills,
+                       EventQueue* events) {
+    // `C-437`: the `AddKills` batch path (`lua/sim/Unit.lua:3084-3106`) — "for
+    // kills made through the script, since kills through the engine are already
+    // counted". Adds the batch to the `KILLS` stat, returns early at the
+    // ceiling (`VeteranLevel == table.getsize(vet)`), then loops `while
+    // unitKills >= nextKills` — the only multi-level promotion retail has.
+    if (!store.alive(unit) || kills <= 0) {
+        return 0;
+    }
+    const UnitIndex slot = unit.index;
+    const std::span<Health> healths = store.health();
+    if (slot >= healths.size()) {
+        return 0;
+    }
+    Health& health = healths[slot];
+    if (!health.alive()) {
+        return 0;
+    }
+    health.veterancy.kills += kills;
+    const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+    const VeterancyThresholds& thresholds =
+        def != nullptr ? def->veterancyKills : kVeterancyKillThresholds;
+    int promoted = 0;
+    while (health.veterancy.level < kMaxVeteranLevel
+           && health.veterancy.level < static_cast<int>(thresholds.size())
+           && thresholds[static_cast<std::size_t>(health.veterancy.level)] > 0
+           && health.veterancy.kills
+                  >= thresholds[static_cast<std::size_t>(health.veterancy.level)]) {
+        promoteOneLevel(store, catalog, unit, slot, health, def, events);
+        ++promoted;
+    }
+    return promoted;
 }
 
 void tickRegeneration(UnitStore& store, const UnitCatalog& catalog, TickRate rate) {

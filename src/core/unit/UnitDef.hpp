@@ -507,6 +507,12 @@ struct UnitDef {
     /// unauthored; 1.02 on the UEA0102 fighter, 0 on the XAA0306. Unitless,
     /// never damped.
     float airTightTurnMultiplier = 1.0f;
+    /// `Air.HoverOverAttack` (`C-412`, `Air+0x79`, schema `0x00527d5c` —
+    /// "Whether unit should hover over the target directly to attack... used for
+    /// cases like the C.Z.A.R"): selects retail's alternate `0x6c4f00` solver
+    /// path instead of the winged state machine. False when unauthored — only
+    /// the UAA0310 CZAR states it. Spawn-copied, saved, hashed.
+    bool airHoverOverAttack = false;
     float airBreakOffTrigger = 0.0f;
     float airBreakOffDistance = 0.0f;
     float airRandomBreakOffMultiplier = 1.5f;

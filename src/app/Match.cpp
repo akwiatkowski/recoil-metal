@@ -1152,8 +1152,14 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::sim
             if (!scene.store.alive(decision.unit)) {
                 break;  // died between the census and the order
             }
+            // Platoon attack-move (`CPlatoon:AggressiveMoveToLocation`
+            // `0x00736e20`): the same port Move issued as an AttackMove
+            // command — walk-at-a-place with teeth, not a plain move.
+            const rm::sim::CommandKind moveKind = decision.attackMove
+                ? rm::sim::CommandKind::AttackMove : rm::sim::CommandKind::Move;
             if (issueMove(scene, decision.unit, playerDriving(scene, army.index),
-                          tickIndex, decision.toX, decision.toZ, decision.queued)) {
+                          tickIndex, decision.toX, decision.toZ, decision.queued,
+                          moveKind)) {
                 ++marching;
             }
             break;

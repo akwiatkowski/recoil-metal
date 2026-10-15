@@ -321,6 +321,7 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
         motion.airMinSpeedElmosPerSec = rm::sim::fxFromFloat(def.airMinSpeedElmosPerSecond);
         motion.airAttackElevation = rm::sim::fxFromFloat(def.airAttackElevationElmos);
         motion.airWinged = def.airWinged;
+        motion.airHoverOverAttack = def.airHoverOverAttack;
         motion.airTurnSpeed = rm::sim::fxFromFloat(def.airTurnSpeed);
         motion.airCombatTurnSpeed = rm::sim::fxFromFloat(def.airCombatTurnSpeed);
         motion.airKTurn = rm::sim::fxFromFloat(def.airKTurn);

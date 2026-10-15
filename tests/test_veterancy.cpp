@@ -350,3 +350,21 @@ TEST_CASE("one kill promotes at most one level, however many thresholds it clear
     (void)rm::sim::creditKill(roster.store, roster.catalog, rookie, nullptr);
     CHECK(healthOf(roster, rookie).veterancy.level == 2);
 }
+
+TEST_CASE("a scripted batch of kills can promote more than one level at once") {
+    // `C-437`: the `AddKills` batch path (`lua/sim/Unit.lua:3084-3106`) loops
+    // `while unitKills >= nextKills`, so a single scripted grant that clears
+    // several thresholds climbs every one of them — the one multi-level path
+    // retail has. A degenerate table where every threshold is already met
+    // tells it apart from the per-kill single step: one grant lands at 5.
+    Roster roster;
+    UnitDef def = bodyDef(1000.0f);
+    def.veterancyKills = {1, 1, 1, 1, 1};
+    const rm::UnitTypeIndex type = roster.addType(def);
+    const UnitId rookie = roster.add(type, 0.0f, 0.0f, 0, 1000.0f);
+
+    (void)rm::sim::grantScriptedKills(roster.store, roster.catalog, rookie, 1, nullptr);
+    CHECK(healthOf(roster, rookie).veterancy.kills == 1);
+    CHECK(healthOf(roster, rookie).veterancy.level == 5);
+    CHECK(healthOf(roster, rookie).maximum == rm::test::mag(1500.0f));
+}

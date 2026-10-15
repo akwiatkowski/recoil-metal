@@ -192,6 +192,33 @@ inline constexpr int kImpactMarkDecalTextures = 10;  // (C-290 `ScorchDecalTextu
     bits ^= bits >> 16;
     return static_cast<int>(bits % static_cast<std::uint32_t>(choices));
 }
+/// Retail's LOD pick for one scorch (`defaultexplosions.lua:211,215` C-290):
+/// both `CreateScorchMarkSplat` and `CreateScorchMarkDecal` pass
+/// `GetRandomFloat(200,350)`. The pick is the mark's own position bits
+/// through one more splitmix32 round past the texture stream —
+/// replay-identical, off the sim RNG (C-297), presentation only.
+inline constexpr int kImpactMarkLodMin = 200;  // (C-290 `GetRandomFloat(200,350)`)
+inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350)`)
+[[nodiscard]] int impactMarkLod(float x, float z) noexcept {
+    std::uint32_t bits = static_cast<std::uint32_t>(std::llround(
+                             static_cast<double>(x) * 4096.0))  // 1/4096 elmo
+                         * 0x85EBCA6Bu
+                       ^ static_cast<std::uint32_t>(std::llround(
+                             static_cast<double>(z) * 4096.0))  // 1/4096 elmo
+                             * 0x9E3779B1u;
+    bits ^= bits >> 16;  // splitmix32 finaliser
+    bits *= 0x7FEB352Du;
+    bits ^= bits >> 15;
+    bits *= 0x846CA68Bu;
+    bits ^= bits >> 16;
+    bits ^= bits >> 11;  // one more round past the texture stream
+    bits *= 0x27D4EB2Fu;
+    bits ^= bits >> 15;
+    return kImpactMarkLodMin
+           + static_cast<int>(bits
+                              % static_cast<std::uint32_t>(kImpactMarkLodMax - kImpactMarkLodMin
+                                                           + 1));
+}
 [[nodiscard]] float impactMarkRadius(float blastRadiusElmos) noexcept {
     if (!(blastRadiusElmos > 0.0f)) {
         return kImpactMarkRadiusElmos;  // elmos (legacy blast-less mark)
@@ -263,7 +290,8 @@ void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
         .x = x,
         .z = z,
         .blastRadiusElmos = blastRadiusElmos,
-        .textureIndex = impactMarkTexture(x, z, blastRadiusElmos)});
+        .textureIndex = impactMarkTexture(x, z, blastRadiusElmos),
+        .lod = impactMarkLod(x, z)});
     ++scene.impactMarksRevision;
 }
 

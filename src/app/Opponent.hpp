@@ -120,6 +120,8 @@ struct Decision {
     rm::sim::Fx toX{};
     rm::sim::Fx toZ{};
     bool queued = false;
+    /// Platoon attack-move: the same port Move issued as an AttackMove command.
+    bool attackMove = false;
     /// Reclaim: how far from the centre a wreck may be, in elmos (half a reclaim-grid cell).
     rm::sim::Fx radius{};
     /// SetIntel: which intel type to flip, and the new enabled state.
