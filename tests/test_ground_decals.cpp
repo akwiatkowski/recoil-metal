@@ -507,12 +507,11 @@ TEST_CASE("impact marks cover the blast that made them", "[decals]") {
 }
 TEST_CASE("impact marks record retail's texture pick", "[decals]") {
     // Retail lays one of 10 splat textures (`scorch_001`-`010_albedo`) or one
-    // of 2 decal textures (`scorch_*_albedo`) per scorch, picked at random
-    // (`defaultexplosions.lua` C-290). Ours records the pick from the mark's
-    // own bits — replay-identical, off the sim RNG (C-297) — so the future
-    // FA-PRESENT texture projection samples what retail would have drawn.
-    // Splat-scale marks (scale <= 1.2, blast <= 9.6 elmos through 8 elmos per
-    // ogrid) pick 0..9; decal-scale marks pick 0..1. A blast-less direct hit
+    // of 10 decal textures (same names, `ScorchDecalTextures:234-244`) per
+    // scorch, picked at random (`defaultexplosions.lua` C-290). Ours records
+    // the pick from the mark's own bits — replay-identical, off the sim RNG
+    // (C-297) — so the future FA-PRESENT texture projection samples what
+    // retail would have drawn. Both scales pick 0..9. A blast-less direct hit
     // rides the splat path.
     rm::app::UnitScene splat;
     rm::app::noteImpactMark(splat, 10.0f, 20.0f, 8.0f);
@@ -524,7 +523,7 @@ TEST_CASE("impact marks record retail's texture pick", "[decals]") {
     rm::app::noteImpactMark(decal, 10.0f, 20.0f, 24.0f);
     REQUIRE(decal.impactMarks.size() == 1);
     CHECK(decal.impactMarks[0].textureIndex >= 0);
-    CHECK(decal.impactMarks[0].textureIndex < 2);
+    CHECK(decal.impactMarks[0].textureIndex < 10);
 
     rm::app::UnitScene direct;
     rm::app::noteImpactMark(direct, 10.0f, 20.0f, 0.0f);
@@ -546,6 +545,17 @@ TEST_CASE("impact marks record retail's texture pick", "[decals]") {
     rm::app::UnitScene replay;
     rm::app::noteImpactMark(replay, 10.0f, 20.0f, 8.0f);
     CHECK(replay.impactMarks[0].textureIndex == splat.impactMarks[0].textureIndex);
+    // Ten choices per scale means a spread of decal-scale marks visits more
+    // than two textures — the old 2-texture model fails this.
+    std::vector<int> decalPicks;
+    for (int i = 0; i < 64; ++i) {
+        rm::app::UnitScene scene;
+        rm::app::noteImpactMark(scene, static_cast<float>(i) * 1.3f,
+                                static_cast<float>(i) * 0.7f + 5.0f, 24.0f);
+        decalPicks.push_back(scene.impactMarks[0].textureIndex);
+    }
+    std::sort(decalPicks.begin(), decalPicks.end());
+    CHECK(std::unique(decalPicks.begin(), decalPicks.end()) - decalPicks.begin() > 2);
 }
 TEST_CASE("impact marks carry deterministic rotation", "[decals]") {
     // Retail rotates every scorch by a random 0..2pi angle (`defaultexplosions.lua`

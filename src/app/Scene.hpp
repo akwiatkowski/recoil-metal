@@ -788,8 +788,8 @@ struct UnitScene {
         float blastRadiusElmos = 0.0f;
         /// Retail's texture pick for this scorch (`defaultexplosions.lua`
         /// C-290): one of 10 splat textures (`scorch_001`-`010_albedo`) at
-        /// splat scale, one of 2 decal textures (`scorch_*_albedo`) past the
-        /// 1.2 scale split. Derived from the mark's own position bits like the
+        /// splat scale, one of 10 decal textures (same names, past the 1.2
+        /// scale split). Derived from the mark's own position bits like the
         /// rotation angle — replay-identical, off the sim RNG (C-297), so the
         /// future FA-PRESENT texture projection samples what retail drew.
         int textureIndex = 0;

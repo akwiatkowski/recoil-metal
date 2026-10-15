@@ -8,7 +8,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "core/sim/CommandInternal.hpp"
 #include "core/sim/CommandQueue.hpp"
+#include "core/sim/Intel.hpp"
 #include "core/scene/OrderTimes.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/sim/Skirmish.hpp"
@@ -3174,4 +3176,76 @@ TEST_CASE("a queued batch's predicted time is every copy's build time") {
                                                     rm::sim::fxFromFloat(500));
     REQUIRE(times.size() == 1);
     CHECK(*times[0] == Catch::Approx(30.0f));
+}
+
+TEST_CASE("a guard prefers its blip-nearer prey over its truth-nearer one", "[intel][targeting]") {
+    // The open automatic-targeting gap: each weapon acquires at its blip
+    // (`C-277` family; 96 elmos per `LosHandler.h:322`), but `guardAttackTarget`
+    // ranks its per-weapon winners at truth. Two guns that each own one prey —
+    // and whose preys flip order under the wander — must chase the blip-nearer
+    // one. Identity survives, rank follows the blip.
+    const rm::HeightField field = flatField();
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef guardDef;
+    guardDef.name = "guard";
+    guardDef.categories = {"LAND"};
+    guardDef.speedElmosPerSecond = 20.0f;
+    rm::unitdef::Weapon landGun;
+    landGun.label = "land gun";
+    landGun.role = rm::unitdef::WeaponRole::DirectFire;
+    landGun.targetPriorities = {{"LAND"}};
+    landGun.targetRestrictOnlyAllow = std::vector<std::string>{"LAND"};
+    landGun.damage = rm::sim::magFromFloat(10.0f);
+    landGun.maxRange = rm::sim::fxFromFloat(500.0f);
+    landGun.rateOfFire = 1.0f;
+    rm::unitdef::Weapon navalGun = landGun;
+    navalGun.label = "naval gun";
+    navalGun.targetPriorities = {{"NAVAL"}};
+    navalGun.targetRestrictOnlyAllow = std::vector<std::string>{"NAVAL"};
+    guardDef.weapons.push_back(landGun);
+    guardDef.weapons.push_back(navalGun);
+    guardDef.guardScanRadiusElmos = rm::sim::fxFromFloat(400.0f);
+    guardDef.radarRadiusElmos = 400.0f;  // vision stays zero: every contact is radar-only
+    const rm::UnitTypeIndex guardType = roster.addType(guardDef);
+    rm::unitdef::UnitDef landDef;
+    landDef.name = "land enemy";
+    landDef.categories = {"LAND"};
+    rm::unitdef::UnitDef navalDef;
+    navalDef.name = "naval enemy";
+    navalDef.categories = {"NAVAL"};
+    const UnitId guard = roster.add(guardType, 0.0f, 0.0f, 0, 100.0f);
+    const UnitId near = roster.add(roster.addType(landDef), 0.0f, 150.0f, 1, 100.0f);
+    const UnitId far = roster.add(roster.addType(navalDef), 0.0f, 170.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, near.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Radar);
+    REQUIRE(rm::sim::contactKindForUnit(0, far.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Radar);
+    // Truth always ranks the nearer prey first; the blip wanders up to 96 elmos,
+    // so some tick ranks them the other way round. The search is deterministic:
+    // the blip is a pure function of unit, tick and rate.
+    rm::TickIndex flipTick = 0;
+    bool flipped = false;
+    for (rm::TickIndex tick = 0; tick < 400 && !flipped; ++tick) {
+        const auto [nearX, nearZ] = rm::sim::radarBlipPosition(
+            near, roster.transform(near).x, roster.transform(near).z, tick, roster.rate);
+        const auto [farX, farZ] = rm::sim::radarBlipPosition(
+            far, roster.transform(far).x, roster.transform(far).z, tick, roster.rate);
+        if (farX * farX + farZ * farZ < nearX * nearX + nearZ * nearZ) {
+            flipTick = tick;
+            flipped = true;
+        }
+    }
+    REQUIRE(flipped);
+    const std::optional<UnitId> prey = rm::sim::guardAttackTarget(
+        guard.index, roster.store, roster.catalog, armies, &intel, nullptr, flipTick,
+        roster.rate);
+    REQUIRE(prey.has_value());
+    CHECK(*prey == far);  // truth-nearer loses: identity survives, rank follows the blip
 }

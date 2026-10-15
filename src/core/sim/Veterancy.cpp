@@ -60,11 +60,17 @@ bool creditKill(UnitStore& store, const UnitCatalog& catalog, UnitId killer,
     const VeterancyThresholds& thresholds =
         def != nullptr ? def->veterancyKills : kVeterancyKillThresholds;
 
-    const int earned = veterancyLevelFor(health.veterancy.kills, thresholds);
-    if (earned <= health.veterancy.level) {
+    // `C-437`: retail's `CheckVeteranLevel` (`lua/sim/Unit.lua:3131-3151`) is a
+    // single `if` against the NEXT threshold only — one kill promotes at most
+    // one level, however many thresholds the new kill count clears. Only the
+    // script-side `AddKills` batch path (`Unit.lua:3084-3106`) loops.
+    const int next = health.veterancy.level;  // 0-based index of the next level
+    if (next >= kMaxVeteranLevel || next >= static_cast<int>(thresholds.size())
+        || thresholds[static_cast<std::size_t>(next)] <= 0
+        || health.veterancy.kills < thresholds[static_cast<std::size_t>(next)]) {
         return false;
     }
-    health.veterancy.level = earned;
+    health.veterancy.level = next + 1;
     // `C-258`: promotion applies the veteran `Regen` buff, and a buff event
     // recomputes the regen rate — erasing any standing `SetRegenRate` write or
     // `RevertRegenRate` suppression. The incoherence is retail's: a promoted
@@ -76,7 +82,7 @@ bool creditKill(UnitStore& store, const UnitCatalog& catalog, UnitId killer,
     // single most consequential detail in this feature.
     if (def != nullptr && def->health > Mag{}) {
         const Mag previousMaximum = health.maximum;
-        health.maximum = veterancyMaxHealth(def->health + enhancementHealthAdd(store, catalog, slot), earned);
+        health.maximum = veterancyMaxHealth(def->health + enhancementHealthAdd(store, catalog, slot), health.veterancy.level);
         if (health.maximum > previousMaximum) {
             // Retail heals by exactly the increase (`Buff.lua`'s `AdjustHealth(unit, val -
             // oldmax)`), so a unit promoted mid-fight is rewarded now rather than over the
@@ -94,7 +100,7 @@ bool creditKill(UnitStore& store, const UnitCatalog& catalog, UnitId killer,
                      .kind = EventKind::UnitVeteranPromoted,
                      .unit = killer,
                      .army = armyOf(store, slot),
-                     .amount = Mag::fromInt(earned),
+                     .amount = Mag::fromInt(health.veterancy.level),
                      .at = positionOf(store.transforms()[slot]),
                  });
     return true;

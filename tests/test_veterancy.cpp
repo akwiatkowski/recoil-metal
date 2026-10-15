@@ -328,3 +328,25 @@ TEST_CASE("regeneration never exceeds the maximum and never revives the dead") {
     // corpse before `retireDead` sees it would silently undo a kill.
     CHECK(healthOf(roster, corpse).current == rm::sim::Mag{});
 }
+
+TEST_CASE("one kill promotes at most one level, however many thresholds it clears") {
+    // `C-437`: retail's `CheckVeteranLevel` (`lua/sim/Unit.lua:3131-3151`) is a
+    // single `if` — one kill, one level — while only `AddKills`
+    // (`Unit.lua:3084-3106`) loops. A degenerate table where every threshold
+    // is already met tells the two shapes apart: a total-derived level jumps
+    // straight to 5, retail steps to 1.
+    Roster roster;
+    UnitDef def = bodyDef(1000.0f);
+    def.veterancyKills = {1, 1, 1, 1, 1};
+    const rm::UnitTypeIndex type = roster.addType(def);
+    const UnitId rookie = roster.add(type, 0.0f, 0.0f, 0, 1000.0f);
+
+    (void)rm::sim::creditKill(roster.store, roster.catalog, rookie, nullptr);
+    CHECK(healthOf(roster, rookie).veterancy.kills == 1);
+    CHECK(healthOf(roster, rookie).veterancy.level == 1);
+    CHECK(healthOf(roster, rookie).maximum == rm::test::mag(1100.0f));
+
+    // The ladder still climbs — one level per kill, not one per threshold.
+    (void)rm::sim::creditKill(roster.store, roster.catalog, rookie, nullptr);
+    CHECK(healthOf(roster, rookie).veterancy.level == 2);
+}

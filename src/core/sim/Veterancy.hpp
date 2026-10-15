@@ -131,10 +131,12 @@ inline constexpr VeterancyRegen kVeterancyRegenPerSecond{2, 4, 6, 8, 10};
 /// The level a unit with this many kills has earned, against its own threshold table.
 ///
 /// Derived from the total rather than accumulated step by step, so it cannot drift and it
-/// gives the same answer whether the kills arrived one at a time or in a batch. Retail's two
-/// paths — `CheckVeteranLevel`, which promotes at most one level, and `AddKills`, which loops
-/// — agree with this whenever a single kill cannot cross two thresholds. That holds for the
-/// default table and for every shipped override, whose levels are evenly spaced.
+/// gives the same answer whether the kills arrived one at a time or in a batch. This is
+/// the `AddKills` batch shape (`lua/sim/Unit.lua:3084-3106`), which loops; the per-kill
+/// `creditKill` path follows `CheckVeteranLevel` (`Unit.lua:3131-3151`, `C-437`) and
+/// steps at most one level per kill, so the two agree whenever a single kill cannot
+/// cross two thresholds. That holds for the default table and for every shipped
+/// override, whose levels are evenly spaced.
 ///
 /// A non-positive threshold is treated as absent and ends the ladder, so a blueprint stating
 /// only `Level1` and `Level2` caps at 2 rather than promoting on a zero.

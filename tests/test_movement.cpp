@@ -1784,9 +1784,8 @@ TEST_CASE("an idle flyer auto-lands after its auto-land interval") {
 
 TEST_CASE("a parked flyer recharges fuel while it waits") {
     // `C-223`: recharge runs while the vert event is Bottom. A grounded aircraft with no
-    // orders is exactly that, and the idle skip in the tick must not starve it — at a
-    // drain of one sixteenth (exact in fixed point), four ticks take a half tank to three
-    // quarters, eight fill it, and the clamp holds there.
+    // orders is exactly that, and the idle skip in the tick must not starve it — the tank
+    // climbs by the bare-ground step each tick and the clamp holds at full.
     const HeightField field = flatField();
     const rm::sim::Terrain terrain{field};
     std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
@@ -1795,14 +1794,35 @@ TEST_CASE("a parked flyer recharges fuel while it waits") {
     motion[0].airborne = false;
     motion[0].fuelDrainPerTick = rm::sim::Fx::fromRatio(1, 16);
     motion[0].fuelRatio = rm::sim::Fx::fromRatio(1, 2);
+    const rm::sim::Fx step =
+        motion[0].fuelDrainPerTick * rm::sim::Fx::fromRatio(1, 10);
 
-    run(units, motion, field, 4);
-    CHECK(motion[0].fuelRatio == rm::sim::Fx::fromRatio(3, 4));
-    run(units, motion, field, 10);
+    run(units, motion, field, 40);
+    CHECK(motion[0].fuelRatio == rm::sim::Fx::fromRatio(1, 2) + step * 40);
+    run(units, motion, field, 400);
     CHECK(motion[0].fuelRatio == rm::sim::Fx::fromInt(1));
     CHECK(motion[0].airState == MoveState::AirState::Bottom);
     CHECK(units[0].y == rm::sim::Fx{});
 }
+TEST_CASE("a parked flyer recharges at a tenth of its drain rate") {
+    // `C-223` (`0x006c03c0`, `C-190` correction): with no pad the recharge rate is
+    // x0.1 of the drain rate (`CUnitMotion+0x0C` mover copy, not the blueprint) —
+    // effectively never. Ten ticks recover ten bare-ground steps, not ten drains.
+    const HeightField field = flatField();
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{flyer()};
+    motion[0].airState = MoveState::AirState::Bottom;
+    motion[0].airborne = false;
+    motion[0].fuelDrainPerTick = rm::sim::Fx::fromRatio(1, 16);
+    motion[0].fuelRatio = rm::sim::Fx::fromRatio(1, 2);
+    const rm::sim::Fx step =
+        motion[0].fuelDrainPerTick * rm::sim::Fx::fromRatio(1, 10);
+
+    run(units, motion, field, 10);
+    CHECK(motion[0].fuelRatio == rm::sim::Fx::fromRatio(1, 2) + step * 10);
+    CHECK(motion[0].fuelRatio < rm::sim::Fx::fromRatio(1, 2) + motion[0].fuelDrainPerTick);
+}
+
 
 TEST_CASE("fuel drains in flight, clamps at zero, and means nothing natively") {
     // `1 / (FuelUseTime x 10)` per tick while off the ground (`C-223`): at drain 0.1,

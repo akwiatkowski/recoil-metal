@@ -406,6 +406,20 @@ std::optional<SacrificeWork> sacrificeWork(
                                anchor[1] - from[1]);
     return distance > leash ? std::optional{anchor} : std::nullopt;
 }
+namespace {
+
+/// The Army record for an index, or null — file-local like every other
+/// translation unit's copy (`Combat.cpp`, `Reclaim.cpp`, `CommandAdvance.cpp`).
+[[nodiscard]] const Army* armyFor(int index, std::span<const Army> armies) noexcept {
+    for (const Army& army : armies) {
+        if (army.index == index) {
+            return &army;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
 
 [[nodiscard]] std::optional<UnitId> guardAttackTarget(
     UnitIndex slot, const UnitStore& store, const UnitCatalog& catalog,
@@ -427,9 +441,29 @@ std::optional<SacrificeWork> sacrificeWork(
         const auto found = nearestTarget(positionOf(at), store.motion()[slot].armyIndex, slot, ranged,
             store, armies, intel, &catalog, at.heading, incumbent, playableRect,
             {}, std::nullopt, tick, rate, store.targetFocuses()[slot]);
-        if (!found) continue;
-        const Fx distance = groundDistanceElmos(positionOf(at),
-            positionOf(store.transforms()[found->index]));
+        // Automatic acquisition scores at the blip (`C-277` family; 96 elmos per
+        // `LosHandler.h:322`), so this inter-weapon rank reads the same
+        // estimate: a radar/sonar contact competes from its deterministic
+        // blip, a sighting (or intel-less caller) from truth. Identity is
+        // untouched — the winner is still the found UnitId.
+        const std::array<Fx, 3> aimAt = [&] {
+            if (intel != nullptr) {
+                const Army* mine = armyFor(store.motion()[slot].armyIndex, armies);
+                const std::optional<ContactKind> kind =
+                    mine != nullptr
+                        ? contactKindForUnit(mine->alliance, found->index, store,
+                                             catalog, armies, *intel)
+                        : std::nullopt;
+                if (kind == ContactKind::Radar || kind == ContactKind::Sonar) {
+                    const Transform& truth = store.transforms()[found->index];
+                    const auto [blipX, blipZ] = radarBlipPosition(
+                        *found, truth.x, truth.z, tick, rate);
+                    return std::array<Fx, 3>{blipX, truth.y, blipZ};
+                }
+            }
+            return positionOf(store.transforms()[found->index]);
+        }();
+        const Fx distance = groundDistanceElmos(positionOf(at), aimAt);
         if (!prey || distance < preyDistance
             || (distance == preyDistance && found->index < prey->index)) {
             prey = found;

@@ -162,14 +162,15 @@ inline constexpr float kImpactMarkScaleSplit = 1.2f;  // (C-290 `CreateScorchMar
 inline constexpr float kImpactMarkSplatFactor = 4.0f;  // (C-290 splat x4)
 inline constexpr float kImpactMarkDecalFactor = 3.0f;  // (C-290 decal x3)
 /// Retail lays one of 10 splat textures (`scorch_001`-`010_albedo`) or one of
-/// 2 decal textures (`scorch_*_albedo`) per scorch, picked at random
-/// (`defaultexplosions.lua` C-290). The pick is the mark's own position bits
-/// through one more splitmix32 round — replay-identical, off the sim RNG
-/// (C-297), presentation only. Blast-less direct hits ride the splat path.
-/// Counts, not indices into a texture this engine uploads: the FA-PRESENT
-/// projection owns the sampling.
+/// 10 decal textures (the same `scorch_001`-`010_albedo` names in
+/// `ScorchDecalTextures`, `defaultexplosions.lua:234-244`) per scorch, picked
+/// at random (`defaultexplosions.lua` C-290). The pick is the mark's own
+/// position bits through one more splitmix32 round — replay-identical, off
+/// the sim RNG (C-297), presentation only. Blast-less direct hits ride the
+/// splat path. Counts, not indices into a texture this engine uploads: the
+/// FA-PRESENT projection owns the sampling.
 inline constexpr int kImpactMarkSplatTextures = 10;  // (C-290 `scorch_001`-`010`)
-inline constexpr int kImpactMarkDecalTextures = 2;  // (C-290 `scorch_*_albedo`)
+inline constexpr int kImpactMarkDecalTextures = 10;  // (C-290 `ScorchDecalTextures:234-244`)
 [[nodiscard]] int impactMarkTexture(float x, float z, float blastRadiusElmos) noexcept {
     const float scale = blastRadiusElmos / 8.0f;  // ogrids (C-290 scale)
     const int choices = (blastRadiusElmos > 0.0f && scale > kImpactMarkScaleSplit)

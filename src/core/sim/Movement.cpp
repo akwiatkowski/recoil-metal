@@ -115,11 +115,13 @@ namespace {
 // the look-ahead that feeds it is computed.
 void tickAirState(Transform& unit, MoveState& state) noexcept {
     using AirState = MoveState::AirState;
-    // Recharge while grounded runs at the drain rate — its exact rate is open, and with
-    // no native consequence at zero either choice is behaviourally identical today.
+    // Bare-ground recharge runs at x0.1 of the drain rate (`C-223`/`C-190`: the
+    // mover's own `CUnitMotion+0x0C` copy per tick, `padBp.AI.RefuelingMultiplier`
+    // on a pad instead) — effectively never, in elmos-free ratio units.
     if (state.airState == AirState::Bottom) {
-        state.fuelRatio =
-            std::min(Fx::fromInt(1), state.fuelRatio + state.fuelDrainPerTick);
+        state.fuelRatio = std::min(
+            Fx::fromInt(1),
+            state.fuelRatio + state.fuelDrainPerTick * Fx::fromRatio(1, 10));
         state.idleTicks = 0;
         if (!state.moving) {
             return;
