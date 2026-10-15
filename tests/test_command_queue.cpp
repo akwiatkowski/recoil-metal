@@ -428,6 +428,93 @@ TEST_CASE("a guard holds fire when a radar contact's blip reads in reach") {
     CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Assist);
     CHECK_FALSE(roster.store.motion()[guard.index].moving);
 }
+TEST_CASE("a guard chasing a radar contact routes to its blip, not truth") {
+    // FA-INTEL: automatic acquisition scores at the blip (`C-277` family; 96 elmos per
+    // `LosHandler.h:322`), so the guard chase leg must route to the same estimate —
+    // truth-near but blip-far still walks toward the blip. Units: elmos.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef guardDef;
+    guardDef.name = "commander";
+    guardDef.categories = {"COMMAND"};
+    guardDef.buildRate = 10.0f;
+    guardDef.speedElmosPerSecond = 20.0f;
+    rm::unitdef::Weapon gun;
+    gun.label = "commander gun";
+    gun.role = rm::unitdef::WeaponRole::DirectFire;
+    gun.targetPriorities = {{"LAND"}};
+    gun.damage = rm::sim::magFromFloat(10.0f);
+    gun.maxRange = rm::sim::fxFromFloat(20.0f);
+    gun.rateOfFire = 1.0f;
+    guardDef.weapons.push_back(gun);
+    guardDef.guardScanRadiusElmos = rm::sim::fxFromFloat(400.0f);
+    guardDef.radarRadiusElmos = 600.0f;
+    guardDef.visionRadiusElmos = 0.0f;
+    const rm::UnitTypeIndex guardType = roster.addType(guardDef);
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef enemyDef;
+    enemyDef.name = "enemy";
+    enemyDef.categories = {"LAND"};
+    const rm::UnitTypeIndex enemyType = roster.addType(enemyDef);
+    const UnitId guard = roster.add(guardType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
+    // Truth sits 60 elmos out: inside the 400-elmo scan, outside the 20-elmo gun.
+    const UnitId enemy = roster.add(enemyType, 40.0f, 100.0f, 1, 100.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::fxFromFloat(field.widthElmos()),
+                    rm::sim::fxFromFloat(field.depthElmos()),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, &terrain, roster.rate);
+    REQUIRE(rm::sim::contactKindForUnit(0, enemy.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Radar);
+    rm::TickIndex chaseTick = 0;
+    bool blipFar = false;
+    for (rm::TickIndex tick = 0; tick < 400 && !blipFar; ++tick) {
+        const auto [x, z] = rm::sim::radarBlipPosition(
+            enemy, roster.transform(enemy).x, roster.transform(enemy).z, tick,
+            roster.rate);
+        const rm::sim::Fx gap = rm::sim::groundDistanceElmos(
+            rm::sim::positionOf(roster.transform(guard)), {x, {}, z});
+        if (gap > rm::sim::fxFromFloat(25.0f)) {
+            chaseTick = tick;
+            blipFar = true;
+        }
+    }
+    REQUIRE(blipFar);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid, &grid};
+    std::vector<rm::sim::Construction> building;
+    const auto apply = [&](const CommandIssue& issue) {
+        return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
+                                     terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                     &building);
+    };
+    const CommandIssue assist{.source = 0, .id = rm::commandId(0, 101), .player = 0,
+                              .kind = CommandKind::Assist, .units = {guard}, .target = guardee};
+    REQUIRE(apply(assist));
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+        &building, nullptr, nullptr, nullptr, nullptr, armies, &intel, nullptr, nullptr,
+        nullptr, nullptr, chaseTick);
+    // The chase leg routes toward the blip the hold gate read — not toward truth.
+    const auto [blipX, blipZ] = rm::sim::radarBlipPosition(
+        enemy, roster.transform(enemy).x, roster.transform(enemy).z, chaseTick,
+        roster.rate);
+    REQUIRE(rm::sim::positionOf(roster.transform(guard)) != rm::sim::positionOf(roster.transform(enemy)));
+    CHECK(rm::sim::groundDistanceElmos(
+              {blipX, roster.transform(guard).y, blipZ},
+              {roster.store.motion()[guard.index].destinationX, {},
+               roster.store.motion()[guard.index].destinationZ})
+          < rm::sim::fxFromFloat(8.0f));
+}
 
 TEST_CASE("accepted commands consume one match-global creation serial") {
     const rm::HeightField field = flatField();

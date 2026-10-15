@@ -775,7 +775,6 @@ struct UnitScene {
     /// Where shots hit ground that killed nothing. Retail scorches terrain hits, and
     /// a battle that only marks its kills forgets most of what happened there.
     /// Capped: oldest drop out as new ones land, or a long bombardment grows this
-    /// without bound. Drawn by refreshWreckDecals beside the wreck scorch.
     struct ImpactMark {
         /// App tick the shot landed on, so the projection can retire the
         /// mark at retail's scorch lifetime. App-side (presentation), never
@@ -787,6 +786,13 @@ struct UnitScene {
         /// scorch by explosion size). Zero for a direct hit with no blast.
         /// Carried so the projection draws the scorch over the blast area.
         float blastRadiusElmos = 0.0f;
+        /// Retail's texture pick for this scorch (`defaultexplosions.lua`
+        /// C-290): one of 10 splat textures (`scorch_001`-`010_albedo`) at
+        /// splat scale, one of 2 decal textures (`scorch_*_albedo`) past the
+        /// 1.2 scale split. Derived from the mark's own position bits like the
+        /// rotation angle — replay-identical, off the sim RNG (C-297), so the
+        /// future FA-PRESENT texture projection samples what retail drew.
+        int textureIndex = 0;
     };
     static constexpr std::size_t kMaxImpactMarks = 512;
     std::vector<ImpactMark> impactMarks;

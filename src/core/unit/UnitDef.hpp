@@ -491,6 +491,13 @@ struct UnitDef {
     /// circling branch (the sustained-turn states 3/4/5). 1 when unauthored; 3 on the
     /// XSA0203 gunship, 2 on the XEA3204. Unitless multiplier, never damped.
     float airCirclingTurnMult = 1.0f;
+    /// `Air.TightTurnMultiplier` (`C-224`, `Air+0x1c`, schema `0x00527b24` —
+    /// "Additional turning multiplier ability during a tight turn manuver"):
+    /// augments the divided `KTurn` on retail's `0x6c4908` hard-turn branch
+    /// (sustained-turn state 3) as `TightTurnMultiplier × (1 − dot)`. 1 when
+    /// unauthored; 1.02 on the UEA0102 fighter, 0 on the XAA0306. Unitless,
+    /// never damped.
+    float airTightTurnMultiplier = 1.0f;
     float airBreakOffTrigger = 0.0f;
     float airBreakOffDistance = 0.0f;
     float airRandomBreakOffMultiplier = 1.5f;

@@ -1474,3 +1474,30 @@ TEST_CASE("C-411: CirclingTurnMult parses with a 1 default when unauthored") {
     REQUIRE(none.has_value());
     CHECK(none->airCirclingTurnMult == Catch::Approx(1.0f));
 }
+TEST_CASE("C-224: TightTurnMultiplier parses with a 1 default when unauthored") {
+    // `C-224` (`Air+0x1c`, schema `0x00527b24` "Additional turning multiplier
+    // ability during a tight turn manuver"): the UEA0102 fighter authors 1.02,
+    // the XAA0306 0, and an absent key defaults to 1 — ordinary turns keep
+    // their authored gain. Unitless, never damped. Currently fails: the key is
+    // never read, so the authored 1.02 decodes as the 1.0 default.
+    const Blueprint authored{"XXB0712_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true, TightTurnMultiplier = 1.02 },
+            SizeX = 0.8, SizeY = 1, SizeZ = 1,
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(authored.path());
+    REQUIRE(def.has_value());
+    CHECK(def->airTightTurnMultiplier == Catch::Approx(1.02f));
+    const Blueprint bare{"XXB0713_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true },
+            SizeX = 0.8, SizeY = 0.25, SizeZ = 1.4,
+        }
+    )"};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->airTightTurnMultiplier == Catch::Approx(1.0f));
+}

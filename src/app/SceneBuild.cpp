@@ -328,6 +328,7 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
         motion.airKRoll = rm::sim::fxFromFloat(def.airKRoll);
         motion.airBankFactor = rm::sim::fxFromFloat(def.airBankFactor);
         motion.airCirclingTurnMult = rm::sim::fxFromFloat(def.airCirclingTurnMult);
+        motion.airTightTurnMultiplier = rm::sim::fxFromFloat(def.airTightTurnMultiplier);
         motion.airBreakOffTrigger = rm::sim::fxFromFloat(def.airBreakOffTrigger);
         motion.airBreakOffDistance = rm::sim::fxFromFloat(def.airBreakOffDistance);
         motion.airRandomBreakOffMultiplier = rm::sim::fxFromFloat(def.airRandomBreakOffMultiplier);

@@ -1157,27 +1157,29 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     MoveState& chase = store.motion()[slot];
                     // Automatic acquisition scores at the blip (`C-277` family; 96 elmos per
                     // `LosHandler.h:322`), so this hold/chase gate reads the same estimate:
-                    // a radar/sonar contact holds at its blip, a sighting at truth. Units:
-                    // elmos. No sim RNG — `radarBlipPosition` is a pure function of identity.
-                    const Fx gap = [&] {
-                        if (intel != nullptr) {
-                            const Army* mine = armyFor(store.motion()[slot].armyIndex, armies);
-                            const std::optional<ContactKind> kind =
-                                mine != nullptr
-                                    ? contactKindForUnit(mine->alliance, prey->index, store,
-                                                         catalog, armies, *intel)
-                                    : std::nullopt;
-                            if (kind == ContactKind::Radar || kind == ContactKind::Sonar) {
-                                const auto [blipX, blipZ] = radarBlipPosition(
-                                    *prey, sight[prey->index].x, sight[prey->index].z, tick,
-                                    rate);
-                                return groundDistanceElmos(positionOf(sight[slot]),
-                                                           {blipX, sight[slot].y, blipZ});
-                            }
+                    // a radar/sonar contact holds at its blip and chases toward it, a
+                    // sighting at truth. Units: elmos. No sim RNG — `radarBlipPosition`
+                    // is a pure function of identity.
+                    std::optional<std::array<Fx, 2>> blipAt;
+                    if (intel != nullptr) {
+                        const Army* mine = armyFor(store.motion()[slot].armyIndex, armies);
+                        const std::optional<ContactKind> kind =
+                            mine != nullptr
+                                ? contactKindForUnit(mine->alliance, prey->index, store,
+                                                     catalog, armies, *intel)
+                                : std::nullopt;
+                        if (kind == ContactKind::Radar || kind == ContactKind::Sonar) {
+                            const auto [blipX, blipZ] = radarBlipPosition(
+                                *prey, sight[prey->index].x, sight[prey->index].z, tick,
+                                rate);
+                            blipAt = std::array<Fx, 2>{blipX, blipZ};
                         }
-                        return groundDistanceElmos(positionOf(sight[slot]),
-                                                   positionOf(sight[prey->index]));
-                    }();
+                    }
+                    const Fx gap = blipAt.has_value()
+                        ? groundDistanceElmos(positionOf(sight[slot]),
+                                              {(*blipAt)[0], sight[slot].y, (*blipAt)[1]})
+                        : groundDistanceElmos(positionOf(sight[slot]),
+                                              positionOf(sight[prey->index]));
                     // `CAiAttackerImpl` arbitration: the longest-range weapon that can hit —
                     // its [minRange, maxRange] envelope covers the gap — owns the hold.
                     // `reach` is that weapon's maxRange; `widest` is the longest envelope at all, the
@@ -1203,12 +1205,18 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                         chase.path.clear();
                         chase.pathIndex = 0;
                     } else {
+                        // The chase walks toward what the guard is attacking — the blip for
+                        // a radar/sonar contact, truth for a sighting — so the route and
+                        // the hold gate cannot disagree about where the target is.
+                        const Fx chaseX =
+                            blipAt.has_value() ? (*blipAt)[0] : sight[prey->index].x;
+                        const Fx chaseZ =
+                            blipAt.has_value() ? (*blipAt)[1] : sight[prey->index].z;
                         const PassabilityGrid* chaseGrid = gridFor(*current);
                         if (chaseGrid == nullptr) {
                             continue;
                         }
-                        (void)routeUnit(slot, sight[prey->index].x, sight[prey->index].z,
-                                        store, terrain, *chaseGrid);
+                        (void)routeUnit(slot, chaseX, chaseZ, store, terrain, *chaseGrid);
                     }
                     continue;
                 }

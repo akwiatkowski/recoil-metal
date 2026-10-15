@@ -161,6 +161,36 @@ inline constexpr int kImpactMarkSegments = 12;
 inline constexpr float kImpactMarkScaleSplit = 1.2f;  // (C-290 `CreateScorchMark` gate)
 inline constexpr float kImpactMarkSplatFactor = 4.0f;  // (C-290 splat x4)
 inline constexpr float kImpactMarkDecalFactor = 3.0f;  // (C-290 decal x3)
+/// Retail lays one of 10 splat textures (`scorch_001`-`010_albedo`) or one of
+/// 2 decal textures (`scorch_*_albedo`) per scorch, picked at random
+/// (`defaultexplosions.lua` C-290). The pick is the mark's own position bits
+/// through one more splitmix32 round — replay-identical, off the sim RNG
+/// (C-297), presentation only. Blast-less direct hits ride the splat path.
+/// Counts, not indices into a texture this engine uploads: the FA-PRESENT
+/// projection owns the sampling.
+inline constexpr int kImpactMarkSplatTextures = 10;  // (C-290 `scorch_001`-`010`)
+inline constexpr int kImpactMarkDecalTextures = 2;  // (C-290 `scorch_*_albedo`)
+[[nodiscard]] int impactMarkTexture(float x, float z, float blastRadiusElmos) noexcept {
+    const float scale = blastRadiusElmos / 8.0f;  // ogrids (C-290 scale)
+    const int choices = (blastRadiusElmos > 0.0f && scale > kImpactMarkScaleSplit)
+                            ? kImpactMarkDecalTextures
+                            : kImpactMarkSplatTextures;
+    std::uint32_t bits = static_cast<std::uint32_t>(std::llround(
+                             static_cast<double>(x) * 4096.0))  // 1/4096 elmo
+                         * 0x85EBCA6Bu
+                       ^ static_cast<std::uint32_t>(std::llround(
+                             static_cast<double>(z) * 4096.0))  // 1/4096 elmo
+                             * 0x9E3779B1u;
+    bits ^= bits >> 16;  // splitmix32 finaliser
+    bits *= 0x7FEB352Du;
+    bits ^= bits >> 15;
+    bits *= 0x846CA68Bu;
+    bits ^= bits >> 16;
+    bits ^= bits >> 13;  // one more round past the rotation stream
+    bits *= 0x5BD1E995u;
+    bits ^= bits >> 16;
+    return static_cast<int>(bits % static_cast<std::uint32_t>(choices));
+}
 [[nodiscard]] float impactMarkRadius(float blastRadiusElmos) noexcept {
     if (!(blastRadiusElmos > 0.0f)) {
         return kImpactMarkRadiusElmos;  // elmos (legacy blast-less mark)
@@ -228,7 +258,11 @@ void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
                                 scene.impactMarks.begin() + 64);
     }
     scene.impactMarks.push_back(UnitScene::ImpactMark{
-        .tick = tick, .x = x, .z = z, .blastRadiusElmos = blastRadiusElmos});
+        .tick = tick,
+        .x = x,
+        .z = z,
+        .blastRadiusElmos = blastRadiusElmos,
+        .textureIndex = impactMarkTexture(x, z, blastRadiusElmos)});
     ++scene.impactMarksRevision;
 }
 

@@ -5,10 +5,11 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "core/lua/LuaTable.hpp"
 #include "core/sim/Combat.hpp"
 #include "core/sim/Command.hpp"
+#include "core/sim/Enhancement.hpp"
 #include "core/sim/Intel.hpp"
-
 #include "support/FxMatchers.hpp"
 #include "support/TestRoster.hpp"
 
@@ -59,12 +60,16 @@ namespace {
 /// issue naming `bit` for `units`.
 rm::sim::ApplyCommandResult toggle(rm::test::Roster& roster, std::uint8_t bit,
                                    std::vector<UnitId> units) {
+    // Each click carries a fresh command id: `applyCommand` replays a live id
+    // as a duplicate, so reusing one id across clicks would refuse every
+    // toggle after the first.
+    static std::uint32_t sequence = 0;
     std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
     const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
     return rm::sim::applyCommand(
         CommandIssue{.tick = 1,
                      .source = 0,
-                     .id = rm::commandId(0, 1),
+                     .id = rm::commandId(0, ++sequence),
                      .player = 0,
                      .kind = CommandKind::ToggleScriptBit,
                      .units = std::move(units),
@@ -196,4 +201,50 @@ TEST_CASE("C-349: a unit attached to a transport refuses the toggle") {
     roster.motion(cargo).attached = false;
     REQUIRE(toggle(roster, 3, {cargo}).accepted == std::vector<UnitId>{cargo});
     CHECK(roster.store.scriptBitDisabled(cargo, 3));
+}
+
+TEST_CASE("C-255/C-379: an installed enhancement's toggle cap answers the intake gate") {
+    // `Shield` runs `AddToggleCap('RULEUTC_ShieldToggle')` (`UAL0001_script.lua`):
+    // a hull whose blueprint never declared the cap gains it through the
+    // install, and the `ToggleScriptBit` intake that reads only the blueprint
+    // must accept it. `ShieldRemove` runs `RemoveToggleCap`, and the gate
+    // closes again. The unit-level half of the `CreateEnhancement` contract —
+    // the rack half belongs to FA-UI's `toggleAvailability`.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def = toggledDef("acu", {});
+    def.health = rm::sim::Mag::fromInt(100);
+    const auto params = rm::lua::parseTable("{}");
+    REQUIRE(params);
+    const auto spec = [&](std::string name, std::string slot,
+                          std::vector<std::string> removes = {}) {
+        return rm::unitdef::EnhancementSpec{
+            .name = std::move(name), .slot = std::move(slot),
+            .buildCostMass = rm::sim::Mag::fromInt(1),
+            .buildCostEnergy = rm::sim::Mag::fromInt(1),
+            .buildTime = rm::sim::Fx::fromInt(1),
+            .removes = std::move(removes), .parameters = *params};
+    };
+    def.enhancements.push_back(spec("Shield", "Back"));
+    def.enhancements.push_back({.name = "ShieldRemove",
+                                .slot = "Back",
+                                .prerequisite = "Shield",
+                                .buildCostMass = rm::sim::Mag::fromInt(1),
+                                .buildCostEnergy = rm::sim::Mag::fromInt(1),
+                                .buildTime = rm::sim::Fx::fromInt(1),
+                                .removes = {"Shield", "ShieldRemove"},
+                                .parameters = *params});
+    const rm::UnitTypeIndex type = roster.addType(std::move(def));
+    const UnitId unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+
+    // No cap on the blueprint: the click is refused.
+    CHECK(toggle(roster, 0, {unit}).accepted.empty());
+
+    // The install grants the cap: the same click lands.
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "Shield"));
+    REQUIRE(toggle(roster, 0, {unit}).accepted == std::vector<UnitId>{unit});
+
+    // The Remove branch takes it away: refused again.
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit,
+                                        "ShieldRemove"));
+    CHECK(toggle(roster, 0, {unit}).accepted.empty());
 }

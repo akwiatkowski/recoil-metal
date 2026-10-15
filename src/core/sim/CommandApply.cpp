@@ -1043,10 +1043,13 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                 continue;
             }
             const Player* player = playerFor(issue.player, players);
-            const unitdef::UnitDef* definition = catalog.def(store.typeAt(unit.index));
+            // `C-255`/`C-379`: the cap gate reads the unit's LIVE caps, not the
+            // blueprint's alone — `CreateEnhancement`'s `AddToggleCap` grants
+            // survive intake, and `RemoveToggleCap` closes the gate again. A
+            // blueprint-declared cap stays accepted with no install; the reader
+            // answers false when the unit has no blueprint at all.
             if (player == nullptr || !authorised(*player, store, unit, armies)
-                || definition == nullptr || !definition->toggleCapsDeclared
-                || !definition->hasToggleCap(rule->second)) {
+                || !unitHasToggleCap(store, catalog, unit.index, rule->second)) {
                 continue;
             }
             const bool disabled = !store.scriptBitDisabled(unit, issue.scriptBit);

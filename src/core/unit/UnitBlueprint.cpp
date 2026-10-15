@@ -508,6 +508,7 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.airKRoll = std::max(0.0f, numberOr(*airBlock, "KRoll", 0.0f));
         def.airBankFactor = std::max(0.0f, numberOr(*airBlock, "BankFactor", 0.0f));
         def.airCirclingTurnMult = std::max(0.0f, numberOr(*airBlock, "CirclingTurnMult", 1.0f));
+        def.airTightTurnMultiplier = std::max(0.0f, numberOr(*airBlock, "TightTurnMultiplier", 1.0f));
         def.airBreakOffTrigger = std::max(0.0f, numberOr(*airBlock, "BreakOffTrigger", 0.0f)) * scmap::kElmosPerOgrid;
         def.airBreakOffDistance = std::max(0.0f, numberOr(*airBlock, "BreakOffDistance", 0.0f)) * scmap::kElmosPerOgrid;
         def.airRandomBreakOffMultiplier = std::max(0.0f, numberOr(*airBlock, "RandomBreakOffDistanceMult", 1.5f));
