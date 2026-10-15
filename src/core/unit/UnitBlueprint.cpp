@@ -308,6 +308,13 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         return std::unexpected{lua::ParseError{
             "unknown Physics.BuildRestriction: " + std::string{restriction}, 0}};
     }
+    // `C-218`: `Physics.BuildOnLayerCaps` — the authored LAYER allow-set. Every
+    // shipped unit states the table (census 568/568); Land/Water gate foundation
+    // placement. Absent table keeps the constructor default (Land).
+    if (const lua::Value* caps = physics->find("BuildOnLayerCaps")) {
+        def.buildOnLand = flagAt(*caps, "LAYER_Land");
+        def.buildOnWater = flagAt(*caps, "LAYER_Water");
+    }
     def.motion = *motion;
     def.canFly = (def.motion == unitdef::MotionType::Air);
 

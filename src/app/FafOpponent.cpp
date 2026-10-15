@@ -241,6 +241,23 @@ __rm_faf.attackerMeta = {
         AttackerWeaponsBusy = function() return false end,
     },
 }
+-- `C-453`'s `ScriptedDecal:SetTexture` (`0x00884fe0`): the second native leaf
+-- on the AI-manager boundary — a UI-layer texture field on the scripted
+-- decal object (`moho.userDecal_methods`, `engine/User/ScriptedDecal.lua`).
+-- Retail keeps it on the decal the UI pass draws; the sim never sees it, so
+-- the handle records the path and the last write wins. `GetTexture` is the
+-- read-back the UI pass uses; `Destroy` drops the handle like retail's
+-- `Destroyable` teardown.
+__rm_faf.decalMeta = {
+    __index = {
+        SetTexture = function(d, tex) d.__texture = tex end,
+        GetTexture = function(d) return d.__texture end,
+        Destroy = function(d) d.__texture = nil end,
+    },
+}
+function __rm_faf.decal()
+    return setmetatable({ __texture = nil }, __rm_faf.decalMeta)
+end
 
 -- `C-361`: resolve a packed unit handle to the table the callback surface
 -- hands Lua. The snapshot's own units are the real thing — they carry the

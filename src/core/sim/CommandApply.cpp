@@ -342,6 +342,31 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     return 20;
 }
 
+/// ART-S007 `GrowthFormation`'s naval half (formations.lua:709-721) selects
+/// these land-independent surface widths by total sea hull count: three-wide
+/// up to nine, five-wide up to twenty-five, seven-wide past that
+/// (`Three`/`Five`/`SevenNavalGrowthFormation`). AttackMove's naval half
+/// (formations.lua:654-666) is the 5/7/9-wide split at ten and twenty-five.
+/// Subs sail their own same-threshold blocks on the same beats.
+[[nodiscard]] std::size_t navalFormationWidth(std::size_t hulls, bool attack) noexcept {
+    if (attack) {
+        if (hulls <= 10) {
+            return 5;
+        }
+        if (hulls <= 25) {
+            return 7;
+        }
+        return 9;
+    }
+    if (hulls <= 9) {
+        return 3;
+    }
+    if (hulls <= 25) {
+        return 5;
+    }
+    return 7;
+}
+
 [[nodiscard]] const std::shared_ptr<SharedCommand>& ensureSharedCommand(
     const Command& command, CommandSource source, CommandId id, std::uint32_t count,
     Fx formationAnchorX, Fx formationAnchorZ, std::string_view scriptTask,
@@ -847,9 +872,21 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     // Stable: ties keep canonical order, so a homogeneous group fills exactly as
     // before and selection order stays presentation-only.
     std::ranges::stable_sort(formationMembers, {}, formationClass);
-    const std::size_t formationWidth = isAttackOrder
-                                           ? attackFormationWidth(formationMembers.size())
-                                           : growthFormationWidth(formationMembers.size());
+    // Retail routes each layer class through its own blocks (`GrowthFormation`
+    // formations.lua:679-723, `AttackFormation` formations.lua:622-668): land
+    // hulls through the land widths, surface hulls through the naval ones.
+    // A surface hull is the `surfaceWater` motion flag `Roster` derives from
+    // `MotionType::Water`; subs keep the land block until their own split lands.
+    const bool allSurfaceWater = std::ranges::all_of(formationMembers, [&](UnitId unit) {
+        return store.motion()[unit.index].surfaceWater;
+    });
+    const std::size_t formationWidth = allSurfaceWater
+                                           ? navalFormationWidth(formationMembers.size(),
+                                                                 isAttackOrder)
+                                           : (isAttackOrder
+                                                  ? attackFormationWidth(formationMembers.size())
+                                                  : growthFormationWidth(
+                                                        formationMembers.size()));
     // The formation's facing. Retail carries it on the wire command as an orientation
     // quaternion (`C-151`, `CDecoder::DecodeCommandData` +0x3c..+0x48) that the engine
     // applies to the Lua `FormationPos` offsets — the script itself returns unrotated

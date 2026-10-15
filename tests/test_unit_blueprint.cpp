@@ -1409,6 +1409,46 @@ TEST_CASE("C-218 (6): StartTurnDistance derives from SizeZ x 3 when unauthored")
     REQUIRE(none.has_value());
     CHECK(none->startTurnDistance == Catch::Approx(4.2f));
 }
+TEST_CASE("C-218: BuildOnLayerCaps reads the authored LAYER allow-set") {
+    // `C-218`'s constructor-default tail (`BuildOnLayerCaps 1`): the allow-set
+    // retail's placement consults alongside the motion class. Every shipped unit
+    // authors it (census: 568/568); a land tank allows Land only, a naval
+    // factory Water only. The loader reads each `LAYER_* = true` entry; a
+    // default-allow-land keeps placement total when the table is absent.
+    const Blueprint tank{"XXB0710_unit.bp", R"(
+        UnitBlueprint {
+            Physics = {
+                MotionType = 'RULEUMT_Land', MaxSpeed = 3.4,
+                BuildOnLayerCaps = {
+                    LAYER_Air = false, LAYER_Land = true, LAYER_Orbit = false,
+                    LAYER_Seabed = false, LAYER_Sub = false, LAYER_Water = false,
+                },
+            },
+            SizeX = 0.7, SizeY = 0.5, SizeZ = 0.9,
+        }
+    )"};
+    const auto tankDef = rm::unitbp::loadFile(tank.path());
+    REQUIRE(tankDef.has_value());
+    CHECK(tankDef->buildOnLand);
+    CHECK_FALSE(tankDef->buildOnWater);
+
+    const Blueprint yard{"XXB0711_unit.bp", R"(
+        UnitBlueprint {
+            Physics = {
+                MotionType = 'RULEUMT_None',
+                BuildOnLayerCaps = {
+                    LAYER_Air = false, LAYER_Land = false, LAYER_Orbit = false,
+                    LAYER_Seabed = false, LAYER_Sub = false, LAYER_Water = true,
+                },
+            },
+            SizeX = 4, SizeY = 2, SizeZ = 6,
+        }
+    )"};
+    const auto yardDef = rm::unitbp::loadFile(yard.path());
+    REQUIRE(yardDef.has_value());
+    CHECK(yardDef->buildOnWater);
+    CHECK_FALSE(yardDef->buildOnLand);
+}
 TEST_CASE("C-411: CirclingTurnMult parses with a 1 default when unauthored") {
     // `C-411` (`Air+0x60`, schema `0x00e62768` "Adjust turning ability when in
     // circling mode"): the XSA0203 gunship authors 3, the UEA0104 gunship 1, and

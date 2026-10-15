@@ -86,6 +86,30 @@ TEST_CASE("C-453: unit GetAttacker returns an attacker bound to its unit",
     REQUIRE(ok);
 }
 
+// C-453: `ScriptedDecal:SetTexture` (`0x00884fe0`) is the second native leaf
+// on the AI-manager boundary — a UI-layer texture setter on the scripted
+// decal object (`moho.userDecal_methods`). The sim never sees it: the handle
+// records the texture path the UI pass reads.
+TEST_CASE("C-453: a scripted decal records its texture without touching the sim",
+          "[faf][ai][c453]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    const bool ok = ai.eval(R"(
+        local decal = __rm_faf.decal()
+        assert(decal ~= nil, 'the driver hands out a decal handle, not nil')
+        decal:SetTexture('/textures/ui/test.dds')
+        assert(decal:GetTexture() == '/textures/ui/test.dds',
+            'SetTexture records the path the UI pass reads')
+        decal:SetTexture('/textures/ui/other.dds')
+        assert(decal:GetTexture() == '/textures/ui/other.dds',
+            'the last write wins, like a texture field')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
 
 TEST_CASE("FAF enemy and blueprint queries read the observed match and retail content",
           "[faf][ai][brain-query]") {

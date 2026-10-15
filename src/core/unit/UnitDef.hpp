@@ -345,6 +345,15 @@ struct UnitDef {
     /// that family does state.
     MotionType motion = MotionType::None;
     BuildRestriction buildRestriction = BuildRestriction::None;
+    /// `C-218`: `Physics.BuildOnLayerCaps` — the authored LAYER allow-set retail's
+    /// placement consults alongside the motion class (constant `0x00E4DA94`,
+    /// constructor default `1`). Every shipped unit authors the table
+    /// (census: 568/568); 387 allow Land only, 56 Air only, 54 Water only.
+    /// Units (ogrids) are retail layers, not sim layers: Land/Water gate
+    /// foundation placement, Air gates nothing on the ground. True = authored
+    /// `LAYER_X = true`; absent table defaults to Land (retail's `1`).
+    bool buildOnLand = true;
+    bool buildOnWater = false;
 
     /// How far a guarding unit looks for something to attack, in elmos —
     /// `AI.GuardScanRadius`, ogrids like every sibling range (`C-183`). Only 43 of 568

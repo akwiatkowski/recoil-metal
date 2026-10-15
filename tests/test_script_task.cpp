@@ -1219,3 +1219,83 @@ TEST_CASE("C-313: ScriptHost publishes __active_mods and hook-concats mod task c
 
     std::filesystem::remove_all(scratch);
 }
+
+TEST_CASE("C-311: ScriptHost import and doscript concatenate hook copies") {
+    // `C-311` (`SCR_LuaDoFileConcat`, `0x004d4de0`): EVERY load is hook-aware,
+    // not just the task's own modulePath — `import` and `doscript` collect the
+    // base file plus each registered hookdir's copy of the same path and run
+    // them as ONE chunk, so a hook shares the original's locals. The helper's
+    // hook rewrites the module-local answer; the doscript hook rewrites the
+    // global. A host that reads only base files leaves the queue sleeping.
+    const std::filesystem::path scratch = std::filesystem::temp_directory_path()
+        / "rm-script-host-c311-import";
+    std::filesystem::remove_all(scratch);
+    std::filesystem::create_directories(scratch / "lua/sim/tasks");
+    std::filesystem::create_directories(scratch / "schook/lua/sim/tasks");
+    {
+        std::ofstream helper(scratch / "lua/sim/tasks/C311Helper.lua");
+        helper << "answer = 1\n";
+    }
+    {
+        std::ofstream helperHook(scratch / "schook/lua/sim/tasks/C311Helper.lua");
+        helperHook << "answer = 42\n";
+    }
+    {
+        std::ofstream script(scratch / "lua/sim/tasks/C311Script.lua");
+        script << "G_c311script = 'base'\n";
+    }
+    {
+        std::ofstream scriptHook(scratch / "schook/lua/sim/tasks/C311Script.lua");
+        scriptHook << "G_c311script = 'hooked'\n";
+    }
+    {
+        std::ofstream task(scratch / "lua/sim/tasks/C311Use.lua");
+        task << "local helper = import('/lua/sim/tasks/C311Helper.lua')\n"
+                "doscript('/lua/sim/tasks/C311Script.lua')\n"
+                "TypeClass = Class({}) {\n"
+                "  TaskTick = function(self, result)\n"
+                "    if helper.answer ~= 42 then return 1 end\n"
+                "    if G_c311script ~= 'hooked' then return 1 end\n"
+                "    return -1\n"
+                "  end,\n"
+                "}\n";
+    }
+
+    rm::vfs::Vfs content;
+    content.mountDirectory(scratch);
+    content.addHookDirectory("/schook");
+    rm::app::ScriptHost host{content};
+    host.registerTask("C311Use", rm::app::ScriptTaskRegistration{
+        .modulePath = "/lua/sim/tasks/C311Use.lua",
+    });
+
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c311_use";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "C311Use"},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    REQUIRE(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                   nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                   nullptr, &host) == 1);
+    CHECK(roster.store.orders()[unit.index].empty());
+    CHECK(host.errors().empty());
+
+    std::filesystem::remove_all(scratch);
+}

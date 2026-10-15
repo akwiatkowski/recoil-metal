@@ -60,6 +60,22 @@ local function importModule(path)
 end
 import = importModule
 
+-- `doscript` is the same `C-311` hook-aware concat as `import`, run in the
+-- caller's environment rather than a fresh module one (`C-311`:
+-- `SCR_LuaDoFileConcat` serves both; `0x004d4de0`). `env` defaults to the
+-- caller: with no argument the chunk runs in `_G`, which is the observable
+-- effect retail bootstrap files rely on. A missing file is a Lua error, not
+-- the empty table `import` hands back for deliberately unvendored AI files.
+function doscript(path, env)
+    path = string.lower(path)
+    if path:sub(1,1) ~= '/' then path = '/lua/' .. path end
+    local source = __rm_read(path)
+    if not source then error('doscript: cannot open '..path) end
+    local chunk, why = load(source, '@'..path, 't', env or _G)
+    if not chunk then error(why) end
+    return chunk()
+end
+
 -- The host instantiates one class table per (unit, task); the constructor invokes the
 -- two creation hooks (OnPreCreate, OnCreate) and stores the lifecycle functions so the
 -- dispatcher can invoke them per beat.
@@ -79,14 +95,25 @@ constexpr const char* kHostTable = "rm_script_host";
     return raw != nullptr ? std::string{raw} : std::string{};
 }
 
-int readSource(lua_State* lua) {
+int concatSource(lua_State* lua) {
+    // `C-311` (`SCR_LuaDoFileConcat`, `0x004d4de0`): every `doscript`/`import`
+    // load collects the base file plus each registered hookdir's copy of the
+    // same path as ONE chunk, in hookdir registration order — the same rule
+    // `ensureInstance` applies to the task's own modulePath below.
     auto* content = static_cast<const rm::vfs::Vfs*>(lua_touserdata(lua, lua_upvalueindex(1)));
     const char* path = lua_tostring(lua, 1);
     if (path == nullptr) { lua_pushnil(lua); return 1; }
     const auto bytes = content->read(path);
     if (!bytes) { lua_pushnil(lua); return 1; }
-    const std::string translated =
-        rm::ai::rewriteLegacyLua({reinterpret_cast<const char*>(bytes->data()), bytes->size()});
+    std::string concatenated{reinterpret_cast<const char*>(bytes->data()), bytes->size()};
+    for (const std::string& hookPath : content->hooksFor(path)) {
+        if (const auto hookBytes = content->read(hookPath)) {
+            concatenated.push_back('\n');
+            concatenated.append(reinterpret_cast<const char*>(hookBytes->data()),
+                                hookBytes->size());
+        }
+    }
+    const std::string translated = rm::ai::rewriteLegacyLua(concatenated);
     lua_pushlstring(lua, translated.data(), translated.size());
     return 1;
 }
@@ -110,7 +137,7 @@ struct ScriptHost::Impl {
             lua_pushnil(lua); lua_setglobal(lua, name);
         }
         lua_pushlightuserdata(lua, const_cast<rm::vfs::Vfs*>(&content));
-        lua_pushcclosure(lua, readSource, 1);
+        lua_pushcclosure(lua, concatSource, 1);
         lua_setglobal(lua, "__rm_read");
         if (luaL_dostring(lua, kBootstrap) != LUA_OK) {
             errors.emplace_back(toString(lua, -1));

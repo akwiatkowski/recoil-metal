@@ -54,12 +54,17 @@ struct Fixture {
     rm::sim::PathService paths;
     std::vector<rm::sim::Construction> building;
     rm::UnitTypeIndex tank;
-
+    rm::UnitTypeIndex ship;
     Fixture() {
         rm::unitdef::UnitDef def;
         def.name = "test_tank";
         def.categories = {"LAND", "DIRECTFIRE", "TECH1"};
         tank = roster.addType(def);
+        rm::unitdef::UnitDef hull;
+        hull.name = "test_frigate";
+        hull.categories = {"MOBILE", "NAVAL"};
+        hull.motion = rm::unitdef::MotionType::Water;
+        ship = roster.addType(hull);
     }
 
     [[nodiscard]] rm::sim::ApplyCommandResult issueMove(
@@ -243,5 +248,70 @@ TEST_CASE("a grouped attack-move uses AttackFormation block widths", "[formation
         }
     }
     CHECK(front == 8);
+    CHECK(back == 1);
+}
+
+TEST_CASE("a grouped naval move uses naval block widths", "[formation]") {
+    // Retail `GrowthFormation` (ART-S007 lua/formations.lua:698-723) routes sea
+    // units through the naval blocks, not the land ones: up to nine hulls fill
+    // a three-wide block (`ThreeNavalGrowthFormation`), so a four-frigate group
+    // move holds three on the anchor line with exactly one trailing behind it.
+    Fixture fix;
+    std::vector<UnitId> group;
+    for (int i = 0; i < 4; ++i) {
+        group.push_back(fix.roster.add(fix.ship, 200.0f,
+                                       200.0f + 10.0f * static_cast<float>(i),
+                                       0, 500.0f));
+    }
+    const rm::sim::ApplyCommandResult result = fix.issueMove(group, 900.0f, 215.0f);
+    REQUIRE(result.accepted == group);
+
+    std::size_t front = 0;
+    std::size_t back = 0;
+    for (const UnitId member : group) {
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        const float x = rm::test::asFloat(entries.front().targetX());
+        if (x == Catch::Approx(900.0f).margin(0.01f)) {
+            ++front;
+        } else if (x == Catch::Approx(892.0f).margin(0.01f)) {
+            ++back;
+        }
+    }
+    CHECK(front == 3);
+    CHECK(back == 1);
+}
+
+TEST_CASE("a grouped naval attack-move uses naval attack widths", "[formation]") {
+    // Retail `AttackFormation` (ART-S007 lua/formations.lua:643-668) routes sea
+    // units through the naval attack blocks: up to ten hulls fill a five-wide
+    // block (`FiveWideNavalAttackFormation`), so a six-frigate group
+    // attack-move holds five on the anchor line with one trailing behind it —
+    // where the land `AttackFormation` would hold all six on an eight-wide row.
+    Fixture fix;
+    std::vector<UnitId> group;
+    for (int i = 0; i < 6; ++i) {
+        group.push_back(fix.roster.add(fix.ship, 200.0f,
+                                       200.0f + 10.0f * static_cast<float>(i),
+                                       0, 500.0f));
+    }
+    const rm::sim::ApplyCommandResult result =
+        fix.issueMove(group, 900.0f, 225.0f, CommandKind::AttackMove);
+    REQUIRE(result.accepted == group);
+
+    std::size_t front = 0;
+    std::size_t back = 0;
+    for (const UnitId member : group) {
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        CHECK(entries.front().kind() == CommandKind::AttackMove);
+        const float x = rm::test::asFloat(entries.front().targetX());
+        if (x == Catch::Approx(900.0f).margin(0.01f)) {
+            ++front;
+        } else if (x == Catch::Approx(892.0f).margin(0.01f)) {
+            ++back;
+        }
+    }
+    CHECK(front == 5);
     CHECK(back == 1);
 }
