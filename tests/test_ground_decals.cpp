@@ -678,6 +678,47 @@ TEST_CASE("impact marks record retail's LOD pick", "[decals]") {
     CHECK(replay.impactMarks[0].lod == scene.impactMarks[0].lod);
 }
 
+TEST_CASE("impact marks keep a weapon's own decal when retail scripts one", "[decals]") {
+    // Retail's per-weapon `OnImpact` overrides lay their OWN decal beside the
+    // base-class scorch (`AIFSonanceShell02_script.lua:19-20`,
+    // `CIFArtilleryProton01_script.lua:15`, `AIFFragmentationSensorShell03_script.lua:20`):
+    // a `crater_radial01_*` or `scorch_011_albedo` mark at the authored size,
+    // not the blast-derived splat/decal split (`defaultexplosions.lua` C-290,
+    // claim C-484). The mark records the scripted texture pick and draw size
+    // from its own bits — replay-identical, off the sim RNG (C-297) — so the
+    // FA-PRESENT projection draws what the script laid.
+    const HeightField field = flatAt(64, 0);
+    rm::app::UnitScene scene;
+    rm::app::noteImpactMark(scene, 10.0f, 20.0f, 8.0f,
+                            /*tick=*/0, rm::app::UnitScene::ImpactMarkScript::SonanceCrater);
+    REQUIRE(scene.impactMarks.size() == 1);
+    // The scripted pick is the sonance crater pair, not the scorch_001-010
+    // splat/decal stream: texture index past the base ten.
+    CHECK(scene.impactMarks[0].textureIndex >= 10);
+    // The scripted draw size is the authored 12 elmos, not the blast-derived
+    // splat (8 elmos x4 = 32): the projection draws what the script laid.
+    rm::app::refreshWreckDecals(scene, field);
+    float far = 0.0f;
+    for (const DecalVertex& vertex : scene.wreckDecals) {
+        const float dx = vertex.position[0] - 10.0f;
+        const float dz = vertex.position[2] - 20.0f;
+        far = std::max(far, std::sqrt(dx * dx + dz * dz));
+    }
+    CHECK(far == Approx(12.0f));
+    // Replay-identical: the same scripted mark redraws the same disc, off the
+    // sim RNG (C-297) — the angle and texture ride the mark's own bits.
+    rm::app::UnitScene replay;
+    rm::app::noteImpactMark(replay, 10.0f, 20.0f, 8.0f,
+                            /*tick=*/0, rm::app::UnitScene::ImpactMarkScript::SonanceCrater);
+    CHECK(replay.impactMarks[0].textureIndex == scene.impactMarks[0].textureIndex);
+    rm::app::refreshWreckDecals(replay, field);
+    REQUIRE(replay.wreckDecals.size() == scene.wreckDecals.size());
+    for (std::size_t i = 0; i < scene.wreckDecals.size(); ++i) {
+        CHECK(scene.wreckDecals[i].position[0] == Approx(replay.wreckDecals[i].position[0]));
+        CHECK(scene.wreckDecals[i].position[2] == Approx(replay.wreckDecals[i].position[2]));
+    }
+}
+
 
 TEST_CASE("a chamfered square cuts its corners at 45 degrees", "[selection-square]") {
     const auto field = flatAt(64, 0);

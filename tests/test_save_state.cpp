@@ -590,6 +590,7 @@ TEST_CASE("a current save round-trips winged-flight state", "[save-state]") {
     motion.airBreakOffDistance = rm::sim::Fx::fromInt(40);
     motion.airKRoll = rm::sim::Fx::fromInt(2);
     motion.airBankFactor = rm::sim::Fx::fromInt(3);
+    motion.airKRollDamping = rm::sim::Fx::fromInt(1);
     motion.airCirclingTurnMult = rm::sim::Fx::fromInt(3);
     motion.airTightTurnMultiplier = rm::sim::Fx::fromRatio(51, 50);
 
@@ -616,6 +617,7 @@ TEST_CASE("a current save round-trips winged-flight state", "[save-state]") {
     CHECK(back.airBreakOffDistance == motion.airBreakOffDistance);
     CHECK(back.airKRoll == motion.airKRoll);
     CHECK(back.airBankFactor == motion.airBankFactor);
+    CHECK(back.airKRollDamping == motion.airKRollDamping);
     CHECK(back.airCirclingTurnMult == motion.airCirclingTurnMult);
     CHECK(back.airTightTurnMultiplier == motion.airTightTurnMultiplier);
     CHECK(SaveState::encode(*restored) == bytes);

@@ -75,8 +75,8 @@ Run the complete 24-case matrix (four factories, three HUD profiles, two scales)
 
 ```sh
 mise exec -- python3 tools/input_acceptance.py \
-  --map '/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance/maps/SCMP_009/SCMP_009.scmap' \
-  --gamedata '/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance/gamedata' \
+  --map '/Volumes/blue_1tb_ssd/faf/Supreme Commander Forged Alliance/maps/SCMP_009/SCMP_009.scmap' \
+  --gamedata '/Volumes/blue_1tb_ssd/faf/Supreme Commander Forged Alliance/gamedata' \
   --output "$HOME/projects/llm/input/recoil-metal/acceptance/2026-09-05-native-input"
 ```
 

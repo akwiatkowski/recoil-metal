@@ -522,6 +522,11 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         def.airKTurnDamping = std::max(0.0f, numberOr(*airBlock, "KTurnDamping", 3.0f));
         def.airKRoll = std::max(0.0f, numberOr(*airBlock, "KRoll", 0.0f));
         def.airBankFactor = std::max(0.0f, numberOr(*airBlock, "BankFactor", 0.0f));
+        // `KRollDamping` (`C-244`, `Air+0x5c`, schema `0x00527ca0`): the roll
+        // axis damping. Authored on all 36 winged flyers (1 on 22 incl. the
+        // UEA0102 fighter, 2 on ten, 4 on four); absent on all fifteen
+        // non-winged flyers, which default to 0.
+        def.airKRollDamping = std::max(0.0f, numberOr(*airBlock, "KRollDamping", 0.0f));
         def.airCirclingTurnMult = std::max(0.0f, numberOr(*airBlock, "CirclingTurnMult", 1.0f));
         def.airTightTurnMultiplier = std::max(0.0f, numberOr(*airBlock, "TightTurnMultiplier", 1.0f));
         def.airBreakOffTrigger = std::max(0.0f, numberOr(*airBlock, "BreakOffTrigger", 0.0f)) * scmap::kElmosPerOgrid;

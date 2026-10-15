@@ -230,6 +230,40 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
                                                       : kImpactMarkSplatFactor;
     return blastRadiusElmos * factor;  // elmos (C-290 x3/x4)
 }
+/// A per-weapon `OnImpact` decal's authored draw size in elmos (C-484): the
+/// script lays its own texture at its own size, NOT the blast-derived
+/// splat/decal split. `BaseScorch` keeps the split; every other value draws
+/// what its corpus script states — the sonance crater pair's wider 12-elmo
+/// albedo (the 10-elmo normals ride the same mark), proton `scorch_011` at
+/// 10, napalm `scorch_001` at 3.75-5 (midpoint 4.375), EMP `nuke_scorch_001`
+/// at 28. The blast radius still sizes the base scorch when a scripted shot
+/// ALSO scorches through its base class (all four call their parent after).
+[[nodiscard]] float impactMarkScriptedRadius(UnitScene::ImpactMarkScript script,
+                                             float blastRadiusElmos) noexcept {
+    using Script = UnitScene::ImpactMarkScript;
+    switch (script) {
+        case Script::SonanceCrater: return 12.0f;  // elmos (albedo half of :19-20)
+        case Script::ProtonScorch: return 10.0f;  // elmos (`CIFArtilleryProton01:15`)
+        case Script::NapalmScorch: return 4.375f;  // elmos (3.75-5 midpoint, `:13`)
+        case Script::EmpScorch: return 28.0f;  // elmos (`CIFEMPFluxWarhead02:116`)
+        case Script::BaseScorch: break;
+    }
+    return impactMarkRadius(blastRadiusElmos);
+}
+/// A scripted mark's texture stream (C-484): past the base ten
+/// (`scorch_001`-`010`), so the FA-PRESENT projection samples the weapon's
+/// own texture rather than the splat/decal stream. Base marks keep 0..9.
+[[nodiscard]] int impactMarkScriptedTexture(UnitScene::ImpactMarkScript script, int base) noexcept {
+    using Script = UnitScene::ImpactMarkScript;
+    switch (script) {
+        case Script::SonanceCrater: return 10;  // `crater_radial01_*` pair
+        case Script::ProtonScorch: return 11;  // `scorch_011_albedo`
+        case Script::NapalmScorch: return 12;  // `scorch_001_albedo` scripted draw
+        case Script::EmpScorch: return 13;  // `nuke_scorch_001_albedo`
+        case Script::BaseScorch: break;
+    }
+    return base;
+}
 /// Retail scorch lifetime floor in seconds (`defaultexplosions.lua` C-290:
 /// lifetime 300-600); each mark retires at its own point in the spread,
 /// derived from the mark's own position bits like the rotation angle below —
@@ -280,7 +314,7 @@ inline constexpr float kImpactMarkLifetimeSecondsWidth = 300.0f;  // s (C-290 60
 } // namespace
 
 void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
-                    rm::TickIndex tick) {
+                    rm::TickIndex tick, UnitScene::ImpactMarkScript script) {
     if (scene.impactMarks.size() >= UnitScene::kMaxImpactMarks) {
         scene.impactMarks.erase(scene.impactMarks.begin(),
                                 scene.impactMarks.begin() + 64);
@@ -290,8 +324,9 @@ void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
         .x = x,
         .z = z,
         .blastRadiusElmos = blastRadiusElmos,
-        .textureIndex = impactMarkTexture(x, z, blastRadiusElmos),
-        .lod = impactMarkLod(x, z)});
+        .textureIndex = impactMarkScriptedTexture(script, impactMarkTexture(x, z, blastRadiusElmos)),
+        .lod = impactMarkLod(x, z),
+        .script = script});
     ++scene.impactMarksRevision;
 }
 
@@ -351,7 +386,7 @@ void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field,
     // bombardment leaves hundreds and nobody inspects one up close.
     for (const UnitScene::ImpactMark& mark : scene.impactMarks) {
         rm::appendWreckMark(scene.wreckDecals, field, {mark.x, 0.0f, mark.z},
-                            impactMarkRadius(mark.blastRadiusElmos),
+                            impactMarkScriptedRadius(mark.script, mark.blastRadiusElmos),
                             kImpactMarkSegments, impactMarkRotation(mark.x, mark.z));
     }
     scene.wreckDecalsFrom = scene.features.revision();

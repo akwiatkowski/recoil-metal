@@ -1507,6 +1507,32 @@ TEST_CASE("C-224: TightTurnMultiplier parses with a 1 default when unauthored") 
     REQUIRE(none.has_value());
     CHECK(none->airTightTurnMultiplier == Catch::Approx(1.0f));
 }
+TEST_CASE("C-244: KRollDamping parses with a 0 default when unauthored") {
+    // `C-244` (`Air+0x5c`, schema `0x00527ca0` "Controller damping parameter
+    // for roll changes"): the UEA0102 fighter authors 1, ten hulls author 2,
+    // four author 4, and an absent key defaults to 0 — the unauthored state
+    // of all fifteen non-winged flyers. Unitless, read at spawn.
+    const Blueprint authored{"XXB0716_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true, KRoll = 2, KRollDamping = 1 },
+            SizeX = 0.8, SizeY = 1, SizeZ = 1,
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(authored.path());
+    REQUIRE(def.has_value());
+    CHECK(def->airKRollDamping == Catch::Approx(1.0f));
+    const Blueprint bare{"XXB0717_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true },
+            SizeX = 0.8, SizeY = 0.25, SizeZ = 1.4,
+        }
+    )"};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->airKRollDamping == Catch::Approx(0.0f));
+}
 TEST_CASE("C-412: HoverOverAttack parses with a false default when unauthored") {
     // `C-412` (`Air+0x79`, schema `0x00527d5c` "Whether unit should hover over the
     // target directly to attack... used for cases like the C.Z.A.R"): the UAA0310

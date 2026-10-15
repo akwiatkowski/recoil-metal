@@ -498,13 +498,16 @@ struct UnitDef {
     float airKTurn = 3.0f;
     float airKTurnDamping = 3.0f;
     // `KRoll`/`BankFactor` (`C-244`'s roll axis, `Air+0x58`): the planar model banks
-    // the visual roll into the turn at `KRoll` radians per second toward a demand of
-    // `BankFactor` times the turn applied this tick. `KRollDamping` and `BankForward`
-    // are deliberately unread — the first damps a roll-rate state the planar reduction
-    // has no room for, the second pitches a channel it does not own (both need the
-    // three-axis solver `Movement.hpp` names). Zero `KRoll`/`BankFactor` means no bank.
+    // the visual roll toward a demand of `BankFactor` times the turn applied
+    // this tick, driven as `KRoll x demand - KRollDamping x rate` on the
+    // roll-rate state — the same PD shape as the yaw axis. `KRollDamping`
+    // (`Air+0x5c`, schema `0x00527ca0`) is 1 on the UEA0102 fighter, 2 on ten
+    // hulls, 4 on four; unauthored (all fifteen non-winged flyers) reads 0.
+    // `BankForward` stays unread — it pitches a channel the planar reduction
+    // does not own. Zero `KRoll`/`BankFactor` means no bank.
     float airKRoll = 0.0f;
     float airBankFactor = 0.0f;
+    float airKRollDamping = 0.0f;
     /// `Air.CirclingTurnMult` (`C-411`, `Air+0x60`, schema `0x00e62768` — "Adjust turning
     /// ability when in circling mode"): scales the divided `KTurn` on retail's `0x6c4960`
     /// circling branch (the sustained-turn states 3/4/5). 1 when unauthored; 3 on the

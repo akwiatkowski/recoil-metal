@@ -368,3 +368,32 @@ TEST_CASE("a scripted batch of kills can promote more than one level at once") {
     CHECK(healthOf(roster, rookie).veterancy.level == 5);
     CHECK(healthOf(roster, rookie).maximum == rm::test::mag(1500.0f));
 }
+TEST_CASE("C-437: a chain kill from a victim's death blast credits the original killer") {
+    // `C-437` (`lua/sim/Unit.lua:933-954`): the killer is credited BEFORE the
+    // victim's death weapon fires — `instigator:OnKilledUnit(self)` runs, then
+    // `DoDeathWeapon()`. The full chain: K kills V (V.lastHitBy = K, K earns
+    // the credit), V dies, V's blast fells B (B.lastHitBy = V's corpse
+    // handle). The corpse-credited chain kill earns nothing — a dead killer
+    // earns nothing — while K's pre-blast credit stands alone at one kill.
+    Roster roster;
+    UnitDef killerDef = bodyDef(1000.0f);
+    killerDef.veterancyKills = {1, 1, 1, 1, 1};
+    const rm::UnitTypeIndex killerType = roster.addType(killerDef);
+    const UnitId killer = roster.add(killerType, 0.0f, 0.0f, 0, 1000.0f);
+    UnitDef victimDef = bodyDef(100.0f);
+    const UnitId victim = roster.add(roster.addType(victimDef), 10.0f, 0.0f, 1, 100.0f);
+    const UnitId bystander = roster.add(roster.addType(victimDef), 20.0f, 0.0f, 1, 100.0f);
+    // K fells V: the pre-blast credit promotes on the degenerate ladder.
+    roster.store.health()[victim.index].lastHitBy = killer;
+    CHECK(rm::sim::creditKill(roster.store, roster.catalog, killer, nullptr));
+    CHECK(healthOf(roster, killer).veterancy.kills == 1);
+    CHECK(healthOf(roster, killer).veterancy.level == 1);
+    // V dies; its blast fells B, naming the corpse as the killer.
+    roster.store.kill(victim);
+    roster.store.health()[bystander.index].lastHitBy = victim;
+    roster.store.health()[bystander.index].current = rm::test::mag(0.0f);
+    // The corpse earns nothing for the chain kill; K keeps exactly its one.
+    CHECK_FALSE(rm::sim::creditKill(roster.store, roster.catalog, victim, nullptr));
+    CHECK(healthOf(roster, killer).veterancy.kills == 1);
+    CHECK(healthOf(roster, killer).veterancy.level == 1);
+}

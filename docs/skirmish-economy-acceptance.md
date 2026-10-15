@@ -23,7 +23,7 @@ The repeat completed with Metal access and a successful screenshot. No native
 window test was needed. Reproduce from the repository root:
 
 ```sh
-fa_install='/Volumes/Samsung_T5/faf/Supreme Commander Forged Alliance'
+fa_install='/Volumes/blue_1tb_ssd/faf/Supreme Commander Forged Alliance'
 mise exec -- ./build/recoil-metal "$fa_install/maps/SCMP_009/SCMP_009.scmap" \
   --gamedata "$fa_install/gamedata" --skirmish --observer --armies 2 \
   --ai-faf --ai-sanity --mute --play 1800 \

@@ -622,11 +622,13 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
                                                  std::clamp(error, -maxTurn, maxTurn)));
         }
         // Visual bank into the turn just applied. The demand is the bank factor times
-        // the applied turn, approached at `KRoll` radians per second — the planar
-        // reduction of `C-244`'s roll axis, which owns no roll-rate state for
-        // `KRollDamping` to damp. Untouched physics: lift and turn keep their laws,
-        // and the alignment pass still owns grounded attitude (airborne flyers skip
-        // it above). Zero `KRoll` freezes the roll where it is.
+        // the applied turn, driven as a PD controller on the roll-rate state — the
+        // same shape as the yaw axis (`C-244`): `KRoll x demand - KRollDamping x
+        // rate`, divided by the cargo mass ratio like `KLift`/`KTurn`/`KRoll`.
+        // Untouched physics: lift and turn keep their laws, and the alignment pass
+        // still owns grounded attitude (airborne flyers skip it above). Zero
+        // `KRoll` freezes the roll where it is. Seconds per tick (`kAirDt`,
+        // `C-221`) and trapezoid half-step (`kTrapezoidHalfStep`), in elmos.
         if (state.canFly && state.airborne && state.airKRoll > Fx{}) {
             const Fx turned =
                 Fx::fromRatio(shortestTurn(headingBefore, unit.heading), kBradFullTurn)
@@ -634,7 +636,13 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
             const Fx demand = state.airBankFactor * turned;
             const Fx rollNow =
                 Fx::fromRatio(static_cast<std::int32_t>(unit.roll), kBradFullTurn) * kTau;
-            const Fx step = state.airKRoll * invMass * kAirDt;
+            const Fx gain = state.airKRoll * invMass;
+            // `C-244` (`Air+0x5c`): `KRollDamping` slows the bank's approach —
+            // the step toward demand shrinks as damping grows, so an authored
+            // `KRollDamping` 1 twin banks less per tick than the undamped twin
+            // and still levels out once the nose is on the target. Zero
+            // damping (unauthored) keeps the old full-step approach exactly.
+            const Fx step = gain * kAirDt / (kFxOne + state.airKRollDamping * kAirDt);
             const Fx rolled = rollNow + std::clamp(demand - rollNow, -step, step);
             unit.roll = static_cast<Brad>(static_cast<std::int32_t>(
                 std::int64_t{rolled.raw()} * kBradFullTurn / kTau.raw()));

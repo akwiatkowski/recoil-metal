@@ -1435,6 +1435,37 @@ TEST_CASE("a flyer without roll gains never banks", "[air-bank]") {
     CHECK(units[0].heading != rm::Brad{0});
     CHECK(units[0].roll == rm::Brad{0});
 }
+TEST_CASE("C-244: roll damping slows the bank's approach to its demand", "[air-bank]") {
+    // `C-244` (`0x006c5130`-`0x006c58cf`, `Air+0x5c`, schema `0x00527ca0`
+    // "Controller damping parameter for roll changes"): the roll axis is the
+    // same PD shape as the yaw axis — `KRoll x demand - KRollDamping x rate`.
+    // Two identical banking flyers (UEA0102 numbers: `KRoll` 2, `BankFactor`
+    // 2) differ only in damping: after three ticks the undamped twin has
+    // banked further than the `KRollDamping` 1 twin. Currently fails: the
+    // bank approaches at `KRoll` with no damping term, so both twins bank
+    // identically.
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto banked = [&](int damping) {
+        std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+        units[0].y = rm::sim::Fx::fromInt(80);
+        std::vector<MoveState> motion{flyer()};
+        motion[0].altitudeRef = rm::sim::Fx::fromInt(80);
+        motion[0].airLiftFactor = rm::sim::Fx{};
+        motion[0].airKRoll = rm::sim::Fx::fromInt(2);
+        motion[0].airBankFactor = rm::sim::Fx::fromInt(2);
+        motion[0].airKRollDamping = rm::sim::Fx::fromInt(damping);
+        rm::sim::orderTo(motion[0], terrain, rm::test::fx(700.0f), rm::test::fx(100.0f));
+        for (int i = 0; i < 3; ++i) {
+            rm::sim::tick(units, motion, terrain);
+        }
+        return units[0].roll;
+    };
+    const rm::Brad free = banked(0);
+    const rm::Brad damped = banked(1);
+    CHECK(free != rm::Brad{0});
+    CHECK(static_cast<std::int32_t>(damped) < static_cast<std::int32_t>(free));
+}
 
 TEST_CASE("combat turns keep flying forward at their state speed", "[air-combat]") {
     using rm::sim::Fx;

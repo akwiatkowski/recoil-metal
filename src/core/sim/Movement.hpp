@@ -281,6 +281,11 @@ struct MoveState {
     /// Zero rate (unauthored) freezes the visual roll where it is.
     Fx airKRoll{};
     Fx airBankFactor{};
+    /// `KRollDamping` (`C-244`, `Air+0x5c`, schema `0x00527ca0` — "Controller
+    /// damping parameter for roll changes"): damps the roll-rate state the same
+    /// PD way `KTurnDamping` damps the yaw rate. 1 on the UEA0102 fighter, 2 on
+    /// ten hulls, 4 on four; unauthored (all fifteen non-winged flyers) reads 0.
+    Fx airKRollDamping{};
     Fx airTightTurnMultiplier = kFxOne;
     /// `CirclingTurnMult` (`C-411`, `Air+0x60`, schema `0x00e62768`): scales the divided
     /// `KTurn` on the `0x6c4960` circling branch — the sustained-turn states 3/4/5.

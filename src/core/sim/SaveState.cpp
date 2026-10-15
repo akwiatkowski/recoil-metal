@@ -192,6 +192,10 @@ constexpr std::uint32_t kVersion56 = 56;
 // aircraft controller snapshot. Pre-v57 saves decode with false — the
 // unauthored default retail implies anyway (only the UAA0310 CZAR states it).
 constexpr std::uint32_t kVersion57 = 57;
+// v58 adds the air roll damping gain (`KRollDamping`, `C-244`, `Air+0x5c`):
+// pre-v58 saves decode it as zero, which is the unauthored default retail
+// implies anyway (all fifteen non-winged flyers omit it).
+constexpr std::uint32_t kVersion58 = 58;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1895,7 +1899,7 @@ bool readSubMotion(PayloadReader& r, std::vector<MoveState>& motion) {
 }
 
 void writeAirController(PayloadWriter& w, std::span<const MoveState> motion, bool bank,
-                        bool circling, bool tight, bool hoverAttack) {
+                        bool circling, bool tight, bool hoverAttack, bool rollDamp) {
     w.count(motion.size());
     for (const auto& state : motion) {
         w.u64(state.airCombatDeadline);
@@ -1921,15 +1925,19 @@ void writeAirController(PayloadWriter& w, std::span<const MoveState> motion, boo
         if (hoverAttack) {
             w.u8(state.airHoverOverAttack);
         }
+        if (rollDamp) {
+            w.i32(state.airKRollDamping.raw());
+        }
     }
 }
 
 bool readAirController(PayloadReader& r, std::vector<MoveState>& motion, bool bank,
-                       bool circling, bool tight, bool hoverAttack) {
+                       bool circling, bool tight, bool hoverAttack, bool rollDamp) {
     std::size_t count{};
     const std::size_t kRecordBytes = 8 + 5 * 4 + 3 + kAirControllerFx.size() * 4
                                      + (bank ? 2 * 4 : 0) + (circling ? 4 : 0)
-                                     + (tight ? 4 : 0) + (hoverAttack ? 1 : 0);
+                                     + (tight ? 4 : 0) + (hoverAttack ? 1 : 0)
+                                     + (rollDamp ? 4 : 0);
     if (!r.count(count, kRecordBytes) || count != motion.size()) return false;
     for (auto& state : motion) {
         std::uint8_t winged{}, transport{}, near{};
@@ -1972,6 +1980,13 @@ bool readAirController(PayloadReader& r, std::vector<MoveState>& motion, bool ba
             state.airHoverOverAttack = hover != 0;
         } else {
             state.airHoverOverAttack = false;
+        }
+        if (rollDamp) {
+            std::int32_t damp{};
+            if (!r.i32(damp)) return false;
+            state.airKRollDamping = Fx::fromRaw(damp);
+        } else {
+            state.airKRollDamping = Fx{};
         }
     }
     return true;
@@ -2440,7 +2455,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion16)
         writeAirController(payloadWriter, state.units.motion, version >= kVersion21,
                            version >= kVersion55, version >= kVersion56,
-                           version >= kVersion57);
+                           version >= kVersion57, version >= kVersion58);
     if (version >= kVersion18) writeSubMotion(payloadWriter, state.units.motion);
     if (version >= kVersion19) {
         writeEnhancements(payloadWriter, state.enhancements);
@@ -2524,7 +2539,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion50 && version != kVersion51
                && version != kVersion52 && version != kVersion53
                && version != kVersion54 && version != kVersion55
-               && version != kVersion56 && version != kVersion57)
+               && version != kVersion56 && version != kVersion57
+               && version != kVersion58)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2578,7 +2594,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion16
         && !readAirController(reader, units.motion, version >= kVersion21,
                               version >= kVersion55, version >= kVersion56,
-                              version >= kVersion57))
+                              version >= kVersion57, version >= kVersion58))
         return std::nullopt;
     if (version >= kVersion18 && !readSubMotion(reader, units.motion)) return std::nullopt;
     std::vector<EnhancementWork> enhancements;
@@ -2675,7 +2691,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion57);
+    return rm::sim::encode(state, kVersion58);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

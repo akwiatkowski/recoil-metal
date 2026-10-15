@@ -772,6 +772,19 @@ struct UnitScene {
     /// there is something new to draw.
     std::uint64_t wreckDecalsFrom = 0;  ///< the FeatureStore revision the decals were built at
 
+    /// Which scorch table laid a mark: retail's base explosion path or one of
+    /// the per-weapon `OnImpact` overrides laying its own decal beside it
+    /// (C-484: `AIFSonanceShell02` crater pair at 10/12 elmos,
+    /// `CIFArtilleryProton01` scorch_011 at 10, napalm scorch_001 at 3.75-5,
+    /// EMP nuke_scorch_001 at 28). Carries the corpus site for the FA-PRESENT
+    /// texture projection. Elmos and seconds; texture names in corpus files.
+    enum class ImpactMarkScript : std::uint8_t {
+        BaseScorch,  ///< `defaultexplosions.lua` splat/decal split (C-290)
+        SonanceCrater,  ///< `AIFSonanceShell02_script.lua:19-20` (12 elmos)
+        ProtonScorch,  ///< `CIFArtilleryProton01_script.lua:15` (10 elmos)
+        NapalmScorch,  ///< `TIFNapalmCarpetBomb01_script.lua:13` (3.75-5 elmos)
+        EmpScorch,  ///< `CIFEMPFluxWarhead02_script.lua:116` (28 elmos)
+    };
     /// Where shots hit ground that killed nothing. Retail scorches terrain hits, and
     /// a battle that only marks its kills forgets most of what happened there.
     /// Capped: oldest drop out as new ones land, or a long bombardment grows this
@@ -799,6 +812,10 @@ struct UnitScene {
         /// off the sim RNG (C-297), so the future FA-PRESENT LOD projection
         /// culls what retail would have culled.
         int lod = 200;
+        /// Retail's scripted decal for this mark (C-484): `BaseScorch` rides
+        /// the blast-derived splat/decal split, any other value draws the
+        /// weapon's own authored texture at its authored size in elmos.
+        ImpactMarkScript script = ImpactMarkScript::BaseScorch;
     };
     static constexpr std::size_t kMaxImpactMarks = 512;
     std::vector<ImpactMark> impactMarks;
@@ -1651,9 +1668,11 @@ void refreshWreckDecals(UnitScene& scene, const HeightField& field, TickIndex no
 /// Drops the oldest sixty-four past the cap — amortised, so a bombardment
 /// tick does no per-hit shifting. `blastRadiusElmos` sizes the scorch from
 /// the shot (`defaultexplosions.lua` C-290); zero keeps the legacy 2.5-elmo
-/// mark for a blast-less direct hit.
+/// mark for a blast-less direct hit. `script` records a per-weapon `OnImpact`
+/// decal (C-484) — drawn at its authored size, not the blast split.
 void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos = 0.0f,
-                    TickIndex tick = 0);
+                    TickIndex tick = 0,
+                    UnitScene::ImpactMarkScript script = UnitScene::ImpactMarkScript::BaseScorch);
 
 [[nodiscard]] rm::data::OpeningStep stepForRole(const rm::data::Opening& opening,
                                                 rm::unitdef::Role role);
