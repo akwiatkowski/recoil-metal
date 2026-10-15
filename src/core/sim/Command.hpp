@@ -28,6 +28,7 @@ class ScriptTaskHost;
 struct PlayableRect;
 struct GuardWork;
 struct SelfDestructWork;
+struct WorkClaim;
 
 /// When an input is applied relative to one simulation tick.
 enum class CommandPhase : std::uint8_t {
@@ -542,7 +543,7 @@ using CommandGridForUnit = std::function<const PassabilityGrid*(UnitId)>;
 [[nodiscard]] bool guardAllowsBuildAssistance(UnitIndex slot, const UnitStore& store,
     const UnitCatalog& catalog, std::span<const Construction> building,
     std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect,
-    TickIndex tick = 0, TickRate rate = TickRate{});
+    TickIndex tick = 0, TickRate rate = TickRate{}, std::span<const WorkClaim> claims = {});
 
 /// Starts the next order for every unit that has finished its current one.
 ///
@@ -587,7 +588,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                               std::vector<GuardWork>* guardWork = nullptr,
                               RandomStream* random = nullptr, TickIndex tick = 0,
                               std::span<const PassabilityGrid* const> gridForTypeSubmerged = {},
-                              std::vector<EnhancementWork>* enhancements = nullptr);
+                              std::vector<EnhancementWork>* enhancements = nullptr,
+                              std::span<const WorkClaim> claims = {});
 
 /// Updates attack-move and patrol combat after movement and intel. These orders retain their
 /// waypoint while `target` temporarily names the visible hostile that interrupted the route.
@@ -597,7 +599,8 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                              const Intel* intel = nullptr,
                              const PlayableRect* playableRect = nullptr,
                              TickIndex tick = 0,
-                             std::span<const PassabilityGrid* const> gridForTypeSubmerged = {});
+                             std::span<const PassabilityGrid* const> gridForTypeSubmerged = {},
+                             std::span<const WorkClaim> claims = {});
 
 // --- The log --------------------------------------------------------------------------
 //

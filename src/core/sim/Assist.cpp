@@ -77,7 +77,8 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
                             std::vector<AssistLink>* links,
                             std::span<const SiloAmmo> siloAmmo,
                             std::span<const SiloBuild> siloQueue,
-                            std::vector<SiloAssistWork>* siloAssists) {
+                            std::vector<SiloAssistWork>* siloAssists,
+                            std::span<const WorkClaim> claims) {
     // Cleared first, unconditionally: last tick's help is not this tick's fact. In the same
     // sweep, a row nobody is working is marked `paused` — an interrupted scaffold keeps its
     // place and its progress but draws nothing, which is the same "held, not cancelled"
@@ -113,7 +114,7 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
             || !store.alive(head->target())) {
             continue;
         }
-        if (!guardAllowsBuildAssistance(slot, store, catalog, building, armies, intel, playableRect, tick, rate)) {
+        if (!guardAllowsBuildAssistance(slot, store, catalog, building, armies, intel, playableRect, tick, rate, claims)) {
             continue;
         }
 

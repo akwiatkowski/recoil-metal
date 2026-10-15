@@ -424,7 +424,7 @@ namespace {
 [[nodiscard]] std::optional<UnitId> guardAttackTarget(
     UnitIndex slot, const UnitStore& store, const UnitCatalog& catalog,
     std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect,
-    TickIndex tick, TickRate rate) {
+    TickIndex tick, TickRate rate, std::span<const WorkClaim> claims) {
     const auto* guard = catalog.def(store.typeAt(slot));
     if (armies.empty() || guard == nullptr || !guard->isMobile()
         || guard->guardScanRadiusElmos <= Fx{}) return {};
@@ -440,7 +440,7 @@ namespace {
         const auto incumbent = w < cache.size() ? std::optional{cache[w]} : std::nullopt;
         const auto found = nearestTarget(positionOf(at), store.motion()[slot].armyIndex, slot, ranged,
             store, armies, intel, &catalog, at.heading, incumbent, playableRect,
-            {}, std::nullopt, tick, rate, store.targetFocuses()[slot]);
+            claims, std::nullopt, tick, rate, store.targetFocuses()[slot]);
         // Automatic acquisition scores at the blip (`C-277` family; 96 elmos per
         // `LosHandler.h:322`), so this inter-weapon rank reads the same
         // estimate: a radar/sonar contact competes from its deterministic
@@ -476,7 +476,7 @@ namespace {
 bool guardAllowsBuildAssistance(UnitIndex slot, const UnitStore& store,
     const UnitCatalog& catalog, std::span<const Construction> building,
     std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect,
-    TickIndex tick, TickRate rate) {
+    TickIndex tick, TickRate rate, std::span<const WorkClaim> claims) {
     if (!store.slotAlive(slot)) return false;
     const auto* head = store.orders()[slot].active();
     if (head == nullptr || !isGuardCommand(head->kind()) || !store.alive(head->target())
@@ -485,7 +485,7 @@ bool guardAllowsBuildAssistance(UnitIndex slot, const UnitStore& store,
     // The economy prepass and dispatch use the same C-183 return/attack decisions. A helper
     // cannot lend build power before dispatch chooses a higher-priority activity for it.
     return !guardReturnPosition(slot, head->target(), store, catalog, building)
-        && !guardAttackTarget(slot, store, catalog, armies, intel, playableRect, tick, rate);
+        && !guardAttackTarget(slot, store, catalog, armies, intel, playableRect, tick, rate, claims);
 }
 
 /// The unfinished work this builder founded, or null. The OLDEST such, which is the only one

@@ -14,6 +14,7 @@
 // The `Internal` in the name is the contract: nothing outside `src/core/sim/` may include this.
 
 #include "core/sim/Command.hpp"
+#include "core/sim/Combat.hpp"
 
 namespace rm::sim {
 
@@ -45,7 +46,7 @@ void canonicalizeUnits(std::vector<UnitId>& units);
 [[nodiscard]] std::optional<UnitId> guardAttackTarget(
     UnitIndex slot, const UnitStore& store, const UnitCatalog& catalog,
     std::span<const Army> armies, const Intel* intel, const PlayableRect* playableRect,
-    TickIndex tick = 0, TickRate rate = TickRate{});
+    TickIndex tick = 0, TickRate rate = TickRate{}, std::span<const WorkClaim> claims = {});
 
 /// The unfinished construction row a builder owns, if any — asked when a cancellation decides
 /// whether work stops (`CommandApply`) and when the queue advances past the order

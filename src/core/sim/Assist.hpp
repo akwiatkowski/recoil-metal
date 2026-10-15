@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/sim/Combat.hpp"
 #include "core/sim/Economy.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -112,7 +113,8 @@ std::size_t applyAssistance(const UnitStore& store, const UnitCatalog& catalog,
                             std::vector<AssistLink>* links = nullptr,
                             std::span<const SiloAmmo> siloAmmo = {},
                             std::span<const SiloBuild> siloQueue = {},
-                            std::vector<SiloAssistWork>* siloAssists = nullptr);
+                            std::vector<SiloAssistWork>* siloAssists = nullptr,
+                            std::span<const WorkClaim> claims = {});
 
 /// The unit at the end of `start`'s guard chain — `C-183`'s transitive walk
 /// through `Unit+0x4e0`, the same field retail's roll-off follows (`C-189`).

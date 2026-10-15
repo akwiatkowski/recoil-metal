@@ -631,6 +631,79 @@ TEST_CASE("C-345: a second self-destruct order cancels the countdown",
     }
     CHECK(roster.store.alive(unit));
 }
+
+TEST_CASE("C-383: a capped factory waiting on the cap notifies the brain each beat",
+          "[fa-match]") {
+    // `0x0074fda0` fires `OnUnitCapLimitReached` (army vfunc `0x1c`) when the
+    // caller asks for the callback — and `CFactoryBuildTask::TaskTick` IS the
+    // caller that asks: it retries the create every beat rather than dropping
+    // the order. A capped factory therefore notifies once per beat it waits,
+    // which is what makes retail's "unit cap reached" voice line fire while
+    // production is held — not only when a mobile scaffold is refused.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    const rm::sim::TickRate rate{};
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "test_factory";
+    factoryDef.categories = {"FACTORY", "STRUCTURE"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"TESTMOBILE"}};
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef tankDef;
+    tankDef.name = "test_tank";
+    tankDef.categories = {"TESTMOBILE", "MOBILE", "LAND"};
+    tankDef.speedElmosPerSecond = 10.0f;
+    const rm::UnitTypeIndex tankType = roster.addType(tankDef);
+    const UnitId factory = roster.add(factoryType, 300.0f, 300.0f, 0, 500.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<rm::sim::Projectile> projectiles;
+    std::vector<rm::sim::Construction> building;
+    rm::sim::EventQueue events;
+    const std::vector<int> commandersEver{0, 0};
+    const std::vector<rm::sim::Player> players = rm::sim::onePlayerPerArmy(2, 0);
+
+    // Army 0 at its cap: the factory itself fills it, so the product's create
+    // is refused. `unitCostTotal` is set by hand because it is only recomputed
+    // inside `tickSkirmish`, and the intake check runs first.
+    armies[0].unitCap = rm::sim::Fx::fromInt(1);
+    armies[0].unitCostTotal = rm::sim::Fx::fromInt(1);
+    const rm::sim::Command build{.tick = 0,
+                                 .player = 0,
+                                 .kind = rm::sim::CommandKind::Build,
+                                 .unit = factory,
+                                 .targetX = rm::sim::fxFromFloat(300.0f),
+                                 .targetZ = rm::sim::fxFromFloat(300.0f),
+                                 .buildType = tankType};
+    REQUIRE(rm::sim::applyCommand(build, roster.store, roster.catalog, players, armies,
+                                  terrain, grid, rate, &building, &events, nullptr,
+                                  nullptr, nullptr, nullptr, nullptr, nullptr, nullptr));
+    REQUIRE(building.empty());  // admitted, held — nothing materialises
+
+    const std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(),
+                                                             &grid);
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .building = &building,
+                .events = &events,
+                .passability = grids,
+                .commandersEver = commandersEver};
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate, 0);
+    CHECK(events.count(rm::sim::EventKind::UnitCapLimitReached) == 1);
+    CHECK(building.empty());  // still held: no row founded
+    REQUIRE(!events.all().empty());
+    CHECK(events.all().front().army == 0);
+
+    rm::sim::EventQueue second;
+    match.events = &second;
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate, 1);
+    CHECK(second.count(rm::sim::EventKind::UnitCapLimitReached) == 1);
+}
 TEST_CASE("C-210: a civilian army stands outside the victory verdict",
           "[fa-match]") {
     // `victory.lua` skips civilian brains in every arm of the poll

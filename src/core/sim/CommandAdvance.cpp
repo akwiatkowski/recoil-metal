@@ -345,7 +345,8 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                              ScriptTaskHost* scriptTasks, std::vector<GuardWork>* guardWork,
                              RandomStream* random, TickIndex tick,
                              std::span<const PassabilityGrid* const> gridForTypeSubmerged,
-                             std::vector<EnhancementWork>* enhancements) {
+                             std::vector<EnhancementWork>* enhancements,
+                             std::span<const WorkClaim> claims) {
     std::size_t started = 0;
     if (guardWork != nullptr) {
         guardWork->clear();
@@ -485,6 +486,13 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 if (building != nullptr
                     && factoryProductionCapped(pending->asCommand(), store, catalog, armies,
                                                *building)) {
+                    // `C-383` (`0x0074fda0`, army vfunc `0x1c`): the retrying
+                    // factory task is the caller that asks for the callback,
+                    // so each beat it waits notifies the brain — the held
+                    // order is a refused create with a retry behind it.
+                    emit(events, Event{.kind = EventKind::UnitCapLimitReached,
+                                       .unit = store.idAt(slot),
+                                       .army = store.motion()[slot].armyIndex});
                     return;  // at the cap: production waits, the order keeps its slot
                 }
                 const bool wasInstant = instantaneous(pending->kind());
@@ -760,6 +768,12 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 }
                 if (factoryProductionCapped(current->asCommand(), store, catalog, armies,
                                             *building)) {
+                    // Same refused-create-with-retry as the `startPending`
+                    // hold above: the active factory task asks, the brain
+                    // hears it once per beat waited (`C-383`).
+                    emit(events, Event{.kind = EventKind::UnitCapLimitReached,
+                                       .unit = store.idAt(slot),
+                                       .army = store.motion()[slot].armyIndex});
                     continue;  // at the cap: the factory waits, its order stays
                 }
                 if (!startCommand(current->asCommand(), store, catalog, terrain, *buildGrid,
@@ -1173,7 +1187,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             if (guardDef != nullptr && guardDef->isMobile()
                 && guardDef->guardScanRadiusElmos > Fx{}) {
                 const std::span<const Transform> sight = store.transforms();
-                const auto prey = guardAttackTarget(slot, store, catalog, armies, intel, playableRect, tick, rate);
+                const auto prey = guardAttackTarget(slot, store, catalog, armies, intel, playableRect, tick, rate, claims);
                 if (prey.has_value()) {
                     const bool targetAirborne = store.motion()[prey->index].airborne;
                     MoveState& chase = store.motion()[slot];
@@ -1922,7 +1936,8 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                             std::span<const PassabilityGrid* const> gridForType, TickRate rate,
                             const Intel* intel, const PlayableRect* playableRect,
                             TickIndex tick,
-                            std::span<const PassabilityGrid* const> gridForTypeSubmerged) {
+                            std::span<const PassabilityGrid* const> gridForTypeSubmerged,
+                            std::span<const WorkClaim> claims) {
     const auto armyFor = [armies](int index) -> const Army* {
         for (const Army& army : armies) {
             if (army.index == index) {
@@ -2005,7 +2020,7 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
                 const std::optional<UnitId> candidate =
                     nearestTarget(from, owner, slot, weapon, store, armies, intel, &catalog,
                                    store.transforms()[slot].heading, std::nullopt, playableRect,
-                                   {}, std::nullopt, tick, rate, store.targetFocuses()[slot]);
+                                   claims, std::nullopt, tick, rate, store.targetFocuses()[slot]);
                 if (!candidate) {
                     continue;
                 }

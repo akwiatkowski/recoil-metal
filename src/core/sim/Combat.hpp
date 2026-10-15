@@ -297,8 +297,9 @@ inline constexpr Seconds kProjectileLifetime = Seconds{30.0f};
 /// Retail's `IsTargetExempt` (C-157, reject step 11 of `FindBestEnemy`): a candidate that an
 /// own-side engineer is reclaiming or capturing can neither become nor remain the incumbent
 /// — "do not shoot what my own side is taking apart." Derived per tick from the active
-/// `ReclaimUnit` orders (`collectUnitWorkClaims`), never saved. Capture does not exist yet,
-/// so today every claim is a reclaim.
+/// `ReclaimUnit`/`Capture` queue heads (`collectUnitWorkClaims`/`collectCaptureClaims`),
+/// never saved. Every automatic-acquisition pass — aim, fire, guard, attack-move —
+/// reads the same per-tick claims.
 struct WorkClaim {
     UnitIndex target = 0;
     int workerArmy = kNoArmy;

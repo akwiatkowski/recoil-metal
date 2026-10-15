@@ -808,6 +808,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // `C-083`'s silo assists are computed in the same pass — the assistant's
     // guard chain resolves to a founder whose silo queue head is helped — and
     // billed below with the silo's own demand.
+    // What own-side engineers are taking apart this tick (C-157): derived from the
+    // queue heads BEFORE dispatch, so the assistance prepass, the guard ladder inside
+    // `advanceOrders`, the attack-move pass and the aim/fire passes all spare the same
+    // units. One derivation keeps every acquisition pass on the same predicate.
+    std::vector<WorkClaim> commandClaims = collectUnitWorkClaims(store);
+    for (const WorkClaim& claim : collectCaptureClaims(store)) {
+        commandClaims.push_back(claim);
+    }
     std::vector<SiloAssistWork> siloAssists;
     if (match.building != nullptr || match.siloAmmo != nullptr) {
         std::vector<Construction> noBuilding;  // silo-only matches still assist
@@ -820,7 +828,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                       : std::span<const SiloAmmo>{},
             match.siloQueue != nullptr ? std::span<const SiloBuild>{*match.siloQueue}
                                        : std::span<const SiloBuild>{},
-            &siloAssists);
+            &siloAssists, commandClaims);
     }
 
     // 0. THE ORDER QUEUES, before anything moves (§7 P4.1). A unit that finished its order last
@@ -845,6 +853,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             (void)publishPathResult(result, store, catalog);
         }
     }
+    // `commandClaims` (derived with the assistance prepass above) also feeds the
+    // guard ladder inside `advanceOrders` and the attack-move/aim/fire passes below.
     std::vector<GuardWork> guardWork;
     report.ordersStarted = advanceOrders(store, catalog, terrain, match.passability, rate,
                                           match.building, match.events, match.features,
@@ -854,7 +864,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                                              : nullptr,
                                           match.scriptTasks, &guardWork, &match.random,
                                           tickIndex, match.passabilitySubmerged,
-                                          match.enhancements);
+                                          match.enhancements, commandClaims);
 
     // 0b. TRANSPORTS. Between dispatch and movement so a route issued here —
     //     a carrier coming to its cargo, a ferry turning for the drop — moves
@@ -978,8 +988,11 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
 
     // Attack-move and patrol acquire only from the post-movement, post-intel world. Their
     // temporary target then feeds the ordinary aiming and firing passes below.
+    // `commandClaims` was derived before dispatch above, so every acquisition pass —
+    // assistance, guard, attack-move, aim, fire — spares the same units.
     updateAggressiveOrders(store, catalog, match.armies, terrain, match.passability, rate,
-                            match.intel, playableRect, tickIndex, match.passabilitySubmerged);
+                            match.intel, playableRect, tickIndex, match.passabilitySubmerged,
+                            commandClaims);
 
     // Same class of per-unit automation: a hull under its retreat threshold abandons
     // its queue for the nearest mechanic before the aim pass picks its next target.
@@ -988,14 +1001,9 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // 2. AIM, then fire. An unturreted weapon may only shoot along the hull, so a unit
     //    that has stopped facing the wrong way has to be brought round first; otherwise
     //    the facing gate reads as a weapon that does not work.
-    // What own-side engineers are taking apart this tick, so no gun of theirs shoots it
-    // (C-157). Derived from the queue heads after dispatch, consumed by aim and fire only.
-    // Capture claims join the reclaim ones: own guns spare what own engineers are taking,
-    // whichever order kind is doing the taking.
-    std::vector<WorkClaim> claims = collectUnitWorkClaims(store);
-    for (const WorkClaim& claim : collectCaptureClaims(store)) {
-        claims.push_back(claim);
-    }
+    // `commandClaims` feeds aim and fire too: own guns spare what own engineers are
+    // taking, whichever order kind is doing the taking.
+    const std::vector<WorkClaim>& claims = commandClaims;
     (void)aimAtTargets(store, catalog, match.armies, match.intel, match.projectiles,
                        playableRect, tickIndex, rate, claims,
                        match.siloAmmo != nullptr ? std::span<const SiloAmmo>{*match.siloAmmo}

@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/sim/Combat.hpp"
+#include "core/sim/CommandInternal.hpp"
 
 #include "support/TestRoster.hpp"
 
@@ -898,9 +899,29 @@ TEST_CASE("automatic acquisition skips a unit an own-side engineer is reclaiming
     const std::array<rm::sim::WorkClaim, 1> theirs{{{.target = near.index, .workerArmy = 1}}};
     CHECK(pick(theirs) == near);
     CHECK(pick({}) == near);
-    // The incumbent cannot remain one once our engineer starts on it.
     CHECK(pick({}, near) == near);
     CHECK(pick(ours, near) == far);
+}
+
+TEST_CASE("a guard does not acquire a unit an own-side engineer is reclaiming (C-157)") {
+    // `guardAttackTarget` is ordinary automatic acquisition with a range-overridden
+    // weapon copy: the C-157 own-side reject must hold there too, or the guard
+    // ladder chases what the main fire pass spares.
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex targetType = roster.addType(targetDef());
+    const UnitId target = roster.add(targetType, 0.0f, 50.0f, 1, 100.0f);
+    rm::unitdef::UnitDef guardDef = gunnerDef(directFire(10.0f, 300.0f));
+    guardDef.speedElmosPerSecond = 20.0f;
+    guardDef.guardScanRadiusElmos = rm::sim::fxFromFloat(400.0f);
+    const UnitId guard = roster.add(roster.addType(guardDef), 0.0f, 0.0f, 0, 100.0f);
+    const std::array<rm::sim::WorkClaim, 1> ours{{{.target = target.index, .workerArmy = 0}}};
+    CHECK(rm::sim::guardAttackTarget(guard.index, roster.store, roster.catalog, armies,
+                                     nullptr, nullptr, 0, rm::sim::TickRate{}, ours)
+          == std::nullopt);
+    CHECK(rm::sim::guardAttackTarget(guard.index, roster.store, roster.catalog, armies,
+                                     nullptr, nullptr, 0, rm::sim::TickRate{})
+          == target);
 }
 
 TEST_CASE("automatic acquisition rejects a closer target outside the playable rectangle") {
