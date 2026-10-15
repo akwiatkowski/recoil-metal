@@ -535,3 +535,23 @@ TEST_CASE("C-369: the rack's toggle state reads the sim script-bit mask", "[ui][
     const std::array<const rm::unitdef::UnitDef*, 1> weapon{&gun};
     CHECK_FALSE(rm::ui::toggleEngaged(weapon, {}, std::array<std::uint16_t, 1>{0})[1]);
 }
+
+TEST_CASE("C-333: a mixed script-bit toggle reports its split state", "[ui][toggles]") {
+    // Retail's mixed-state '?' (orders.lua:339,365-390): a toggle whose carriers
+    // disagree on the bit is neither lit nor dark. `toggleMixed` names that
+    // split per toggle so the rack can mark it.
+    rm::unitdef::UnitDef shield;
+    shield.toggleCapsDeclared = true;
+    shield.toggleCaps = {"RULEUTC_ShieldToggle"};
+    const std::array<const rm::unitdef::UnitDef*, 2> pair{&shield, &shield};
+    const std::array<std::uint16_t, 2> split{0, 1u << 0};
+    CHECK(rm::ui::toggleMixed(pair, {}, split)[0]);
+    const std::array<std::uint16_t, 2> agreed{0, 0};
+    CHECK_FALSE(rm::ui::toggleMixed(pair, {}, agreed)[0]);
+    // Unbacked caps never split: there is no bit to disagree on.
+    rm::unitdef::UnitDef gun;
+    gun.toggleCapsDeclared = true;
+    gun.toggleCaps = {"RULEUTC_WeaponToggle"};
+    const std::array<const rm::unitdef::UnitDef*, 1> weapon{&gun};
+    CHECK_FALSE(rm::ui::toggleMixed(weapon, {}, std::array<std::uint16_t, 1>{0})[1]);
+}

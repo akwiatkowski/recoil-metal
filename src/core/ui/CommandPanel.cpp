@@ -187,7 +187,47 @@ toggleEngaged(std::span<const unitdef::UnitDef* const> selection,
     }
     return lit;
 }
-
+ToggleEngaged
+toggleMixed(std::span<const unitdef::UnitDef* const> selection,
+            std::span<const std::uint8_t> paused,
+            std::span<const std::uint16_t> masks) noexcept {
+    ToggleEngaged mixed{};
+    for (std::size_t t = 0; t < kToggleDescriptors.size(); ++t) {
+        const std::string_view cap = kToggleDescriptors[t].cap;
+        if (cap == "RULEUTC_ProductionToggle") {
+            bool held = false, running = false;
+            for (std::size_t i = 0; i < selection.size(); ++i) {
+                const unitdef::UnitDef* def = selection[i];
+                if (def == nullptr || !sim::canPauseProduction(*def)) continue;
+                if (i < paused.size() && paused[i] != 0) {
+                    held = true;
+                } else {
+                    running = true;
+                }
+            }
+            mixed[t] = held && running;
+            continue;
+        }
+        const std::optional<std::uint8_t> bit = scriptBitForToggleCap(cap);
+        if (!bit) continue;
+        bool on = false, off = false;
+        for (std::size_t i = 0; i < selection.size(); ++i) {
+            const unitdef::UnitDef* def = selection[i];
+            if (def == nullptr || !def->toggleCapsDeclared
+                || !def->hasToggleCap(cap)) {
+                continue;
+            }
+            const std::uint16_t mask = i < masks.size() ? masks[i] : 0;
+            if ((mask & static_cast<std::uint16_t>(1u << *bit)) == 0) {
+                on = true;
+            } else {
+                off = true;
+            }
+        }
+        mixed[t] = on && off;
+    }
+    return mixed;
+}
 
 namespace {
 
@@ -680,7 +720,8 @@ void appendCommandRack(Geometry& out, const text::Font& labelFont,
                        const CommandPage& page,
                        std::optional<std::size_t> hovered,
                        std::optional<sim::CommandKind> armed,
-                       const CommandAvailability& engaged) {
+                       const CommandAvailability& engaged,
+                       const CommandAvailability& mixed) {
     if (!layout.visible || !labelFont.usable()) {
         return;
     }
@@ -728,7 +769,8 @@ void appendCommandRack(Geometry& out, const text::Font& labelFont,
                              layout.cellHeight, lit);
         }
 
-        const std::string label = cell.name.empty() ? "--" : std::string{cell.name};
+        std::string label = cell.name.empty() ? "--" : std::string{cell.name};
+        if (slot < mixed.size() && mixed[slot] && cell.toggle) label += " ?";
         const std::vector<std::string> lines =
             wrapToWidth(labelFont.glyphs, label, layout.cellWidth - 6.0f, 2, 0.72f);
         const float lineHeight = std::max(9.0f, labelFont.lineHeight * 0.72f);

@@ -1710,6 +1710,30 @@ TEST_CASE("a hill ahead raises the altitude reference and holds the forward desi
     CHECK(rm::sim::fxToFloat(motion2[0].velocity[2]) == Approx(16.0f).margin(0.1));
     CHECK(motion2[0].altitudeRef == rm::sim::Fx::fromInt(80));
 }
+TEST_CASE("a FlyInWater flyer clears the seabed, not the waterline", "[air][flyinwater]") {
+    // `C-499`/`C-510` (`0x006c3696` source select, helper `0x006c2e80`): a
+    // `FlyInWater=false` flyer measures clearance against the SURFACE (ground
+    // maxed with the water level); a `FlyInWater=true` flyer answers the deep
+    // ground alone. Flat seabed at 0 under 30 elmos of water: the ordinary
+    // look-ahead answers 30 so its reference slews 80 -> 80.7 (`LiftFactor` 7
+    // x 0.1 step), while the seaplane's answers 0 and its reference holds 80.
+    HeightField field = flatField();
+    const rm::sim::Terrain terrain{field, true, 30.0f};
+    const auto run = [&](bool flyInWater) {
+        std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f)};
+        units[0].y = rm::sim::Fx::fromInt(80);
+        std::vector<MoveState> motion{flyer()};
+        motion[0].airFlyInWater = flyInWater;
+        motion[0].altitudeRef = rm::sim::Fx::fromInt(80);
+        rm::sim::orderTo(motion[0], terrain, rm::test::fx(100.0f), rm::test::fx(700.0f));
+        rm::sim::tick(units, motion, terrain);
+        return motion[0].altitudeRef;
+    };
+    CHECK(rm::sim::fxToFloat(run(false)) == Approx(80.7f).margin(0.01));
+    CHECK(run(true) == rm::sim::Fx::fromInt(80));
+}
+
+
 
 TEST_CASE("a grounded flyer lifts, cruises and lands on arrival") {
     // The full loop with no invented thresholds: an order takes a Bottom flyer Up and off

@@ -2083,14 +2083,14 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     w < healths[slot].automaticTargets.size()
                         ? std::optional<UnitId>{healths[slot].automaticTargets[w]}
                         : std::nullopt;
-                // `C-093`: the re-acquisition cadence. A weapon whose last scan
+                // `C-424`: the re-acquisition cadence. A weapon whose last scan
                 // found nothing waits `targetCheckTicks` before asking again —
-                // retail's `max(1, ceil(TargetCheckInterval x rate)) + 1`
-                // reschedule — while a live incumbent re-checks every tick, the
-                // "reschedule at 1" of a successful acquire. A stale incumbent
-                // is kept rather than re-validated: retail holds the target
-                // until the task next runs, and the firing pass's own gates
-                // still apply to it.
+                // retail's `max(1, round(TargetCheckInterval x rate))` reschedule
+                // (`0x006B3AF0`, `frndint`) — while a live incumbent re-checks
+                // every tick, the "reschedule at 1" of a successful acquire. A
+                // stale incumbent is kept rather than re-validated: retail holds
+                // the target until the task next runs, and the firing pass's own
+                // gates still apply to it.
                 Health& health = healths[slot];
                 if (w >= health.targetCheckTick.size()) {
                     health.targetCheckTick.resize(def->weapons.size(), 0);
@@ -3509,6 +3509,13 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         Health& owner = healths[bubble.slot];
         const UnitCatalog::ShieldInfo& shield = shieldFor(store, *catalog, bubble.slot);
         const Mag absorbed = std::min(owner.shield.current, bubble.absorb);
+        // Retail `PassOverkillDamage` (`shield.lua` `OnDamage`/`GetOverkill`,
+        // corpus `UAL0303_unit.bp:78`): the excess over remaining shield
+        // health reaches the owner's hull through `DoTakeDamage` — here the
+        // same `DealDamage` armour+handicap value the shield itself absorbed.
+        const Mag overkill = shield.passOverkillDamage && bubble.absorb > absorbed
+                                 ? bubble.absorb - absorbed
+                                 : Mag{};
         owner.shield.current -= absorbed;
         owner.shield.regenDelayRemaining = shield.regenDelay;
         dealt += absorbed;
@@ -3529,6 +3536,20 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
                                .instigator = by,
                                .army = armyAt(store, bubble.slot),
                                .at = centre});
+            if (overkill > Mag{} && owner.current > Mag{}) {
+                const Mag hullTaken = std::min(owner.current, overkill);
+                owner.current -= hullTaken;
+                dealt += hullTaken;
+                owner.lastHitBy = by;
+                emit(events, Event{
+                                 .kind = EventKind::UnitDamaged,
+                                 .unit = store.idAt(bubble.slot),
+                                 .instigator = by,
+                                 .army = armyAt(store, bubble.slot),
+                                 .amount = overkill,
+                                 .at = positionOf(transforms[bubble.slot]),
+                             });
+            }
         }
     }
 
@@ -3752,16 +3773,23 @@ void sweepFlight(Projectile& shot, std::array<Fx, 3> from,
     // (corpus: 209 `DestroyOnWater = true` vs 77 false — the default kill
     // is the surface blast, not silent removal), so the water plane wins
     // where both are crossed. `DestroyOnWater` shots never reach here: `C-204`
-    // kills them silently above, before the sweep runs.
+    // kills them silently above, before the sweep runs. Retail's water
+    // enter/exit tests run in both directions (`OnEnterWater` on the way
+    // down, `OnExitWater` on the way up), so an upward broach crosses the
+    // same plane: below-to-at-or-above counts exactly like above-to-at-or-below.
     std::optional<SweepFraction> waterHit;
     if (terrain.hasWater() && !shot.stayUnderwater) {
-        const Fx fromAbove = from[1] - terrain.waterLevel();
-        const Fx toBelow = shot.position[1] - terrain.waterLevel();
-        if (fromAbove > Fx{} && toBelow <= Fx{}) {
-            const FxWide dropRaw = FxWide{fromAbove.raw()} - FxWide{toBelow.raw()};
-            if (dropRaw > 0) {
+        const Fx fromDelta = from[1] - terrain.waterLevel();
+        const Fx toDelta = shot.position[1] - terrain.waterLevel();
+        const bool crossesDown = fromDelta > Fx{} && toDelta <= Fx{};
+        const bool crossesUp = fromDelta < Fx{} && toDelta >= Fx{};
+        if (crossesDown || crossesUp) {
+            const Fx fromAbs = fromDelta > Fx{} ? fromDelta : Fx{} - fromDelta;
+            const Fx toAbs = toDelta > Fx{} ? toDelta : Fx{} - toDelta;
+            const FxWide spanRaw = FxWide{fromAbs.raw()} + FxWide{toAbs.raw()};
+            if (spanRaw > 0) {
                 waterHit = static_cast<SweepFraction>(
-                    (FxWide{fromAbove.raw()} * kSweepOne) / dropRaw);
+                    (FxWide{fromAbs.raw()} * kSweepOne) / spanRaw);
             } else {
                 waterHit = SweepFraction{};
             }

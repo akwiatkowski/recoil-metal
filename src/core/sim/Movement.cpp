@@ -241,12 +241,14 @@ void integrateAir(Transform& unit, MoveState& state, const Terrain& terrain) noe
     // Idle, retail's target sits under the aircraft and the reach collapses to the point
     // sample; a stale destination must not choose the cell for a flyer going nowhere.
     const Fx reach = approaching ? std::min(cruise * kLookAheadSeconds, distance) : Fx{};
-    const Fx aheadHeight = terrain.maxSurfaceHeightNear(unit.x, unit.z, reach);
+    const Fx aheadHeight =
+        terrain.maxSurfaceHeightNear(unit.x, unit.z, reach, state.airFlyInWater);
     const Fx climbAhead = std::max(Fx{}, aheadHeight - unit.y);
     if (climbAhead > state.airLiftFactor && reach > Fx::fromInt(kSquareSize)) {
         const Fx halfReach = reach * Fx::fromRatio(1, 2);
-        const Fx nearHeight =
-            terrain.maxSurfaceHeightNear(unit.x, unit.z, halfReach) * kNearScanWeight;
+        const Fx nearHeight = terrain.maxSurfaceHeightNear(unit.x, unit.z, halfReach,
+                                                           state.airFlyInWater)
+                              * kNearScanWeight;
         const Fx climbNear = std::max(Fx{}, nearHeight - unit.y);
         const Fx factor = std::max(kLookAheadFloor, (halfReach - climbNear) / halfReach);
         desiredX = desiredX * factor * factor;
@@ -268,7 +270,8 @@ void integrateAir(Transform& unit, MoveState& state, const Terrain& terrain) noe
     }
 
     // --- the lift law and the takeoff gate (`C-245`) ---
-    const Fx surface = terrain.surfaceHeightAt(unit.x, unit.z);
+    // `C-499`/`C-510`: a FlyInWater flyer clears the deep ground, not the surface.
+    const Fx surface = terrain.surfaceHeightAt(unit.x, unit.z, state.airFlyInWater);
     const Fx heightAbove = unit.y - surface;
     const std::array<Fx, 3> old = state.velocity;
     const Fx horizontalSpeed = fxHypot(old[0], old[2]);
@@ -675,7 +678,9 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
                 unit.x = std::clamp(unit.x, Fx{}, width);
                 unit.z = std::clamp(unit.z, Fx{}, depth);
             }
-            const Fx surface = terrain.surfaceHeightAt(unit.x, unit.z);
+            // `C-499`/`C-510`: touchdown seats on the same datum the lift law read.
+            const Fx surface =
+                terrain.surfaceHeightAt(unit.x, unit.z, state.airFlyInWater);
             if (!state.airborne && unit.y > surface) {
                 state.airborne = true;
             } else if (!state.airborne) {

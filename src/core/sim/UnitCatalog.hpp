@@ -100,6 +100,9 @@ public:
         /// granted fraction of a tick per tick.
         bool personalBubble = false;
         bool transportShield = false;
+        /// Retail's `PassOverkillDamage` (`shield.lua` `OnDamage`): the excess
+        /// over remaining shield health reaches the owner's hull.
+        bool passOverkillDamage = false;
 
         [[nodiscard]] bool exists() const noexcept {
             return maximum > Mag{} && boundingRadiusElmos > Fx{};
@@ -305,9 +308,10 @@ public:
         /// That equivalence is what lets the whole corpus of existing tests stay untouched.
         unitdef::DamageProfile damage{};
 
-        /// `C-093`: ticks between target scans after a FAILED acquire —
-        /// retail's `max(1, ceil(TargetCheckInterval x ticksPerSecond)) + 1`.
-        /// A successful acquire re-checks next tick regardless.
+        /// `C-424`: ticks between target scans after a FAILED acquire —
+        /// retail's `max(1, round(TargetCheckInterval x ticksPerSecond))`
+        /// (`0x006B3AF0`, `frndint` round-half-up). A successful acquire
+        /// re-checks next tick regardless.
         TickCount targetCheckTicks = 2;
 
         /// `C-262`: the ring profiles, resolved beside `damage` for the same

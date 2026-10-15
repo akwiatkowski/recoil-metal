@@ -127,6 +127,15 @@ toggleEngaged(std::span<const unitdef::UnitDef* const> selection,
               std::span<const std::uint8_t> paused = {},
               std::span<const std::uint16_t> masks = {}) noexcept;
 
+/// `C-333`'s mixed-state '?': true per toggle when at least two carriers of
+/// that cap disagree on the bit (or on pause for production). Reads the same
+/// `paused`/`masks` alignment as `toggleEngaged`; unbacked caps never split.
+[[nodiscard]] ToggleEngaged
+toggleMixed(std::span<const unitdef::UnitDef* const> selection,
+            std::span<const std::uint8_t> paused = {},
+            std::span<const std::uint16_t> masks = {}) noexcept;
+
+
 
 /// One resolved rack cell: an order, a toggle filling its dead order slot, or the
 /// dead order itself. Name/icon views borrow from the descriptor tables and the
@@ -225,14 +234,16 @@ commandPage(std::span<const unitdef::UnitDef* const> selection,
                                    bool armed = false);
 
 /// `engaged` lights the cells whose standing order is ON for the whole selection, the way
-/// `armed` lights the command being targeted. Cells come from `commandPage`: orders where
-/// available, toggles filling dead slots, overrides applied.
+/// `armed` lights the command being targeted. `mixed` marks the cells whose carriers
+/// disagree (retail's '?' icon, `C-333`): the label gains a " ?" suffix. Cells come
+/// from `commandPage`: orders where available, toggles filling dead slots, overrides applied.
 void appendCommandRack(Geometry& out, const text::Font& labelFont,
                        const text::Font& readoutFont, const Theme& theme,
                        const CommandRackLayout& layout,
                        const CommandPage& page,
                        std::optional<std::size_t> hovered = std::nullopt,
                        std::optional<sim::CommandKind> armed = std::nullopt,
-                       const CommandAvailability& engaged = CommandAvailability{});
+                       const CommandAvailability& engaged = CommandAvailability{},
+                       const CommandAvailability& mixed = CommandAvailability{});
 
 } // namespace rm::ui

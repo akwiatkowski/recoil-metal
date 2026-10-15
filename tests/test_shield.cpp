@@ -826,3 +826,25 @@ TEST_CASE("a brownout stretches shield recharge instead of running it flat out")
     CHECK(roster.health(generator).shield.current
           == roster.health(generator).shield.maximum);
 }
+
+TEST_CASE("a pass-overkill shield forwards the excess to its owner's hull") {
+    // Retail `shield.lua` `OnDamage`/`GetOverkill` with authored
+    // `PassOverkillDamage` (corpus `UAL0303_unit.bp:78`): the bubble absorbs
+    // up to its remaining health and the owner's hull takes `incoming - old`
+    // shield health — here 40 - 25 = 15 — rather than the blast's remainder.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef overkill = shieldDef();
+    overkill.name = "pass_overkill_bubble";
+    overkill.shield.passOverkillDamage = true;
+    const rm::UnitTypeIndex shieldType = roster.addType(overkill);
+    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    roster.health(generator).shield.current = rm::sim::Mag::fromInt(25);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    (void)rm::sim::damageArea(
+        rm::test::at(0, 0, 0), rm::sim::Fx{}, rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40)),
+        0, roster.store, armies, &roster.catalog);
+
+    CHECK(roster.health(generator).shield.current == rm::sim::Mag{});
+    CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(85.0f));
+}

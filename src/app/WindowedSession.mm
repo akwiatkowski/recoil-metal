@@ -727,6 +727,8 @@ int runWindowed(const Session& session) {
         rm::ui::CommandPage commandPage{};
         /// Standing orders that are ON for the whole selection, lit on the rack.
         rm::ui::CommandAvailability commandEngaged{};
+        /// Split toggles (retail's '?', `C-333`), parallel to `commandEngaged`.
+        rm::ui::CommandAvailability commandMixed{};
         std::vector<const rm::unitdef::UnitDef*> commandSelection;
         // Pause flags aligned with `commandSelection` — the production toggle's cell
         // lighting and inspector card read them; rebuilt each frame beside it.
@@ -2537,6 +2539,7 @@ int runWindowed(const Session& session) {
             }
             // Auto-expand is lit when every field builder in the selection is on it.
             commandEngaged = {};
+            commandMixed = {};
             {
                 std::size_t fieldBuilders = 0, expanding = 0;
                 for (const rm::sim::UnitId id : selected) {
@@ -2570,14 +2573,18 @@ int runWindowed(const Session& session) {
             // The backed script-bit toggles (`C-369`) light from the sim-side
             // mask exactly like the production toggle lights from its pause
             // flags — `toggleEngaged` reads `scriptBitMasks`, and the cell at
-            // the toggle's page slot takes its entry.
+            // the toggle's page slot takes its entry. A split selection shows
+            // retail's '?' (`C-333`) via `commandMixed` below.
             {
                 const rm::ui::ToggleEngaged lit = rm::ui::toggleEngaged(
+                    commandSelection, productionPaused, scriptBitMasks);
+                const rm::ui::ToggleEngaged split = rm::ui::toggleMixed(
                     commandSelection, productionPaused, scriptBitMasks);
                 for (std::size_t rackSlot = 0; rackSlot < commandPage.size(); ++rackSlot) {
                     const auto& cell = commandPage[rackSlot];
                     if (!cell.toggle) continue;
                     commandEngaged[rackSlot] = lit[*cell.toggle];
+                    commandMixed[rackSlot] = split[*cell.toggle];
                 }
             // Auto-build lights a silo-build cell the way auto-expand lights AUTO MEX:
             // every silo record the cell covers is set to refill itself.
@@ -2693,7 +2700,7 @@ int runWindowed(const Session& session) {
                 rm::ui::commandSlotAt(commandRack, hudCursor[0], hudCursor[1]);
             rm::ui::appendCommandRack(hudScratch, window.labelFont(), window.readoutFont(),
                                       theme, commandRack, commandPage, overCommand,
-                                      armedCommand, commandEngaged);
+                                      armedCommand, commandEngaged, commandMixed);
 
             const auto production = gatherProduction(units, activeBuilder);
             const auto productionRect = rm::ui::productionPanelRect(frame);

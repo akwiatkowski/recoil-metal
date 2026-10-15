@@ -639,7 +639,23 @@ TEST_CASE("a current save round-trips the hover-attack flag", "[save-state]") {
     CHECK(restored->units.motion[czar.index].airHoverOverAttack);
     CHECK(SaveState::encode(*restored) == bytes);
 }
-
+TEST_CASE("a current save round-trips the FlyInWater flag", "[save-state]") {
+    // `C-499`/`C-510` (`Air+0x36a`, SaveState v61): the seaplane's surface
+    // datum select is spawn-copied controller state, so a mid-flight save
+    // must carry it or a restored seaplane clears the waterline. Pre-v61
+    // decodes false — the unauthored default retail implies anyway.
+    rm::sim::UnitStore original;
+    const auto plane = original.spawn({});
+    original.motion()[plane.index].canFly = true;
+    original.motion()[plane.index].airFlyInWater = true;
+    RandomStream random{std::uint32_t{1}};
+    const auto bytes =
+        SaveState::encode({.tick = 42, .random = random.snapshot(), .units = original.snapshot()});
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    CHECK(restored->units.motion[plane.index].airFlyInWater);
+    CHECK(SaveState::encode(*restored) == bytes);
+}
 
 TEST_CASE("a current save round-trips attachment bones", "[save-state]") {
     rm::sim::UnitStore original;

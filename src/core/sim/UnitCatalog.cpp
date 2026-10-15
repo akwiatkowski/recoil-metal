@@ -275,6 +275,7 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
         shield.shape = def->shield.shape;
         shield.personalBubble = def->shield.personalBubble;
         shield.transportShield = def->shield.transportShield;
+        shield.passOverkillDamage = def->shield.passOverkillDamage;
         shield.radiusElmos = def->shield.radiusElmos;
         shield.verticalOffsetElmos = def->shield.verticalOffsetElmos;
         shield.boxHalfExtentsElmos = def->shield.boxHalfExtentsElmos;
@@ -314,15 +315,16 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
                     weapon.bursts() ? rate.ticks(weapon.burstDelay) : reload,
                 .burstSize = weapon.bursts() ? weapon.burstSize : 1,
                 .damage = damageFor(weapon),
-                // `C-093`: retail's reschedule is `max(1, ceil(interval x
-                // ticksPerSecond)) + 1`; `ticks()` rounds rather than ceilings,
-                // which is within a tick of the same answer and keeps the
-                // conversion at the load boundary like every other rate. An
-                // unauthored interval means every-tick scanning — 1, so the
-                // gate `tick < tick + 1` never holds.
+                // `C-424`: retail's reschedule is `max(1, round(interval x
+                // ticksPerSecond))` — `0x006B3AF0` computes in ticks with `frndint`
+                // (round-half-up) and a max-1 clamp, the sole caller the acquire
+                // tick. `ticks()` rounds to nearest the same way, so the + 1 the
+                // old ceil formula carried is dropped. An unauthored interval
+                // means every-tick scanning — 1, so the gate `tick < tick + 1`
+                // never holds.
                 .targetCheckTicks = weapon.targetCheckIntervalSeconds > 0.0f
-                    ? static_cast<TickCount>(std::max<TickCount>(
-                          1, rate.ticks(seconds(weapon.targetCheckIntervalSeconds))) + 1)
+                    ? std::max<TickCount>(
+                          1, rate.ticks(seconds(weapon.targetCheckIntervalSeconds)))
                     : 1,
                 .innerRing = profileFor(weapon, weapon.innerRingDamage),
                 .outerRing = profileFor(weapon, weapon.outerRingDamage),

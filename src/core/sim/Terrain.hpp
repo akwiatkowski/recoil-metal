@@ -92,18 +92,23 @@ public:
 
     /// The surface under a world position: the ground, or the water where the ground is
     /// drowned. What an aircraft measures its height above and lands on (`C-222`).
-    [[nodiscard]] Fx surfaceHeightAt(Fx x, Fx z) const noexcept;
+    /// With `flyInWater` (`C-499`/`C-510`, `Air+0x36a`, `0x006c3696` source
+    /// select) the deep ground alone — no water-level max — so a seaplane
+    /// answers the seabed where an ordinary flyer answers the waterline.
+    [[nodiscard]] Fx surfaceHeightAt(Fx x, Fx z, bool flyInWater = false) const noexcept;
 
     /// The highest surface a flyer must clear within `reachElmos` of a position — retail's
     /// terrain look-ahead (`C-246`). Not a directional scan: retail indexes a max-height
     /// pyramid at the level whose cell is at least half the reach wide, so the answer is the
     /// maximum over the power-of-two cell CONTAINING the position, aligned to the grid.
-    /// Below one ogrid of reach it is the point sample. Water counts as surface.
+    /// Below one ogrid of reach it is the point sample. Water counts as surface, unless
+    /// `flyInWater` selects the deep ground (`C-499`/`C-510`).
     ///
     /// One load from the map's `MaxHeightPyramid` when the view was given one and the
     /// vertical scale is positive; otherwise the cell's corners are scanned, which answers
     /// identically and costs `(2^L + 1)^2` reads.
-    [[nodiscard]] Fx maxSurfaceHeightNear(Fx x, Fx z, Fx reachElmos) const noexcept;
+    [[nodiscard]] Fx maxSurfaceHeightNear(Fx x, Fx z, Fx reachElmos,
+                                          bool flyInWater = false) const noexcept;
 
     /// The field this samples, for the passes that still need its integer geometry — square
     /// counts, extents. Deliberately not a way back to the float accessors: those are the

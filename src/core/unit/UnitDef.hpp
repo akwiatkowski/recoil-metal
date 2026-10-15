@@ -109,11 +109,13 @@ struct ShieldSpec {
     /// found (absent from every archive, including shield.lua), so this is
     /// specified-from-name rather than retail-evidenced.
     bool personalBubble = false;
-    /// Transport shields parse but behave as ordinary bubbles for now: whether
-    /// cargo rides inside or outside the coverage is undecidable without a
-    /// retail source, and attached children already sit inside the dome by
-    /// position. Recorded so the distinction survives parsing.
     bool transportShield = false;
+    /// Retail's `PassOverkillDamage` (`shield.lua` `OnDamage`/`GetOverkill`,
+    /// corpus `UAL0303_unit.bp:78`): when the absorbed blow exceeds the
+    /// bubble's remaining health, the owner takes `incoming - old` shield
+    /// health through `DoTakeDamage`. Ordinary bubbles absorb-and-leak only
+    /// the blast remainder onto sheltered hulls instead.
+    bool passOverkillDamage = false;
 
     [[nodiscard]] bool exists() const noexcept {
         const bool geometry = shape == ShieldShape::Sphere

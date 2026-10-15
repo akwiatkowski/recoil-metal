@@ -1577,6 +1577,32 @@ TEST_CASE("C-412: HoverOverAttack parses with a false default when unauthored") 
     REQUIRE(none.has_value());
     CHECK_FALSE(none->airHoverOverAttack);
 }
+TEST_CASE("C-499: FlyInWater parses with a false default when unauthored") {
+    // `C-499` (`Air+0x36a`, `0x006c3696` source select): a seaplane authors
+    // true and measures clearance against the deep ground; ordinary flyers
+    // omit it and clear the surface. No shipped unit states it, so absent
+    // must decode false.
+    const Blueprint authored{"XXB0716_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true, FlyInWater = true },
+            SizeX = 0.8, SizeY = 1, SizeZ = 1,
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(authored.path());
+    REQUIRE(def.has_value());
+    CHECK(def->airFlyInWater);
+    const Blueprint bare{"XXB0717_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true },
+            SizeX = 0.8, SizeY = 0.25, SizeZ = 1.4,
+        }
+    )"};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK_FALSE(none->airFlyInWater);
+}
 
 TEST_CASE("C-218 (3): a stated motion class with MaxSpeed 0 reads as immobile") {
     // `C-218`'s third explicit-0-vs-absent site (`fa-exe-analysis-plan.md`, corroborated

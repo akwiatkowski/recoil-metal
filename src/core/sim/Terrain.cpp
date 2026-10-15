@@ -107,9 +107,14 @@ Fx Terrain::heightAt(Fx x, Fx z) const noexcept {
     return alongZ0 + (alongZ1 - alongZ0) * fz;
 }
 
-Fx Terrain::surfaceHeightAt(Fx x, Fx z) const noexcept {
+Fx Terrain::surfaceHeightAt(Fx x, Fx z, bool flyInWater) const noexcept {
+    // `C-499`/`C-510` (`0x006c3696` source select): the FlyInWater path reads
+    // the deep ground where the ordinary path maxes with the water level.
     const Fx ground = heightAt(x, z);
-    return hasWater_ ? std::max(ground, waterLevel_) : ground;
+    if (flyInWater || !hasWater_) {
+        return ground;
+    }
+    return std::max(ground, waterLevel_);
 }
 
 Fx Terrain::deepHeightAt(Fx x, Fx z) const noexcept {
@@ -177,12 +182,12 @@ void Terrain::flattenRect(Fx x0Elmos, Fx z0Elmos, Fx x1Elmos, Fx z1Elmos,
     field.setElevationRect(x0, z0, x1, z1, fxToFloat(elevation));
 }
 
-Fx Terrain::maxSurfaceHeightNear(Fx x, Fx z, Fx reachElmos) const noexcept {
+Fx Terrain::maxSurfaceHeightNear(Fx x, Fx z, Fx reachElmos, bool flyInWater) const noexcept {
     // Retail works in ogrids — one heightmap sample per ogrid, one square here — and
     // takes the point sample under a reach of one (`0x006340f0`).
     const Fx reachSquares = reachElmos / Fx::fromInt(kSquareSize);
     if (reachSquares < Fx::fromInt(1) || field_->squaresX <= 0 || field_->squaresZ <= 0) {
-        return surfaceHeightAt(x, z);
+        return surfaceHeightAt(x, z, flyInWater);
     }
 
     // The pyramid level: the highest set bit of half the reach, plus one — so the cell is
@@ -204,7 +209,7 @@ Fx Terrain::maxSurfaceHeightNear(Fx x, Fx z, Fx reachElmos) const noexcept {
     // while the scale is positive; a downhill scale takes the scan below instead.
     if (lookAhead_ != nullptr && heightScale_ > 0 && level <= lookAhead_->levelCount()) {
         const Fx highest = decodeRaw(lookAhead_->maxRaw(level, cellX, cellZ));
-        return hasWater_ ? std::max(highest, waterLevel_) : highest;
+        return (!flyInWater && hasWater_) ? std::max(highest, waterLevel_) : highest;
     }
 
     const std::int32_t first = 1 << level;
@@ -220,7 +225,7 @@ Fx Terrain::maxSurfaceHeightNear(Fx x, Fx z, Fx reachElmos) const noexcept {
             any = true;
         }
     }
-    return hasWater_ ? std::max(highest, waterLevel_) : highest;
+    return (!flyInWater && hasWater_) ? std::max(highest, waterLevel_) : highest;
 }
 
 TerrainTypeGrid::TerrainTypeGrid(std::span<const std::uint8_t> base, int squaresX,

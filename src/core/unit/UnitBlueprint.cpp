@@ -979,6 +979,7 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             const bool personal = flag("PersonalShield");
             def.shield.personalBubble = flag("PersonalBubble");
             def.shield.transportShield = flag("TransportShield");
+            def.shield.passOverkillDamage = flag("PassOverkillDamage");
             def.shield.maximum =
                 sim::magFromFloat(numberOr(*shield, "ShieldMaxHealth", 0.0f));
             def.shield.verticalOffsetElmos = sim::fxFromFloat(

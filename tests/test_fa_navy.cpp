@@ -958,3 +958,50 @@ TEST_CASE("C-169: a shell crossing the waterline dies as a Water impact with spl
     // crossing point takes damage from the blast.
     CHECK(rm::test::asFloat(roster.health(boat).current) < 1000.0f);
 }
+
+TEST_CASE("C-169: a shot climbing out of the waterline dies as a Water impact", "[fa-navy]") {
+    // The second half of `C-169`'s surface block: retail's water
+    // enter/exit tests run in both directions (`OnEnterWater` on the way
+    // down, `OnExitWater` on the way up), and the destroy-on-water plane
+    // intersect fires either way. A shot climbing from under the waterline
+    // to above it crosses the same plane — the player sees the splash
+    // where the torpedo-shaped mistake broaches, not a shell flying on
+    // dry.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);  // waterline at 80
+    rm::test::Roster roster;
+    const UnitDef sub = subDef();
+    const UnitDef ship = shipDef();
+    const rm::UnitTypeIndex subType = roster.addType(sub);
+    const rm::UnitTypeIndex shipType = roster.addType(ship);
+    const UnitId gunboat = spawnDef(roster, shipType, ship, 300.0f, 300.0f, 0);
+    const UnitId boat = spawnDef(roster, subType, sub, 320.0f, 300.0f, 1);
+    rm::sim::tick(roster.store.transforms(), roster.store.motion(), terrain);
+    REQUIRE(roster.motion(boat).submerged);
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    // An ordinary shell (no StayUnderwater clamp, no DestroyOnWater kill)
+    // rising from 70 to 90 across one tick, crossing the 80-elmo plane
+    // mid-segment from below.
+    rm::sim::Projectile shell;
+    shell.position = {Fx::fromInt(300), Fx::fromInt(70), Fx::fromInt(300)};
+    shell.velocity = {Fx{}, Fx::fromInt(20), Fx{}};
+    shell.ticksRemaining = 100;
+    shell.damage.base = rm::sim::Mag::fromInt(100);
+    shell.damageRadiusElmos = Fx::fromInt(20);
+    shell.firedByArmy = 0;
+    shell.firedBy = gunboat;  // friendly hull, off the flight line so the sweep spares it
+    shell.targetLayers = rm::unitdef::TargetLayerMask::Both;
+    std::vector<rm::sim::Projectile> shots{shell};
+    rm::sim::EventQueue events;
+    for (int i = 0; i < 10 && !shots.empty(); ++i) {
+        rm::sim::advanceProjectiles(shots, roster.store, armies, terrain,
+                                    roster.rate, &events);
+    }
+    REQUIRE(shots.empty());
+    const auto impacts = events.all();
+    REQUIRE(std::ranges::any_of(impacts, [](const rm::sim::Event& event) {
+        return event.kind == rm::sim::EventKind::ProjectileImpact
+               && event.impactType == rm::sim::ImpactType::Water;
+    }));
+    CHECK(rm::test::asFloat(roster.health(boat).current) < 1000.0f);
+}

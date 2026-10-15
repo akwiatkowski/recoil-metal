@@ -199,7 +199,7 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
         feed(h, motion.airKRollDamping);
         feed(h, motion.airCirclingTurnMult);
         feed(h, motion.airTightTurnMultiplier);
-        feed(h, motion.airHoverOverAttack);
+        feed(h, motion.airFlyInWater);
         feed(h, motion.velocity);
         feed(h, motion.altitudeRef);
         feed(h, motion.fuelRatio);

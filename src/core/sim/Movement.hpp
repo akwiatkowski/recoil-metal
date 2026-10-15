@@ -366,6 +366,12 @@ struct MoveState {
     Fx airMinSpeedElmosPerSec{};
     Fx airAttackElevation{};
     bool airWinged = false;
+    /// `Air.FlyInWater` (`C-499`/`C-510`, `Air+0x36a`): a flyer that may route
+    /// under water measures clearance against the deep ground (`heightAt`),
+    /// not the surface (`surfaceHeightAt` maxed with the water level) —
+    /// retail's `0x006c3696` source select. Spawn-copied, saved, hashed.
+    /// False when unauthored; no shipped unit states it.
+    bool airFlyInWater = false;
     /// `Air.HoverOverAttack` (`C-412`, `Air+0x79`): the CZAR-style hover-attack
     /// flag — selects retail's alternate `0x6c4f00` solver path instead of the
     /// winged `0x6c4960` state machine. Spawn-copied, saved (v57), hashed.

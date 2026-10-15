@@ -431,11 +431,11 @@ struct Weapon {
     /// `HeadingArcRange` pair already carries, so it folds into those fields.
     bool slavedToBody = false;
 
-    /// `TargetCheckInterval` in authored seconds (C-093): how long a weapon
+    /// `TargetCheckInterval` in authored seconds (C-424): how long a weapon
     /// that found NOTHING waits before scanning again. Retail's reschedule is
-    /// `max(1, ceil(interval x ticksPerSecond)) + 1` ticks after a failed
-    /// acquire and one tick after a successful one — the catalog holds the
-    /// converted figure (`WeaponRates::targetCheckTicks`).
+    /// `max(1, round(interval x ticksPerSecond))` ticks after a failed acquire
+    /// (`0x006B3AF0`, `frndint`) and one tick after a successful one — the
+    /// catalog holds the converted figure (`WeaponRates::targetCheckTicks`).
     float targetCheckIntervalSeconds = 0.0f;
 
     /// The firing arc, in DEGREES, and its centre — retail's `HeadingArcCenter`/`Range`.

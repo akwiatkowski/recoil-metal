@@ -4027,6 +4027,29 @@ TEST_CASE("a turreted weapon scores candidates by slew from its aim, not distanc
           == ahead);
 }
 
+TEST_CASE("a failed target scan reschedules by round(TargetCheckInterval x rate)") {
+    // `C-424`: the per-weapon reschedule is `max(1, round(interval x 10))` from
+    // retail `0x006B3AF0` (`frndint`, round-half-up, max-1 clamp) — NOT ceil + 1.
+    // URL0107's authored 0.16 s scan is 2 ticks (round(1.6) = 2, ceil(1.6) + 1 = 3).
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.targetCheckIntervalSeconds = 0.16f;  // 2 ticks, not 3
+    const rm::UnitTypeIndex gunner = roster.addType(gunnerDef(weapon));
+    (void)roster.add(gunner, 0.0f, 0.0f, 0, 100.0f);
+
+    std::vector<Projectile> shots;
+    // Tick 0: nothing in range — the scan fails and schedules its next check.
+    (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                               roster.rate, nullptr, nullptr, nullptr, 0);
+    // Tick 2: a target appears — retail's 2-tick cadence re-scans and acquires.
+    const rm::UnitTypeIndex target = roster.addType(targetDef());
+    (void)roster.add(target, 0.0f, 50.0f, 1, 100.0f);
+    (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                               roster.rate, nullptr, nullptr, nullptr, 2);
+    CHECK(shots.size() == 1);
+}
+
 TEST_CASE("a failed target scan waits the authored TargetCheckInterval") {
     // `C-093`: retail reschedules a failed acquire at `TargetCheckInterval`;
     // a weapon that found nothing does not re-scan every tick.
