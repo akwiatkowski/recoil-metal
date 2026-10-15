@@ -384,6 +384,37 @@ std::optional<SacrificeWork> sacrificeWork(
     }
     return std::nullopt;
 }
+Fx reservedCapCost(std::span<const Construction> building,
+                   const UnitCatalog& catalog, int armyIndex) noexcept {
+    Fx reserved{};
+    for (const Construction& work : building) {
+        if (work.armyIndex != armyIndex || work.finished()) {
+            continue;
+        }
+        if (const unitdef::UnitDef* def =
+                catalog.def(static_cast<UnitTypeIndex>(work.blueprintIndex))) {
+            reserved = reserved + def->capCost;
+        }
+    }
+    return reserved;
+}
+
+bool unitCapBlocks(std::span<const Army> armies, int armyIndex,
+                   const UnitCatalog& catalog,
+                   std::span<const Construction> building,
+                   const unitdef::UnitDef& product) noexcept {
+    // Retail's creation gate (`0x0074fda0`): `costTotal + reserved + new
+    // CapCost` over `unitCap` refuses the unit. An empty `armies` span means
+    // a bare test store with no army records — nothing is capped.
+    if (armies.empty() || armyIndex < 0
+        || static_cast<std::size_t>(armyIndex) >= armies.size()) {
+        return false;
+    }
+    const Army& army = armies[static_cast<std::size_t>(armyIndex)];
+    return army.unitCostTotal + reservedCapCost(building, catalog, armyIndex)
+               + product.capCost
+           > army.unitCap;
+}
 
 [[nodiscard]] std::optional<std::array<Fx, 3>> guardReturnPosition(
     UnitIndex slot, UnitId guardee, const UnitStore& store, const UnitCatalog& catalog,

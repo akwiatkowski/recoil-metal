@@ -1478,7 +1478,10 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     // replacement-entity transfer on completion. The transfer spawns, so this runs
     // after every span-holding pass has finished with the store.
     if (match.captures != nullptr) {
-        (void)applyCaptureWork(store, *match.captures, match.events,
+        (void)applyCaptureWork(store, catalog, match.armies, *match.captures,
+                               match.building != nullptr ? std::span<const Construction>{*match.building}
+                                                         : std::span<const Construction>{},
+                               match.events,
                                match.siloAmmo != nullptr ? std::span<SiloAmmo>{*match.siloAmmo}
                                                          : std::span<SiloAmmo>{},
                                match.enhancements != nullptr

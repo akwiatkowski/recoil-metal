@@ -595,6 +595,40 @@ TEST_CASE("a capture keeps the target's enhancements and shield toggle", "[captu
           == "AdvancedEngineering");
     CHECK(f.roster.store.scriptBitDisabled(replacement, 0));
 }
+TEST_CASE("a transfer refused by the captor's unit cap leaves the old unit and reports failure", "[capture]") {
+    // Spec §"Failure" (`0x0074E421`): replacement-creation failure leaves
+    // the ordinary unattached old target intact, cleans capture
+    // funding/activation, and reports failure explicitly. The bounded
+    // mechanism is retail's creation gate (`0x0074fda0`): the captor's army
+    // is at its unit cap, so the replacement cannot exist.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.capture(captor, target));
+    f.tick(10);
+    REQUIRE(f.captures.size() == 1);
+    REQUIRE(f.captures[0].progress == 10);
+    // The captor's army is full: any replacement would exceed the cap.
+    f.armies[0].unitCap = rm::sim::Fx::fromInt(0);
+    f.tick(40);
+    // The old target stands under its own army; the task is gone and the
+    // captor's failure pair fired, not the completion triple.
+    CHECK(f.roster.store.alive(target));
+    CHECK(f.roster.store.motion()[target.index].armyIndex == 1);
+    CHECK(f.captures.empty());
+    std::size_t failed = 0;
+    std::size_t failedBeing = 0;
+    std::size_t captured = 0;
+    for (const rm::sim::Event& event : f.events.all()) {
+        failed += event.kind == rm::sim::EventKind::FailedCapture ? 1 : 0;
+        failedBeing += event.kind == rm::sim::EventKind::FailedBeingCaptured ? 1 : 0;
+        captured += event.kind == rm::sim::EventKind::Captured ? 1 : 0;
+    }
+    CHECK(failed == 1);
+    CHECK(failedBeing == 1);
+    CHECK(captured == 0);
+}
+
 TEST_CASE("a transfer rebuilds transport attachments and carries manipulator state", "[capture]") {
     // `C-513` (`0x0074e1fc`-`0x0074e3d8`): the native transfer rebuilds
     // transport attachments on the replacement — per stored child into

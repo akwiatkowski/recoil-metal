@@ -1011,6 +1011,52 @@ TEST_CASE("a firing arc centre rotates automatic acquisition around the hull hea
                                  nullptr, nullptr, static_cast<rm::Brad>(8192))
           == right);  // 45 degrees of hull heading plus 45 degrees of weapon offset is +X.
 }
+TEST_CASE("automatic acquisition skips the out-of-arc penalty for AutoInitiateAttackCommand") {
+    // `C-493`: retail's 4x reach-class penalty applies only when the weapon's
+    // `AutoInitiateAttackCommand` is unset (`[[weapon+0x48]+0x4c] == 0` at
+    // `0x005de95c`-`0x005de988`); a weapon that auto-issues attack orders
+    // compares raw scores across reach classes.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId outside = roster.add(type, 10.0f, 0.0f, 1, 100.0f);
+    const UnitId within = roster.add(type, 0.0f, 15.0f, 1, 100.0f);
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.arcRangeDegrees = 30.0f;
+    weapon.arcRangeBrads = rm::unitdef::arcRangeBradsFromDegrees(weapon.arcRangeDegrees);
+    weapon.autoInitiateAttackCommand = true;
+
+    // Without the penalty the nearer out-of-arc target wins on raw distance.
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store, armies,
+                                 nullptr, nullptr, rm::Brad{})
+          == outside);
+    CHECK(within != outside);
+}
+
+TEST_CASE("a turreted weapon adds the out-of-arc penalty to its slew score") {
+    // `C-493`: the penalty is mode-dependent — distance mode multiplies by
+    // 4 (`mulss`), aim mode adds 4 (`addss`, same `0x00e4d3e0` constant).
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex type = roster.addType(targetDef());
+    const UnitId ahead = roster.add(type, 0.0f, 100.0f, 1, 100.0f);  // dead ahead, far
+    const UnitId flank = roster.add(type, 50.0f, 0.0f, 1, 100.0f);   // abeam, near
+
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.turreted = true;
+    weapon.arcRangeDegrees = 30.0f;
+    weapon.arcRangeBrads = rm::unitdef::arcRangeBradsFromDegrees(weapon.arcRangeDegrees);
+
+    // A barrel on +Z: the ahead target scores 0 slew in-arc; the near flank
+    // target scores slew + 4 out-of-arc — the ahead target still wins.
+    CHECK(rm::sim::nearestTarget(rm::test::at(0, 0, 0), 0, rm::UnitIndex{0}, weapon, roster.store,
+                                 armies, nullptr, &roster.catalog, rm::Brad{},
+                                 std::nullopt, nullptr, {}, std::nullopt, 0,
+                                 rm::sim::TickRate{}, rm::TargetFocus::Default,
+                                 rm::Brad{0})
+          == ahead);
+    CHECK(flank != ahead);
+}
 
 TEST_CASE("automatic acquisition applies category target restrictions before ranking") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);

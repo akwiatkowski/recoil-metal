@@ -1358,14 +1358,15 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
             ++row;
         }
 
-        // `C-092`: the score is not always distance. A turreted or
+        // `C-092`/`C-493`: the score is not always distance. A turreted or
         // `SlavedToBody` weapon answers "least slew" — retail's weighted dot
         // product against the current aim direction — so its score is the
         // angular error to the candidate, scaled by distance to keep the
         // ordering total. A candidate dead ahead scores zero and wins
         // outright, which is exactly "prefers what it is already pointing at".
+        const bool aimMode = aimBearing && (weapon.turreted || weapon.slavedToBody);
         std::uint64_t score;
-        if (aimBearing && (weapon.turreted || weapon.slavedToBody)) {
+        if (aimMode) {
             const std::uint32_t slew =
                 headingError(*aimBearing, bearingTo(from, aimAt));
             score = static_cast<std::uint64_t>(distance.raw())
@@ -1376,8 +1377,16 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
             score = static_cast<std::uint64_t>(dxRaw * dxRaw)
                   + static_cast<std::uint64_t>(dzRaw * dzRaw);
         }
-        if (reach != ReachClass::InRange) {
-            score *= 4;
+        // `C-493` (`0x005de95c`-`0x005de988`): the reach-class penalty applies
+        // only when `AutoInitiateAttackCommand` is unset (`[[weapon+0x48]+0x4c]`),
+        // and is mode-dependent — distance mode MULTIPLIES by 4.0 (`mulss`,
+        // `0x00e4d3e0`) while aim mode ADDS 4.0 (`addss`, same constant).
+        if (reach != ReachClass::InRange && !weapon.autoInitiateAttackCommand) {
+            if (aimMode) {
+                score += 4;
+            } else {
+                score *= 4;
+            }
         }
         return Candidate{.slot = slot, .row = row, .score = score};
     };

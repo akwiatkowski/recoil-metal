@@ -529,6 +529,7 @@ TEST_CASE("FA weapon priority rows, height reach, and rescan cadence parse") {
     CHECK(weapon.maxHeightDifference == rm::test::fx(2.5f * 8.0f));  // ogrids → elmos;
     CHECK(weapon.slavedToBody);
     CHECK(weapon.targetCheckIntervalSeconds == 0.5f);
+    CHECK_FALSE(weapon.autoInitiateAttackCommand);  // `C-493`: absent means unset
 }
 
 TEST_CASE("FA weapon TrackingRadius is dimensionless and defaults without shortening range") {

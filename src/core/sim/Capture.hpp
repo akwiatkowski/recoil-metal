@@ -96,12 +96,17 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
 
 /// One tick of funded captures: fully funded beats advance progress by one per
 /// active captor, capped at the budget, and a finished capture transfers the
-/// target to the captor's army. Returns how many captors made progress — the
-/// outward sign a capture is advancing, for the report and for tests.
+/// target to the captor's army. A finished capture whose replacement the
+/// captor's unit cap refuses (`0x0074fda0`, spec §"Failure" `0x0074E421`)
+/// leaves the old target intact, drops the task, and reports the failure
+/// pair instead of the completion triple. Returns how many captors made
+/// progress — the outward sign a capture is advancing, for the report and for
+/// tests.
 ///
 /// Run AFTER the economy pass awarded this tick's funding, like repair work.
-std::size_t applyCaptureWork(UnitStore& store, std::vector<CaptureWork>& captures,
-                             EventQueue* events,
+std::size_t applyCaptureWork(UnitStore& store, const UnitCatalog& catalog,
+                             std::span<const Army> armies, std::vector<CaptureWork>& captures,
+                             std::span<const Construction> building, EventQueue* events,
                              std::span<SiloAmmo> siloAmmo = {},
                              std::span<EnhancementWork> enhancements = {});
 /// The replacement-entity ownership transfer both capture and gifting share —

@@ -1,6 +1,7 @@
 #include "core/sim/Capture.hpp"
 
 #include "core/sim/Command.hpp"
+#include "core/sim/CommandInternal.hpp"
 #include "core/sim/Enhancement.hpp"
 #include "core/map/HeightField.hpp"
 #include "core/sim/Reclaim.hpp"
@@ -303,8 +304,10 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
     });
 }
 
-std::size_t applyCaptureWork(UnitStore& store, std::vector<CaptureWork>& captures,
-                             EventQueue* events, std::span<SiloAmmo> siloAmmo,
+std::size_t applyCaptureWork(UnitStore& store, const UnitCatalog& catalog,
+                             std::span<const Army> armies, std::vector<CaptureWork>& captures,
+                             std::span<const Construction> building, EventQueue* events,
+                             std::span<SiloAmmo> siloAmmo,
                              std::span<EnhancementWork> enhancements) {
     std::size_t capturing = 0;
     for (std::size_t i = 0; i < captures.size();) {
@@ -354,6 +357,28 @@ std::size_t applyCaptureWork(UnitStore& store, std::vector<CaptureWork>& capture
         work.progress = std::min(work.workTicks, work.progress + std::max(1, activeCaptors));
         if (work.progress < work.workTicks) {
             ++i;
+            continue;
+        }
+        // Spec §"Failure" (`0x0074E421`, creation gate `0x0074fda0`): when the
+        // captor's army is at its unit cap the replacement cannot exist — the
+        // ordinary unattached old target stays intact, the task drops, and the
+        // failure pair fires instead of the completion triple.
+        const unitdef::UnitDef* replacementDef =
+            catalog.def(store.typeAt(work.target.index));
+        if (replacementDef != nullptr
+            && unitCapBlocks(armies, work.armyIndex, catalog, building, *replacementDef)) {
+            const Transform& refusal = store.transforms()[work.target.index];
+            emit(events, Event{.kind = EventKind::FailedBeingCaptured,
+                               .unit = work.target,
+                               .instigator = store.idAt(work.captor),
+                               .army = store.motion()[work.target.index].armyIndex,
+                               .at = {refusal.x, refusal.y, refusal.z}});
+            emit(events, Event{.kind = EventKind::FailedCapture,
+                               .unit = store.idAt(work.captor),
+                               .instigator = work.target,
+                               .army = work.armyIndex,
+                               .at = {refusal.x, refusal.y, refusal.z}});
+            captures.erase(captures.begin() + static_cast<std::ptrdiff_t>(i));
             continue;
         }
         // `C-237` (`0x0060B822`-`0x0060B870`): the completion triple, in retail's

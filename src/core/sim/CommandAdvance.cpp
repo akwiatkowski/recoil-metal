@@ -111,42 +111,6 @@ namespace {
     const auto b = std::ranges::find_if(armies, [theirs](const Army& army) { return army.index == theirs; });
     return a != armies.end() && b != armies.end() && allied(*a, *b);
 }
-/// The `CapCost` an army's unfinished constructions already reserve. Retail's
-/// rising unit is a live entity from the moment the scaffold exists, so it
-/// counts toward the cap the whole time it is being built — matching the gate
-/// at `0x0074fda0`, which adds only the NEW unit's `CapCost` to a total that
-/// already includes it.
-[[nodiscard]] Fx reservedCapCost(std::span<const Construction> building,
-                                 const UnitCatalog& catalog, int armyIndex) noexcept {
-    Fx reserved{};
-    for (const Construction& work : building) {
-        if (work.armyIndex != armyIndex || work.finished()) {
-            continue;
-        }
-        if (const unitdef::UnitDef* def =
-                catalog.def(static_cast<UnitTypeIndex>(work.blueprintIndex))) {
-            reserved = reserved + def->capCost;
-        }
-    }
-    return reserved;
-}
-
-/// Retail's creation gate (`0x0074fda0`): `costTotal + reserved + new CapCost`
-/// over `unitCap` refuses the unit. `armies` empty means a bare test store with
-/// no army records — nothing is capped.
-[[nodiscard]] bool unitCapBlocks(std::span<const Army> armies, int armyIndex,
-                                 const UnitCatalog& catalog,
-                                 std::span<const Construction> building,
-                                 const unitdef::UnitDef& product) noexcept {
-    if (armies.empty() || armyIndex < 0
-        || static_cast<std::size_t>(armyIndex) >= armies.size()) {
-        return false;
-    }
-    const Army& army = armies[static_cast<std::size_t>(armyIndex)];
-    return army.unitCostTotal + reservedCapCost(building, catalog, armyIndex)
-               + product.capCost
-           > army.unitCap;
-}
 
 } // namespace
 

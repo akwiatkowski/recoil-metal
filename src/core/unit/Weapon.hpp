@@ -488,6 +488,14 @@ struct Weapon {
     std::optional<std::vector<std::string>> targetRestrictOnlyAllow;
     std::optional<std::vector<std::string>> targetRestrictOnlyDisallow;
 
+    /// `AutoInitiateAttackCommand` (`C-493`, `blueprint_layout.tsv:219`,
+    /// `weapon+0x48` + `0x4c`): when set, an idle unit issues an attack order
+    /// against an acquired target (the Lua `_AimOnTarget` path in
+    /// `UnitWeapon.lua:42`). For automatic acquisition it gates the
+    /// reach-class score penalty at `0x005de95c`-`0x005de988`: with the flag
+    /// set the penalty is skipped and candidates compare on raw scores.
+    bool autoInitiateAttackCommand = false;
+
     /// Whether the weapon has a turret. A turreted weapon may fire without the hull
     /// turning; 284 of the 399 that say so are turreted.
     bool turreted = false;

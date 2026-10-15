@@ -110,18 +110,33 @@ struct SacrificeWork {
     const Command& command, const UnitStore& store,
     std::span<const Construction> building,
     std::span<const EnhancementWork> enhancements) noexcept;
+/// The `CapCost` an army's unfinished constructions already reserve. Retail's
+/// rising unit is a live entity from the moment the scaffold exists, so it
+/// counts toward the cap the whole time it is being built — matching the gate
+/// at `0x0074fda0`, which adds only the NEW unit's `CapCost` to a total that
+/// already includes it.
+[[nodiscard]] Fx reservedCapCost(std::span<const Construction> building,
+                                const UnitCatalog& catalog, int armyIndex) noexcept;
 
-/// Whether a factory's build order must WAIT on the unit cap rather than start.
-///
-/// Retail's creation gate (`0x0074fda0`) refuses `costTotal + CapCost > unitCap`
-/// at the moment the entity would exist, and `CFactoryBuildTask` answers a
-/// refusal by retrying the create every beat — production holds, the order is
-/// never dropped. Callers check this BEFORE `startCommand` so a held order
-/// keeps its queue slot; a mobile build's scaffold has no retry task and is
-/// refused by `startCommand` itself.
-[[nodiscard]] bool factoryProductionCapped(const Command& command, const UnitStore& store,
-                                           const UnitCatalog& catalog,
-                                           std::span<const Army> armies,
-                                           std::span<const Construction> building) noexcept;
+/// Retail's creation gate (`0x0074fda0`): `costTotal + reserved + new CapCost`
+/// over `unitCap` refuses the unit. An empty `armies` span means a bare test
+/// store with no army records — nothing is capped.
+[[nodiscard]] bool unitCapBlocks(std::span<const Army> armies, int armyIndex,
+                                 const UnitCatalog& catalog,
+                                 std::span<const Construction> building,
+                                 const unitdef::UnitDef& product) noexcept;
+
+ /// Whether a factory's build order must WAIT on the unit cap rather than start.
+ ///
+ /// Retail's creation gate (`0x0074fda0`) refuses `costTotal + CapCost > unitCap`
+ /// at the moment the entity would exist, and `CFactoryBuildTask` answers a
+ /// refusal by retrying the create every beat — production holds, the order is
+ /// never dropped. Callers check this BEFORE `startCommand` so a held order
+ /// keeps its queue slot; a mobile build's scaffold has no retry task and is
+ /// refused by `startCommand` itself.
+ [[nodiscard]] bool factoryProductionCapped(const Command& command, const UnitStore& store,
+                                            const UnitCatalog& catalog,
+                                            std::span<const Army> armies,
+                                            std::span<const Construction> building) noexcept;
 
 } // namespace rm::sim

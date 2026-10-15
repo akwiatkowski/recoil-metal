@@ -388,6 +388,12 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         if (const lua::Value* turreted = entry.find("Turreted")) {
             weapon.turreted = turreted->asBoolean().value_or(false);
         }
+        // `C-493` (`blueprint_layout.tsv:219`, `weapon+0x48` + `0x4c`): gates the
+        // reach-class score penalty in `nearestTarget` — set weapons compare
+        // raw scores across reach classes.
+        if (const lua::Value* autoAttack = entry.find("AutoInitiateAttackCommand")) {
+            weapon.autoInitiateAttackCommand = autoAttack->asBoolean().value_or(false);
+        }
         if (const lua::Value* manual = entry.find("ManualFire")) {
             weapon.manualFire = manual->asBoolean().value_or(false);
         }

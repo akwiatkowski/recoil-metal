@@ -553,6 +553,92 @@ TEST_CASE("C-183: a bingo-fuel guard ferry docks at a staging pad instead of fly
     CHECK(head->kind() == CommandKind::Guard);
 }
 
+TEST_CASE("C-183/C-348: a bingo-fuel guard ferry diverts to a staging pad mid-route",
+          "[fa-transport][guard][airstaging]") {
+    // The C-183 ladder order applied to the C-348 carrier-side loop: refuel/staging
+    // outranks ferry even once the guard-ferry anchor is set and the route is
+    // underway. A transport flying its beacon route (anchor set, en route to the
+    // drop) that drops to bingo fuel diverts to an allied AIRSTAGINGPLATFORM in
+    // reach instead of pressing on dry. The guard order still heads the queue.
+    // Filed against `advanceGuardFerry` (`Transport.cpp`): today it drives the
+    // route unconditionally, so this fails — the carrier keeps the drop leg.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex beaconType = roster.addType(beaconDef());
+    UnitDef padDef;
+    padDef.name = "test_pad";
+    padDef.categories = {"AIRSTAGINGPLATFORM", "STRUCTURE"};  // sorted for hasCategory
+    padDef.collisionRadiusElmos = 24.0f;
+    padDef.refuelingMultiplier = 10.0f;
+    padDef.stagingScanRadiusElmos = rm::sim::fxFromFloat(400.0f);  // pad-owned reach, `C-225`
+    padDef.transport.dockingSlots = 1;
+    const rm::UnitTypeIndex padType = roster.addType(padDef);
+
+    // Mid-route: high over the beacon leg. Starts FULL — the first tick settles
+    // the guard-ferry anchor and commits the drop leg — then the test drains
+    // the tank to bingo to prove the carrier pass yields the route.
+    const UnitId transport = roster.add(transportType, 45.0f, 45.0f, 0, 500.0f);
+    giveFlight(roster.motion(transport));
+    roster.motion(transport).airborne = true;
+    roster.motion(transport).fuelDrainPerTick = Fx::fromRatio(1, 5000);
+    const UnitId beacon = roster.add(beaconType, 30.0f, 30.0f, 0, 10.0f);
+    // Pad ahead of the route, inside its own scan radius of the carrier.
+    (void)roster.add(padType, 60.0f, 60.0f, 0, 500.0f);
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+    REQUIRE(rm::sim::applyCommand(moveIssue(beacon, 400.0f, 400.0f, 1), roster.store,
+                                  roster.catalog, players, armies, terrain, gridFor,
+                                  roster.rate)
+                .accepted.size()
+            == 1);
+    REQUIRE(rm::sim::applyCommand(
+                CommandIssue{.source = 0,
+                             .id = rm::commandId(0, 2),
+                             .player = 0,
+                             .kind = CommandKind::Guard,
+                             .units = {transport},
+                             .target = beacon},
+                roster.store, roster.catalog, players, armies, terrain, gridFor,
+                roster.rate)
+                .accepted.size()
+            == 1);
+
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    // Settle the anchor first on a full tank: one tick starts the guard-ferry
+    // loop (anchor set, drop leg committed). Then drain to bingo and require
+    // the carrier pass to yield the route to the staging rung.
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    REQUIRE(roster.store.orders()[transport.index].active() != nullptr);
+    REQUIRE(roster.store.orders()[transport.index].active()->transportAnchor().has_value());
+    roster.motion(transport).fuelRatio = Fx::fromRatio(3, 100);
+    bool diverted = false;
+    for (int i = 0; i < 120 && !diverted; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        // Diverting means routing toward the pad, not holding the drop leg: the
+        // destination swings off the beacon-drop line toward the pad.
+        const rm::sim::MoveState& motion = roster.motion(transport);
+        if (motion.moving) {
+            const Fx dx = motion.destinationX - rm::sim::fxFromFloat(60.0f);
+            const Fx dz = motion.destinationZ - rm::sim::fxFromFloat(60.0f);
+            diverted = dx * dx + dz * dz
+                <= Fx::fromInt(30) * Fx::fromInt(30);
+        }
+    }
+
+    CHECK(diverted);
+    const rm::sim::QueuedCommand* head = roster.store.orders()[transport.index].active();
+    REQUIRE(head != nullptr);
+    CHECK(head->kind() == CommandKind::Guard);
+}
 
 TEST_CASE("C-198: cargo hangs from its class's nearest free attach bone",
           "[fa-transport]") {

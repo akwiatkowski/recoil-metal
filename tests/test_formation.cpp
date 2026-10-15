@@ -521,3 +521,54 @@ TEST_CASE("a mixed land-and-sea group fans out per domain", "[formation]") {
     }
     CHECK(front == 7);
 }
+
+TEST_CASE("a mixed sea-and-sub group shares retail's sea counter", "[formation]") {
+    // Retail picks BOTH the naval and the sub `AttackFormation` blocks from one
+    // shared `seaCounter = max(sea, sub)` (ART-S007 lua/formations.lua:650-666):
+    // two frigates plus twelve subs sail a FiveWide naval block and a
+    // SevenWide sub block, not the ThreeWide/SevenWide their own counts pick.
+    // (TDD: fails — the intake widths each domain from its own count.)
+    Fixture fix;
+    rm::unitdef::UnitDef subDef;
+    subDef.name = "test_sub";
+    subDef.categories = {"MOBILE", "NAVAL", "SUBMERSIBLE"};
+    subDef.motion = rm::unitdef::MotionType::SurfacingSub;
+    const rm::UnitTypeIndex sub = fix.roster.addType(subDef);
+    // Both domains centre on the click's z (ships 240-250, subs 190-300, each
+    // mean 245) so the shared centroid-to-click facing is exact-east like the
+    // land/sea mixed case above: front rows land exactly on the anchor line
+    // and the counts below are exact, not tilt-noise.
+    std::vector<UnitId> group;
+    for (int i = 0; i < 2; ++i) {
+        group.push_back(fix.roster.add(fix.ship, 200.0f,
+                                       240.0f + 10.0f * static_cast<float>(i),
+                                       0, 500.0f));
+    }
+    for (int i = 0; i < 12; ++i) {
+        const UnitId id = fix.roster.add(sub, 200.0f,
+                                         190.0f + 10.0f * static_cast<float>(i),
+                                         0, 500.0f);
+        fix.roster.store.motion()[id.index].submersible = true;
+        group.push_back(id);
+    }
+    const rm::sim::ApplyCommandResult result =
+        fix.issueMove(group, 900.0f, 245.0f, CommandKind::AttackMove);
+    REQUIRE(result.accepted == group);
+
+    std::size_t seaFront = 0;
+    std::size_t subFront = 0;
+    for (const UnitId member : group) {
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        if (rm::test::asFloat(entries.front().targetX())
+            == Catch::Approx(900.0f).margin(0.01f)) {
+            if (fix.roster.store.motion()[member.index].submersible) {
+                ++subFront;
+            } else {
+                ++seaFront;
+            }
+        }
+    }
+    CHECK(seaFront == 2);
+    CHECK(subFront == 7);
+}

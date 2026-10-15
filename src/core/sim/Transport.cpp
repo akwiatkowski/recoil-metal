@@ -795,6 +795,18 @@ void advanceGuardFerry(UnitStore& store, const UnitCatalog& catalog, const Terra
         || beaconDef == nullptr || !beaconDef->isFerryBeacon()) {
         return;
     }
+    // `C-183` ladder order: the refuel/staging rung outranks the ferry rung.
+    // A bingo-fuel flyer yields the route drive to the guard ladder in
+    // `advanceOrders`, which diverts it to an allied `AIRSTAGINGPLATFORM` in
+    // reach, docks it, refuels it and relaunches it. Without the yield this
+    // pass would re-commit the drop leg on the same tick dispatch tore the
+    // movement down to serve the pad. The quarter tank mirrors
+    // `CommandAdvance.cpp`'s `kBingoFuelRatio` — an adapter convention, no
+    // retail bingo fraction was recovered.
+    const MoveState& motion = store.motion()[slot];
+    if (motion.canFly && motion.fuelRatio < Fx::fromRatio(1, 4)) {
+        return;
+    }
     const Transform& beaconAt = store.transforms()[beacon.index];
     if (!order.transportAnchor()) {
         order.beginFerry({beaconAt.x, beaconAt.z});

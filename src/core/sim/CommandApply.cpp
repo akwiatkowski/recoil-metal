@@ -343,31 +343,38 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
 }
 
 /// ART-S007 `GrowthFormation`'s naval half (formations.lua:709-721) selects
-/// these land-independent surface widths by total sea hull count: three-wide
+/// these land-independent surface widths by the shared sea counter: three-wide
 /// up to nine, five-wide up to twenty-five, seven-wide past that
 /// (`Three`/`Five`/`SevenNavalGrowthFormation`). AttackMove's naval half
 /// (formations.lua:654-666) is the 5/7/9-wide split at ten and twenty-five.
-/// Subs sail their own same-threshold blocks on the same beats.
-[[nodiscard]] std::size_t navalFormationWidth(std::size_t hulls, bool attack) noexcept {
+/// `seaCounter` picks BOTH the naval and the sub `AttackFormation`/`GrowthFormation`
+/// blocks (`AttackFormation` formations.lua:650-666, `GrowthFormation` 705-721):
+/// `seaCounter = max(sea surface hulls, submerged hulls)` after the sub count is
+/// backed out of the sea list. Each domain still fills only its own count of
+/// slots — the shared beat only selects the block both domains lay.
+[[nodiscard]] std::size_t seaCounter(std::size_t sea, std::size_t sub) noexcept {
+    return sea >= sub ? sea : sub;
+}
+[[nodiscard]] std::size_t navalFormationWidth(std::size_t counter, bool attack) noexcept {
     if (attack) {
-        if (hulls <= 10) {
+        if (counter <= 10) {
             return 5;
         }
-        if (hulls <= 25) {
+        if (counter <= 25) {
             return 7;
         }
         return 9;
     }
-    if (hulls <= 9) {
+    if (counter <= 9) {
         return 3;
     }
-    if (hulls <= 25) {
+    if (counter <= 25) {
         return 5;
     }
     return 7;
 }
 /// ART-S007 `GrowthFormation`'s sub half (formations.lua:709-721) sails submerged
-/// hulls in their own blocks on the same sea-counter beats: three-wide up to nine
+/// hulls in their own blocks on the shared sea-counter beats: three-wide up to nine
 /// (`ThreeWideSubGrowthFormation`, 2 rows of 3, formations.lua:534-539), five-wide
 /// past that — both `FiveWideSubGrowthFormation` (3 rows of 5, formations.lua:541-547)
 /// and `SevenWideSubGrowthFormation` (4 rows of 5, formations.lua:549-557) lay five
@@ -376,17 +383,17 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
 /// (`FiveWideSubGrowthFormation` reused at 656, `SevenWideSubAttackFormation` 3 rows
 /// of 7 at 659, `NineWideSubAttackFormation` 4 rows of 9 at 662-665). Widths feed the
 /// same `BlockBuilderLand` slot geometry, anchor, facing and retry path as land.
-[[nodiscard]] std::size_t subFormationWidth(std::size_t hulls, bool attack) noexcept {
+[[nodiscard]] std::size_t subFormationWidth(std::size_t counter, bool attack) noexcept {
     if (attack) {
-        if (hulls <= 10) {
+        if (counter <= 10) {
             return 5;
         }
-        if (hulls <= 25) {
+        if (counter <= 25) {
             return 7;
         }
         return 9;
     }
-    if (hulls <= 9) {
+    if (counter <= 9) {
         return 3;
     }
     return 5;
@@ -945,8 +952,9 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     const Fx seaSpacing = Fx::fromRatio(3, 2);
     const std::size_t landWidth = isAttackOrder ? attackFormationWidth(landMembers.size())
                                                 : growthFormationWidth(landMembers.size());
-    const std::size_t seaWidth = navalFormationWidth(seaMembers.size(), isAttackOrder);
-    const std::size_t subWidth = subFormationWidth(subMembers.size(), isAttackOrder);
+    const std::size_t counter = seaCounter(seaMembers.size(), subMembers.size());
+    const std::size_t seaWidth = navalFormationWidth(counter, isAttackOrder);
+    const std::size_t subWidth = subFormationWidth(counter, isAttackOrder);
     // The formation's facing. Retail carries it on the wire command as an orientation
     // quaternion (`C-151`, `CDecoder::DecodeCommandData` +0x3c..+0x48) that the engine
     // applies to the Lua `FormationPos` offsets — the script itself returns unrotated
