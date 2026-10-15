@@ -20,11 +20,34 @@ namespace {
 /// an instance table that records the four lifecycle hooks as fields. Both halves keep
 /// out of the engine-side metatable so a class hierarchy does not chain through them.
 constexpr const char* kBootstrap = R"lua(
+-- Class/State/ChangeState: the shipped `class.lua` object model in miniature
+-- (`C-318`, `mohodata/lua/system/class.lua`). Every task class is built with
+-- this `Class`; shipped states are `State { ... }` placeholders inside the
+-- class spec which materialize into real derived classes here, exactly where
+-- retail's `StateProxiesToClasses` runs at class creation. A state derives
+-- from its containing class (`setmetatable(state, {__index = class})`), so
+-- the instance keeps its fields across `ChangeState` while method lookup
+-- moves to the new state — including sibling states reached through the
+-- chained class. `OnExitState`/`OnEnterState` fire around the switch when
+-- present. Retail also kills the old `Main` thread and forks the new state's
+-- `Main` here; this host has no threads (`ForkThread`/`WaitFor` live in the
+-- FAF sandbox), so `Main` is ignored.
+local ClassTag = {}
 function Class(...)
     local bases = {...}
     return function(fields)
         fields = fields or {}
+        for key, value in pairs(fields) do
+            if type(value) == 'table' and value[ClassTag] == 'state' then
+                local state = { __state = key }
+                state.__index = state
+                for k, v in pairs(value.spec) do state[k] = v end
+                setmetatable(state, { __index = fields })
+                fields[key] = state
+            end
+        end
         setmetatable(fields, {
+            [ClassTag] = 'class',
             __index = function(_, key)
                 for _, base in ipairs(bases) do
                     local v = base and base[key]
@@ -41,7 +64,24 @@ function Class(...)
         return fields
     end
 end
-State = Class
+function State(spec)
+    return { [ClassTag] = 'state', spec = spec or {} }
+end
+function ChangeState(obj, newstate)
+    if type(newstate) == 'string' then newstate = obj[newstate] end
+    assert(type(newstate) == 'table' and newstate.__state ~= nil,
+        'ChangeState: target is not a State')
+    local already = getmetatable(obj)
+    if already ~= nil and already.__index == newstate then return end
+    local onExit = obj.OnExitState
+    if onExit then onExit(obj) end
+    setmetatable(obj, { __index = newstate })
+    local onEnter = obj.OnEnterState
+    if onEnter then onEnter(obj) end
+end
+
+
+
 
 local modules = {}
 local function importModule(path)
@@ -79,7 +119,9 @@ end
 
 -- The host instantiates one class table per (unit, task); the constructor invokes the
 -- two creation hooks (OnPreCreate, OnCreate) and stores the lifecycle functions so the
--- dispatcher can invoke them per beat.
+-- dispatcher can invoke them per beat. `tick` is the no-state fallback only:
+-- per-beat dispatch re-reads the instance's live `TaskTick`, which is the current
+-- state's after `ChangeState` (`C-318`).
 function __rm_construct(klass)
     local self = klass()
     rawset(self, '__rm_hooks',
@@ -454,16 +496,22 @@ std::int32_t ScriptHost::taskTick(rm::sim::UnitId unit, std::string_view task,
         lua_pop(lua, 1);
         return static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Done);
     }
-    // Prefer `__rm_hooks.tick` (set by `__rm_construct`) over the per-instance raw field;
-    // the per-instance raw field hits the metatable's `__index`, which can produce a
-    // table value instead of a function value when the class table holds the function.
-    lua_getfield(lua, -1, "__rm_hooks");
-    if (lua_istable(lua, -1)) {
-        lua_getfield(lua, -1, "tick");
-        lua_remove(lua, -2);  // drop __rm_hooks; leave tick
-    } else {
+    // The instance's `TaskTick` resolves through its metatable — the class, or
+    // the current state after `ChangeState` swaps it (`C-318`). A cached copy
+    // would freeze dispatch on the creation-time state, so every beat re-reads
+    // the live field. `__rm_hooks.tick` is only the no-state fallback (kept
+    // for instances built before states existed).
+    lua_getfield(lua, -1, "TaskTick");
+    if (!lua_isfunction(lua, -1)) {
         lua_pop(lua, 1);
-        lua_getfield(lua, -1, "TaskTick");
+        lua_getfield(lua, -1, "__rm_hooks");
+        if (lua_istable(lua, -1)) {
+            lua_getfield(lua, -1, "tick");
+            lua_remove(lua, -2);  // drop __rm_hooks; leave tick
+        } else {
+            lua_pop(lua, 1);
+            lua_getfield(lua, -1, "TaskTick");
+        }
     }
     if (!lua_isfunction(lua, -1)) {
         // No TaskTick declared: by retail's contract the default is "repeat next beat",

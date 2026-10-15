@@ -1229,10 +1229,11 @@ TEST_CASE("C-218 (2): an AltFootprint is parsed into its own struct and never me
     CHECK(def->altFootprint.occupancyCaps == 3);
 
     // And critically, the REGULAR footprint is NOT overwritten. The two are siblings,
-    // not a merge; this is what makes the runtime toggle work.
+    // not a merge; this is what makes the runtime toggle work. Absence on the regular
+    // footprint now derives `layerTable[None] = 0` per `C-219` (not the old -1).
     CHECK(def->footprintSquaresX == 5);
     CHECK(def->footprintSquaresZ == 5);
-    CHECK(def->occupancyCaps == -1);  // absent on the regular footprint
+    CHECK(def->occupancyCaps == 0);
 }
 
 TEST_CASE("C-218 (2): a blueprint with no AltFootprint keeps `hasAltFootprint` false") {
@@ -1252,12 +1253,12 @@ TEST_CASE("C-218 (2): a blueprint with no AltFootprint keeps `hasAltFootprint` f
     CHECK(def->altFootprint.occupancyCaps == -1);
 }
 
-TEST_CASE("C-218 (4): OccupancyCaps is read verbatim and a 0 is distinguishable from absent") {
+TEST_CASE("C-218 (4): an authored OccupancyCaps wins and an explicit 0 stays 0") {
     // `C-218`'s fourth explicit-0-vs-absent site: `Footprint.OccupancyCaps` is a layer mask
     // (entity schema `EntityBlueprint.lua:87`); a rock props file ships `OccupancyCaps = 3`
-    // (Land|Air), a crystal ships `= 0` ("occupies no layer"), and a structure that states
-    // no `Footprint` block keeps the absent sentinel. The `-1` sentinel is the only thing
-    // that lets a downstream caller tell "explicitly nowhere" from "I forgot to write it".
+    // (Land|Air), a crystal ships `= 0` ("occupies no layer"). Absence now derives
+    // `layerTable[MotionType]` per `C-219` (pinned in the next test); this test pins that
+    // an authored key always wins, so an explicit zero is never overwritten by derivation.
     const Blueprint propLike{"XXB0601_unit.bp", R"(
         UnitBlueprint {
             Footprint = { SizeX = 1, SizeZ = 1, OccupancyCaps = 3 },
@@ -1284,7 +1285,9 @@ TEST_CASE("C-218 (4): OccupancyCaps is read verbatim and a 0 is distinguishable 
     CHECK(explicitZero->occupancyCaps == 0);
     CHECK(explicitZero->occupancyCaps != -1);  // explicit zero, NOT the absent sentinel
 
-    // And absence stays absent, never silently defaulted to something else.
+    // Absence derives `layerTable[MotionType]` per `C-219` — here `None` → 0, the same
+    // integer answer retail's pass writes; only an authored key (including an explicit
+    // zero) bypasses the derivation.
     const Blueprint withNoFootprint{"XXB0603_unit.bp", R"(
         UnitBlueprint {
             Physics = { MotionType = 'RULEUMT_None' },
@@ -1293,7 +1296,7 @@ TEST_CASE("C-218 (4): OccupancyCaps is read verbatim and a 0 is distinguishable 
     )"};
     const auto absent = rm::unitbp::loadFile(withNoFootprint.path());
     REQUIRE(absent.has_value());
-    CHECK(absent->occupancyCaps == -1);
+    CHECK(absent->occupancyCaps == 0);
 }
 
 TEST_CASE("C-218 (6): AttackElevation falls back to Elevation when the file states neither") {
@@ -1533,4 +1536,52 @@ TEST_CASE("C-218 (3): a stated motion class with MaxSpeed 0 reads as immobile") 
     REQUIRE(gone.has_value());
     CHECK(gone->motion == MotionType::None);
     CHECK_FALSE(gone->isMobile());
+}
+
+TEST_CASE("C-219: absent OccupancyCaps derives from the motion-class layer table",
+          "[unitbp][occupancy]") {
+    // `C-219` (`fa-exe-analysis-plan.md`, `ComputeDerivedQuantities` at `0x00525D60`,
+    // table at `0x00FB8B9C`): `Footprint.OccupancyCaps = layerTable[MotionType]` — a
+    // unit's pathable layer set is derived, not authored, which is why 0 of the 568
+    // shipped blueprints state `OccupancyCaps`. An authored value still wins; absence
+    // derives from the (already MaxSpeed-gated) motion class. Currently fails: absence
+    // reads as the -1 sentinel instead of the derived mask.
+    struct Row {
+        const char* motion;
+        int wantCaps;
+    };
+    // Bit semantics per `C-219`/`C-202`: Land 1, Seabed 2, Sub 4, Water 8, Air 0x10.
+    const Row rows[] = {
+        {"RULEUMT_None", 0x0},
+        {"RULEUMT_Land", 0x1},
+        {"RULEUMT_Air", 0x10},
+        {"RULEUMT_Water", 0x8},
+        {"RULEUMT_Hover", 0x9},               // Land|Water
+        {"RULEUMT_Amphibious", 0x3},          // Land|Seabed
+        {"RULEUMT_AmphibiousFloating", 0x9},  // Land|Water
+        {"RULEUMT_SurfacingSub", 0xC},        // Sub|Water
+    };
+    for (const Row& row : rows) {
+        const std::string name =
+            std::string("XXC219") + row.motion + "_unit.bp";
+        const std::string source =
+            "UnitBlueprint { Physics = { MotionType = '" + std::string(row.motion) +
+            "', MaxSpeed = 1 }, SizeX = 1, SizeZ = 1, }";
+        const Blueprint bp{name, source};
+        const auto def = rm::unitbp::loadFile(bp.path());
+        REQUIRE(def.has_value());
+        CHECK(def->occupancyCaps == row.wantCaps);
+    }
+    // An authored mask still wins over the derived one, including an explicit zero
+    // (the crystal case from the `C-218 (4)` test: "occupies no layer").
+    const Blueprint stated{"XXC219stated_unit.bp", R"(
+        UnitBlueprint {
+            Footprint = { SizeX = 1, SizeZ = 1, OccupancyCaps = 3 },
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto kept = rm::unitbp::loadFile(stated.path());
+    REQUIRE(kept.has_value());
+    CHECK(kept->occupancyCaps == 3);
 }

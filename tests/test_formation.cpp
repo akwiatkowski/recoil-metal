@@ -66,13 +66,14 @@ struct Fixture {
         hull.motion = rm::unitdef::MotionType::Water;
         ship = roster.addType(hull);
     }
+    std::uint32_t sequence = 0;
 
     [[nodiscard]] rm::sim::ApplyCommandResult issueMove(
         const std::vector<UnitId>& units, float x, float z,
         CommandKind kind = CommandKind::Move) {
         const CommandIssue issue{.tick = 0,
                                  .source = 0,
-                                 .id = rm::commandId(0, 0),
+                                 .id = rm::commandId(0, ++sequence),
                                  .player = 0,
                                  .kind = kind,
                                  .units = units,
@@ -353,6 +354,50 @@ TEST_CASE("a grouped sub move sails its own growth blocks", "[formation]") {
     }
     CHECK(front == 3);
     CHECK(back == 1);
+}
+
+TEST_CASE("a grouped air move fans out instead of piling onto the click",
+          "[formation]") {
+    // Retail `GrowthFormation` (ART-S007 lua/formations.lua:676-728) routes air
+    // units through `BlockBuilderAir`'s staggered chevron, not the land block:
+    // a four-bomber group move holds nobody on the click itself, fanning out
+    // around the anchor instead of piling onto it. `AttackFormation`
+    // (formations.lua:669-671) lays the same chevron, so an air attack-move
+    // fans out the same way.
+    Fixture fix;
+    rm::unitdef::UnitDef bomberDef;
+    bomberDef.name = "test_bomber";
+    bomberDef.categories = {"AIR", "BOMBER", "TECH1"};
+    bomberDef.motion = rm::unitdef::MotionType::Air;
+    const rm::UnitTypeIndex bomber = fix.roster.addType(bomberDef);
+    for (const CommandKind kind : {CommandKind::Move, CommandKind::AttackMove}) {
+        // Fresh hulls per leg: a plain order clears the queue, so reusing the
+        // group would cancel the first leg's orders against the second's.
+        std::vector<UnitId> group;
+        for (int i = 0; i < 4; ++i) {
+            const UnitId id = fix.roster.add(bomber, 200.0f,
+                                             200.0f + 10.0f * static_cast<float>(i),
+                                             0, 500.0f);
+            fix.roster.store.motion()[id.index].airborne = true;
+            group.push_back(id);
+        }
+        const rm::sim::ApplyCommandResult result = fix.issueMove(group, 900.0f, 215.0f, kind);
+        REQUIRE(result.accepted == group);
+
+        std::size_t onAnchor = 0;
+        for (const UnitId member : group) {
+            const auto& entries = fix.roster.store.orders()[member.index].entries();
+            REQUIRE(entries.size() == 1);
+            CHECK(entries.front().kind() == kind);
+            const float x = rm::test::asFloat(entries.front().targetX());
+            const float z = rm::test::asFloat(entries.front().targetZ());
+            if (x == Catch::Approx(900.0f).margin(0.01f)
+                && z == Catch::Approx(215.0f).margin(0.01f)) {
+                ++onAnchor;
+            }
+        }
+        CHECK(onAnchor == 0);
+    }
 }
 
 TEST_CASE("a grouped sub attack-move sails its own attack blocks", "[formation]") {

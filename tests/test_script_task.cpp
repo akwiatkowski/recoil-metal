@@ -469,6 +469,69 @@ TEST_CASE("C-318: a registered ScriptModule/ScriptClass fires OnPreCreate, OnCre
     std::filesystem::remove_all(scratch);
 }
 
+TEST_CASE("C-318: ScriptHost runs a shipped-shape state task through ChangeState") {
+    // `C-318` state-machine half (`mohodata/lua/system/class.lua:327`): shipped
+    // tasks are state machines — `EnhanceTask` opens in `Stopping` and reaches
+    // `Enhancing` through `ChangeState(self, self.Enhancing)`. The host used to
+    // alias `State = Class` with no `ChangeState` at all, so a task in the
+    // shipped shape died inside `OnCreate` and the queue retired at once.
+    // `ChangeState` must switch dispatch to the new state while instance fields
+    // survive the switch: the `Stopping` beat arms the instance and waits, and
+    // only the `Enhancing` beat — reading that same field — may retire the
+    // queue. Either half broken leaves the queue standing after two beats.
+    rm::vfs::Vfs content;
+    rm::app::ScriptHost host{content};
+    host.registerTask("C318States", rm::app::ScriptTaskRegistration{
+        .source =
+            "TypeClass = Class({}) {\n"
+            "  OnCreate = function(self) ChangeState(self, self.Stopping) end,\n"
+            "  Stopping = State {\n"
+            "    TaskTick = function(self)\n"
+            "      self.armed = true\n"
+            "      ChangeState(self, self.Enhancing)\n"
+            "      return 1\n"
+            "    end,\n"
+            "  },\n"
+            "  Enhancing = State {\n"
+            "    TaskTick = function(self)\n"
+            "      if self.armed ~= true then return 1 end\n"
+            "      return -1\n"
+            "    end,\n"
+            "  },\n"
+            "}\n",
+    });
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c318_states";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "C318States"},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    REQUIRE(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                   nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                   nullptr, &host) == 1);
+    CHECK(roster.store.orders()[unit.index].active() != nullptr);
+    CHECK(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                 nullptr, &host) == 0);
+    CHECK(roster.store.orders()[unit.index].empty());
+    CHECK(host.errors().empty());
+}
+
 TEST_CASE("C-311: ScriptHost concatenates the base task with its hook copies") {
     // `C-311` (`SCR_LuaDoFileConcat`, `0x004d4de0`): every load collects the
     // base file plus every registered hookdir's copy of the same path and

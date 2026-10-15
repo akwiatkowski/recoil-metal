@@ -1130,8 +1130,77 @@ TEST_CASE("the ArmyPool is a real corpus Platoon whose plan runs as a thread",
         assert(#pool:GetPlatoonUnits() == 1, 'a disbanded platoon returns its units')
     )"));
     INFO(ai.lastError());
+    REQUIRE(ok);
 }
 
+// Platoon order verbs (`CPlatoon:Stop 0x007363c0`, `MoveToLocation 0x00736b20`,
+// `AggressiveMoveToLocation 0x00736e20`): `HuntAI` (platoon.lua:453-471) calls
+// them every pass, but they are counted stubs returning nil — the order never
+// reaches the sim. The verbs queue one pending order per live platoon unit,
+// drained as Move/Stop decisions like `__rm_faf_set_intel` (`C-283`).
+TEST_CASE("CPlatoon order verbs queue pending orders the port drains",
+          "[faf][ai][platoon-orders]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_type('UEL0201', { 'MOBILE', 'LAND', 'TECH1', 'DIRECTFIRE' })
+        local mk = function(idx)
+            local u = { bp = 'UEL0201', h = __rm_faf_handle(idx, 1),
+                        x = 100, z = 100, __cats = __rm_faf.cats.UEL0201 }
+            setmetatable(u, __rm_faf.unitMeta)
+            return u
+        end
+        local tank, wing = mk(7), mk(8)
+        __rm_faf_boot(0, { faction = 1, startX = 100, startZ = 100,
+            sizeX = 512, sizeZ = 512, armies = 2, base = 'NormalMain', markers = {} })
+        local brain = __rm_faf.brains[0]
+        local platoon = brain:MakePlatoon('Raiders', 'none')
+        brain:AssignUnitsToPlatoon(platoon, { tank, wing }, 'Attack', 'GrowthFormation')
+        -- `Stop` clears the queue: one pending stop per live unit.
+        platoon:Stop()
+        local pending = __rm_faf_platoon_orders()
+        assert(#pending == 2, 'Stop queues one order per live unit, got ' .. #pending)
+        assert(pending[1].kind == 'stop' and pending[2].kind == 'stop')
+        -- `MoveToLocation(dest, false)` replaces: one pending move per unit at
+        -- the destination in elmos (Lua tables are `{x, y, z}`).
+        platoon:MoveToLocation({ 200, 0, 300 }, false)
+        pending = __rm_faf_platoon_orders()
+        assert(#pending == 2, 'a move replaces the stop, got ' .. #pending)
+        assert(pending[1].kind == 'move' and pending[1].x == 200 and pending[1].z == 300)
+        -- `MoveToLocation(dest, true)` queues behind: the earlier move survives.
+        platoon:MoveToLocation({ 400, 0, 500 }, true)
+        pending = __rm_faf_platoon_orders()
+        assert(#pending == 4, 'a queued move appends, got ' .. #pending)
+        assert(pending[3].kind == 'move' and pending[3].x == 400 and pending[3].queued)
+        -- `AggressiveMoveToLocation` is the attack-move sibling: same queue,
+        -- one pending order per unit.
+        platoon:AggressiveMoveToLocation({ 600, 0, 700 })
+        pending = __rm_faf_platoon_orders()
+        assert(#pending == 2, 'an attack-move replaces the queue, got ' .. #pending)
+        assert(pending[1].kind == 'attackmove')
+        -- Dead units drop out on read, like `platoonUnits`.
+        tank.Dead = true
+        assert(#__rm_faf_platoon_orders() == 1, 'a dead unit leaves no pending order')
+        tank.Dead = nil
+        brain.snap = { units = { tank, wing }, occupied = {}, underway = {},
+                       mass = 400, energy = 1500, massStorage = 650, energyStorage = 4000,
+                       massIncome = 0.2, energyIncome = 10,
+                       massRequested = 0, energyRequested = 0,
+                       massUsage = 0, energyUsage = 0,
+                       structuresUnderway = 0, mobileUnderway = 0, tick = 99 }
+        brain.builders = {}
+        local decisions = __rm_faf_decide(0, brain.snap)
+        assert(#decisions == 2, 'the attack-move drains as two decisions, got ' .. #decisions)
+        assert(decisions[1].kind == 'attackmove' and decisions[1].builder == tank.h)
+        assert(#__rm_faf_platoon_orders() == 0, 'the drain consumes the queue')
+        assert(#__rm_faf_decide(0, brain.snap) == 0, 'a silent platoon stays silent')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
 TEST_CASE("FAF factory upgrades reserve production until the current product finishes",
           "[faf][ai][factory-upgrade]") {
     const auto root = corpusRoot();

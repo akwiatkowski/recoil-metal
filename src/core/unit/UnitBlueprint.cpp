@@ -631,16 +631,21 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     if (footprint != nullptr) {
         def.minWaterDepthElmos =
             numberOr(*footprint, "MinWaterDepth", 0.0f) * scmap::kElmosPerOgrid;
-        // `C-218`: `Footprint.OccupancyCaps` (entity schema `EntityBlueprint.lua:87`).
-        // A layer mask retail's `ComputeDerivedQuantities` would overwrite its derived cap with
-        // when the file states one. The prop corpus sets `OccupancyCaps = 3`
-        // (Land | Air) on rocks and 0 on crystals that occupy nothing at all — a 0
-        // here is a "no layer" answer, NOT a missing key. The `-1` sentinel marks the
-        // absent case so a content-driven sim can distinguish "no idea" from
-        // "explicitly nowhere".
+        // `C-219` (`ComputeDerivedQuantities` at `0x00525D60`, table at `0x00FB8B9C`):
+        // `Footprint.OccupancyCaps = layerTable[MotionType]` — a unit's pathable
+        // layer set is derived, not authored (0 of the 568 shipped units state the
+        // key). An authored value still wins, including an explicit zero (crystal:
+        // occupies no layer); only absence derives, from the MaxSpeed-gated class.
+        // Bits per `C-202` LAYER semantics: Land 1, Seabed 2, Sub 4, Water 8, Air 0x10.
         if (const std::optional<double> caps = footprint->numberAt("OccupancyCaps")) {
             def.occupancyCaps = static_cast<int>(*caps);
+        } else {
+            def.occupancyCaps = unitdef::occupancyCapsFor(def.motion);
         }
+    } else {
+        // `C-219`: no `Footprint` block at all is the same absence — retail's pass
+        // still writes `layerTable[MotionType]`.
+        def.occupancyCaps = unitdef::occupancyCapsFor(def.motion);
     }
     // `C-218`: `AltFootprint` (entity schema `EntityBlueprint.lua:5`,
     // `Sim/Unit.lua:128-131`, `Unit:ForceAltFootprint(state)`). Same shape as the

@@ -563,6 +563,52 @@ moho.platoon_methods.Destroy = function(self)
     self:OnDestroy()
 end
 
+-- Platoon order verbs: `CPlatoon:Stop` (`0x007363c0`), `MoveToLocation`
+-- (`0x00736b20`), `AggressiveMoveToLocation` (`0x00736e20`). Retail issues
+-- one native order per live squad unit — `HuntAI` (platoon.lua:453-471)
+-- stops then attack-moves every pass, and the multi-waypoint loops
+-- (platoon.lua:700-707, 1020-1026) queue each leg behind the last. The
+-- verbs below queue the same per-unit orders on `__pendingOrders`; the
+-- port drains them as Move/Stop decisions at the pass boundary, like
+-- `__rm_faf_set_intel` (`C-283`). A non-queued order replaces the pending
+-- queue first (retail's clear-then-issue); a queued one appends.
+-- Destinations are Lua `{x, y, z}` triples in elmos — `GetPosition` and
+-- `AIUtils.RandomLocation` both build them that way. Dead units leave no
+-- order, like `liveSquad` on read.
+local function platoonIssue(self, entries, queued)
+    if not queued then self.__pendingOrders = {} end
+    local pending = self.__pendingOrders
+    if pending == nil then pending = {} self.__pendingOrders = pending end
+    for _, u in ipairs(platoonUnits(self)) do
+        for _, e in ipairs(entries) do
+            pending[#pending + 1] = { kind = e.kind, h = u.h,
+                                      x = e.x, z = e.z, queued = queued == true }
+        end
+    end
+end
+moho.platoon_methods.Stop = function(self) platoonIssue(self, {{ kind = 'stop' }}) end
+moho.platoon_methods.MoveToLocation = function(self, dest, queued)
+    platoonIssue(self, {{ kind = 'move', x = dest[1], z = dest[3] }}, queued)
+end
+moho.platoon_methods.AggressiveMoveToLocation = function(self, dest, queued)
+    platoonIssue(self, {{ kind = 'attackmove', x = dest[1], z = dest[3] }}, queued)
+end
+function __rm_faf_platoon_orders()
+    local out = {}
+    -- `__platoons` is a set (platoons are keys, values are `true`), so the
+    -- loop takes keys, not values.
+    for platoon in pairs(__rm_faf.brains[0].__platoons or {}) do
+        for _, e in ipairs(platoon.__pendingOrders or {}) do
+            local live = false
+            for _, u in ipairs(platoonUnits(platoon)) do
+                if u.h == e.h then live = true break end
+            end
+            if live then out[#out + 1] = e end
+        end
+    end
+    return out
+end
+
 -- `FormPlatoon`/`CanFormPlatoon` (`0x593c10` family): gather matching pool
 -- units per template squad row {category, min, max, squadName, formation}.
 -- `count` scales the authored minimums; the radius is authored ogrids.
@@ -2498,6 +2544,40 @@ function __rm_faf_decide(army, snap)
         return false
     end)
 
+    -- `Stop`/`MoveToLocation`/`AggressiveMoveToLocation` above — becomes one
+    -- decision per unit, in platoon-serial order, before the builder pass
+    -- returns. The queue clears on drain, like the native order queue
+    -- consuming an issue: a plan that wants the platoon to keep moving
+    -- re-issues every pass (`HuntAI` does), and a silent platoon stays
+    -- silent. Dead units were already filtered at queue time on read.
+    do
+        local serials = {}
+        for platoon in pairs(brain.__platoons or {}) do
+            serials[#serials + 1] = platoon
+        end
+        table.sort(serials, function(a, b)
+            return (a.__serial or 0) < (b.__serial or 0)
+        end)
+        for _, platoon in ipairs(serials) do
+            local live = {}
+            for _, u in ipairs(platoonUnits(platoon)) do live[u.h] = true end
+            for _, e in ipairs(platoon.__pendingOrders or {}) do
+                if live[e.h] then
+                    if e.kind == 'stop' then
+                        decisions[#decisions + 1] = { kind = 'stop', builder = e.h }
+                    elseif e.kind == 'move' then
+                        decisions[#decisions + 1] = { kind = 'move', builder = e.h,
+                            x = e.x, z = e.z, queued = e.queued }
+                    elseif e.kind == 'attackmove' then
+                        decisions[#decisions + 1] = { kind = 'attackmove', builder = e.h,
+                            x = e.x, z = e.z, queued = e.queued }
+                    end
+                end
+            end
+            platoon.__pendingOrders = {}
+        end
+    end
+
     return decisions
 end
 
@@ -4237,6 +4317,31 @@ void FafOpponent::convertDecision(lua_State* lua) {
     };
 
     const std::string kind = field("kind");
+    // Platoon verbs drain here: `attackmove` is the same port Move issued as
+    // an AttackMove command — the sim's walk-at-a-place with teeth
+    // (`CommandKind::AttackMove`), distinct from the plain `Move` the
+    // builder pass emits. Queued legs append behind the unit's orders.
+    if (kind == "attackmove") {
+        const auto unit = handleAt(0);
+        if (!unit) return;
+        lua_getfield(lua, -1, "queued");
+        const bool queued = lua_toboolean(lua, -1) != 0;
+        lua_getfield(lua, -2, "x");
+        lua_getfield(lua, -3, "z");
+        const float x = static_cast<float>(lua_tonumber(lua, -2));
+        const float z = static_cast<float>(lua_tonumber(lua, -1));
+        const bool valid = lua_isnumber(lua, -2) && lua_isnumber(lua, -1)
+            && std::isfinite(x) && std::isfinite(z) && x >= 0 && z >= 0
+            && x <= static_cast<float>(world_->field.squaresX * rm::kSquareSize)
+            && z <= static_cast<float>(world_->field.squaresZ * rm::kSquareSize);
+        lua_pop(lua, 3);
+        if (valid) {
+            decisions_.push_back({.kind = Decision::Kind::Move, .unit = *unit,
+                .toX = rm::sim::fxFromFloat(x), .toZ = rm::sim::fxFromFloat(z),
+                .queued = queued, .attackMove = true});
+        }
+        return;
+    }
 
     if (kind=="move" || kind=="stop" || kind=="guard") {
         const auto unit=handleAt(0);

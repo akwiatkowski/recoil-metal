@@ -124,6 +124,23 @@ std::optional<MotionType> motionTypeFromName(std::string_view name) noexcept {
     return std::nullopt;
 }
 
+int occupancyCapsFor(MotionType motion) noexcept {
+    // `C-219`: retail's `layerTable[MotionType]` read at `0x00FB8B9C` =
+    // `00 01 10 08 01 0c 03 09 09 00`. Layer bits per `C-202`: Land 1, Seabed 2,
+    // Sub 4, Water 8, Air 0x10 — an integer mask, like the file states it.
+    switch (motion) {
+        case MotionType::None: return 0x0;
+        case MotionType::Land: return 0x1;
+        case MotionType::Air: return 0x10;
+        case MotionType::Water: return 0x8;
+        case MotionType::Hover: return 0x9;               // Land|Water
+        case MotionType::Amphibious: return 0x3;          // Land|Seabed
+        case MotionType::AmphibiousFloating: return 0x9;  // Land|Water
+        case MotionType::SurfacingSub: return 0xC;        // Sub|Water
+    }
+    return 0x0;  // an enum value from outside the set occupies no layer
+}
+
 bool travelsOnGround(MotionType motion) noexcept {
     switch (motion) {
         case MotionType::Land:

@@ -63,6 +63,14 @@ enum class MotionType : std::uint8_t {
 /// approximated.
 [[nodiscard]] bool travelsOnGround(MotionType motion) noexcept;
 
+/// `C-219` (`ComputeDerivedQuantities` at `0x00525D60`, table at `0x00FB8B9C`):
+/// `Footprint.OccupancyCaps = layerTable[MotionType]` — a unit's pathable layer set
+/// is derived from its motion class, not authored (0 of the 568 shipped units state
+/// the key). Bits per `C-202` LAYER semantics: Land 1, Seabed 2, Sub 4, Water 8,
+/// Air 0x10 (`None 0, Land 1, Air 0x10, Water 8, Hover 9, Amphibious 3,
+/// AmphibiousFloating 9, SurfacingSub 0xC`; Biped and Special never ship).
+[[nodiscard]] int occupancyCapsFor(MotionType motion) noexcept;
+
 enum class ShieldShape {
     Sphere,
     Box,
@@ -277,13 +285,14 @@ struct UnitDef {
     /// the two when building a surface-water MoveDef. Zero means "any water at all".
     float minWaterDepthElmos = 0.0f;
 
-    /// `C-218`: `Footprint.OccupancyCaps` (engine/Core/Blueprints/EntityBlueprint.lua:87)
-    /// — a layer mask retail's `ComputeDerivedQuantities` overwrites a derived cap with
-    /// when the file states one. Prop blueprints ship `OccupancyCaps = 3` (Land|Air);
-    /// a structure that states `0` says "no layer at all" rather than "I forgot".
-    /// Recorded verbatim; -1 is the absent key, the only place `-1` is the answer the
-    /// parser owes its caller instead of a coercion. Other shape fields follow their
-    /// respective derivations; this one is left as-authored.
+    /// `C-218`/`C-219`: `Footprint.OccupancyCaps` (entity schema
+    /// `EntityBlueprint.lua:87`) — a layer mask retail derives as
+    /// `layerTable[MotionType]` in `ComputeDerivedQuantities` when the file states
+    /// none. Prop blueprints ship `OccupancyCaps = 3` (Land|Air); a structure that
+    /// states `0` says "no layer at all" rather than "I forgot". Recorded verbatim
+    /// when authored (including an explicit zero); otherwise `occupancyCapsFor`
+    /// of the MaxSpeed-gated motion class. The `-1` default survives only until the
+    /// loader runs — no loaded blueprint keeps it.
     int occupancyCaps = -1;
 
     /// `C-218`: `AltFootprint` (engine/Core/Blueprints/EntityBlueprint.lua:5,

@@ -851,6 +851,22 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     const bool isAttackOrder = issue.kind == CommandKind::AttackMove;
     bool useGrowthFormation = (issue.kind == CommandKind::Move || isAttackOrder)
                               && canonical.size() > 1;
+    // Retail flies air groups through `GrowthFormation` too (ART-S007
+    // lua/formations.lua:676-728): `BlockBuilderAir` lays a staggered chevron
+    // (`StaggeredChevronBlock`, formations.lua:371-375) with its own
+    // `GetChevronPosition` offsets (formations.lua:1013-1030), not the land
+    // block — so airborne members join the formation set and fan out below.
+    std::vector<UnitId> airMembers;
+    for (const UnitId unit : canonical) {
+        if (!useGrowthFormation) {
+            break;
+        }
+        if (!store.alive(unit) || issuer == nullptr || !authorised(*issuer, store, unit, armies)
+            || !store.motion()[unit.index].airborne) {
+            continue;
+        }
+        airMembers.push_back(unit);
+    }
     for (const UnitId unit : canonical) {
         if (!useGrowthFormation) {
             break;
@@ -862,7 +878,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         }
         formationMembers.push_back(unit);
     }
-    useGrowthFormation = useGrowthFormation && formationMembers.size() > 1;
+    useGrowthFormation = useGrowthFormation
+                         && (formationMembers.size() + airMembers.size()) > 1;
     const auto formationClass = [&](UnitId unit) {
         const unitdef::UnitDef* def = catalog.def(store.typeAt(unit.index));
         if (def == nullptr) {
@@ -1348,27 +1365,69 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             // per step behind the anchor (formations.lua:896). A collision diameter is the
             // existing local-target spacing, so its half supplies the even-row half
             // positions; successive rows are one diameter behind the anchor.
-            const std::size_t formationRank = static_cast<std::size_t>(
-                std::ranges::find(formationMembers, unit) - formationMembers.begin());
-            const std::size_t column = formationRank % formationWidth;
-            const std::size_t row = formationRank / formationWidth;
-            const Fx radius = store.motion()[unit.index].radiusElmos;
-            const Fx diameter = Fx::fromRaw(saturate(FxWide{radius.raw()} * 2));
-            if (formationWidth % 2 == 0) {
-                const FxWide halfDiameterOffsets = column % 2 == 0
-                                                       ? -static_cast<FxWide>(column + 1)
-                                                       : static_cast<FxWide>(column);
-                localX = Fx::fromRaw(
-                    saturate(FxWide{radius.raw()} * halfDiameterOffsets));
+            const auto airRank = std::ranges::find(airMembers, unit);
+            const bool isAirMember = airRank != airMembers.end();
+            // Both formation scripts lay the same chevron for air groups:
+            // `AttackFormation` (formations.lua:669-671) and `GrowthFormation`
+            // (formations.lua:724-726) each close with `BlockBuilderAir`
+            // over the same `StaggeredChevronBlock`.
+            if (isAirMember) {
+                // Retail `BlockBuilderAir` chevron (ART-S007 lua/formations.lua:1013-1030):
+                // `GetChevronPosition` trails each slot one 0.375-elmo step per
+                // chevron rank behind the anchor (`yPos = -offset`, so the leader
+                // keeps the anchor line) and fans it sideways the same amount,
+                // alternating flanks (`xPos = +/-offset`); the two-row
+                // `StaggeredChevronBlock` (formations.lua:371-375) adds a
+                // per-column block shift (`blockOff`) plus its -2/-1 row
+                // stagger (`firstBlockOffset`). Spacing doubles to 2 elmos when
+                // an experimental flies along (`BlockBuilderAir`, formations.lua:958).
+                const bool hasExperimental = std::ranges::any_of(airMembers, [&](UnitId member) {
+                    const unitdef::UnitDef* memberDef =
+                        catalog.def(store.typeAt(member.index));
+                    return memberDef != nullptr && memberDef->hasCategory("EXPERIMENTAL");
+                });
+                const std::size_t chevronRank = static_cast<std::size_t>(airRank - airMembers.begin());
+                // `BlockBuilderAir` numbers chevron positions from 1
+                // (formations.lua:943-1010: `chevronPos` starts at 1 and the
+                // `> chevronSize` reset fires before the first slot).
+                const std::int32_t chevronPos = static_cast<std::int32_t>(chevronRank % 5) + 1;
+                const std::int32_t column = static_cast<std::int32_t>(chevronRank % 3) + 1;
+                const Fx spacing = hasExperimental ? Fx::fromInt(2) : Fx::fromInt(1);
+                const Fx step = Fx::fromRatio(3, 8) * spacing;
+                const std::int32_t whole = chevronPos / 2;
+                Fx chevronX = step * whole;
+                if (chevronPos % 2 == 0) {
+                    chevronX = -chevronX;
+                }
+                const Fx chevronZ = -(step * whole);
+                const std::int32_t rowLen = 3;
+                const std::int32_t firstBlockOffset = (rowLen % 2 == 1) ? -1 : -2;
+                const std::int32_t blockOff = (column % 2 == 1) ? -(column / 2) * 2 : (column / 2) * 2;
+                localX = chevronX + spacing * (blockOff + firstBlockOffset);
+                localZ = chevronZ;
             } else {
-                const FxWide diameterOffsets = column % 2 == 0
-                                                   ? -static_cast<FxWide>(column / 2)
-                                                   : static_cast<FxWide>((column + 1) / 2);
-                localX = Fx::fromRaw(
-                    saturate(FxWide{diameter.raw()} * diameterOffsets));
+                const std::size_t formationRank = static_cast<std::size_t>(
+                    std::ranges::find(formationMembers, unit) - formationMembers.begin());
+                const std::size_t column = formationRank % formationWidth;
+                const std::size_t row = formationRank / formationWidth;
+                const Fx radius = store.motion()[unit.index].radiusElmos;
+                const Fx diameter = Fx::fromRaw(saturate(FxWide{radius.raw()} * 2));
+                if (formationWidth % 2 == 0) {
+                    const FxWide halfDiameterOffsets = column % 2 == 0
+                                                           ? -static_cast<FxWide>(column + 1)
+                                                           : static_cast<FxWide>(column);
+                    localX = Fx::fromRaw(
+                        saturate(FxWide{radius.raw()} * halfDiameterOffsets));
+                } else {
+                    const FxWide diameterOffsets = column % 2 == 0
+                                                       ? -static_cast<FxWide>(column / 2)
+                                                       : static_cast<FxWide>((column + 1) / 2);
+                    localX = Fx::fromRaw(
+                        saturate(FxWide{diameter.raw()} * diameterOffsets));
+                }
+                localZ = Fx::fromRaw(saturate(-FxWide{diameter.raw()}
+                                              * static_cast<FxWide>(row)));
             }
-            localZ = Fx::fromRaw(saturate(-FxWide{diameter.raw()}
-                                          * static_cast<FxWide>(row)));
         } else if ((issue.kind == CommandKind::Move || issue.kind == CommandKind::AttackMove)
                    && canonical.size() > 1 && !store.motion()[unit.index].airborne) {
             // Degenerate fan-out for a group that cannot fill a formation (fewer than two
