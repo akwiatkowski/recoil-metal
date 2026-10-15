@@ -1226,7 +1226,7 @@ TEST_CASE("C-218 (2): an AltFootprint is parsed into its own struct and never me
     // toggle its choice.
     const Blueprint named{"XXB0501_unit.bp", R"(
         UnitBlueprint {
-            Physics = { MotionType = 'RULEUMT_None' },
+            Physics = { MotionType = 'RULEUMT_None', AltMotionType = 'RULEUMT_Land' },
             Footprint = { SizeX = 5, SizeZ = 5 },
             AltFootprint = {
                 SizeX = 8, SizeZ = 6, MaxSlope = 0.25,
@@ -1269,6 +1269,39 @@ TEST_CASE("C-218 (2): a blueprint with no AltFootprint keeps `hasAltFootprint` f
     CHECK(def->altFootprint.squaresX == 0);
     CHECK(def->altFootprint.squaresZ == 0);
     CHECK(def->altFootprint.occupancyCaps == -1);
+}
+
+TEST_CASE("C-218 (2b): an AltFootprint without AltMotionType is overwritten by Footprint") {
+    // `C-218` site (2) (`0x00525D77`): the entire `AltFootprint` struct is
+    // overwritten by `Footprint` whenever `AltMotionType` is absent. The two
+    // footprints are NOT siblings — the alt table only survives when the file
+    // also states `Physics.AltMotionType`.
+    const Blueprint noAltMotion{"XXB0503_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_None' },
+            Footprint = { SizeX = 5, SizeZ = 5 },
+            AltFootprint = { SizeX = 8, SizeZ = 6 },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto overwritten = rm::unitbp::loadFile(noAltMotion.path());
+    REQUIRE(overwritten.has_value());
+    CHECK_FALSE(overwritten->hasAltFootprint);
+    CHECK(overwritten->altFootprint.squaresX == 5);
+    CHECK(overwritten->altFootprint.squaresZ == 5);
+    const Blueprint withAltMotion{"XXB0504_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_None', AltMotionType = 'RULEUMT_Land' },
+            Footprint = { SizeX = 5, SizeZ = 5 },
+            AltFootprint = { SizeX = 8, SizeZ = 6 },
+            SizeX = 1, SizeZ = 1,
+        }
+    )"};
+    const auto kept = rm::unitbp::loadFile(withAltMotion.path());
+    REQUIRE(kept.has_value());
+    CHECK(kept->hasAltFootprint);
+    CHECK(kept->altFootprint.squaresX == 8);
+    CHECK(kept->altFootprint.squaresZ == 6);
 }
 
 TEST_CASE("C-218 (4): an authored OccupancyCaps wins and an explicit 0 stays 0") {

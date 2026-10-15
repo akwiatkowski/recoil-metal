@@ -680,19 +680,31 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     }
     // `C-218`: `AltFootprint` (entity schema `EntityBlueprint.lua:5`,
     // `Sim/Unit.lua:128-131`, `Unit:ForceAltFootprint(state)`). Same shape as the
-    // regular `Footprint`. The five fields are read into their own struct, never
-    // merged into `Footprint`, because the swap is a runtime toggle and silently
-    // merging would deny the caller the choice. `hasAltFootprint` is the only
-    // signal anything cares about; the values are verbatim from the file.
+    // regular `Footprint`, kept in its own struct so the runtime toggle has a
+    // choice.
+    // `C-218` site (2) (`0x00525D77`): the entire `AltFootprint` struct is
+    // overwritten by `Footprint` whenever `Physics.AltMotionType` is absent.
+    // The alt table only survives when the file also states the alternate
+    // motion class; without it retail reads the regular footprint twice.
+    const bool hasAltMotion = physics->stringAt("AltMotionType").has_value();
     if (const lua::Value* altFootprint = parsed->path("AltFootprint")) {
-        def.hasAltFootprint = true;
-        def.altFootprint.squaresX = squaresFrom(numberOr(*altFootprint, "SizeX", 0.0f));
-        def.altFootprint.squaresZ = squaresFrom(numberOr(*altFootprint, "SizeZ", 0.0f));
-        def.altFootprint.maxSlopeDegrees = numberOr(*altFootprint, "MaxSlope", 0.0f);
-        def.altFootprint.minWaterDepthElmos =
-            numberOr(*altFootprint, "MinWaterDepth", 0.0f) * scmap::kElmosPerOgrid;
-        if (const std::optional<double> caps = altFootprint->numberAt("OccupancyCaps")) {
-            def.altFootprint.occupancyCaps = static_cast<int>(*caps);
+        if (hasAltMotion) {
+            def.hasAltFootprint = true;
+            def.altFootprint.squaresX = squaresFrom(numberOr(*altFootprint, "SizeX", 0.0f));
+            def.altFootprint.squaresZ = squaresFrom(numberOr(*altFootprint, "SizeZ", 0.0f));
+            def.altFootprint.maxSlopeDegrees = numberOr(*altFootprint, "MaxSlope", 0.0f);
+            def.altFootprint.minWaterDepthElmos =
+                numberOr(*altFootprint, "MinWaterDepth", 0.0f) * scmap::kElmosPerOgrid;
+            if (const std::optional<double> caps = altFootprint->numberAt("OccupancyCaps")) {
+                def.altFootprint.occupancyCaps = static_cast<int>(*caps);
+            }
+        } else {
+            def.hasAltFootprint = false;
+            def.altFootprint.squaresX = def.footprintSquaresX;
+            def.altFootprint.squaresZ = def.footprintSquaresZ;
+            def.altFootprint.maxSlopeDegrees = def.maxSlopeDegrees;
+            def.altFootprint.minWaterDepthElmos = def.minWaterDepthElmos;
+            def.altFootprint.occupancyCaps = def.occupancyCaps;
         }
     }
 

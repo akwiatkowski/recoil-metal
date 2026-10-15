@@ -447,6 +447,12 @@ parse with the native product guard (`0x00518C8B`) — one zeroed axis discards
 the other two authored values and all three derive `(1/12)(a²+b²)` box inertia
 from root `SizeX/Y/Z`; absence reads exactly like explicit zero (0 of 568
 shipped units author any axis). Suite green.
+
+**Implemented 2026-10-15 (C-218 AltFootprint overwrite):** the entire
+`AltFootprint` struct is overwritten by `Footprint` whenever
+`Physics.AltMotionType` is absent (`0x00525D77`) — the alt table survives
+only with the alternate motion class; without it retail reads the regular
+footprint twice. Suite green.
 ```text
 /goal Advance FA-CONTENT by tracing retail SCD mount and override precedence from ART-E001 and the
 owned archive corpus, recording exact locators and counterexamples, then adding a discriminating
