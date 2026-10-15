@@ -730,7 +730,10 @@ int runWindowed(const Session& session) {
         std::vector<const rm::unitdef::UnitDef*> commandSelection;
         // Pause flags aligned with `commandSelection` — the production toggle's cell
         // lighting and inspector card read them; rebuilt each frame beside it.
-        std::vector<std::uint8_t> productionPaused;
+        // Sim-side script-bit masks aligned with `commandSelection` (`C-369`):
+        // a set bit means that feature is OFF — the rack lighting and the
+        // toggle inspector cards read them; rebuilt each frame beside it.
+        std::vector<std::uint16_t> scriptBitMasks;
 
         // WHOSE MENU THE ICON ATLAS WAS PACKED FOR. Keyed on the builder rather than on the
         // option list, because the list is rebuilt every frame and compares equal every frame —
@@ -2526,6 +2529,12 @@ int runWindowed(const Session& session) {
                 productionPaused.push_back(static_cast<std::uint8_t>(
                     units.store.alive(id) && units.store.productionPaused(id)));
             }
+            scriptBitMasks.clear();
+            for (const rm::sim::UnitId id : selected) {
+                scriptBitMasks.push_back(units.store.alive(id)
+                    ? units.store.scriptBitsDisabledMaskAt(id.index)
+                    : 0);
+            }
             // Auto-expand is lit when every field builder in the selection is on it.
             commandEngaged = {};
             {
@@ -2558,6 +2567,18 @@ int runWindowed(const Session& session) {
                 }
                 commandEngaged[rackSlot] = producers > 0 && held == producers;
             }
+            // The backed script-bit toggles (`C-369`) light from the sim-side
+            // mask exactly like the production toggle lights from its pause
+            // flags — `toggleEngaged` reads `scriptBitMasks`, and the cell at
+            // the toggle's page slot takes its entry.
+            {
+                const rm::ui::ToggleEngaged lit = rm::ui::toggleEngaged(
+                    commandSelection, productionPaused, scriptBitMasks);
+                for (std::size_t rackSlot = 0; rackSlot < commandPage.size(); ++rackSlot) {
+                    const auto& cell = commandPage[rackSlot];
+                    if (!cell.toggle) continue;
+                    commandEngaged[rackSlot] = lit[*cell.toggle];
+                }
             // Auto-build lights a silo-build cell the way auto-expand lights AUTO MEX:
             // every silo record the cell covers is set to refill itself.
             for (std::size_t rackSlot = 0; rackSlot < commandPage.size(); ++rackSlot) {
@@ -2721,7 +2742,7 @@ int runWindowed(const Session& session) {
                     // being aimed while merely hovered, and `commandEngaged` is false for it.
                     inspector = rm::ui::commandInspector(commandPage, *overCommand,
                         commandSelection, commandEngaged[*overCommand],
-                        productionPaused);
+                        productionPaused, scriptBitMasks);
                 } else if (overTile && *overTile < rosterTiles.size()) {
                     inspector = selectedUnitCard(units, rosterTiles[*overTile], activeBuilder);
                 } else {

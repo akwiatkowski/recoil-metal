@@ -466,6 +466,46 @@ void detachCargo(UnitStore& store, const UnitCatalog& catalog, const Terrain& te
     if (children.empty()) {
         return;
     }
+    // `C-458`: retail's `CUnitUnloadUnits` takes the single-unit fast path
+    // when its task slots read `0x60 == 0x64` — one passenger steps off at
+    // the keel instead of out on the detach ring.
+    if (children.size() == 1) {
+        const UnitId lone = children.front();
+        const Transform& at = store.transforms()[carrier.index];
+        const unitdef::UnitDef* carrierDef = catalog.def(store.typeAt(carrier.index));
+        if (carrierDef != nullptr && carrierDef->isCarrier()) {
+            // `C-225`: a carrier launch is a detach, not a landing.
+            if (!store.detach(lone)) {
+                return;
+            }
+            Transform& place = store.transforms()[lone.index];
+            place.x = at.x;
+            place.z = at.z;
+            place.y = at.y;
+            place.pitch = 0;
+            place.roll = 0;
+            MoveState& launched = store.motion()[lone.index];
+            launched.airborne = true;
+            launched.moving = false;
+            launched.path.clear();
+            launched.pathIndex = 0;
+            return;
+        }
+        if (!store.detach(lone)) {
+            return;
+        }
+        Transform& place = store.transforms()[lone.index];
+        place.x = at.x;
+        place.z = at.z;
+        place.y = terrain.heightAt(at.x, at.z);
+        place.pitch = 0;
+        place.roll = 0;
+        MoveState& dropped = store.motion()[lone.index];
+        dropped.moving = false;
+        dropped.path.clear();
+        dropped.pathIndex = 0;
+        return;
+    }
     const Transform& at = store.transforms()[carrier.index];
     const unitdef::UnitDef* carrierDef = catalog.def(store.typeAt(carrier.index));
     if (carrierDef != nullptr && carrierDef->isCarrier()) {

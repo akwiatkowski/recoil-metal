@@ -86,6 +86,8 @@ std::string_view eventKindName(EventKind kind) noexcept {
         return "chat-message";
     case EventKind::TemplateShared:
         return "template-shared";
+    case EventKind::TransportAttach:
+        return "transport-attach";
     }
     return "unknown";
 }

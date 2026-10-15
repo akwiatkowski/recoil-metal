@@ -3078,6 +3078,73 @@ TEST_CASE("a pad with no free slot leaves the bingo guard holding", "[guard][air
     CHECK_FALSE(scene.roster.store.motion()[guard.index].moving);
     CHECK_FALSE(scene.roster.store.parentOf(guard).has_value());
 }
+TEST_CASE("C-183: a fueled transport guarding a ferry beacon flies the beacon route",
+          "[guard][ferry]") {
+    // The remaining C-183 ferry rung in its smallest FA-CMD-ownable form: the
+    // GUARD-side route commit. A fueled transport guarding a FERRYBEACON must
+    // leave the beacon on the beacon's own route (here: toward the beacon's
+    // command target) instead of chasing the beacon with the build-reach
+    // hold or idling at the anchor. The carrier-side loop itself stays in
+    // `updateTransports` (`advanceGuardFerry`); this rung only commits the
+    // leg so the guard ladder owns the tick. Retail callers: `C-348`
+    // (`CUnitFerryTask`/`CUnitWaitForFerryTask`/`CUnitCallTransport` /
+    // `CUnitCallAirStaging`/`CUnitCallLandTransport` on the FERRYBEACON
+    // category) feeding the C-183 guard ladder's ferry rung.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef carrierDef;
+    carrierDef.name = "test_transport";
+    carrierDef.categories = {"AIR", "MOBILE", "TRANSPORTATION"};
+    carrierDef.motion = rm::unitdef::MotionType::Air;
+    carrierDef.canFly = true;
+    carrierDef.speedElmosPerSecond = 10.0f;
+    carrierDef.transport.transportClass = 6;
+    const rm::UnitTypeIndex carrierType = roster.addType(carrierDef);
+    rm::unitdef::UnitDef beaconDef;
+    beaconDef.name = "test_beacon";
+    beaconDef.categories = {"FERRYBEACON", "UNTARGETABLE"};
+    const rm::UnitTypeIndex beaconType = roster.addType(beaconDef);
+    const UnitId carrier = roster.add(carrierType, 30.0f, 30.0f, 0, 500.0f);
+    roster.store.motion()[carrier.index].canFly = true;
+    roster.store.motion()[carrier.index].airborne = true;
+    roster.store.motion()[carrier.index].fuelRatio = rm::sim::Fx::fromInt(1);
+    roster.store.motion()[carrier.index].fuelDrainPerTick = rm::sim::Fx::fromRatio(1, 5000);
+    const UnitId beacon = roster.add(beaconType, 30.0f, 30.0f, 0, 10.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+    std::vector<rm::sim::Construction> building;
+    // The beacon's own active command names the drop: the far end of the route.
+    REQUIRE(rm::sim::applyCommand(CommandIssue{.source = 0, .id = rm::commandId(0, 1), .player = 0,
+                                                .kind = CommandKind::Move, .units = {beacon},
+                                                .targetX = rm::sim::fxFromFloat(400.0f),
+                                                .targetZ = rm::sim::fxFromFloat(400.0f)},
+                                   roster.store, roster.catalog, players, armies, terrain,
+                                   [&grid](UnitId) { return &grid; }, roster.rate)
+                .accepted.size()
+            == 1);
+    const auto apply = [&](const CommandIssue& issue) {
+        return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
+                                     terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                     &building);
+    };
+    REQUIRE(apply(CommandIssue{.source = 0, .id = rm::commandId(0, 2), .player = 0,
+                               .kind = CommandKind::Guard, .units = {carrier},
+                               .target = beacon}));
+
+
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building, nullptr, nullptr, nullptr, nullptr, armies);
+
+    // The ferry rung owns the tick: the carrier routes toward the drop, and
+    // the Guard order still heads the queue (standing loop, not delivery).
+    CHECK(roster.store.motion()[carrier.index].moving);
+    REQUIRE(roster.store.orders()[carrier.index].active() != nullptr);
+    CHECK(roster.store.orders()[carrier.index].active()->kind() == CommandKind::Guard);
+}
 
 // --- Predicted times -------------------------------------------------------------
 //

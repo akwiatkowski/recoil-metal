@@ -152,6 +152,42 @@ toggleAvailability(std::span<const unitdef::UnitDef* const> selection) noexcept 
     }
     return present;
 }
+ToggleEngaged
+toggleEngaged(std::span<const unitdef::UnitDef* const> selection,
+              std::span<const std::uint8_t> paused,
+              std::span<const std::uint16_t> masks) noexcept {
+    ToggleEngaged lit{};
+    for (std::size_t t = 0; t < kToggleDescriptors.size(); ++t) {
+        const std::string_view cap = kToggleDescriptors[t].cap;
+        if (cap == "RULEUTC_ProductionToggle") {
+            std::size_t producers = 0, held = 0;
+            for (std::size_t i = 0; i < selection.size(); ++i) {
+                const unitdef::UnitDef* def = selection[i];
+                if (def == nullptr || !sim::canPauseProduction(*def)) continue;
+                ++producers;
+                if (i < paused.size() && paused[i] != 0) ++held;
+            }
+            lit[t] = producers > 0 && held == producers;
+            continue;
+        }
+        const std::optional<std::uint8_t> bit = scriptBitForToggleCap(cap);
+        if (!bit) continue;
+        std::size_t carriers = 0, enabled = 0;
+        for (std::size_t i = 0; i < selection.size(); ++i) {
+            const unitdef::UnitDef* def = selection[i];
+            if (def == nullptr || !def->toggleCapsDeclared
+                || !def->hasToggleCap(cap)) {
+                continue;
+            }
+            ++carriers;
+            const std::uint16_t mask = i < masks.size() ? masks[i] : 0;
+            if ((mask & static_cast<std::uint16_t>(1u << *bit)) == 0) ++enabled;
+        }
+        lit[t] = carriers > 0 && enabled == carriers;
+    }
+    return lit;
+}
+
 
 namespace {
 
@@ -430,7 +466,8 @@ std::optional<std::size_t> commandSlotAt(const CommandRackLayout& layout, float 
 
 InfoCard toggleCard(const ToggleDescriptor& toggle,
     std::span<const unitdef::UnitDef* const> selection,
-    std::span<const std::uint8_t> paused) {
+    std::span<const std::uint8_t> paused,
+    std::span<const std::uint16_t> masks) {
     InfoCard card;
     card.title = std::string{toggle.label} + " TOGGLE";
     const bool production = toggle.cap == "RULEUTC_ProductionToggle";
@@ -443,6 +480,7 @@ InfoCard toggleCard(const ToggleDescriptor& toggle,
             ? sim::canPauseProduction(*def)
             : (def->toggleCapsDeclared && def->hasToggleCap(toggle.cap));
         if (!applies) continue;
+        ++eligible;
         if (i < paused.size() && paused[i] != 0) ++held;
     }
     const bool backed = production || toggle.cap == "RULEUTC_ShieldToggle"
@@ -461,9 +499,22 @@ InfoCard toggleCard(const ToggleDescriptor& toggle,
         return card;
     }
     if (!production) {
-        // A backed script-bit toggle: the card reports the audience, not a
-        // paused count — per-unit bit state is not yet mirrored to the UI.
-        card.rows.push_back({"STATE", "ENABLED", kGain});
+        // A backed script-bit toggle (`C-369`): the card reads the sim-side
+        // mask like the rack lighting — ON when every carrier has the bit
+        // enabled, OFF or PARTIALLY OFF once any of them disables it.
+        std::size_t carriers = 0, off = 0;
+        const std::optional<std::uint8_t> bit = scriptBitForToggleCap(toggle.cap);
+        for (std::size_t i = 0; i < selection.size(); ++i) {
+            const auto* def = selection[i];
+            if (!def || !def->toggleCapsDeclared || !def->hasToggleCap(toggle.cap)) {
+                continue;
+            }
+            ++carriers;
+            const std::uint16_t mask = i < masks.size() ? masks[i] : 0;
+            if (bit && (mask & static_cast<std::uint16_t>(1u << *bit)) != 0) ++off;
+        }
+        card.rows.push_back({"STATE", off == 0 ? "ON" : off < carriers ? "PARTIALLY OFF" : "OFF",
+                             off == 0 ? kGain : kLoss});
         card.rows.push_back({"APPLIES TO", std::to_string(eligible) + " OF "
             + std::to_string(total) + " UNITS"});
         return card;
@@ -553,10 +604,11 @@ InfoCard commandCard(const CommandDescriptor& command,
 
 InfoCard commandInspector(const CommandPage& page, std::size_t slot,
     std::span<const unitdef::UnitDef* const> selection, bool armed,
-    std::span<const std::uint8_t> paused) {
+    std::span<const std::uint8_t> paused,
+    std::span<const std::uint16_t> masks) {
     const std::optional<std::size_t> toggle = page[slot].toggle;
     if (toggle) {
-        return toggleCard(kToggleDescriptors[*toggle], selection, paused);
+        return toggleCard(kToggleDescriptors[*toggle], selection, paused, masks);
     }
     if (page[slot].order == sim::CommandKind::MissileLaunch) {
         // A substituted cell inspects as the order it issues — the table under it

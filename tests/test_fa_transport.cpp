@@ -1261,3 +1261,53 @@ TEST_CASE("C-264: a full carrier pool sends the product off the pad instead",
     REQUIRE(rollOff != nullptr);
     CHECK(rollOff->kind() == CommandKind::Move);
 }
+
+TEST_CASE("C-458: unload lands in slot order, single cargo at the keel",
+          "[fa-transport]") {
+    // `CUnitUnloadUnits::TaskTick` (`0x0062ce60`) walks its task slots
+    // strictly ascending with per-slot landing — landing-spot order is
+    // slot/command order — and takes a single-unit fast path when the hold
+    // carries one (`0x60 == 0x64`). The player sees a full hold fan out in
+    // boarding order while a lone passenger steps off at the keel, not out
+    // on the ring.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const UnitId transport = landedTransport(roster, transportType, 50.0f, 50.0f);
+    const UnitId first = roster.add(cargoType, 51.0f, 50.0f, 0, 500.0f);
+    const UnitId second = roster.add(cargoType, 49.0f, 50.0f, 0, 500.0f);
+    const UnitId third = roster.add(cargoType, 50.0f, 51.0f, 0, 500.0f);
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog,
+                                  *roster.catalog.def(transportType), transport, first));
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog,
+                                  *roster.catalog.def(transportType), transport, second));
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog,
+                                  *roster.catalog.def(transportType), transport, third));
+
+    rm::sim::detachCargo(roster.store, roster.catalog, terrain, transport);
+    REQUIRE_FALSE(roster.motion(first).attached);
+    // Spread is deck radius (4) + 2 elmos: slot order fans out (+6,0),
+    // (0,+6), (-6,+6) off the keel.
+    CHECK(rm::sim::fxToFloat(roster.transform(first).x) == Approx(56.0f).margin(0.01f));
+    CHECK(rm::sim::fxToFloat(roster.transform(first).z) == Approx(50.0f).margin(0.01f));
+    CHECK(rm::sim::fxToFloat(roster.transform(second).x) == Approx(50.0f).margin(0.01f));
+    CHECK(rm::sim::fxToFloat(roster.transform(second).z) == Approx(56.0f).margin(0.01f));
+    CHECK(rm::sim::fxToFloat(roster.transform(third).x) == Approx(44.0f).margin(0.01f));
+    CHECK(rm::sim::fxToFloat(roster.transform(third).z) == Approx(56.0f).margin(0.01f));
+
+    // The single-unit fast path: a lone passenger lands at the keel.
+    rm::test::Roster solo;
+    const rm::UnitTypeIndex soloTransportType = solo.addType(transportDef());
+    const rm::UnitTypeIndex soloCargoType = solo.addType(cargoDef());
+    const UnitId soloTransport = landedTransport(solo, soloTransportType, 50.0f, 50.0f);
+    const UnitId lone = solo.add(soloCargoType, 51.0f, 50.0f, 0, 500.0f);
+    REQUIRE(rm::sim::attachCargo(solo.store, solo.catalog,
+                                 *solo.catalog.def(soloTransportType), soloTransport, lone));
+    rm::sim::detachCargo(solo.store, solo.catalog, terrain, soloTransport);
+    REQUIRE_FALSE(solo.motion(lone).attached);
+    CHECK(solo.transform(lone).x == solo.transform(soloTransport).x);
+    CHECK(solo.transform(lone).z == solo.transform(soloTransport).z);
+}

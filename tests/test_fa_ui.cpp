@@ -22,6 +22,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <vector>
 
 namespace {
@@ -352,4 +353,47 @@ TEST_CASE("C-367: the idle selectors never offer a dead unit", "[fa-ui]") {
     job.scene.store.kill(engineer);
     CHECK(rm::app::idleMobileCombatUnits(job.scene).empty());
     CHECK(rm::app::idleFieldEngineers(job.scene).empty());
+}
+
+TEST_CASE("C-369: the shield toggle lights from the sim script-bit mask", "[fa-ui]") {
+    // The click path behind the lit cell: `ToggleScriptBit` flips the unit's
+    // mask through the sink, and `toggleEngaged` reads it back — ON with the
+    // bit enabled, dark once the click disables it. Retail's refresh flag
+    // (`GetCheckUICommands`) never carries state; the mask does (`GetScriptBit`).
+    Scenario job;
+    rm::unitdef::UnitDef shield = tankDef();
+    shield.name = "test_shield_tank";
+    shield.toggleCapsDeclared = true;
+    shield.toggleCaps = {"RULEUTC_ShieldToggle"};
+    shield.shield.maximum = rm::sim::Mag::fromInt(100);
+    shield.shield.shape = rm::unitdef::ShieldShape::Box;
+    shield.shield.boxHalfExtentsElmos = {rm::sim::Fx::fromInt(4), rm::sim::Fx::fromInt(4),
+                                         rm::sim::Fx::fromInt(4)};
+    const rm::sim::UnitId unit = job.spawn(shield, 300, 300);
+    const std::vector<rm::sim::UnitId> selection{unit};
+    auto runner = job.runner();
+
+    auto masks = [&]() {
+        std::vector<std::uint16_t> out;
+        for (const rm::sim::UnitId id : selection) {
+            out.push_back(job.scene.store.scriptBitsDisabledMaskAt(id.index));
+        }
+        return out;
+    };
+    const auto defs = [&]() { return defsOf(job.scene, selection); };
+    const std::vector<std::uint8_t> unpaused{0};
+    CHECK(rm::ui::toggleEngaged(defs(), unpaused, masks())[0]);
+
+    REQUIRE(rm::app::submitCommand(job.scene, rm::sim::CommandIssue{
+        .tick = 0,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = 0,
+        .player = 0,
+        .kind = rm::sim::CommandKind::ToggleScriptBit,
+        .units = selection,
+        .scriptBit = 0,
+    }).has_value());
+    (void)rm::app::advanceMatch(runner, 0, 0);
+    REQUIRE(job.scene.store.scriptBitDisabled(unit, 0));
+    CHECK_FALSE(rm::ui::toggleEngaged(defs(), unpaused, masks())[0]);
 }

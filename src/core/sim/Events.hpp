@@ -214,6 +214,11 @@ enum class EventKind : std::uint8_t {
     /// same channel — `army` the sender, `to` the recipient army, `text` the
     /// serialized template table.
     TemplateShared,
+    /// `C-513` (`Unit.lua:3434`): a unit was re-attached to a transport —
+    /// the per-unit edge of retail's native transfer attachment rebuild
+    /// (`0x0074e1fc`-`0x0074e3d8`). `unit` is the re-attached child,
+    /// `instigator` the carrier it now rides.
+    TransportAttach,
 };
 
 /// `UpdateMarker`'s action word (`SimPing.lua:106`), as a byte on the event and

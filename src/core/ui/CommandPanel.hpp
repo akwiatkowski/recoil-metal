@@ -113,6 +113,20 @@ inline constexpr std::array<ToggleDescriptor, 9> kToggleDescriptors{{
     return std::nullopt;
 }
 using ToggleAvailability = std::array<bool, 9>;
+/// `C-369`: the rack's lit state for each `kToggleDescriptors` entry, read from
+/// the sim-side script-bit masks (`GetScriptBit`), not from a refresh flag.
+/// `masks` aligns with `selection` — one disabled-mask per unit, where a set
+/// bit means that feature is OFF (bits per `scriptBitForToggleCap`; production
+/// reads `paused` instead). A toggle lights only when at least one selected
+/// unit carries the cap and every carrier has the bit enabled; unbacked caps
+/// never light.
+using ToggleEngaged = std::array<bool, 9>;
+
+[[nodiscard]] ToggleEngaged
+toggleEngaged(std::span<const unitdef::UnitDef* const> selection,
+              std::span<const std::uint8_t> paused = {},
+              std::span<const std::uint16_t> masks = {}) noexcept;
+
 
 /// One resolved rack cell: an order, a toggle filling its dead order slot, or the
 /// dead order itself. Name/icon views borrow from the descriptor tables and the
@@ -176,18 +190,22 @@ commandPage(std::span<const unitdef::UnitDef* const> selection,
 
 /// The hover card for a toggle cell. The production toggle is backed by
 /// `UnitStore::productionPaused` — `paused` aligns with `selection` and reports how
-/// many eligible units are held; the rest stay present-but-unsupported, with the
-/// count they would apply to once a simulation state exists.
+/// many eligible units are held; backed script-bit toggles read `masks` the same
+/// way — one sim-side disabled-mask per unit (`C-369`). The rest stay
+/// present-but-unsupported, with the count they would apply to once a
+/// simulation state exists.
 [[nodiscard]] InfoCard toggleCard(const ToggleDescriptor& toggle,
                                   std::span<const unitdef::UnitDef* const> selection,
-                                  std::span<const std::uint8_t> paused = {});
+                                  std::span<const std::uint8_t> paused = {},
+                                  std::span<const std::uint16_t> masks = {});
 
 /// The hover inspector for a rack slot: the toggle card on toggle cells, the order
 /// card elsewhere. Slot must be a live rack position.
 [[nodiscard]] InfoCard commandInspector(const CommandPage& page, std::size_t slot,
                                         std::span<const unitdef::UnitDef* const> selection,
                                         bool armed = false,
-                                        std::span<const std::uint8_t> paused = {});
+                                        std::span<const std::uint8_t> paused = {},
+                                        std::span<const std::uint16_t> masks = {});
 
 [[nodiscard]] CommandRackLayout commandRackLayout(const FrameLayout& frame,
                                                    bool hasSelection) noexcept;

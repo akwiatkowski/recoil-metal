@@ -5,8 +5,8 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdlib>
-#include <filesystem>
+#include <cstdint>
+#include <string>
 
 using rm::sim::CommandKind;
 
@@ -367,7 +367,7 @@ TEST_CASE("toggle cards report present-but-unsupported actions", "[ui][toggles]"
     CHECK(card.title == "WEAPON TOGGLE");
     REQUIRE(card.rows.size() == 3);
     CHECK(card.rows[0].value == "NOT IMPLEMENTED");
-    CHECK(card.rows[1].value == "0 OF 1 UNITS");
+    CHECK(card.rows[1].value == "1 OF 1 UNITS");
 
     const rm::ui::CommandPage page = rm::ui::commandPage(selection);
     const rm::ui::InfoCard routed = rm::ui::commandInspector(page, 6, selection);
@@ -507,4 +507,31 @@ TEST_CASE("the retail shield's authored toggle reaches its rack cell", "[ui][tog
     CHECK(page[6].name == "toggle_shield_dome");
     CHECK(page[6].icon == "shield-dome");
     CHECK(page[6].enabled);
+}
+
+TEST_CASE("C-369: the rack's toggle state reads the sim script-bit mask", "[ui][toggles]") {
+    // `CWldSession::GetCheckUICommands` is only a refresh flag — toggle state
+    // is the sim-side script-bit mask (`GetScriptBit`). A shield toggle is lit
+    // when every unit carrying the cap has bit 0 enabled, and dark once any
+    // of them disables it. Unbacked toggles never light.
+    rm::unitdef::UnitDef shield;
+    shield.toggleCapsDeclared = true;
+    shield.toggleCaps = {"RULEUTC_ShieldToggle"};
+    rm::unitdef::UnitDef plain;
+    const std::array<const rm::unitdef::UnitDef*, 2> selection{&shield, &plain};
+    const std::array<std::uint16_t, 2> allEnabled{0, 0};
+    const rm::ui::ToggleEngaged lit = rm::ui::toggleEngaged(selection, {}, allEnabled);
+    CHECK(lit[0]);
+    const std::array<std::uint16_t, 2> oneOff{1u << 0, 0};
+    const rm::ui::ToggleEngaged dark = rm::ui::toggleEngaged(selection, {}, oneOff);
+    CHECK_FALSE(dark[0]);
+    // The shield-less unit never votes: a selection with no carrier stays dark.
+    const std::array<const rm::unitdef::UnitDef*, 1> none{&plain};
+    CHECK_FALSE(rm::ui::toggleEngaged(none, {}, std::array<std::uint16_t, 1>{0})[0]);
+    // Weapon is retail's no-op: declared, but with no bit it can never light.
+    rm::unitdef::UnitDef gun;
+    gun.toggleCapsDeclared = true;
+    gun.toggleCaps = {"RULEUTC_WeaponToggle"};
+    const std::array<const rm::unitdef::UnitDef*, 1> weapon{&gun};
+    CHECK_FALSE(rm::ui::toggleEngaged(weapon, {}, std::array<std::uint16_t, 1>{0})[1]);
 }

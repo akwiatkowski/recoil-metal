@@ -1111,15 +1111,30 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         }
 
         // C-183's FERRY rung outranks the leash and every assist: a transport
-        // guarding a FERRYBEACON flies the beacon's route. The drive itself
-        // lives in the transport pass (`advanceGuardFerry`) — this ladder just
-        // yields the tick so no rung routes the carrier back.
+        // guarding a FERRYBEACON flies the beacon's route. The carrier-side
+        // loop itself lives in the transport pass (`advanceGuardFerry`), but
+        // the guard ladder owns the SAME tick: a fueled guard commits the leg
+        // toward the route's far end here — the beacon's own active command
+        // target (`C-348`'s route contract) — so the carrier moves the beat
+        // the guard order stands rather than waiting a tick or chasing the
+        // beacon with the build-reach hold. A beacon with no command, or a
+        // command with no position, has no far end yet and yields like before.
         if (isGuardCommand(current->kind()) && store.alive(current->target())) {
             const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
             const unitdef::UnitDef* beaconDef =
                 catalog.def(store.typeAt(current->target().index));
             if (guardDef != nullptr && guardDef->isTransport()
                 && beaconDef != nullptr && beaconDef->isFerryBeacon()) {
+                const QueuedCommand* route = orders[current->target().index].active();
+                if (route != nullptr
+                    && (route->kind() == CommandKind::Move
+                        || route->kind() == CommandKind::Ferry
+                        || route->kind() == CommandKind::UnloadTransport)) {
+                    if (const PassabilityGrid* ferryGrid = gridFor(*current)) {
+                        (void)routeUnit(slot, route->targetX(), route->targetZ(), store,
+                                        terrain, *ferryGrid);
+                    }
+                }
                 continue;
             }
         }

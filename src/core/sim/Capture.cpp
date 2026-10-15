@@ -418,15 +418,31 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
     // `C-239`/`SimUtils.lua:58-62`: the transfer takes the top-level unit
     // and its live children together — snapshot the child handles first and
     // detach them, since `kill` below destroys whatever is still attached.
+    // `C-513` needs each child's ATTACHMENT RECORD too: retail's rebuild
+    // re-hangs with the stored slot (`TransportAssignSlot`), so the
+    // bone-indexed re-attach below replays the same bones (C-195/C-196).
     const std::vector<UnitId> cargo = store.childrenOf(unit);
+    std::vector<std::pair<UnitId, UnitStore::AttachBones>> cargoBones;
+    cargoBones.reserve(cargo.size());
     for (const UnitId child : cargo) {
+        cargoBones.emplace_back(child, store.attachmentBonesOf(child));
         (void)store.detach(child);
     }
+    // `C-240`/`C-404` (`0x006B2620`, `0x006414F0`): the two shared
+    // manipulator handles ALIAS onto the replacement — it SHARES that
+    // subsystem state, not a clone. The bounded slice owns no skeleton, so
+    // the state this names is the per-unit manipulator list (`C-293`) and
+    // the bone-visibility mask (`C-303`): both ride the transfer, like the
+    // health record does.
+    const std::vector<Manipulator> keptManipulators = store.manipulators()[victim];
+    const std::vector<std::uint64_t> keptBoneHidden(store.boneHiddenMaskAt(victim).begin(),
+                                                    store.boneHiddenMaskAt(victim).end());
     store.kill(unit);
-    for (const UnitId child : cargo) {
+    for (const auto& [child, bones] : cargoBones) {
         if (!store.alive(child)) {
             continue;
         }
+        (void)bones;
         (void)transferUnitArmy(store, child, armyIndex, events, siloAmmo, enhancements);
     }
     const UnitId replacement = store.spawn(UnitStore::Spawn{
@@ -442,6 +458,22 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
     if (shieldToggledOff) {
         (void)store.setScriptBitDisabled(replacement, 0, true);
     }
+    // `C-240`/`C-404` aliasing, second half: the kept manipulator list and
+    // bone mask land on the replacement. The spawn wiped both (newcomers
+    // start bare), so this is a copy into a cleared slot — the observable
+    // half of retail's shared-handle install (`0x006B2620`).
+    for (const Manipulator& manipulator : keptManipulators) {
+        (void)store.addManipulator(replacement, manipulator);
+    }
+    for (std::size_t word = 0; word < keptBoneHidden.size(); ++word) {
+        for (int bit = 0; bit < 64; ++bit) {
+            if ((keptBoneHidden[word] & (std::uint64_t{1} << bit)) != 0) {
+                (void)store.setBoneHidden(
+                    replacement, static_cast<std::int32_t>(word * 64 + static_cast<std::size_t>(bit)),
+                    true);
+            }
+        }
+    }
     // Lua restores silo ammo and in-flight enhancement work onto the
     // replacement, so a transferred silo keeps its stockpile and a
     // half-built enhancement keeps its progress.
@@ -455,14 +487,23 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
             work_.owner = replacement;
         }
     }
-    // Re-hang the transferred children on the replacement: each child moved
-    // under the new army above (`transferUnitArmy` replaced it in its own
-    // slot), and retail's native re-attachment keeps the tree together.
-    for (const UnitId child : cargo) {
+    // `C-513` rebuild (`0x0074e1fc`-`0x0074e3d8`): per stored child into
+    // storage, per attach entry with its slot (`TransportAssignSlot`), per
+    // re-attached unit a Lua `OnTransportAttach` (`Unit.lua:3434`). The
+    // bounded slice replays each child's STORED attachment record (C-195/
+    // C-196 bones included), and the event below is that Lua edge.
+    for (const auto& [child, bones] : cargoBones) {
         const UnitId current = store.idAt(child.index);
         if (store.alive(current) && store.motion()[current.index].armyIndex == armyIndex
             && !store.motion()[current.index].attached) {
-            (void)store.attach(replacement, current);
+            if (store.attach(replacement, current, bones)) {
+                const Transform& at = store.transforms()[replacement.index];
+                emit(events, Event{.kind = EventKind::TransportAttach,
+                                   .unit = current,
+                                   .instigator = replacement,
+                                   .army = armyIndex,
+                                   .at = {at.x, at.y, at.z}});
+            }
         }
     }
     emit(events, Event{.kind = EventKind::UnitCreated,

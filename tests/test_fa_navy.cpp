@@ -914,3 +914,47 @@ TEST_CASE("C-170: a surface splash still wets a submerged hull under the blast",
     CHECK(rm::test::asFloat(roster.health(boat).current) == Catch::Approx(900.0f));
     CHECK(dealt == rm::sim::Mag::fromInt(100));
 }
+
+TEST_CASE("C-169: a shell crossing the waterline dies as a Water impact with splash", "[fa-navy]") {
+    // `C-169`'s surface block runs before the entity sweep: a shell whose
+    // tick segment crosses the water plane raises `IMPACT_Water` at the
+    // plane crossing — not `Terrain`, not a hull behind the splash — and the
+    // blast still wets what the sphere reaches (`Projectile.lua:173-185`
+    // `DoDamage` runs on a Water impact too). The player sees the splash go
+    // up where the shell came down, and the sub below take the edge of it.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);  // waterline at 80
+    rm::test::Roster roster;
+    const UnitDef sub = subDef();
+    const rm::UnitTypeIndex subType = roster.addType(sub);
+    const UnitId boat = spawnDef(roster, subType, sub, 300.0f, 300.0f, 1);
+    rm::sim::tick(roster.store.transforms(), roster.store.motion(), terrain);
+    REQUIRE(roster.motion(boat).submerged);
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    // A shell falling straight down through the waterline: 90 -> 70 across
+    // one tick, crossing the 80-elmo plane mid-segment.
+    rm::sim::Projectile shell;
+    shell.position = {Fx::fromInt(300), Fx::fromInt(90), Fx::fromInt(300)};
+    shell.velocity = {Fx{}, Fx::fromInt(-20), Fx{}};
+    shell.ticksRemaining = 100;
+    shell.damage.base = rm::sim::Mag::fromInt(100);
+    shell.damageRadiusElmos = Fx::fromInt(20);
+    shell.firedByArmy = 0;
+    shell.targetLayers = rm::unitdef::TargetLayerMask::Both;
+    std::vector<rm::sim::Projectile> shots{shell};
+    rm::sim::EventQueue events;
+    for (int i = 0; i < 10 && !shots.empty(); ++i) {
+        rm::sim::advanceProjectiles(shots, roster.store, armies, terrain,
+                                    roster.rate, &events);
+    }
+    REQUIRE(shots.empty());
+    const auto impacts = events.all();
+    REQUIRE(std::ranges::any_of(impacts, [](const rm::sim::Event& event) {
+        return event.kind == rm::sim::EventKind::ProjectileImpact
+               && event.impactType == rm::sim::ImpactType::Water;
+    }));
+    // The Water impact still splashes: the submerged hull 12 elmos under the
+    // crossing point takes damage from the blast.
+    CHECK(rm::test::asFloat(roster.health(boat).current) < 1000.0f);
+}

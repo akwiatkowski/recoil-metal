@@ -3733,10 +3733,48 @@ void sweepFlight(Projectile& shot, std::array<Fx, 3> from,
     // Or it reaches the GROUND, which is what a miss does. Height is the test there
     // rather than proximity, because a near miss must land rather than fly on and hit
     // whatever happens to be behind it.
+    // `C-169`'s surface block runs BEFORE the entity sweep: a segment
+    // crossing the water plane meets it at a single fraction — straight-line
+    // flight, one crossing at most — and raises `IMPACT_Water` there. The
+    // flat field's seabed (y 0) sits far below the 80-elmo waterline
+    // (corpus: 209 `DestroyOnWater = true` vs 77 false — the default kill
+    // is the surface blast, not silent removal), so the water plane wins
+    // where both are crossed. `DestroyOnWater` shots never reach here: `C-204`
+    // kills them silently above, before the sweep runs.
+    std::optional<SweepFraction> waterHit;
+    if (terrain.hasWater() && !shot.stayUnderwater) {
+        const Fx fromAbove = from[1] - terrain.waterLevel();
+        const Fx toBelow = shot.position[1] - terrain.waterLevel();
+        if (fromAbove > Fx{} && toBelow <= Fx{}) {
+            const FxWide dropRaw = FxWide{fromAbove.raw()} - FxWide{toBelow.raw()};
+            if (dropRaw > 0) {
+                waterHit = static_cast<SweepFraction>(
+                    (FxWide{fromAbove.raw()} * kSweepOne) / dropRaw);
+            } else {
+                waterHit = SweepFraction{};
+            }
+        }
+    }
     const std::optional<SweptHit> struck =
         firstStruck(shot, from, shot.position, store, armies, catalog);
     const std::optional<SweepFraction> groundHit =
         terrainEntry(from, shot.position, terrain);
+    // The water plane pre-empts both: retail's surface tests run before the
+    // entity sweep, and the crossing fraction sits ahead of any hull behind
+    // the splash on a falling segment. `hitUnit`'s ground comparison is
+    // untouched — water only wins where the segment actually crossed it.
+    const bool hitWater = waterHit
+        && (!struck || struck->proximityFallback || *waterHit < struck->fraction);
+    if (hitWater) {
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            shot.position[axis] =
+                interpolateSweep(from[axis], shot.position[axis], *waterHit);
+        }
+        shot.position[1] = terrain.waterLevel();
+        shot.pendingImpact = ImpactType::Water;
+        shot.impactTarget = {};
+        return;
+    }
     // Retail skips the fallback entity query entirely once this tick has a surface hit.
     const bool hitUnit =
         struck

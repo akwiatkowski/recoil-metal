@@ -595,3 +595,49 @@ TEST_CASE("a capture keeps the target's enhancements and shield toggle", "[captu
           == "AdvancedEngineering");
     CHECK(f.roster.store.scriptBitDisabled(replacement, 0));
 }
+TEST_CASE("a transfer rebuilds transport attachments and carries manipulator state", "[capture]") {
+    // `C-513` (`0x0074e1fc`-`0x0074e3d8`): the native transfer rebuilds
+    // transport attachments on the replacement — per stored child into
+    // storage, per attach entry with its slot — and fires Lua
+    // `OnTransportAttach` for each re-attached unit (`Unit.lua:3434`).
+    // `C-240`/`C-404`: the two shared manipulator handles alias onto the
+    // replacement (`0x006B2620`, `0x006414F0`), so its manipulator list and
+    // bone-visibility mask ride the transfer, not just its health record.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId carrier = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    const UnitId cargo = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.roster.store.attach(carrier, cargo, {.parent = 3, .self = 5}));
+    rm::sim::Manipulator slide;
+    slide.kind = rm::sim::ManipulatorKind::StorageSlide;
+    slide.slideBone = 7;
+    REQUIRE(f.roster.store.addManipulator(carrier, slide));
+    REQUIRE(f.roster.store.setBoneHidden(carrier, 9, true));
+    REQUIRE(f.capture(captor, carrier));
+    f.tick(120);
+    CHECK_FALSE(f.roster.store.alive(carrier));
+    const UnitId newCarrier = f.roster.store.idAt(carrier.index);
+    const UnitId newCargo = f.roster.store.idAt(cargo.index);
+    REQUIRE(f.roster.store.alive(newCarrier));
+    REQUIRE(f.roster.store.alive(newCargo));
+    // The attachment record is rebuilt with its bones, not as a bare link.
+    CHECK(f.roster.store.parentOf(newCargo) == newCarrier);
+    CHECK(f.roster.store.attachmentBonesOf(newCargo).parent == 3);
+    CHECK(f.roster.store.attachmentBonesOf(newCargo).self == 5);
+    // One `OnTransportAttach` per re-attached unit, naming child and carrier.
+    std::size_t attached = 0;
+    for (const rm::sim::Event& event : f.events.all()) {
+        if (event.kind == rm::sim::EventKind::TransportAttach) {
+            ++attached;
+            CHECK(event.unit == newCargo);
+            CHECK(event.instigator == newCarrier);
+        }
+    }
+    CHECK(attached == 1);
+    // The manipulator list and the bone mask aliased onto the replacement.
+    REQUIRE(f.roster.store.manipulators()[newCarrier.index].size() == 1);
+    CHECK(f.roster.store.manipulators()[newCarrier.index][0].kind
+          == rm::sim::ManipulatorKind::StorageSlide);
+    CHECK(f.roster.store.manipulators()[newCarrier.index][0].slideBone == 7);
+    CHECK(f.roster.store.boneHiddenAt(newCarrier.index, 9));
+}
