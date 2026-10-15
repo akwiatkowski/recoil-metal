@@ -77,13 +77,21 @@ local factionNames = { 'UEF', 'Aeon', 'Cybran', 'Seraphim' }
 
 -- One category set per blueprint id, built from the tag list C++ sends once per type.
 -- In Moho every unit id is itself a category, so the id joins its own set.
-function __rm_faf_type(bp, tags, threat)
+function __rm_faf_type(bp, tags, threat, toggleCaps)
     if __rm_faf.cats[bp] then return end
     local set = {}
     for _, tag in ipairs(tags) do set[string.upper(tag)] = true end
     set[string.upper(bp)] = true
     __rm_faf.cats[bp] = set
     __rm_faf.threat[bp] = threat or {}
+    -- Retail `Unit:TestToggleCaps` answers from the blueprint's authored
+    -- `General.ToggleCaps` table (engine `Sim/Unit.lua:710` documents the
+    -- contract; `UnitBlueprint.cpp` keeps only the true entries). The Lua
+    -- source table is the authority, so the cache carries the authored
+    -- per-type set beside the category set — FAF's scouting loop gates the
+    -- cloak enable on it (platoon.lua:1293 `RULEUTC_CloakToggle`).
+    __rm_faf.toggleCaps = __rm_faf.toggleCaps or {}
+    __rm_faf.toggleCaps[bp] = toggleCaps or {}
 end
 
 -- One unit's threat in one of Moho's domains, from the blueprint's own estimates. The
@@ -191,6 +199,14 @@ __rm_faf.unitMeta = {
         -- already computes `idle` per unit (C++: stationary and no queued
         -- enhancement), so the binding reads the flag back.
         IsIdleState = function(u) return u.idle ~= false end,
+        -- Retail `Unit:TestToggleCaps` (engine `Sim/Unit.lua:710`): true when
+        -- the unit's blueprint declares the cap in `General.ToggleCaps`.
+        -- The test's `__rm_faf_type` fourth argument carries the authored set;
+        -- match-side `teachType` teaches it from the loaded blueprint below.
+        TestToggleCaps = function(u, cap)
+            local caps = __rm_faf.toggleCaps and __rm_faf.toggleCaps[u.bp]
+            return caps ~= nil and caps[cap] == true
+        end,
         -- Retail's `Entity:IsPaused`/`SetPaused`, read by `Platoon:PlatoonDisband`
         -- (platoon.lua:322-324) when it releases a platoon's units. Snapshot units
         -- are never paused; the flag is per-table so a pause survives the pass.
@@ -2812,7 +2828,12 @@ void FafOpponent::teachType(lua_State* lua, const rm::unitdef::UnitDef& def) {
     lua_setfield(lua, -2, "u");
     lua_pushnumber(lua, static_cast<lua_Number>(def.economyThreat));
     lua_setfield(lua, -2, "e");
-    if (lua_pcall(lua, 3, 0, 0) != 0) {
+    lua_newtable(lua);  // the authored `General.ToggleCaps` set, for TestToggleCaps
+    for (const std::string& cap : def.toggleCaps) {
+        lua_pushboolean(lua, 1);
+        lua_setfield(lua, -2, cap.c_str());
+    }
+    if (lua_pcall(lua, 4, 0, 0) != 0) {
         lua_pop(lua, 1);
     }
 }

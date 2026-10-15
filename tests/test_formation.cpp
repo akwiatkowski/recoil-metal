@@ -257,6 +257,10 @@ TEST_CASE("a grouped naval move uses naval block widths", "[formation]") {
     // units through the naval blocks, not the land ones: up to nine hulls fill
     // a three-wide block (`ThreeNavalGrowthFormation`), so a four-frigate group
     // move holds three on the anchor line with exactly one trailing behind it.
+    // The sea call passes `spacing` 1.5 (formations.lua:722) and the naval
+    // blocks set `LineBreak = 0.5` (formations.lua:451), so the trailing row
+    // sits 1.5 diameters (12 elmos at the roster's fixed 4-elmo radius) behind
+    // the anchor — 888, not the land 892.
     Fixture fix;
     std::vector<UnitId> group;
     for (int i = 0; i < 4; ++i) {
@@ -275,7 +279,7 @@ TEST_CASE("a grouped naval move uses naval block widths", "[formation]") {
         const float x = rm::test::asFloat(entries.front().targetX());
         if (x == Catch::Approx(900.0f).margin(0.01f)) {
             ++front;
-        } else if (x == Catch::Approx(892.0f).margin(0.01f)) {
+        } else if (x == Catch::Approx(888.0f).margin(0.01f)) {
             ++back;
         }
     }
@@ -289,6 +293,8 @@ TEST_CASE("a grouped naval attack-move uses naval attack widths", "[formation]")
     // block (`FiveWideNavalAttackFormation`), so a six-frigate group
     // attack-move holds five on the anchor line with one trailing behind it —
     // where the land `AttackFormation` would hold all six on an eight-wide row.
+    // Same 1.5-diameter sea spacing (formations.lua:667-668, `LineBreak = 0.5`
+    // at 501): the trailer sits at 888, not the land 892.
     Fixture fix;
     std::vector<UnitId> group;
     for (int i = 0; i < 6; ++i) {
@@ -309,7 +315,7 @@ TEST_CASE("a grouped naval attack-move uses naval attack widths", "[formation]")
         const float x = rm::test::asFloat(entries.front().targetX());
         if (x == Catch::Approx(900.0f).margin(0.01f)) {
             ++front;
-        } else if (x == Catch::Approx(892.0f).margin(0.01f)) {
+        } else if (x == Catch::Approx(888.0f).margin(0.01f)) {
             ++back;
         }
     }
@@ -322,7 +328,9 @@ TEST_CASE("a grouped sub move sails its own growth blocks", "[formation]") {
     // submerged hulls in their own blocks: up to nine subs fill a three-wide
     // block (`ThreeWideSubGrowthFormation`, formations.lua:534-539), so a
     // four-sub group move holds three on the anchor line with one trailing —
-    // where the land `FourWide` block would hold all four abreast.
+    // where the land `FourWide` block would hold all four abreast. Subs sail at
+    // the same 1.5 sea spacing (formations.lua:723, `LineBreak = 0.5` at 535):
+    // the trailer sits at 888, not the land 892.
     Fixture fix;
     rm::unitdef::UnitDef subDef;
     subDef.name = "test_sub";
@@ -348,7 +356,7 @@ TEST_CASE("a grouped sub move sails its own growth blocks", "[formation]") {
         const float x = rm::test::asFloat(entries.front().targetX());
         if (x == Catch::Approx(900.0f).margin(0.01f)) {
             ++front;
-        } else if (x == Catch::Approx(892.0f).margin(0.01f)) {
+        } else if (x == Catch::Approx(888.0f).margin(0.01f)) {
             ++back;
         }
     }
@@ -406,6 +414,8 @@ TEST_CASE("a grouped sub attack-move sails its own attack blocks", "[formation]"
     // block (the `FiveWideSubGrowthFormation` reuse, formations.lua:656), so a
     // six-sub group attack-move holds five on the anchor line with one trailing
     // — where the land `TwoRow` eight-wide block would hold all six abreast.
+    // Same 1.5 sub spacing (formations.lua:668, `LineBreak = 0.5` at 564):
+    // the trailer sits at 888, not the land 892.
     Fixture fix;
     rm::unitdef::UnitDef subDef;
     subDef.name = "test_sub";
@@ -433,10 +443,43 @@ TEST_CASE("a grouped sub attack-move sails its own attack blocks", "[formation]"
         const float x = rm::test::asFloat(entries.front().targetX());
         if (x == Catch::Approx(900.0f).margin(0.01f)) {
             ++front;
-        } else if (x == Catch::Approx(892.0f).margin(0.01f)) {
+        } else if (x == Catch::Approx(888.0f).margin(0.01f)) {
             ++back;
         }
     }
     CHECK(front == 5);
+    CHECK(back == 1);
+}
+
+TEST_CASE("a grouped naval move spreads slots at sea spacing", "[formation]") {
+    // Retail `GrowthFormation` (ART-S007 lua/formations.lua:722) calls
+    // `BlockBuilderLand(seaUnitsList, seaBlock, NavalCategories, 1.5)`, and every
+    // naval block sets `LineBreak = 0.5` (formations.lua:451-478) — so columns
+    // spread 1.5 slot units and rows advance 1 + 0.5 per step: the trailing row
+    // sits 1.5 diameters behind the anchor, not one. The roster's fixed 4-elmo
+    // radius makes that 12 elmos behind the click.
+    Fixture fix;
+    std::vector<UnitId> group;
+    for (int i = 0; i < 4; ++i) {
+        group.push_back(fix.roster.add(fix.ship, 200.0f,
+                                       200.0f + 10.0f * static_cast<float>(i),
+                                       0, 500.0f));
+    }
+    const rm::sim::ApplyCommandResult result = fix.issueMove(group, 900.0f, 215.0f);
+    REQUIRE(result.accepted == group);
+
+    std::size_t front = 0;
+    std::size_t back = 0;
+    for (const UnitId member : group) {
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        const float x = rm::test::asFloat(entries.front().targetX());
+        if (x == Catch::Approx(900.0f).margin(0.01f)) {
+            ++front;
+        } else if (x == Catch::Approx(888.0f).margin(0.01f)) {
+            ++back;
+        }
+    }
+    CHECK(front == 3);
     CHECK(back == 1);
 }

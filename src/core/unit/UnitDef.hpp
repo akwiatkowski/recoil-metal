@@ -196,6 +196,16 @@ struct UnitDef {
     int buildIconSortPriority = 0;
     int strategicIconSortPriority = 0;
 
+    /// `C-218`'s distinguishing counter-examples (`fa-exe-analysis-plan.md`): unlike the
+    /// zero-guarded family, `Physics.MaxSpeedReverse` and `Physics.BackUpDistance` get
+    /// `-1.0` from the constructor and use `< 0` tests, so an absent key is NOT the same
+    /// as an explicit zero. 73 shipped units author `MaxSpeedReverse = 0` (UEL0201 among
+    /// them: "cannot reverse"); absence reads -1 ("unstated"). Ogrids/s and ogrids,
+    /// like their forward counterparts; no consumer yet, recorded for the mover.
+    float maxSpeedReverseOgridsPerSecond = -1.0f;
+    float backUpDistanceOgrids = -1.0f;
+
+
     /// Elmos per second. Recoil's modern `speed` field is already per second;
     /// only the legacy `maxVelocity` is per frame (UnitDef.cpp:442-443).
     float speedElmosPerSecond = 0.0f;

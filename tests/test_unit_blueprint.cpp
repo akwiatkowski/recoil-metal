@@ -1613,3 +1613,37 @@ TEST_CASE("C-219: absent OccupancyCaps derives from the motion-class layer table
     REQUIRE(kept.has_value());
     CHECK(kept->occupancyCaps == 3);
 }
+
+TEST_CASE("C-218: absent MaxSpeedReverse and BackUpDistance read as the -1 sentinel") {
+    // `C-218`'s distinguishing counter-examples (`fa-exe-analysis-plan.md`): unlike the
+    // zero-guarded family, `MaxSpeedReverse` and `BackUpDistance` get `-1.0` from the
+    // constructor and use `< 0` tests, so an absent key is NOT the same as an explicit
+    // zero. UEL0201 authors `MaxSpeedReverse = 0` (cannot reverse); absence must read
+    // -1 (the "unstated" sentinel), not 0. Currently fails: the keys are unread.
+    const Blueprint absent{"XXB0901_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 3.4 },
+            SizeX = 0.7, SizeY = 0.5, SizeZ = 0.9,
+        }
+    )"};
+    const auto none = rm::unitbp::loadFile(absent.path());
+    REQUIRE(none.has_value());
+    CHECK(none->maxSpeedReverseOgridsPerSecond == Catch::Approx(-1.0f));
+    CHECK(none->backUpDistanceOgrids == Catch::Approx(-1.0f));
+
+    // An explicit zero stays zero: 73 shipped units author `MaxSpeedReverse = 0`
+    // (UEL0201 among them), which is "no reverse", not "unstated".
+    const Blueprint zero{"XXB0902_unit.bp", R"(
+        UnitBlueprint {
+            Physics = {
+                MotionType = 'RULEUMT_Land', MaxSpeed = 3.4,
+                MaxSpeedReverse = 0, BackUpDistance = 0,
+            },
+            SizeX = 0.7, SizeY = 0.5, SizeZ = 0.9,
+        }
+    )"};
+    const auto stated = rm::unitbp::loadFile(zero.path());
+    REQUIRE(stated.has_value());
+    CHECK(stated->maxSpeedReverseOgridsPerSecond == Catch::Approx(0.0f));
+    CHECK(stated->backUpDistanceOgrids == Catch::Approx(0.0f));
+}

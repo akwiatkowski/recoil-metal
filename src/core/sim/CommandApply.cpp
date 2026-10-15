@@ -926,6 +926,17 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     const bool allSubmerged = std::ranges::all_of(formationMembers, [&](UnitId unit) {
         return store.motion()[unit.index].submersible;
     });
+    // Retail `BlockBuilderLand` multiplies every sea/sub slot by the call-site
+    // `spacing` argument: `GrowthFormation` passes 1.5 for both sea and sub
+    // lists (formations.lua:722-723) and `AttackFormation` passes 1.5 too
+    // (formations.lua:667-668); land passes nothing, so 1. The naval blocks
+    // additionally set `LineBreak = 0.5` (formations.lua:451-587), adding half
+    // a row step per row transition — columns spread 1.5 diameters and rows
+    // advance 1.5 diameters. Fixed-point `3/2` throughout (C-178, ART-S007).
+    const Fx seaSlotSpacing =
+        (allSubmerged || allSurfaceWater) ? Fx::fromRatio(3, 2) : Fx::fromInt(1);
+    const Fx seaRowSpacing =
+        (allSubmerged || allSurfaceWater) ? Fx::fromRatio(3, 2) : Fx::fromInt(1);
     const std::size_t formationWidth = allSubmerged
                                            ? subFormationWidth(formationMembers.size(),
                                                                isAttackOrder)
@@ -1417,15 +1428,15 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                                                            ? -static_cast<FxWide>(column + 1)
                                                            : static_cast<FxWide>(column);
                     localX = Fx::fromRaw(
-                        saturate(FxWide{radius.raw()} * halfDiameterOffsets));
+                        saturate(FxWide{(radius * seaSlotSpacing).raw()} * halfDiameterOffsets));
                 } else {
                     const FxWide diameterOffsets = column % 2 == 0
                                                        ? -static_cast<FxWide>(column / 2)
                                                        : static_cast<FxWide>((column + 1) / 2);
                     localX = Fx::fromRaw(
-                        saturate(FxWide{diameter.raw()} * diameterOffsets));
+                        saturate(FxWide{(diameter * seaSlotSpacing).raw()} * diameterOffsets));
                 }
-                localZ = Fx::fromRaw(saturate(-FxWide{diameter.raw()}
+                localZ = Fx::fromRaw(saturate(-FxWide{(diameter * seaRowSpacing).raw()}
                                               * static_cast<FxWide>(row)));
             }
         } else if ((issue.kind == CommandKind::Move || issue.kind == CommandKind::AttackMove)

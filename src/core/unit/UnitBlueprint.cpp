@@ -339,6 +339,12 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
             ? numberOr(*air, "MaxAirspeed", rawMaxSpeedOgrids)
             : rawMaxSpeedOgrids;
     def.speedElmosPerSecond = authoredSpeed * scmap::kElmosPerOgrid;
+    // `C-218`'s distinguishing counter-examples (`fa-exe-analysis-plan.md`): `MaxSpeedReverse`
+    // and `BackUpDistance` get `-1.0` from the constructor and use `< 0` tests, so absence
+    // is NOT zero. Ogrids/s and ogrids like their forward counterparts; an explicit zero
+    // (UEL0201's `MaxSpeedReverse = 0`: "cannot reverse") stays zero.
+    def.maxSpeedReverseOgridsPerSecond = numberOr(*physics, "MaxSpeedReverse", -1.0f);
+    def.backUpDistanceOgrids = numberOr(*physics, "BackUpDistance", -1.0f);
 
     // Degrees per second to radians. No 65536 and no tick rate: this family
     // authors the quantity in the unit a person would use, which is worth noting

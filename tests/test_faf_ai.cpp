@@ -3612,6 +3612,36 @@ TEST_CASE("FAF air flyby clamps to retail's 5-elmo map margin",
     INFO(ai.lastError());
     REQUIRE(ok);
 }
+TEST_CASE("FAF snapshot units answer TestToggleCaps from authored ToggleCaps",
+          "[faf][ai][toggle-caps]") {
+    // Retail `Unit:TestToggleCaps` answers from the blueprint's authored
+    // `General.ToggleCaps` table (engine `Unit.lua:710` stub documents the
+    // contract). FAF's scouting loop gates the cloak enable on it
+    // (platoon.lua:1293 `RULEUTC_CloakToggle`), so a missing answer would fire
+    // the counted stub (nil) and error the scout thread at the call.
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 2, base = 'NormalMain', markers = {} })
+        local brain = __rm_faf.brains[0]
+        __rm_faf_type('CLOAKSCOUT', {'AIR', 'SCOUT'}, nil, {RULEUTC_CloakToggle = true})
+        __rm_faf_type('PLAINSCOUT', {'AIR', 'SCOUT'})
+        local cloaked = setmetatable({h=1, bp='CLOAKSCOUT', x=0, z=0,
+            __cats=__rm_faf.cats.CLOAKSCOUT}, __rm_faf.unitMeta)
+        local plain = setmetatable({h=2, bp='PLAINSCOUT', x=0, z=0,
+            __cats=__rm_faf.cats.PLAINSCOUT}, __rm_faf.unitMeta)
+        assert(cloaked:TestToggleCaps('RULEUTC_CloakToggle') == true,
+            'authored ToggleCaps answer true')
+        assert(plain:TestToggleCaps('RULEUTC_CloakToggle') == false,
+            'absent ToggleCaps answer false')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
 TEST_CASE("C-418: the Artillery slot needs ARTILLERY and STRATEGIC together",
           "[faf][ai][threat-query]") {
     // C-418 (`0x0071cf00` prologue): the f[9] Artillery slot's category bit-id
