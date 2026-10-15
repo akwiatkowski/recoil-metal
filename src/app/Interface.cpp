@@ -1072,9 +1072,64 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
             }
         }
 
-        if (!emittedUefPair && !emittedCybran) {
-            appendBuildBeam(particles, {{fx, fy + 4.0f, fz}}, {{x, toY, z}}, energy);
+        // Aeon's engineer beams (`CreateAeonCommanderBuildingEffects`, retail
+        // `lua/EffectUtilities.lua`): the `beamEnd` entity is warped to the
+        // target's position, so each `BuildEffectBones` bone streams one
+        // `AeonBuildBeams01` beam to the pad — no sweep, no random offset.
+        bool emittedAeon = false;
+        if (!emittedUefPair && !emittedCybran && faction == rm::sim::Faction::Aeon
+            && builderDef != nullptr && !builderDef->buildEffectBones.empty()
+            && work.builder.index < scene.drawIndexOf.size()) {
+            const rm::SelectionEntry where = scene.drawIndexOf[work.builder.index];
+            if (where.batch < scene.batches.size() && where.batch < scene.drawScratch.size()
+                && where.batch < scene.drawSlotOf.size()
+                && where.instance < scene.drawScratch[where.batch].size()
+                && where.instance < scene.drawSlotOf[where.batch].size()
+                && scene.drawSlotOf[where.batch][where.instance] == work.builder.index) {
+                const rm::UnitBatch& batch = scene.batches[where.batch];
+                if (batch.model != nullptr) {
+                    const rm::UnitInstance& drawn = scene.drawScratch[where.batch][where.instance];
+                    const float padY = field.heightAtWorld(x, z);
+                    const std::array<float, 3> end =
+                        rm::aeonBuildBeamEnd(x, padY, z);
+                    const rm::InstancePlacement placement{
+                        .position = drawn.position,
+                        .rotationX = drawn.rotationX,
+                        .rotationY = drawn.rotationY,
+                        .rotationZ = drawn.rotationZ,
+                        .scale = drawn.scale,
+                    };
+                    for (const std::string& name : builderDef->buildEffectBones) {
+                        const auto bone = std::find_if(
+                            batch.model->bones.begin(), batch.model->bones.end(),
+                            [&name](const rm::ModelBone& candidate) {
+                                return candidate.name == name;
+                            });
+                        if (bone == batch.model->bones.end()) {
+                            continue;
+                        }
+                        const std::size_t flat = static_cast<std::size_t>(
+                            std::distance(batch.model->bones.begin(), bone));
+                        rm::BoneTransform rest{};
+                        rest.translation = bone->globalOffset;
+                        if (flat < batch.builderAim.boneFlags.size()) {
+                            rest.translation = rm::applyBuilderAim(
+                                rest.translation, batch.builderAim.boneFlags[flat],
+                                batch.builderAim,
+                                rm::BuilderAimAngles{.yaw = drawn.builderYaw,
+                                                     .pitch = drawn.builderPitch});
+                        }
+                        appendBuildBeam(particles, rm::boneWorldPosition(rest, placement),
+                                        end, energy);
+                        emittedAeon = true;
+                    }
+                }
+            }
         }
+
+        if (!emittedUefPair && !emittedCybran && !emittedAeon) {
+             appendBuildBeam(particles, {{fx, fy + 4.0f, fz}}, {{x, toY, z}}, energy);
+         }
     }
 
     // THE HELPING HANDS. Every unit the assist scan counted this tick streams to the work

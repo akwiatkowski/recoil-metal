@@ -790,9 +790,14 @@ at each boundary. The third `HasSiloAmmo` gate is now named and implemented
 acquire tick `0x005df7e0`, selected by the `RULEWTT_Projectile` blueprint `+0x130 == 1` gate
 per `C-514`) — an empty counted silo does not even scan for incoming missiles, so the
 unturtled hull holds its heading for a shot the weapon cannot answer, and the live silo
-records ride the `Skirmish.cpp` aim call. Remaining: the returned-missile friendly-fire
-channel (implemented but unreviewed this slice) and whether the redirect cooldown is 10 or
-11 ticks.
+records ride the `Skirmish.cpp` aim call. Reviewed and pinned this slice against
+the Lua (`defaultantiprojectile.lua`, `WaitingState`/`RedirectingState`): the live-launcher
+return keeps the `CollideFriendly`/`DamageFriendly`/`DamageSelf` flip (`C-428`'s
+`DamageInfo+0x7C` skips the sphere `IsAlly` reject, NOSPLASHDAMAGE still rejecting) —
+a returned shot's point hit AND its area blast both admit the source side — while the
+null-`GetLauncher` arm takes the 30-damage fallback (`DoTakeDamage`) with course and
+flags untouched. Both arms ride the existing `shot.friendlyFire` channel with no src
+change. Remaining: whether the redirect cooldown is 10 or 11 ticks.
 
 **Current slice:** `C-095` gives projectile-target weapons a separate nearest-hostile,
 in-range 2-D acquisition path with `max(MaxRadius, MaxRadius * TrackingRadius)` reach; it neither
@@ -818,11 +823,13 @@ non-strategic enemy MISSILE inside the radius turns back on its live launcher, o
 rate cycle, dead owners reaped, SaveState v10. **Acquire-gate follow-up implemented
 (`C-511`/`C-423`):** an empty counted silo skips the incoming-missile scan entirely, so the
 unturtled hull holds rather than tracking a shot the weapon cannot answer; `siloGateOpen`
-is now `const`-correct and shared by aim and fire. **Named divergences:** adjacency
-modifier fixed at 1, `--units` crowds unwired; the returned-missile friendly-fire channel
-is implemented (`shot.friendlyFire` admits/damages the source side) but unreviewed against
- Lua's `CollideFriendly`/`DamageFriendly`/`DamageSelf` flip this slice; the cooldown may be
-10 or 11 ticks (`WaitSeconds` runs n·10+1).
+is now `const`-correct and shared by aim and fire. **Redirect review follow-up
+(`C-088`/`C-428`):** the live-launcher return keeps the Lua's
+`CollideFriendly`/`DamageFriendly`/`DamageSelf` flip — point hit and area blast both
+admit the source side; the null-`GetLauncher` arm deals the 30-damage Lua fallback with
+course and flags untouched (both pinned in `test_combat.cpp`, no src change).
+**Named divergences:** adjacency modifier fixed at 1, `--units` crowds unwired;
+the cooldown may be 10 or 11 ticks (`WaitSeconds` runs n·10+1).
 
 ```text
 /goal Advance FA-MISSILES by closing the remaining WP-29 boundaries, with exact
@@ -835,16 +842,24 @@ refresh FA-MISSILES.
 
 ### FA-DAMAGE - Damage, Death, And Shields
 
-**Largest gap:** ordinary bubbles and personal UnitShield boxes now share the collidable shield
-path. `CollisionCenter*` and `CollisionSize*` drive box containment and projectile sweeps, while a
-conservative bound is used only for spatial admission. The remaining C-143 residue is the owner's
-armour multiplier; PersonalBubble and transport coverage still need their separate semantics.
+**Largest gap:** the C-143 owner-armour residue is closed — each shield absorbs through its
+generator's own armour class plus the owner's-army handicap divide (`C-396`/`C-428`,
+`tests/test_shield.cpp:"each shield uses its owner's armour multiplier for absorption"`,
+`"a handicapped owner's bubble absorbs divided damage"`). `C-428`'s conjunction is now
+pinned too: a `NOSPLASHDAMAGE` ally still rejects a DamageFriendly death blast while an
+ordinary ally beside it takes the full amount
+(`tests/test_shield.cpp:"a NOSPLASHDAMAGE ally still rejects a friendly death blast"`,
+2026-10-15, failing-then-green; 26 shield cases green, full ctest 2201/2201 green).
+PersonalBubble shelters only its generator and TransportShield denies carrier/cargo damage
+while sheltering nobody (both tested); the shield script-bit toggle keeps `OffHealth`
+across recharge (`C-350`, SaveState v36).
 
 ```text
-/goal Advance FA-DAMAGE by applying the shield owner's armour multiplier from C-143 instead of
-the synthetic Shield armour class. Write mixed-owner and damage-type regressions first, preserve
-the established sphere/box admission and one-charge rules, run make test and make verify, then
-update WP-30/31 plus the remaining PersonalBubble and transport-shield boundary.
+/goal Advance FA-DAMAGE on the WP-32 script-policy axis: the C-143/C-396/C-428 numeric
+contract is fully pinned (owner armour, handicap divide, DamageFriendly/NOSPLASHDAMAGE
+conjunction). Next is the remaining PersonalBubble and transport-shield boundary per
+`C-397`, then WP-30/31 confirmation; preserve the established sphere/box admission and
+one-charge rules, run make test and make verify.
 ```
 
 ### FA-INTEL - Vision, Radar, Sonar, And Counter-Intel
@@ -1141,8 +1156,12 @@ seconds, matching `EffectUtilities.lua:227-303`; stalled work emits nothing. **C
 `CollisionOffsetY` lift, retargeted every 0.2 s per `CreateCybranBuildBeams`); draws from a
 frame-keyed splitmix32 stream, sim hash untouched (`tests/test_build_effects.cpp`,
 `src/core/scene/BuildEffects.cpp`, `src/app/Interface.cpp`; `UnitDef` keeps
-`sizeXElmos`/`sizeZElmos`/`collisionOffsetYElmos`, URL0107's 0.15 ogrids). Aeon/Seraphim keep
-the existing centre stream until their authored styles land.
+`sizeXElmos`/`sizeZElmos`/`collisionOffsetYElmos`, URL0107's 0.15 ogrids). **Aeon landed
+2026-10-15:** each `BuildEffectBones` bone streams green-white to the pad per
+`CreateAeonCommanderBuildingEffects` (`beamEnd` warped to the target position,
+one `AeonBuildBeams01` beam per bone, no sweep or offset; `rm::aeonBuildBeamEnd`,
+fixed-camera captures at `/tmp/rm-aeon-build{,2}.png` identical, sim hash untouched).
+Seraphim keeps the existing centre stream until its authored style lands.
 
 Weapon effects now resolve from the original Lua declarations — projectile and unit
 scripts, faction classes, `EffectTemplates.lua`, `defaultcollisionbeams.lua` — executed in an
@@ -1194,27 +1213,26 @@ offscreen capture, preserve the sim hash, and update WP-41 and FA-PRESENT.
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume
 
-**Current slice:** the recon-history envelope now has its continued-hash proof
-(`C-426`, tested — `[fa-persist]`): a mid-order save with intel configured
-carries the recon snapshot (retained contacts, seen-ever latches, brownout
-recovery, explored bitmaps, fog flags), the restore re-stamps the grids from
-the restored units on the next update — `C-426` pins that no cell store is
-needed, the grids persist by reference — and the resumed match hashes
-identically for 300 ticks. A v52 decode-bound fix landed with it: the
-explored-cell count guarded `24` minimum bytes per cell where each cell is
-one `u8` (`SaveState.cpp:readIntel`), rejecting every save that carried a
-nonempty explored bitmap. SaveState v37 retains all older readers; a saved
-FlowField reduces to its expansion count — the deterministic Dijkstra replays
-it on restore.
+**Current slice:** emitter placements now ride the envelope with their
+continued-hash proof (`C-552`, tested — `[fa-persist]`): a mid-order save with
+intel configured carries one stamp record per slot (square, alliance, disable
+mask, cheat, layer key plus the exact sense/hidden square lists the grids
+held), the restore re-adds the grids directly — no priming `update` is owed,
+and none may run, since an extra tick would bank brownout recovery and age
+retained contacts past the live match — and the resumed match hashes
+identically for 300 ticks. SaveState v59 retains all older readers; a pre-v59
+save decodes with empty stamp records and keeps the `C-426` re-stamp contract
+(pinned by a v58-encode legacy test). A saved FlowField still reduces to its
+expansion count — the deterministic Dijkstra replays it on restore.
 
 **Largest gap:** this is not yet a general mid-combat app save. External input
 and the opponent VM remain outside the envelope. Replay is a separate
 compatibility boundary.
 
 ```text
-/goal Continue the pool-by-pool envelope: emitter placements next with their
-continued-hash proof. Keep external input and replay transport separate,
-preserve old readers, and update WP-44 and FA-PERSIST.
+/goal Continue the pool-by-pool envelope: the remaining intel grids and
+external input next with their continued-hash proof. Keep replay transport
+separate, preserve old readers, and update WP-44 and FA-PERSIST.
 ```
 
 ## Maintenance Contract

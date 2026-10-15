@@ -3853,6 +3853,55 @@ TEST_CASE("a redirector turns an enemy missile back on its launcher") {
         CHECK(roster.store.health()[launcher.index].current
               < roster.store.health()[launcher.index].maximum);
     }
+    SECTION("a launcher-less shot is not re-aimed and takes the fallback damage") {
+        // The Lua reads `other:GetLauncher()` into `self.Enemy` and only calls
+        // `SetNewTarget` when it is non-null (`WaitingState.OnCollisionCheck`);
+        // the null-Enemy path instead deals 30 fallback damage in
+        // `RedirectingState.Main` (`DoTakeDamage`). A shot with `firedBy` dead
+        // must keep its course and flags and lose 30 from its authored pool.
+        std::vector<rm::sim::MissileRedirect> redirects{
+            rm::sim::MissileRedirect{.owner = roster.store.idAt(0),
+                                     .radiusElmos = rm::sim::fxFromFloat(120.0f),
+                                     .cooldownTicks = 10,
+                                     .remaining = 0}};
+        Projectile shot = incoming();
+        shot.maxHealth = rm::sim::Mag::fromInt(100);
+        shot.health = rm::sim::Mag::fromInt(100);
+        shot.firedBy = UnitId{};  // no live launcher: the `self.Enemy` null arm
+        const std::vector<Projectile> shots = flyOne(redirects, shot);
+        REQUIRE(shots.size() == 1);
+        CHECK(shots.front().velocity[0] < rm::sim::Fx{});
+        CHECK_FALSE(shots.front().friendlyFire);
+        CHECK(shots.front().health == rm::sim::Mag::fromInt(70));
+        CHECK(redirects.front().remaining == 10);
+    }
+
+    SECTION("a redirected shot's blast also admits the source side") {
+        // `C-428`: retail's sphere worker skips its `IsAlly` reject when the
+        // `DamageFriendly` bit is set — and the redirect Lua sets exactly that
+        // bit. The point-hit path already admits the source side; this pins
+        // the area-blast half: an allied bystander of the launcher still takes
+        // the returned shot's splash.
+        const UnitId bystander =
+            roster.add(roster.addType(targetDef()), 310.0f, 0.0f, 1, 100.0f);
+        Projectile shot = incoming();
+        shot.damage = rm::unitdef::flatDamage(rm::sim::Mag::fromInt(50));
+        shot.damageRadiusElmos = rm::sim::fxFromFloat(30.0f);
+        shot.friendlyFire = true;  // as the redirect sets it on the return leg
+        shot.position = rm::test::at(200, 4, 0);  // short of both: sweep flies it in
+        shot.velocity = rm::test::at(20, 0, 0);   // +20/tick toward launcher/bystander
+        shot.ticksRemaining = 10;  // sweep strikes the launcher; blast follows
+        std::vector<Projectile> shots{shot};
+        std::vector<rm::sim::MissileRedirect> none;
+        for (int tick = 0; tick < 10 && !shots.empty(); ++tick) {
+            rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                        rm::sim::Terrain{flatField()}, roster.rate, nullptr,
+                                        &roster.catalog, none);
+        }
+        CHECK(shots.empty());
+        CHECK(roster.store.health()[bystander.index].current
+              < roster.store.health()[bystander.index].maximum);
+    }
 
     SECTION("a diverted missile still cannot hurt its own side") {
         // The flare's `SetNewTarget` never flips the friendly-fire flags — only

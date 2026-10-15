@@ -32,5 +32,12 @@ struct BuildBeamEnds {
                                                          float drawX, float drawY,
                                                          float drawZ) noexcept;
 
+/// Aeon's engineer beam end (`CreateAeonCommanderBuildingEffects` in retail
+/// `lua/EffectUtilities.lua`): the `beamEnd` entity is warped to the target's
+/// position, so every bone's beam lands at the pad — no sweep, no offset.
+[[nodiscard]] std::array<float, 3> aeonBuildBeamEnd(float siteX, float siteY,
+                                                    float siteZ) noexcept;
+
+
 
 }  // namespace rm

@@ -106,6 +106,36 @@ TEST_CASE("an allied shield absorbs a death blast only when it damages friendlie
     CHECK(friendly.first == rm::sim::Mag::fromInt(60));
     CHECK(friendly.second == rm::sim::Mag::fromInt(100));
 }
+TEST_CASE("a NOSPLASHDAMAGE ally still rejects a friendly death blast") {
+    // `C-428`: the DamageFriendly bit skips the IsAlly reject, but the
+    // NOSPLASHDAMAGE category reject stands regardless — a splash-immune ally
+    // of the dying unit takes nothing from its friendly blast while an
+    // ordinary ally beside it takes the full amount.
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    rm::unitdef::UnitDef immune = plainDef("splash_immune");
+    immune.categories = {"LAND", "NOSPLASHDAMAGE"};
+    const rm::UnitTypeIndex immuneType = roster.addType(immune);
+    const rm::sim::UnitId dying = roster.add(targetType, 0.0f, 0.0f, 0, 100.0f);
+    const rm::sim::UnitId tagged = roster.add(immuneType, 0.0f, 40.0f, 0, 100.0f);
+    const rm::sim::UnitId plain = roster.add(targetType, 0.0f, 60.0f, 0, 100.0f);
+
+    rm::unitdef::UnitDef exploding = plainDef("exploding");
+    rm::unitdef::Weapon death;
+    death.role = rm::unitdef::WeaponRole::Death;
+    death.damage = rm::sim::Mag::fromInt(40);
+    death.damageRadius = rm::sim::Fx::fromInt(100);
+    death.damageFriendly = true;
+    exploding.weapons.push_back(death);
+    (void)rm::sim::explodeOnDeath(exploding, rm::test::at(0, 0, 0), 0, roster.store,
+                                  armies, dying, nullptr, &roster.catalog);
+
+    CHECK(roster.health(tagged).current == rm::sim::Mag::fromInt(100));
+    CHECK(rm::test::asFloat(roster.health(plain).current) == Approx(60.0f));
+}
+
 
 TEST_CASE("shield overkill collapses the bubble and leaks only the remainder") {
     rm::test::Roster roster;

@@ -73,5 +73,12 @@ std::array<float, 3> cybranBuildBeamTarget(float sizeXElmos, float sizeYElmos,
     const float sine = std::sin(headingRadians);
     return {{cosine * rx - sine * rz, y, sine * rx - cosine * rz}};
 }
+std::array<float, 3> aeonBuildBeamEnd(float siteX, float siteY,
+                                      float siteZ) noexcept {
+    // `CreateAeonCommanderBuildingEffects` (`lua/EffectUtilities.lua`): the
+    // `beamEnd` entity is `Warp`ed to `unitBeingBuilt:GetPosition()`, so
+    // every `BuildEffectBones` bone's `AeonBuildBeams01` beam lands there.
+    return {{siteX, siteY, siteZ}};
+}
 
 }  // namespace rm

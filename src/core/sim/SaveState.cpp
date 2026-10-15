@@ -196,6 +196,12 @@ constexpr std::uint32_t kVersion57 = 57;
 // pre-v58 saves decode it as zero, which is the unauthored default retail
 // implies anyway (all fifteen non-winged flyers omit it).
 constexpr std::uint32_t kVersion58 = 58;
+// v59 adds the intel emitter placements (C-552): one stamp record per unit
+// slot — the square/alliance/mask/cheat/layer change key plus the exact
+// square lists each slot added — so a restore re-adds the grids directly and
+// owes no priming update. Pre-v59 saves decode with empty stamp records,
+// which keeps the C-426 re-stamp contract.
+constexpr std::uint32_t kVersion59 = 59;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1401,7 +1407,7 @@ void writePathService(PayloadWriter& w, const std::optional<PathService::Snapsho
 }
 
 void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state,
-                bool withExplored) {
+                bool withExplored, bool withPlacements) {
     w.u8(state.has_value());
     if (!state) {
         return;
@@ -1438,10 +1444,31 @@ void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state,
         w.count(state->fogOfWar.size());
         for (std::uint8_t flag : state->fogOfWar) w.u8(flag);
     }
+    if (withPlacements) {
+        // v59 (`C-552`): the emitter stamp records — one change key plus the
+        // exact square lists per slot, so the restore re-adds the grids.
+        w.count(state->placements.size());
+        for (std::size_t slot = 0; slot < state->placements.size(); ++slot) {
+            const Intel::SavedPlacement& key = state->placements[slot];
+            w.i32(key.square);
+            w.i32(key.alliance);
+            w.u16(key.intelMask);
+            w.u8(key.intelCheat ? 1 : 0);
+            w.u8(key.underwater ? 1 : 0);
+            for (std::size_t kind = 0; kind < kIntelKindCount; ++kind) {
+                w.count(state->sense[slot][kind].size());
+                for (std::int32_t square : state->sense[slot][kind]) w.i32(square);
+            }
+            for (std::size_t kind = 0; kind < kHiddenKindCount; ++kind) {
+                w.count(state->hidden[slot][kind].size());
+                for (std::int32_t square : state->hidden[slot][kind]) w.i32(square);
+            }
+        }
+    }
 }
 
 [[nodiscard]] bool readIntel(PayloadReader& r, std::optional<Intel::Snapshot>& state,
-                             bool withExplored) {
+                             bool withExplored, bool withPlacements) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) {
@@ -1508,6 +1535,46 @@ void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state,
         state->fogOfWar.resize(fogCount);
         for (std::uint8_t& flag : state->fogOfWar) {
             if (!r.u8(flag) || flag > 1) return false;
+        }
+    }
+    if (withPlacements) {
+        // v59: one stamp record per slot. Absent in older saves — the restore
+        // treats empty vectors as "re-stamp from positions" (C-426).
+        std::size_t stampSlots{};
+        if (!r.count(stampSlots, 8)) return false;
+        state->placements.resize(stampSlots);
+        state->sense.resize(stampSlots);
+        state->hidden.resize(stampSlots);
+        for (std::size_t slot = 0; slot < stampSlots; ++slot) {
+            Intel::SavedPlacement& key = state->placements[slot];
+            std::int32_t square{}, alliance{};
+            std::uint16_t mask{};
+            std::uint8_t cheat{}, wet{};
+            if (!r.i32(square) || !r.i32(alliance) || !r.u16(mask) || !r.u8(cheat)
+                || cheat > 1 || !r.u8(wet) || wet > 1) {
+                return false;
+            }
+            key.square = square;
+            key.alliance = alliance;
+            key.intelMask = mask;
+            key.intelCheat = cheat != 0;
+            key.underwater = wet != 0;
+            for (std::size_t kind = 0; kind < kIntelKindCount; ++kind) {
+                std::size_t count{};
+                if (!r.count(count, 4)) return false;
+                state->sense[slot][kind].resize(count);
+                for (std::int32_t& cell : state->sense[slot][kind]) {
+                    if (!r.i32(cell)) return false;
+                }
+            }
+            for (std::size_t kind = 0; kind < kHiddenKindCount; ++kind) {
+                std::size_t count{};
+                if (!r.count(count, 4)) return false;
+                state->hidden[slot][kind].resize(count);
+                for (std::int32_t& cell : state->hidden[slot][kind]) {
+                    if (!r.i32(cell)) return false;
+                }
+            }
         }
     }
     return true;
@@ -2482,7 +2549,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                                                version >= kVersion53);
     if (version >= kVersion37) writePathService(payloadWriter, state.pathService);
     if (version >= kVersion37)
-        writeIntel(payloadWriter, state.intel, version >= kVersion52);
+        writeIntel(payloadWriter, state.intel, version >= kVersion52, version >= kVersion59);
     if (version >= kVersion42) writeProductionOverrides(payloadWriter, state.productionOverrides);
     if (version >= kVersion44) writeUnitPose(payloadWriter, state.units);
     if (version >= kVersion45) writeEffects(payloadWriter, state.effects);
@@ -2540,7 +2607,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion52 && version != kVersion53
                && version != kVersion54 && version != kVersion55
                && version != kVersion56 && version != kVersion57
-               && version != kVersion58)
+               && version != kVersion58 && version != kVersion59)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2624,7 +2691,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::optional<PathService::Snapshot> pathService;
     if (version >= kVersion37 && !readPathService(reader, pathService)) return std::nullopt;
     std::optional<Intel::Snapshot> intel;
-    if (version >= kVersion37 && !readIntel(reader, intel, version >= kVersion52))
+    if (version >= kVersion37
+        && !readIntel(reader, intel, version >= kVersion52, version >= kVersion59))
         return std::nullopt;
     std::optional<std::vector<Resources>> productionOverrides;
     if (version >= kVersion42 && !readProductionOverrides(reader, productionOverrides)) {
@@ -2691,7 +2759,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion58);
+    return rm::sim::encode(state, kVersion59);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

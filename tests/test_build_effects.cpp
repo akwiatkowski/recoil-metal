@@ -76,3 +76,17 @@ TEST_CASE("Cybran build beams land at a heading-rotated random offset inside "
         rm::cybranBuildBeamTarget(8.0f, 16.0f, 4.0f, 0.0f, 3.0f, 0.75f, 0.5f, 0.25f);
     CHECK(lifted[1] == Approx(11.0f));
 }
+
+TEST_CASE("Aeon engineer beams end at the target pad, one beam per bone") {
+    // `CreateAeonCommanderBuildingEffects` (retail `lua/EffectUtilities.lua`
+    // `lua.scd`): the `beamEnd` entity is warped to
+    // `unitBeingBuilt:GetPosition()` and each `BuildEffectBones` bone streams
+    // one `AeonBuildBeams01` beam to it — no sweep, no random offset. The
+    // beam lands at the pad, unlike UEF's corner sweep or Cybran's
+    // `GetRandomOffset` box.
+    const std::array<float, 3> end =
+        rm::aeonBuildBeamEnd(100.0f, 12.0f, 200.0f);
+    CHECK(end[0] == Approx(100.0f));
+    CHECK(end[1] == Approx(12.0f));
+    CHECK(end[2] == Approx(200.0f));
+}

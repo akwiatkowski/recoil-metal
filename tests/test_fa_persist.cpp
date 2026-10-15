@@ -402,3 +402,151 @@ TEST_CASE("C-150/C-151: the recorded command log replays to the identical match"
           == rm::sim::hashMatch(replayed.scene.store, playback.match));
     std::filesystem::remove(path);
 }
+TEST_CASE("C-552: an intel save resumes with its emitter placements, no priming tick", "[fa-persist]") {
+    // The pool-by-pool envelope's emitter slice: the save carries each slot's
+    // placement (square, alliance, disable mask, cheat, layer) and its stamped
+    // squares, so the restore re-adds the grids directly. No priming `update`
+    // is owed — and none may run, because an extra tick would bank brownout
+    // recovery and age retained contacts past what the live match holds.
+    Scenario live;
+    rm::unitdef::UnitDef dish = tankDef();
+    dish.name = "test_dish";
+    dish.visionRadiusElmos = 80.0f;  // 10 ogrids at the scale-2 vision grid (C-076)
+    dish.radarRadiusElmos = 400.0f;  // 100 ogrids at the scale-4 radar grid (C-076)
+    dish.sonarRadiusElmos = 200.0f;
+    (void)live.spawn(dish, 300, 300, 0);
+    rm::unitdef::UnitDef quiet = tankDef();
+    quiet.name = "test_quiet";
+    const rm::sim::UnitId enemy = live.spawn(quiet, 500, 300, 1);
+    live.scene.intel.configure(2, rm::sim::fxFromFloat(live.field.widthElmos()),
+                               rm::sim::fxFromFloat(live.field.depthElmos()),
+                               rm::sim::VisionStyle::ForgedAlliance);
+    auto runner = live.runner();
+
+    int tick = 0;
+    REQUIRE(rm::app::issueMove(live.scene, enemy, 0, static_cast<rm::TickIndex>(tick),
+                               rm::sim::fxFromFloat(600.0f), rm::sim::fxFromFloat(300.0f)));
+    for (; tick < 40; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0);
+    }
+    REQUIRE_FALSE(runner.match.intel->retainedRadarContacts(0).empty());
+
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+        .tick = static_cast<rm::TickIndex>(tick),
+        .random = runner.match.random.snapshot(),
+        .pathServiceBeats = runner.pathService.serviceBeats(),
+        .units = live.scene.store.snapshot(),
+        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+        .pathService = runner.pathService.snapshot(),
+        .intel = runner.match.intel->snapshot()}));
+    REQUIRE(saved);
+    REQUIRE(saved->intel.has_value());
+
+    Scenario resumed;
+    (void)resumed.registerType(dish);
+    (void)resumed.registerType(quiet);
+    resumed.scene.store = rm::sim::UnitStore{saved->units};
+    resumed.scene.intel.configure(2, rm::sim::fxFromFloat(resumed.field.widthElmos()),
+                                  rm::sim::fxFromFloat(resumed.field.depthElmos()),
+                                  rm::sim::VisionStyle::ForgedAlliance);
+    auto continued = resumed.runner();
+    saved->economyArmies->restore(continued.match, resumed.scene.economies,
+                                  resumed.scene.commandersEver);
+    continued.match.random = rm::sim::RandomStream{saved->random};
+    continued.pathService.restoreServiceBeats(saved->pathServiceBeats);
+    const auto gridFor = [&](rm::sim::UnitId unit) -> std::shared_ptr<const rm::sim::PassabilityGrid> {
+        if (!resumed.scene.store.alive(unit)) return nullptr;
+        const auto type = static_cast<std::size_t>(resumed.scene.store.typeAt(unit.index));
+        return std::shared_ptr<const rm::sim::PassabilityGrid>(
+            &continued.passability.gridFor(resumed.scene, type), [](const rm::sim::PassabilityGrid*) {});
+    };
+    continued.pathService.restore(*saved->pathService, gridFor);
+    continued.match.pathService = &continued.pathService;
+    continued.match.intel->restore(*saved->intel);
+    // No priming update: the grids are already re-added from the saved
+    // placements, so radar covers the enemy's ground on the first read.
+    const rm::sim::Transform& foe = resumed.scene.store.transforms()[enemy.index];
+    CHECK(continued.match.intel->sees(0, rm::sim::IntelKind::Radar, foe.x, foe.z));
+
+    for (int step = 0; step < 300; ++step) {
+        INFO("continuation tick " << tick);
+        REQUIRE(rm::sim::hashMatch(live.scene.store, runner.match)
+                == rm::sim::hashMatch(resumed.scene.store, continued.match));
+        (void)rm::app::advanceMatch(runner, tick, 0);
+        (void)rm::app::advanceMatch(continued, tick, 0);
+        ++tick;
+    }
+}
+
+TEST_CASE("C-552: a pre-placement save still decodes and re-stamps", "[fa-persist]") {
+    // Old readers keep the C-426 contract: no placements ride a v58 save (the
+    // last version without them — see SaveState.cpp's kVersion58), so the
+    // restore clears the grids and one priming update re-stamps from positions.
+    Scenario live;
+    rm::unitdef::UnitDef dish = tankDef();
+    dish.name = "test_dish";
+    dish.visionRadiusElmos = 80.0f;
+    dish.radarRadiusElmos = 400.0f;
+    (void)live.spawn(dish, 300, 300, 0);
+    rm::unitdef::UnitDef quiet = tankDef();
+    quiet.name = "test_quiet";
+    const rm::sim::UnitId enemy = live.spawn(quiet, 500, 300, 1);
+    live.scene.intel.configure(2, rm::sim::fxFromFloat(live.field.widthElmos()),
+                               rm::sim::fxFromFloat(live.field.depthElmos()),
+                               rm::sim::VisionStyle::ForgedAlliance);
+    auto runner = live.runner();
+
+    int tick = 0;
+    REQUIRE(rm::app::issueMove(live.scene, enemy, 0, static_cast<rm::TickIndex>(tick),
+                               rm::sim::fxFromFloat(600.0f), rm::sim::fxFromFloat(300.0f)));
+    for (; tick < 40; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0);
+    }
+    REQUIRE_FALSE(runner.match.intel->retainedRadarContacts(0).empty());
+
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encodeAtVersion({
+        .tick = static_cast<rm::TickIndex>(tick),
+        .random = runner.match.random.snapshot(),
+        .pathServiceBeats = runner.pathService.serviceBeats(),
+        .units = live.scene.store.snapshot(),
+        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+        .pathService = runner.pathService.snapshot(),
+        .intel = runner.match.intel->snapshot()}, 58));
+    REQUIRE(saved);
+    REQUIRE(saved->intel.has_value());
+
+    Scenario resumed;
+    (void)resumed.registerType(dish);
+    (void)resumed.registerType(quiet);
+    resumed.scene.store = rm::sim::UnitStore{saved->units};
+    resumed.scene.intel.configure(2, rm::sim::fxFromFloat(resumed.field.widthElmos()),
+                                  rm::sim::fxFromFloat(resumed.field.depthElmos()),
+                                  rm::sim::VisionStyle::ForgedAlliance);
+    auto continued = resumed.runner();
+    saved->economyArmies->restore(continued.match, resumed.scene.economies,
+                                  resumed.scene.commandersEver);
+    continued.match.random = rm::sim::RandomStream{saved->random};
+    continued.pathService.restoreServiceBeats(saved->pathServiceBeats);
+    const auto gridFor = [&](rm::sim::UnitId unit) -> std::shared_ptr<const rm::sim::PassabilityGrid> {
+        if (!resumed.scene.store.alive(unit)) return nullptr;
+        const auto type = static_cast<std::size_t>(resumed.scene.store.typeAt(unit.index));
+        return std::shared_ptr<const rm::sim::PassabilityGrid>(
+            &continued.passability.gridFor(resumed.scene, type), [](const rm::sim::PassabilityGrid*) {});
+    };
+    continued.pathService.restore(*saved->pathService, gridFor);
+    continued.match.pathService = &continued.pathService;
+    continued.match.intel->restore(*saved->intel);
+    // The legacy path: grids persist by reference (C-426), so one priming
+    // update re-stamps them from the restored units before hashing.
+    continued.match.intel->update(resumed.scene.store, resumed.scene.catalog,
+                                  continued.match.armies, nullptr);
+
+    for (int step = 0; step < 300; ++step) {
+        INFO("continuation tick " << tick);
+        REQUIRE(rm::sim::hashMatch(live.scene.store, runner.match)
+                == rm::sim::hashMatch(resumed.scene.store, continued.match));
+        (void)rm::app::advanceMatch(runner, tick, 0);
+        (void)rm::app::advanceMatch(continued, tick, 0);
+        ++tick;
+    }
+}

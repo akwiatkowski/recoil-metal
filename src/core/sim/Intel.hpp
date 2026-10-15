@@ -164,6 +164,11 @@ public:
 
     [[nodiscard]] bool covered(Fx x, Fx z) const noexcept { return covered(squareAt(x, z)); }
 
+    /// Square count — the bound a restore validates saved squares against.
+    [[nodiscard]] std::int32_t squareCount() const noexcept {
+        return static_cast<std::int32_t>(counts_.size());
+    }
+
     /// How many emitters count this square. For tests and for the hash; a caller asking
     /// "can I see this" wants `covered`.
     [[nodiscard]] std::uint16_t count(std::int32_t square) const noexcept {
@@ -397,13 +402,27 @@ public:
     [[nodiscard]] bool intelActive(const UnitStore& store, UnitIndex slot,
                                    IntelType type) const noexcept;
 
+    /// One slot's stamp key in serializable form (SaveState v59): the square,
+    /// alliance, disable mask, cheat and layer bits `update` compares before
+    /// re-stamping. Carried so a restore re-adds the grids directly instead of
+    /// owing a priming `update` — which would bank brownout recovery and age
+    /// retained contacts past what the live match holds.
+    struct SavedPlacement {
+        std::int32_t square = IntelGrid::kNoSquare;
+        std::int32_t alliance = 0;
+        std::uint16_t intelMask = 0;
+        bool intelCheat = false;
+        bool underwater = false;
+    };
+
     /// The authoritative recon history in serializable form (SaveState v37;
-    /// the explored bitmap and fog flags join at v51): retained contacts, the
-    /// seen-ever latches, the brownout recovery counts, the per-alliance
-    /// explored bitmaps and fog-of-war flags. Grids, placements and emitters
-    /// are deliberately absent — the next `update` re-stamps them from unit
-    /// positions, and the script-bit mask in the placement key makes even a
-    /// toggled unit re-stamp correctly.
+    /// the explored bitmap and fog flags join at v52, the stamp records at
+    /// v59): retained contacts, the seen-ever latches, the brownout recovery
+    /// counts, the per-alliance explored bitmaps and fog-of-war flags, and one
+    /// stamp record per slot. The saved squares are the exact lists the grids
+    /// held — restore re-adds them instead of re-stamping from positions, so
+    /// the grids match without a priming pass. Empty `placements` means a
+    /// pre-v59 save: grids stay clear and the next `update` re-stamps.
     struct Snapshot {
         std::vector<std::vector<RetainedRadarContact>> retained;
         std::vector<std::vector<UnitId>> seenEver;
@@ -413,31 +432,68 @@ public:
         /// it rides the save rather than re-deriving from positions.
         std::vector<std::vector<std::uint8_t>> explored;
         /// Per-alliance fog-of-war flags (`C-284`). Empty means all-on, which
-        /// is what a pre-v51 save decodes to.
+        /// is what a pre-v52 save decodes to.
         std::vector<std::uint8_t> fogOfWar;
+        /// One stamp record per unit slot, in slot order. `placements[i]` is
+        /// the change key `update` compared for slot `i`; `sense[i]` and
+        /// `hidden[i]` are the exact square lists its stamp added.
+        std::vector<SavedPlacement> placements;
+        std::vector<std::array<std::vector<std::int32_t>, kIntelKindCount>> sense;
+        std::vector<std::array<std::vector<std::int32_t>, kHiddenKindCount>> hidden;
     };
-    /// Captures the recon history a save must carry.
+    /// Captures the recon history a save must carry, including each slot's
+    /// stamp record (v59) so the restore re-adds the grids directly.
     [[nodiscard]] Snapshot snapshot() const {
-        return {.retained = retainedRadarContacts_,
-                .seenEver = seenEver_,
-                .intelRecovery = intelRecovery_,
-                .intelRecoveryUnit = intelRecoveryUnit_,
-                .explored = explored_,
-                .fogOfWar = fogOfWar_};
+        Snapshot out{.retained = retainedRadarContacts_,
+                     .seenEver = seenEver_,
+                     .intelRecovery = intelRecovery_,
+                     .intelRecoveryUnit = intelRecoveryUnit_,
+                     .explored = explored_,
+                     .fogOfWar = fogOfWar_};
+        // `C-426`: the grids persist by reference — the snapshot records the
+        // stamp key and the exact squares each slot added, so `restore` can
+        // re-add them without re-deriving coverage from positions.
+        out.placements.reserve(placements_.size());
+        out.sense.reserve(emitters_.size());
+        out.hidden.reserve(hiddenEmitters_.size());
+        for (std::size_t slot = 0; slot < placements_.size(); ++slot) {
+            const Placement& key = placements_[slot];
+            out.placements.push_back({.square = key.square,
+                                      .alliance = key.alliance,
+                                      .intelMask = key.intelMask,
+                                      .intelCheat = key.intelCheat,
+                                      .underwater = key.underwater});
+            std::array<std::vector<std::int32_t>, kIntelKindCount> stamped{};
+            std::array<std::vector<std::int32_t>, kHiddenKindCount> stampedHidden{};
+            if (slot < emitters_.size()) {
+                for (std::size_t kind = 0; kind < kIntelKindCount; ++kind) {
+                    stamped[kind] = emitters_[slot][kind].squares;
+                }
+            }
+            if (slot < hiddenEmitters_.size()) {
+                for (std::size_t kind = 0; kind < kHiddenKindCount; ++kind) {
+                    stampedHidden[kind] = hiddenEmitters_[slot][kind].squares;
+                }
+            }
+            out.sense.push_back(std::move(stamped));
+            out.hidden.push_back(std::move(stampedHidden));
+        }
+        return out;
     }
 
-    /// Restores the recon history. Grids and placements stay empty until the
-    /// next `update` re-stamps them — the same state a fresh `configure` leaves.
+    /// Restores the recon history. A v59 save carries each slot's stamp
+    /// record, so the grids are re-added directly and the first hash compares
+    /// live coverage, not empty grids — no priming `update` is owed. A
+    /// pre-v59 save carries no stamp records: grids and placements stay empty
+    /// until the next `update` re-stamps them (the C-426 contract).
     void restore(const Snapshot& state) {
         retainedRadarContacts_ = state.retained;
         seenEver_ = state.seenEver;
         intelRecovery_ = state.intelRecovery;
         intelRecoveryUnit_ = state.intelRecoveryUnit;
         // Whatever this object stamped before the restore belongs to a
-        // different match: clear the grids and the placement records so the
-        // next `update` withdraws nothing stale and re-stamps from the
-        // restored units. The grids are pure derived state — every emitter
-        // re-adds its squares on that pass.
+        // different match: clear the grids and the placement records first, so
+        // the re-add below cannot double-count stale squares.
         for (IntelGrid& grid : grids_) {
             grid.clear();
         }
@@ -445,7 +501,7 @@ public:
             grid.clear();
         }
         // The explored bitmaps and fog flags are accumulated state, not
-        // derived: restore them when the save carried them (v51+), else reset
+        // derived: restore them when the save carried them (v52+), else reset
         // to a fresh match's — nothing explored, fog on everywhere.
         if (state.explored.size() == explored_.size()) {
             explored_ = state.explored;
@@ -460,12 +516,85 @@ public:
             std::ranges::fill(fogOfWar_, std::uint8_t{1});
         }
         placements_.clear();
+        emitters_.clear();
+        hiddenEmitters_.clear();
         // `C-282`: the restored match's listeners already saw these transitions —
         // the first `update` rebuilds `recon_` without emitting.
         recon_.clear();
         reconPrimed_ = false;
-        emitters_.clear();
-        hiddenEmitters_.clear();
+        if (state.placements.empty()) {
+            return;
+        }
+        // The v59 path: the saved squares are the exact lists the grids held,
+        // so re-add them instead of re-stamping from positions. Records are
+        // accepted only when every per-slot vector lines up (placements, sense
+        // and hidden one entry per slot) and every square lands inside its own
+        // grid — a mismatched or out-of-range record means a foreign save, and
+        // the grids stay clear rather than carry a half-restored picture.
+        if (state.placements.size() != state.sense.size()
+            || state.placements.size() != state.hidden.size()) {
+            return;
+        }
+        const std::size_t alliances = alliances_();
+        placements_.resize(state.placements.size());
+        emitters_.resize(state.placements.size());
+        hiddenEmitters_.resize(state.placements.size());
+        for (std::size_t slot = 0; slot < state.placements.size(); ++slot) {
+            const SavedPlacement& saved = state.placements[slot];
+            Placement& placement = placements_[slot];
+            placement.square = saved.square;
+            placement.alliance = saved.alliance;
+            placement.intelMask = saved.intelMask;
+            placement.intelCheat = saved.intelCheat;
+            placement.underwater = saved.underwater;
+            if (placement.square == IntelGrid::kNoSquare) {
+                continue;
+            }
+            if (placement.alliance < 0
+                || static_cast<std::size_t>(placement.alliance) >= alliances) {
+                placement.square = IntelGrid::kNoSquare;
+                continue;
+            }
+            for (std::size_t kind = 0; kind < kIntelKindCount; ++kind) {
+                const std::vector<std::int32_t>& squares = state.sense[slot][kind];
+                const IntelGrid& grid =
+                    grids_[static_cast<std::size_t>(placement.alliance) * kIntelKindCount + kind];
+                bool inside = true;
+                for (const std::int32_t square : squares) {
+                    if (square < 0 || square >= grid.squareCount()) {
+                        inside = false;
+                        break;
+                    }
+                }
+                if (!inside) {
+                    continue;
+                }
+                emitters_[slot][kind].squares = squares;
+                grids_[static_cast<std::size_t>(placement.alliance) * kIntelKindCount + kind].add(squares);
+            }
+            for (std::size_t kind = 0; kind < kHiddenKindCount; ++kind) {
+                const std::vector<std::int32_t>& squares = state.hidden[slot][kind];
+                const IntelGrid& grid =
+                    hiddenGrids_[static_cast<std::size_t>(placement.alliance) * kHiddenKindCount + kind];
+                bool inside = true;
+                for (const std::int32_t square : squares) {
+                    if (square < 0 || square >= grid.squareCount()) {
+                        inside = false;
+                        break;
+                    }
+                }
+                if (!inside) {
+                    continue;
+                }
+                hiddenEmitters_[slot][kind].squares = squares;
+                hiddenGrids_[static_cast<std::size_t>(placement.alliance) * kHiddenKindCount + kind].add(squares);
+            }
+        }
+    }
+    /// Alliance count from the grid layout — the only sizing restore can
+    /// trust, since the snapshot carries no alliance field of its own.
+    [[nodiscard]] std::size_t alliances_() const noexcept {
+        return grids_.empty() ? 0 : grids_.size() / kIntelKindCount;
     }
 
 private:
