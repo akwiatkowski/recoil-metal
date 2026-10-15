@@ -63,12 +63,13 @@ struct Fixture {
     }
 
     [[nodiscard]] rm::sim::ApplyCommandResult issueMove(
-        const std::vector<UnitId>& units, float x, float z) {
+        const std::vector<UnitId>& units, float x, float z,
+        CommandKind kind = CommandKind::Move) {
         const CommandIssue issue{.tick = 0,
                                  .source = 0,
                                  .id = rm::commandId(0, 0),
                                  .player = 0,
-                                 .kind = CommandKind::Move,
+                                 .kind = kind,
                                  .units = units,
                                  .targetX = rm::test::fx(x),
                                  .targetZ = rm::test::fx(z)};
@@ -210,4 +211,37 @@ TEST_CASE("a group move fills front slots in category order", "[formation]") {
         REQUIRE(entries.size() == 1);
         CHECK(rm::test::near(entries.front().targetX()) == 900.0f);
     }
+}
+
+TEST_CASE("a grouped attack-move uses AttackFormation block widths", "[formation]") {
+    // Retail `AttackFormation` (ART-S007 lua/formations.lua:619-641) routes land units
+    // through its own block thresholds, not `GrowthFormation`'s: up to sixteen members
+    // fill an eight-wide two-row block, so a nine-tank group attack-move holds eight on
+    // the anchor line with exactly one trailing a diameter behind it.
+    Fixture fix;
+    std::vector<UnitId> group;
+    for (int i = 0; i < 9; ++i) {
+        group.push_back(fix.roster.add(fix.tank, 200.0f,
+                                       200.0f + 10.0f * static_cast<float>(i),
+                                       0, 500.0f));
+    }
+    const rm::sim::ApplyCommandResult result =
+        fix.issueMove(group, 900.0f, 240.0f, CommandKind::AttackMove);
+    REQUIRE(result.accepted == group);
+
+    std::size_t front = 0;
+    std::size_t back = 0;
+    for (const UnitId member : group) {
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        CHECK(entries.front().kind() == CommandKind::AttackMove);
+        const float x = rm::test::asFloat(entries.front().targetX());
+        if (x == Catch::Approx(900.0f).margin(0.01f)) {
+            ++front;
+        } else if (x == Catch::Approx(892.0f).margin(0.01f)) {
+            ++back;
+        }
+    }
+    CHECK(front == 8);
+    CHECK(back == 1);
 }

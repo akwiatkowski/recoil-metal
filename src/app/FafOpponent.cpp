@@ -211,10 +211,34 @@ __rm_faf.unitMeta = {
             if __rm_faf_is_intel_enabled then return __rm_faf_is_intel_enabled(u.h, intel) end
             return true
         end,
+        -- `C-453`'s `Unit:GetAttacker` (`0x006cb910`): the native per-unit
+        -- attacker leaf — a handle bound to its owner (`CAiAttackerImpl`
+        -- per `C-132(c)`'s `Unit+0x544` manager pointer). Snapshot units
+        -- carry no authored weapon list, so the count is zero and the
+        -- handle caches per unit table for call-site identity.
+        GetAttacker = function(u)
+            if u.__attacker == nil then
+                u.__attacker = setmetatable({ __unit = u }, __rm_faf.attackerMeta)
+            end
+            return u.__attacker
+        end,
         -- `C-361`: a recon blip's `GetSource` — retail's `CIntel` blip object
         -- resolves to the unit it reports. Our blip IS the unit table, so the
         -- source is itself.
         GetSource = function(u) return u end,
+    },
+}
+-- The attacker handle `GetAttacker` returns. `GetUnit` is the owner back-link
+-- (`CAiAttackerImpl:GetUnit`); the weapon leaves read zero until snapshot
+-- units carry authored armament — no corpus caller reaches them today
+-- (verified: zero `GetAttacker` sites in `vendor/ai/faf/lua/`).
+__rm_faf.attackerMeta = {
+    __index = {
+        GetUnit = function(a) return a.__unit end,
+        GetWeaponCount = function() return 0 end,
+        GetMaxWeaponRange = function() return 0 end,
+        GetPrimaryWeapon = function() return nil end,
+        AttackerWeaponsBusy = function() return false end,
     },
 }
 

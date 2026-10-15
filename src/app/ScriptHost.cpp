@@ -161,6 +161,49 @@ void ScriptHost::registerTask(std::string_view taskName, ScriptTaskRegistration 
     lua_settable(lua, -3);
     lua_pop(lua, 2);
 }
+void ScriptHost::setActiveMods(std::vector<rm::vfs::ActiveMod> mods) {
+    // `C-313` (`0x0052fece`): retail builds `__active_mods` natively from
+    // `gameInfo.GameMods`, so the host owns the table and Lua reads it. Order
+    // is `before`/`after` uid constraints, uid-alphabetical otherwise
+    // (`mods.lua` `ModComp`). Ticks here are 100 ms (`TickRate` 10 Hz,
+    // `core/sim/TickRate.hpp`); retail's 10 Hz sim clock is the same source
+    // the `WaitTicks(n)` `n-1` scheduler quirk (`C-305`) is measured against.
+    lua_State* lua = lua_;
+    if (lua == nullptr) return;
+    const std::vector<rm::vfs::ActiveMod> ordered = rm::vfs::orderActiveMods(std::move(mods));
+    lua_newtable(lua);
+    int index = 0;
+    for (const rm::vfs::ActiveMod& mod : ordered) {
+        lua_newtable(lua);
+        lua_pushlstring(lua, mod.uid.data(), mod.uid.size());
+        lua_setfield(lua, -2, "uid");
+        lua_pushlstring(lua, mod.name.data(), mod.name.size());
+        lua_setfield(lua, -2, "name");
+        const std::string location = rm::vfs::modMountPoint(mod);
+        lua_pushlstring(lua, location.data(), location.size());
+        lua_setfield(lua, -2, "location");
+        const std::string hookdir = mod.hookdir.empty() ? "/hook" : mod.hookdir;
+        lua_pushlstring(lua, hookdir.data(), hookdir.size());
+        lua_setfield(lua, -2, "hookdir");
+        lua_pushboolean(lua, mod.uiOnly);
+        lua_setfield(lua, -2, "ui_only");
+        lua_rawseti(lua, -2, ++index);
+    }
+    // `gameInfo.GameMods` is the same table — retail builds `__active_mods`
+    // FROM it, so both names see the one list.
+    lua_pushvalue(lua, -1);
+    lua_setglobal(lua, "__active_mods");
+    lua_getglobal(lua, "gameInfo");
+    if (!lua_istable(lua, -1)) {
+        lua_pop(lua, 1);
+        lua_newtable(lua);
+    }
+    lua_pushvalue(lua, -2);
+    lua_setfield(lua, -2, "GameMods");
+    lua_setglobal(lua, "gameInfo");
+    lua_pop(lua, 1);
+}
+
 
 ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
                                                 std::string_view task,

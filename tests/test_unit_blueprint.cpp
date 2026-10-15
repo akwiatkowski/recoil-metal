@@ -1341,37 +1341,57 @@ TEST_CASE("C-218 (6): AttackElevation falls back to Elevation when the file stat
     }
 }
 
-TEST_CASE("C-218 (6): CatchUpAcc is read from Physics verbatim, zero when unauthored") {
-    // `C-218`'s fourth explicit-0-vs-absent site: `Physics.CatchUpAcc`
+TEST_CASE("C-218 (6): CatchUpAcc derives from max(MaxAcceleration, MaxBrake)") {
+    // `C-218`'s sixth explicit-0-vs-absent chain: `Physics.CatchUpAcc`
     // (`UnitBlueprint.lua:1112-1113`) — the elmos-per-tick² a lagging mover applies.
-    // An authored value is read verbatim; absence and explicit zero both stay zero,
-    // which is what the mover falls back to proportional close-rate when.
+    // An authored value is read verbatim; an absent key derives as
+    // `max(MaxAcceleration, MaxBrake)`; only a file stating neither keeps zero.
     const Blueprint authored{"XXB0704_unit.bp", R"(
         UnitBlueprint {
-            Physics = { MotionType = 'RULEUMT_Air', CatchUpAcc = 10, MaxSpeed = 1 },
-            Air = { MaxAirspeed = 12, Winged = true },
+            Physics = {
+                MotionType = 'RULEUMT_Land', MaxSpeed = 3.4,
+                MaxAcceleration = 3.4, MaxBrake = 3.4, CatchUpAcc = 10,
+            },
+            SizeX = 0.7, SizeY = 0.5, SizeZ = 0.9,
         }
     )"};
     const auto def = rm::unitbp::loadFile(authored.path());
     REQUIRE(def.has_value());
     CHECK(def->catchUpAcc == Catch::Approx(10.0f));
 
+    // Discriminator: UEL0201 authors `MaxAcceleration = MaxBrake = 3.4` and no
+    // `CatchUpAcc`, so its derived value is 3.4, not 0.
+    const Blueprint derived{"XXB0705b_unit.bp", R"(
+        UnitBlueprint {
+            Physics = {
+                MotionType = 'RULEUMT_Land', MaxSpeed = 3.4,
+                MaxAcceleration = 3.4, MaxBrake = 3.4,
+            },
+            SizeX = 0.7, SizeY = 0.5, SizeZ = 0.9,
+        }
+    )"};
+    const auto derivedDef = rm::unitbp::loadFile(derived.path());
+    REQUIRE(derivedDef.has_value());
+    CHECK(derivedDef->catchUpAcc == Catch::Approx(3.4f));
+
+    // Only a file stating neither accel limit keeps zero.
     const Blueprint bare{"XXB0705_unit.bp", kMediumTank};
     const auto none = rm::unitbp::loadFile(bare.path());
     REQUIRE(none.has_value());
     CHECK(none->catchUpAcc == 0.0f);
 }
 
-TEST_CASE("C-218 (6): StartTurnDistance is read from Air verbatim, zero when unauthored") {
-    // `C-218`'s fifth explicit-0-vs-absent site: `Air.StartTurnDistance`
+TEST_CASE("C-218 (6): StartTurnDistance derives from SizeZ x 3 when unauthored") {
+    // `C-218`'s sixth explicit-0-vs-absent chain: `Air.StartTurnDistance`
     // (`UnitBlueprint.lua:254-255`) — the ogrids from a moving target at which a
     // flyer begins to align. Changelog 2026-02-14-3830 tunes it freely
-    // (UAA0102: 10 → 5); we keep the file value verbatim so a combat-state change
-    // can read it later without needing a separate ogrid-to-elmo conversion.
+    // (UAA0102: 10 → 5); an authored value wins, an absent key derives as
+    // `SizeZ x 3`. Discriminator: DAA0206 (the Mercy, SizeZ = 1.4) derives 4.2.
     const Blueprint authored{"XXB0706_unit.bp", R"(
         UnitBlueprint {
             Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
             Air = { MaxAirspeed = 12, Winged = true, StartTurnDistance = 5 },
+            SizeX = 0.8, SizeY = 1, SizeZ = 1,
         }
     )"};
     const auto def = rm::unitbp::loadFile(authored.path());
@@ -1382,9 +1402,10 @@ TEST_CASE("C-218 (6): StartTurnDistance is read from Air verbatim, zero when una
         UnitBlueprint {
             Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
             Air = { MaxAirspeed = 12, Winged = true },
+            SizeX = 0.8, SizeY = 0.25, SizeZ = 1.4,
         }
     )"};
     const auto none = rm::unitbp::loadFile(bare.path());
     REQUIRE(none.has_value());
-    CHECK(none->startTurnDistance == 0.0f);
+    CHECK(none->startTurnDistance == Catch::Approx(4.2f));
 }

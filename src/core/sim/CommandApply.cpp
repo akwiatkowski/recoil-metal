@@ -316,6 +316,32 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     return 8;
 }
 
+/// ART-S007 `AttackFormation` selects these repeating land-block widths by total unit count
+/// (formations.lua:623-640: `TwoRow` through `NineRow` blocks, 8 to 20 columns). Like
+/// `growthFormationWidth` above, members fill front rows first in category order; the block
+/// rows carry per-slot category ranks (formations.lua:192-310), which stay deferred.
+[[nodiscard]] std::size_t attackFormationWidth(std::size_t units) noexcept {
+    if (units <= 16) {
+        return 8;
+    }
+    if (units <= 30) {
+        return 10;
+    }
+    if (units <= 48) {
+        return 12;
+    }
+    if (units <= 70) {
+        return 14;
+    }
+    if (units <= 96) {
+        return 16;
+    }
+    if (units <= 126) {
+        return 18;
+    }
+    return 20;
+}
+
 [[nodiscard]] const std::shared_ptr<SharedCommand>& ensureSharedCommand(
     const Command& command, CommandSource source, CommandId id, std::uint32_t count,
     Fx formationAnchorX, Fx formationAnchorZ, std::string_view scriptTask,
@@ -674,7 +700,7 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
         ensureSharedCommand(command, source, id, count, formationAnchorX, formationAnchorZ,
                             {}, {}, store, shared);
     QueuedCommand entry{command.unit, payload};
-    if (command.kind == CommandKind::Move) {
+    if (command.kind == CommandKind::Move || command.kind == CommandKind::AttackMove) {
         entry.setTargetPosition(command.targetX, command.targetZ);
     }
     if (command.kind == CommandKind::Patrol) {
@@ -764,14 +790,17 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     std::vector<UnitId> canonical = issue.units;
     canonicalizeUnits(canonical);
 
-    // `GrowthFormation` is the travel formation for non-air groups (C-178). Members
-    // fill front rows first in category order — experimentals, direct fire by tech,
+    // `GrowthFormation` is the travel formation for non-air grouped `Move`, `AttackFormation`
+    // for grouped `AttackMove` (C-178; ART-S007 lua/formations.lua:619-641). Members fill
+    // front rows first in category order — experimentals, direct fire by tech,
     // artillery, anti-air, shields, engineers, then the rest — which is retail
     // `lua/formations.lua`'s DFFirst block order reduced to one rank per family.
     // Rejected handles must not consume a formation slot.
     const Player* issuer = playerFor(issue.player, players);
     std::vector<UnitId> formationMembers;
-    bool useGrowthFormation = issue.kind == CommandKind::Move && canonical.size() > 1;
+    const bool isAttackOrder = issue.kind == CommandKind::AttackMove;
+    bool useGrowthFormation = (issue.kind == CommandKind::Move || isAttackOrder)
+                              && canonical.size() > 1;
     for (const UnitId unit : canonical) {
         if (!useGrowthFormation) {
             break;
@@ -818,7 +847,9 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     // Stable: ties keep canonical order, so a homogeneous group fills exactly as
     // before and selection order stays presentation-only.
     std::ranges::stable_sort(formationMembers, {}, formationClass);
-    const std::size_t formationWidth = growthFormationWidth(formationMembers.size());
+    const std::size_t formationWidth = isAttackOrder
+                                           ? attackFormationWidth(formationMembers.size())
+                                           : growthFormationWidth(formationMembers.size());
     // The formation's facing. Retail carries it on the wire command as an orientation
     // quaternion (`C-151`, `CDecoder::DecodeCommandData` +0x3c..+0x48) that the engine
     // applies to the Lua `FormationPos` offsets — the script itself returns unrotated
@@ -1235,8 +1266,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         Fx localX;
         Fx localZ;
         if (useGrowthFormation) {
-            // Retail `GrowthFormation` (lua/formations.lua:676-728) routes land units through
-            // `BlockBuilderLand` (formations.lua:838-913), whose `xPos`/`zPos` are the local
+            // Retail `GrowthFormation` (lua/formations.lua:676-728) and `AttackFormation`
+            // (formations.lua:619-641) both route land units through `BlockBuilderLand`
             // offsets computed here: the engine rotates them by the command's formation
             // quaternion before adding the anchor. `xPos` enumerates columns centre-outward —
             // odd widths 0,+1,-1,+2,-2 and even widths -.5,+.5,-1.5,+1.5 (the `math.mod`
@@ -1265,8 +1296,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             }
             localZ = Fx::fromRaw(saturate(-FxWide{diameter.raw()}
                                           * static_cast<FxWide>(row)));
-        } else if (issue.kind == CommandKind::Move && canonical.size() > 1
-                   && !store.motion()[unit.index].airborne) {
+        } else if ((issue.kind == CommandKind::Move || issue.kind == CommandKind::AttackMove)
+                   && canonical.size() > 1 && !store.motion()[unit.index].airborne) {
             // Degenerate fan-out for a group that cannot fill a formation (fewer than two
             // valid members): centre a line on the clicked anchor, adjacent ranks one
             // collision radius apart, rotated by the same facing so the intake stays

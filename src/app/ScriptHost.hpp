@@ -31,6 +31,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 struct lua_State;
 
@@ -73,6 +74,17 @@ public:
     /// be in retail: a class table `TypeClass` declared by the source, instantiated once per
     /// dispatch, fed the four hook calls.
     void registerTask(std::string_view taskName, ScriptTaskRegistration reg);
+
+    /// Publishes the match's mod list into the host VM (`C-313`): orders `mods`
+    /// by `before`/`after` uid constraints (uid-alphabetical otherwise) and
+    /// installs the resulting table as both `_G.__active_mods` and
+    /// `_G.gameInfo.GameMods`, mirroring retail's native build from
+    /// `gameInfo.GameMods` (`0x0052fece`). Mounting stays with the caller: the
+    /// host borrows `content_` read-only, so each mod's `mountMod` (which
+    /// registers its hookdir for the `C-311` concat) must happen on the VFS
+    /// before dispatch. Each entry carries uid, name, location (the VFS mount
+    /// point), ui_only, and hookdir, matching `mods.lua`'s `LoadModInfo`.
+    void setActiveMods(std::vector<rm::vfs::ActiveMod> mods);
 
     /// Modules loaded but whose instantiation errored. Empty until `registerTask` or a
     /// first-time dispatch fails; exposed for the test fixture to assert exactly-once

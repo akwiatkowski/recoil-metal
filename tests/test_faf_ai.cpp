@@ -63,6 +63,30 @@ constexpr const char* kProbe[] = {
 
 } // namespace
 
+// C-453: `Unit:GetAttacker` (`0x006cb910`) is one of two native leaves on the
+// AI-manager boundary — a per-unit attacker handle bound to its owner.
+TEST_CASE("C-453: unit GetAttacker returns an attacker bound to its unit",
+          "[faf][ai][c453]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    const bool ok = ai.eval(R"(
+        __rm_faf_type('UEB1101', {'STRUCTURE'})
+        local unit = setmetatable({ bp = 'UEB1101' }, __rm_faf.unitMeta)
+        local attacker = unit:GetAttacker()
+        assert(attacker ~= nil, 'GetAttacker returns a handle, not nil')
+        assert(attacker:GetUnit() == unit, 'the attacker is bound to its unit')
+        assert(attacker:GetWeaponCount() == 0, 'a weaponless unit reports zero weapons')
+        assert(attacker:GetMaxWeaponRange() == 0, 'a weaponless unit has zero reach')
+        local same = unit:GetAttacker()
+        assert(same == attacker, 'the handle is stable across calls')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
+
 TEST_CASE("FAF enemy and blueprint queries read the observed match and retail content",
           "[faf][ai][brain-query]") {
     const auto root = corpusRoot();

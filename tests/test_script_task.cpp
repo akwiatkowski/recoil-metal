@@ -1133,3 +1133,89 @@ TEST_CASE("C-388: ScriptHost resolves TaskName by sprintf path with ScriptTask.l
     }
     std::filesystem::remove_all(scratch);
 }
+
+TEST_CASE("C-313: ScriptHost publishes __active_mods and hook-concats mod task copies") {
+    // `C-313` (`0x0052fece`): `__active_mods` is built natively from
+    // `gameInfo.GameMods`, and `C-311`'s concat walks base -> `/schook` ->
+    // `__active_mods` order. The sim task host currently honours only the
+    // `/schook` layer: a mod's `hookdir` copy of the task file never
+    // concatenates, and `_G.__active_mods` stays nil inside the task chunk.
+    const std::filesystem::path scratch = std::filesystem::temp_directory_path()
+        / "rm-script-host-c313";
+    std::filesystem::remove_all(scratch);
+    std::filesystem::create_directories(scratch / "lua/sim/tasks");
+    std::filesystem::create_directories(scratch / "ChessMod/hook/lua/sim/tasks");
+    // The mod hook appends a marker global the base file never sets; the base
+    // chunk reads `__active_mods` into `G_c313mods`. Both must be visible
+    // after dispatch: hook concat (`C-311`) + published table (`C-313`). A
+    // hook that fails to concatenate (or a table left nil) leaves the queue
+    // sleeping instead of retired.
+    {
+        std::ofstream base(scratch / "lua/sim/tasks/C313Probe.lua");
+        base << "TypeClass = Class({}) {\n"
+                "  TaskTick = function(self, result)\n"
+                "    if G_c313hooked ~= true then return 1 end\n"
+                "    if G_c313mods == nil then return 1 end\n"
+                "    if G_c313mods[1] == nil then return 1 end\n"
+                "    if G_c313mods[1].uid ~= 'chess' then return 1 end\n"
+                "    return -1\n"
+                "  end,\n"
+                "}\n"
+                "G_c313mods = __active_mods\n";
+    }
+    {
+        std::ofstream hook(scratch / "ChessMod/hook/lua/sim/tasks/C313Probe.lua");
+        hook << "G_c313hooked = true\n";
+    }
+
+    // The stock tree mounts at `/`; the mod mounts from its own directory
+    // (`C-268`), so its files answer under `/mods/ChessMod/...` and its
+    // hookdir joins the concat. `mountDirectory` walks the whole scratch
+    // tree, so the mod's hook file is staged OUTSIDE the mounted root under
+    // a sibling directory the stock walk never sees.
+    std::filesystem::create_directories(scratch / "stock/lua/sim/tasks");
+    std::filesystem::rename(scratch / "lua/sim/tasks/C313Probe.lua",
+                            scratch / "stock/lua/sim/tasks/C313Probe.lua");
+    rm::vfs::Vfs content;
+    content.mountDirectory(scratch / "stock");
+    rm::vfs::ActiveMod mod;
+    mod.uid = "chess";
+    mod.name = "ChessMod";
+    mod.location = scratch / "ChessMod";
+    REQUIRE(content.mountMod(mod));
+    rm::app::ScriptHost host{content};
+    host.setActiveMods({mod});
+    host.registerTask("C313Probe", rm::app::ScriptTaskRegistration{
+        .modulePath = "/lua/sim/tasks/C313Probe.lua",
+    });
+
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c313_probe";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "C313Probe"},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    REQUIRE(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                   nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                   nullptr, &host) == 1);
+    CHECK(roster.store.orders()[unit.index].empty());
+    CHECK(host.errors().empty());
+
+    std::filesystem::remove_all(scratch);
+}

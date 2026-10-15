@@ -489,13 +489,16 @@ struct UnitDef {
     float airAttackElevationElmos = 0.0f;
     /// `C-218`: `Air.StartTurnDistance` (engine/Core/Blueprints/UnitBlueprint.lua:254-255)
     /// — the ogrids from a moving target at which a flyer begins to align with it.
-    /// FA changelogs tune it freely (e.g. UAA0102: 10 → 5); zero when unauthored, and
-    /// the combat state machine falls back to its proportional close-rate.
+    /// FA changelogs tune it freely (e.g. UAA0102: 10 → 5); an absent key derives as
+    /// `SizeZ x 3` (fa-exe-analysis-plan.md `C-218 (6)`), and the combat state
+    /// machine falls back to its proportional close-rate only when both are zero.
     float startTurnDistance = 0.0f;
     /// `C-218`: `Physics.CatchUpAcc` (engine/Core/Blueprints/UnitBlueprint.lua:1112-1113)
     /// — the elmos-per-tick² a lagging mover applies to close a drifting target. A
     /// bomber loitering gains nothing from it; a fast fighter on chase uses it every
-    /// beat. Zero when unauthored, no other field steals its meaning.
+    /// beat. An absent key derives as `max(MaxAcceleration, MaxBrake)`
+    /// (fa-exe-analysis-plan.md `C-218 (6)`); zero only when the file states no
+    /// accel limits either.
     float catchUpAcc = 0.0f;
     /// `Air.PredictAheadForBombDrop` in seconds (`C-224`, `Air+0x8c`): the fixed
     /// lead time a `NeedToComputeBombDrop` weapon applies to a moving ground

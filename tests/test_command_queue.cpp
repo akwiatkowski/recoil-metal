@@ -456,7 +456,11 @@ TEST_CASE("one grouped issue shares immutable intent and keeps execution local")
     CHECK(firstEntry->target() == UnitId{99, 1});
     CHECK(secondEntry->target() == UnitId{});
     CHECK(firstEntry->targetX() == rm::sim::fxFromFloat(111.0f));
-    CHECK(secondEntry->targetX() == issue.targetX);
+    // A two-member group fills one AttackFormation row (width 8), so the second member
+    // keeps its slot target — one half-diameter off the anchor along the facing's flank
+    // — rather than the click itself. The shared payload still records the click.
+    CHECK(secondEntry->targetX() != issue.targetX);
+    CHECK(secondEntry->payload().targetX == issue.targetX);
     CHECK(firstEntry->payload().target == UnitId{});
 }
 

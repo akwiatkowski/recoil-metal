@@ -524,10 +524,16 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
                      numberOr(*physics, "Elevation", 0.0f))
             * scmap::kElmosPerOgrid;
         // `C-218`: `Air.StartTurnDistance` (changelog 2026-02-14-3830 and the dozen units
-        // around it at `Air.StartTurnDistance = 5`/10/15). Read as authored; ogrids the
-        // same as `AttackElevation`, kept here in raw form so the field's ogrid-ness is
-        // a property of the loader, not a hidden conversion.
+        // around it at `Air.StartTurnDistance = 5`/10/15). An absent key derives as
+        // `SizeZ x 3` (fa-exe-analysis-plan.md `C-218 (6)`), in ogrids: the distance
+        // a flyer needs to line up scales with the hull length. Kept here in raw
+        // ogrid form so the field's ogrid-ness is a property of the loader, not a
+        // hidden conversion. DAA0206 (the Mercy, SizeZ = 1.4) derives 4.2.
         def.startTurnDistance = numberOr(*airBlock, "StartTurnDistance", 0.0f);
+        if (airBlock->find("StartTurnDistance") == nullptr) {
+            def.startTurnDistance =
+                numberOr(*parsed, "SizeZ", 0.0f) * 3.0f;
+        }
         def.airAutoLandTimeSec = numberOr(*airBlock, "AutoLandTime", 0.0f);
         def.airFuelUseTimeSec = numberOr(*airBlock, "FuelUseTime", 0.0f);
         // `C-224`, `Air+0x8c`: seconds of lead a bomb-drop weapon applies to a
@@ -539,8 +545,15 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // `C-218`: `Physics.CatchUpAcc` (`UnitBlueprint.lua:1112-1113`) — elmos-per-tick² a
     // lagging mover applies to close a drifting target. Lives on `Physics`, NOT on `Air`,
     // so it is read once for the whole blueprint whether or not a flyer is present —
-    // a naval chase uses the same field the way an aerial one does.
+    // a naval chase uses the same field the way an aerial one does. An absent key
+    // derives as `max(MaxAcceleration, MaxBrake)` (fa-exe-analysis-plan.md `C-218
+    // (6)`), in ogrids/s^2: the closing effort scales with the hull's own accel
+    // limits. UEL0201 (`MaxAcceleration = MaxBrake = 3.4`) derives 3.4.
     def.catchUpAcc = numberOr(*physics, "CatchUpAcc", 0.0f);
+    if (physics->find("CatchUpAcc") == nullptr) {
+        def.catchUpAcc = std::max(numberOr(*physics, "MaxAcceleration", 0.0f),
+                                  numberOr(*physics, "MaxBrake", 0.0f));
+    }
 
     // --- size --------------------------------------------------------------
     //
