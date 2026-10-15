@@ -86,6 +86,23 @@ public:
     /// point), ui_only, and hookdir, matching `mods.lua`'s `LoadModInfo`.
     void setActiveMods(std::vector<rm::vfs::ActiveMod> mods);
 
+    /// Publishes the funded-economy surface the shipped `Enhancing` beat reads
+    /// (`C-436`, `EnhanceTask.lua:44-84`): `unit:GetResourceConsumed()` returns
+    /// `consumed` (0 = starved, the `obtained > 0` funded guard), and
+    /// `unit.WorkItemBuildTime` is the seconds of work `OnWorkBegin` derived
+    /// (`GetBuildRate()` stays 1.0 work-unit per beat). Keyed by unit; unset
+    /// units read zero funding with no build time, exactly the current stall.
+    void publishTaskFunding(rm::sim::UnitId unit, double buildTimeSeconds,
+                            double consumed);
+    /// Reads back the unit table's `WorkProgress` fraction (`SetWorkProgress`
+    /// mirror) for tests; -1 when the unit has no table yet.
+    [[nodiscard]] double taskWorkProgress(rm::sim::UnitId unit) const;
+    /// Reads back a Lua global number for tests (-1 when absent or
+    /// non-numeric); used to observe completion-time values the shipped
+    /// `OnDestroy` zeroes afterwards.
+    [[nodiscard]] double taskGlobalNumber(const char* name) const;
+
+
     /// Modules loaded but whose instantiation errored. Empty until `registerTask` or a
     /// first-time dispatch fails; exposed for the test fixture to assert exactly-once
     /// behaviour and the absence of errors.

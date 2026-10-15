@@ -1458,6 +1458,60 @@ TEST_CASE("automatic projectile fire aims at a live sonar contact's deterministi
     CHECK(shots.front().velocity == expected.velocity);
 }
 
+TEST_CASE("a beam acquires a radar-only contact and lays its endpoint at the blip") {
+    // Blip-parity closeout (`C-277` family; 96 elmos per `LosHandler.h:322`):
+    // a beam is hitscan, not ballistic, so refusing blip-only contacts made
+    // radar-only targets immune to automatic beam fire. Acquisition scores
+    // at the blip and the beam endpoint lays at the same blip — truth for
+    // sightings and explicit attacks. Damage still lands on the acquired
+    // hull directly: the beam is a line, not a shell that can fall short.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon laser = directFire(10.0f, 300.0f);
+    laser.beam = true;
+    UnitDef gunner = gunnerDef(laser);
+    gunner.radarRadiusElmos = 300.0f;  // vision stays zero: radar-only contact
+    const UnitId shooter =
+        roster.add(roster.addType(gunner), 0.0f, 0.0f, 0, 100.0f);
+    roster.motion(shooter).turnPerTick = rm::sim::kBradHalfTurn;
+    const UnitId target =
+        roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 100.0f);
+
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, target.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Radar);
+
+    constexpr rm::TickIndex tick = 3;
+    std::vector<Projectile> shots;
+    rm::sim::EventQueue events;
+    REQUIRE(rm::sim::aimAtTargets(roster.store, roster.catalog, armies, &intel, nullptr,
+                                  nullptr, tick, roster.rate)
+            == 1);
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate,
+                                 &events, &intel, nullptr, tick)
+            == 1);
+    CHECK(shots.empty());
+    REQUIRE(roster.health(shooter).automaticTargets[0] == target);
+    CHECK(roster.health(target).current == rm::test::mag(90.0f));
+
+    const auto [blipX, blipZ] = rm::sim::radarBlipPosition(
+        target, roster.transform(target).x, roster.transform(target).z, tick, roster.rate);
+    bool beamSeen = false;
+    for (const rm::sim::Event& event : events.all()) {
+        if (event.kind == rm::sim::EventKind::BeamFired) {
+            beamSeen = true;
+            CHECK(event.at[0] == blipX);
+            CHECK(event.at[2] == blipZ);
+        }
+    }
+    CHECK(beamSeen);
+}
+
 TEST_CASE("a radar-only contact is led from its blip, not from truth", "[lead]") {
     // Radar gives a position with error but the step underneath it is still
     // measured — retail's lead reads the target's real velocity whatever the

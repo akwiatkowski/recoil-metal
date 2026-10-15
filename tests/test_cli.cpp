@@ -428,19 +428,20 @@ TEST_CASE("the factions flag parses a seat list, skips what it cannot name") {
     CHECK(rm::app::parseFactions(3, junk).empty());
 }
 
-TEST_CASE("archive mount order keeps name order with retail overrides last") {
-    // Pure paths, no mounting: the question is only the sequence.
+TEST_CASE("archive mount order is pure ascending name order (C-266)") {
+    // Pure paths, no mounting: the question is only the sequence. Retail sorts
+    // `gamedata/*.scd` ascending by filename (`FindFirstFile` sort, `0x004692b0`)
+    // and resolves first-mount-wins (`CVFSImpl` `0x00466c60`), so `lua.scd`
+    // (6th) shadows `mohodata.scd` (9th) with no reordering step.
     const std::vector<std::filesystem::path> unordered{
         "mohodata.scd", "ambience.scd", "lua.scd", "units.scd",
     };
     const auto ordered = rm::app::orderArchivesForMount(unordered);
     REQUIRE(ordered.size() == 4);
-    // Name order, except lua.scd mounts after mohodata.scd: its game Lua must
-    // shadow the Moho stubs, and the last mount wins.
     CHECK(ordered[0].filename() == "ambience.scd");
-    CHECK(ordered[1].filename() == "mohodata.scd");
-    CHECK(ordered[2].filename() == "units.scd");
-    CHECK(ordered[3].filename() == "lua.scd");
+    CHECK(ordered[1].filename() == "lua.scd");
+    CHECK(ordered[2].filename() == "mohodata.scd");
+    CHECK(ordered[3].filename() == "units.scd");
 }
 
 TEST_CASE("per-army personalities parse in seat order, singles fold in", "[ai-personality]") {

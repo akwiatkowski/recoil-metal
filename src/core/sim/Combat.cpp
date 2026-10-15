@@ -1092,6 +1092,14 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
             aim = {x, position[1], z};
         }
     }
+    // A beam is hitscan: it arrives now and never chases flight, so it lays
+    // at the unled blip (`C-277` family) — truth for sightings. Projectile
+    // logic below is untouched.
+    if (weapon.beam) {
+        (void)from;
+        (void)muzzlePerTick;
+        return aim;
+    }
     if (!weapon.leadTarget) {
         return aim;
     }
@@ -1280,17 +1288,13 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                     && *contact != ContactKind::Sonar)) {
                 return std::nullopt;
             }
-            // A beam damages its target directly, so it cannot represent blip-position
-            // error. Keep blip-only automatic acquisition to projectile weapons until
-            // beam endpoints have a coherent uncertain-hit model.
-            if ((*contact == ContactKind::Radar || *contact == ContactKind::Sonar)
-                && weapon.beam) {
-                return std::nullopt;
-            }
+            // A beam is hitscan, not ballistic: it acquires a blip-only contact
+            // like any automatic weapon (`C-277` family) and lays its endpoint
+            // at the same deterministic blip the score used — truth never
+            // enters. Damage still lands on the acquired hull directly.
             // A sonar contact is acquirable exactly where its target swims: a
             // submerged hull needs a weapon that reaches underwater, while a
-            // surfaced one takes the ordinary layer checks above. Beams stay
-            // out — they cannot represent blip-position error.
+            // surfaced one takes the ordinary layer checks above.
             if (*contact == ContactKind::Sonar
                 && motion[slot].submersible && motion[slot].submerged
                 && !weapon.canTarget(false, true, sourceSubmerged)) {
@@ -1866,19 +1870,22 @@ std::size_t aimAtTargets(UnitStore& store, const UnitCatalog& catalog,
                 if (candidateUnit) {
                     const Fx muzzlePerTick =
                         catalog.weaponRates(store.typeAt(slot), w).muzzlePerTick;
-                    if (!hasExplicitAttack && !weapon.beam) {
-                        candidatePosition = automaticProjectileAimPosition(
-                            *candidateUnit, from, motion[slot].armyIndex, weapon,
-                            muzzlePerTick, store, catalog, armies, intel, tick, rate);
-                    } else {
-                        const std::array<Fx, 3> exact =
-                            positionOf(transforms[candidateUnit->index]);
-                        candidatePosition = weapon.leadTarget && !weapon.beam
-                            ? leadUnitPosition(from, exact,
-                                               motion[candidateUnit->index].stepX,
-                                               motion[candidateUnit->index].stepZ, muzzlePerTick)
-                            : exact;
-                    }
+                    // The hull faces the same estimate the shot will use: the
+                    // helper already lays the blip for automatic radar/sonar
+                    // fire — beam unled, projectiles led — and truth for
+                    // sightings and explicit attacks. Aim and fire share one
+                    // bearing (`C-277` family).
+                    candidatePosition = hasExplicitAttack
+                        ? std::optional<std::array<Fx, 3>>{
+                              weapon.leadTarget && !weapon.beam
+                                  ? leadUnitPosition(
+                                        from, positionOf(transforms[candidateUnit->index]),
+                                        motion[candidateUnit->index].stepX,
+                                        motion[candidateUnit->index].stepZ, muzzlePerTick)
+                                  : positionOf(transforms[candidateUnit->index])}
+                        : std::optional<std::array<Fx, 3>>{automaticProjectileAimPosition(
+                              *candidateUnit, from, motion[slot].armyIndex, weapon,
+                              muzzlePerTick, store, catalog, armies, intel, tick, rate)};
                 }
             }
             if (!candidatePosition) {
@@ -2408,7 +2415,12 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                              base[1],
                                              base[2] + motions[target->index].stepZ * lead};
                 }
-                if (!hasExplicitAttack && !weapon.beam) {
+                // Automatic fire lays the helper's estimate — the blip for a
+                // radar/sonar contact (beam unled, projectiles led), truth
+                // for sightings — so aim and fire share one bearing
+                // (`C-277` family). Explicit attacks keep truth (led unless
+                // the weapon is a beam).
+                if (!hasExplicitAttack) {
                     return automaticProjectileAimPosition(
                         *target, from, army, weapon, rates.muzzlePerTick, store, catalog,
                         armies, intel, tick, rate);

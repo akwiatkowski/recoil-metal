@@ -1247,6 +1247,89 @@ TEST_CASE("CPlatoon order verbs return a token IsCommandsActive polls",
     INFO(ai.lastError());
     REQUIRE(ok);
 }
+// `CPlatoon:AttackTarget 0x007365e0`, `GuardTarget 0x00737b20`, `MoveToTarget
+// 0x007368b0`, `Patrol 0x00737d70`, `CanAttackTarget 0x00736210`: the combat
+// verbs HuntAI/artillery/distress plans call every pass (platoon.lua:2830,
+// 2995, 3119, 1414, 4129; sorianutilities/aiutilities target picks).
+// `AttackTarget` aims the platoon's live squad units at one observed foe;
+// `GuardTarget` escorts a living ally through the guard port; `MoveToTarget`
+// moves onto a unit's current position; `Patrol` chains a patrol leg behind
+// the existing queue. Each queues one pending order per live unit and returns
+// the same `IsCommandsActive` token the move verbs return; the pass drain
+// emits them as targeted/guard/patrol decisions.
+TEST_CASE("CPlatoon combat verbs queue targeted orders the port drains",
+          "[faf][ai][platoon-orders]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_type('UEL0201', { 'MOBILE', 'LAND', 'TECH1', 'DIRECTFIRE' })
+        local mk = function(idx)
+            local u = { bp = 'UEL0201', h = __rm_faf_handle(idx, 1),
+                        x = 100, z = 100, __cats = __rm_faf.cats.UEL0201 }
+            setmetatable(u, __rm_faf.unitMeta)
+            return u
+        end
+        local tank, wing, escort = mk(7), mk(8), mk(10)
+        local foe = mk(9); foe.x, foe.z = 500, 500
+        __rm_faf_boot(0, { faction = 1, startX = 100, startZ = 100,
+            sizeX = 512, sizeZ = 512, armies = 2, base = 'NormalMain', markers = {} })
+        local brain = __rm_faf.brains[0]
+        local platoon = brain:MakePlatoon('Raiders', 'none')
+        brain:AssignUnitsToPlatoon(platoon, { tank, wing }, 'Attack', 'GrowthFormation')
+        -- `AttackTarget(foe)` queues one targeted attack per live unit.
+        local cmd = platoon:AttackTarget(foe)
+        assert(cmd ~= nil, 'the attack verb returns a command token')
+        assert(platoon:IsCommandsActive(cmd), 'the token is active while queued')
+        local pending = __rm_faf_platoon_orders()
+        assert(#pending == 2, 'AttackTarget queues one order per live unit, got ' .. #pending)
+        assert(pending[1].kind == 'attack' and pending[1].target == foe.h)
+        -- `CanAttackTarget` gates on liveness: a live foe with a live platoon reads true.
+        assert(platoon:CanAttackTarget('Attack', foe) == true, 'a live foe can be attacked')
+        foe.Dead = true
+        assert(platoon:CanAttackTarget('Attack', foe) == false, 'a dead foe cannot')
+        foe.Dead = nil
+        -- `MoveToTarget(foe)` is a move onto the foe's current position.
+        platoon:MoveToTarget(foe)
+        pending = __rm_faf_platoon_orders()
+        assert(#pending == 2, 'a move replaces the attack, got ' .. #pending)
+        assert(pending[1].kind == 'move' and pending[1].x == 500 and pending[1].z == 500)
+        platoon:AttackTarget(foe)
+        -- `Patrol(dest)` chains a patrol leg behind: the attack survives.
+        platoon:Patrol({ 400, 0, 500 })
+        pending = __rm_faf_platoon_orders()
+        assert(#pending == 4, 'a patrol leg queues behind, got ' .. #pending)
+        assert(pending[3].kind == 'patrol' and pending[3].x == 400 and pending[3].z == 500)
+        assert(pending[3].queued, 'patrol legs queue behind the attack')
+        -- `GuardTarget(tank)` on a second platoon escorts one living ally.
+        local guard = brain:MakePlatoon('Guards', 'none')
+        brain:AssignUnitsToPlatoon(guard, { escort }, 'Support', 'GrowthFormation')
+        local gcmd = guard:GuardTarget(tank)
+        assert(gcmd ~= nil and guard:IsCommandsActive(gcmd), 'guard returns a live token')
+        pending = __rm_faf_platoon_orders()
+        assert(#pending == 5, 'guard adds one order, got ' .. #pending)
+        assert(pending[5].kind == 'guard' and pending[5].target == tank.h)
+        -- The pass drain emits every queued verb as a port decision.
+        brain.snap = { units = { tank, wing, escort }, occupied = {}, underway = {},
+                       mass = 400, energy = 1500, massStorage = 650, energyStorage = 4000,
+                       massIncome = 0.2, energyIncome = 10,
+                       massRequested = 0, energyRequested = 0,
+                       massUsage = 0, energyUsage = 0,
+                       structuresUnderway = 0, mobileUnderway = 0, tick = 99 }
+        brain.builders = {}
+        local decisions = __rm_faf_decide(0, brain.snap)
+        assert(#decisions == 5, 'all five verbs drain, got ' .. #decisions)
+        assert(decisions[1].kind == 'attack_target' and decisions[1].target == foe.h)
+        assert(decisions[2].kind == 'attack_target' and decisions[2].builder == wing.h)
+        assert(decisions[3].kind == 'patrol' and decisions[4].kind == 'patrol')
+        assert(decisions[5].kind == 'guard' and decisions[5].target == tank.h)
+        assert(not platoon:IsCommandsActive(cmd), 'the drain retires the token')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
 TEST_CASE("FAF factory upgrades reserve production until the current product finishes",
           "[faf][ai][factory-upgrade]") {
     const auto root = corpusRoot();

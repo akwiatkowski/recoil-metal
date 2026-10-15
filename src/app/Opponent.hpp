@@ -94,6 +94,10 @@ struct Decision {
         /// Clear this unit's orders, or guard a living unit through native assistance.
         Stop,
         Guard,
+        /// Attack `target` with `unit` — `CPlatoon:AttackTarget` (`0x007365e0`).
+        Attack,
+        /// Patrol `unit` to (`toX`, `toZ`) — `CPlatoon:Patrol` (`0x00737d70`).
+        Patrol,
         /// Send `unit` to reclaim the most valuable wreck within `radius` of (`toX`, `toZ`).
         /// The AI names the reclaim-grid cell; the match resolves the wreck, because the
         /// brain sees cells and the sim sees features.

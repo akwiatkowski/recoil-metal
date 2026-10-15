@@ -200,12 +200,41 @@ struct TaskNative {
     lua_pushboolean(lua, 0);
     return 1;
 }
-[[nodiscard]] int taskZeroFn(lua_State* lua) {
-    lua_pushnumber(lua, 0.0);
-    return 1;
-}
 [[nodiscard]] int taskBuildRateFn(lua_State* lua) {
     lua_pushnumber(lua, 1.0);
+    return 1;
+}
+[[nodiscard]] int taskConsumedFn(lua_State* lua) {
+    // `C-436` (`EnhanceTask.lua:51-56`): the `Enhancing` beat accrues ONLY
+    // when `obtained > 0`. The sim publishes funding per unit
+    // (`publishTaskFunding`); unset units read 0 — the funded stall.
+    TaskNative* native = taskNative(lua);
+    double consumed = 0.0;
+    if (native != nullptr) {
+        lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+        const std::string key = std::to_string(native->unit.generation) + ":"
+                                + std::to_string(native->unit.index) + ":funding";
+        lua_getfield(lua, -1, key.c_str());
+        if (lua_isnumber(lua, -1)) consumed = lua_tonumber(lua, -1);
+        lua_pop(lua, 2);
+    }
+    lua_pushnumber(lua, consumed);
+    return 1;
+}
+[[nodiscard]] int taskSetProgressFn(lua_State* lua) {
+    // `SetWorkProgress` mirrors the fraction onto the unit table's
+    // `WorkProgress` field — the field the shipped beat READS
+    // (`local current = unit.WorkProgress`) and the test reads back.
+    lua_pushvalue(lua, 2);
+    lua_setfield(lua, 1, "WorkProgress");
+    return 0;
+}
+[[nodiscard]] int taskSecondsPerTickFn(lua_State* lua) {
+    // Called as `SecondsPerTick()` in shipped code (`EnhanceTask.lua:58`).
+    // One beat is 1/10 s at the 10 Hz `kDefaultTicksPerSecond`
+    // (`core/sim/TickRate.hpp`) — the same clock the `C-305` `n-1` quirk is
+    // measured against.
+    lua_pushnumber(lua, 0.1);
     return 1;
 }
 [[nodiscard]] int taskAbortMoveFn(lua_State* lua) {
@@ -252,11 +281,11 @@ struct TaskNative {
         lua_setfield(lua, -2, "IsMoving");
         lua_pushcfunction(lua, &taskFalseFn);
         lua_setfield(lua, -2, "IsPaused");
-        lua_pushcfunction(lua, &taskNoopFn);
+        lua_pushcfunction(lua, &taskSetProgressFn);
         lua_setfield(lua, -2, "SetWorkProgress");
         lua_pushcfunction(lua, &taskNoopFn);
         lua_setfield(lua, -2, "SetUnitState");
-        lua_pushcfunction(lua, &taskZeroFn);
+        lua_pushcfunction(lua, &taskConsumedFn);
         lua_setfield(lua, -2, "GetResourceConsumed");
         lua_pushcfunction(lua, &taskNoopFn);
         lua_setfield(lua, -2, "OnWorkBegin");
@@ -272,6 +301,17 @@ struct TaskNative {
         lua_setfield(lua, -2, "GetNavigator");
         lua_pushnumber(lua, 0.0);
         lua_setfield(lua, -2, "WorkProgress");
+        lua_pushnumber(lua, 1.0);
+        lua_setfield(lua, -2, "WorkItemBuildTime");
+        // `publishTaskFunding` may have run before the first `GetUnit` (the
+        // test publishes right after `applyCommand`); apply stored values so
+        // the shipped `Enhancing` beat sees them on its first tick.
+        lua_getfield(lua, -2, (std::string{key} + ":buildtime").c_str());
+        if (lua_isnumber(lua, -1)) {
+            lua_setfield(lua, -2, "WorkItemBuildTime");
+        } else {
+            lua_pop(lua, 1);
+        }
     }
     lua_remove(lua, -2);
     return 1;
@@ -431,7 +471,62 @@ void ScriptHost::setActiveMods(std::vector<rm::vfs::ActiveMod> mods) {
     lua_setglobal(lua, "gameInfo");
     lua_pop(lua, 1);
 }
+void ScriptHost::publishTaskFunding(rm::sim::UnitId unit, double buildTimeSeconds,
+                                     double consumed) {
+    lua_State* lua = lua_;
+    if (lua == nullptr) return;
+    lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+    if (!lua_istable(lua, -1)) {
+        lua_pop(lua, 1);
+        lua_newtable(lua);
+        lua_setfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+        lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+    }
+    const std::string key = std::to_string(unit.generation) + ":"
+                            + std::to_string(unit.index);
+    lua_pushnumber(lua, consumed);
+    lua_setfield(lua, -2, (key + ":funding").c_str());
+    lua_pushnumber(lua, buildTimeSeconds);
+    lua_setfield(lua, -2, (key + ":buildtime").c_str());
+    // The unit table may already exist (created by an earlier `GetUnit`);
+    // mirror the build time onto it so the shipped beat reads it live.
+    lua_getfield(lua, -1, key.c_str());
+    if (lua_istable(lua, -1)) {
+        lua_pushnumber(lua, buildTimeSeconds);
+        lua_setfield(lua, -2, "WorkItemBuildTime");
+    }
+    lua_pop(lua, 2);
+}
 
+double ScriptHost::taskWorkProgress(rm::sim::UnitId unit) const {
+    lua_State* lua = lua_;
+    if (lua == nullptr) return -1.0;
+    lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+    if (!lua_istable(lua, -1)) {
+        lua_pop(lua, 1);
+        return -1.0;
+    }
+    const std::string key = std::to_string(unit.generation) + ":"
+                            + std::to_string(unit.index);
+    lua_getfield(lua, -1, key.c_str());
+    if (!lua_istable(lua, -1)) {
+        lua_pop(lua, 2);
+        return -1.0;
+    }
+    lua_getfield(lua, -1, "WorkProgress");
+    const double progress = lua_isnumber(lua, -1) ? lua_tonumber(lua, -1) : -1.0;
+    lua_pop(lua, 3);
+    return progress;
+}
+
+double ScriptHost::taskGlobalNumber(const char* name) const {
+    lua_State* lua = lua_;
+    if (lua == nullptr || name == nullptr) return -1.0;
+    lua_getglobal(lua, name);
+    const double value = lua_isnumber(lua, -1) ? lua_tonumber(lua, -1) : -1.0;
+    lua_pop(lua, 1);
+    return value;
+}
 
 ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
                                                 std::string_view task,
@@ -602,8 +697,8 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
     lua_setfield(lua, -2, "LUnitMove");
     lua_pushcfunction(lua, &taskNoopFn);
     lua_setfield(lua, -2, "LUnitMoveNear");
-    lua_pushnumber(lua, 0.1);
-    lua_setfield(lua, -2, "SecondsPerTick");
+    lua_pushcfunction(lua, &taskSecondsPerTickFn);
+    lua_setglobal(lua, "SecondsPerTick");
     // Use the bootstrap's `__rm_construct` to call the class as a constructor (which fires
     // OnPreCreate + OnCreate) and rebind the four lifecycle hooks on the returned instance.
     lua_getglobal(lua, "__rm_construct");
@@ -685,8 +780,6 @@ void ScriptHost::pushTaskNatives(rm::sim::UnitId unit, const std::string& taskKe
     lua_setfield(lua, -2, "LUnitMove");
     lua_pushcfunction(lua, &taskNoopFn);
     lua_setfield(lua, -2, "LUnitMoveNear");
-    lua_pushnumber(lua, 0.1);
-    lua_setfield(lua, -2, "SecondsPerTick");
 }
 
 void ScriptHost::clearTaskNatives() {

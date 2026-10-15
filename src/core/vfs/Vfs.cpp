@@ -80,8 +80,9 @@ struct Vfs::Impl {
 
     std::vector<Archive> archives;
 
-    // Keyed by normalised (lower-cased) path. A later mount overwrites an earlier
-    // one, which IS the priority rule — insert-or-assign, not insert.
+    // Keyed by normalised (lower-cased) path. The first mount wins (`C-267`:
+    // retail `CVFSImpl` lookup `0x00466c60` returns the first directory-prefix
+    // match), so mounting is insert-if-absent, not insert-or-assign.
     std::map<std::string, Entry> entries;
 
     /// Registered hook directories, in registration order (`C-312`): the
@@ -143,7 +144,7 @@ void Vfs::mountDirectoryAt(std::string_view vfsPrefix, std::filesystem::path dir
         const std::string shown =
             vfsPrefix == "/" ? "/" + relative.generic_string()
                              : std::string{vfsPrefix} + "/" + relative.generic_string();
-        impl_->entries.insert_or_assign(
+        impl_->entries.try_emplace(
             mounted, Impl::Entry{.archive = -1,
                                  .indexInArchive = 0,
                                  .realPath = item.path(),
@@ -186,7 +187,7 @@ bool Vfs::mountArchiveAt(std::string_view vfsPrefix, const std::filesystem::path
         const std::string shown = vfsPrefix == "/"
                                       ? "/" + std::string{stat.m_filename}
                                       : std::string{vfsPrefix} + "/" + std::string{stat.m_filename};
-        impl_->entries.insert_or_assign(mounted,
+        impl_->entries.try_emplace(mounted,
                                         Impl::Entry{.archive = archiveIndex,
                                                     .indexInArchive = i,
                                                     .realPath = {},

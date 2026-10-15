@@ -149,7 +149,12 @@ TEST_CASE("lookup ignores case, because the content disagrees with itself") {
     REQUIRE(vfs.read("/units/uel0201/uel0201_lod0.scm").has_value());
 }
 
-TEST_CASE("the last mount wins, which is what makes a mod a mod") {
+TEST_CASE("the first mount wins, which is what makes an install an install") {
+    // Retail `CVFSImpl` lookup `0x00466c60` (`C-267`) returns the first
+    // directory-prefix match, so the earliest mount of a path resolves and a
+    // later mount of the same path is inert. The stock/mod split this used to
+    // pin moved to `mountMod` (`C-268`): mods mount under `/mods/<name>` and
+    // act through hook concat, never through VFS shadow.
     const Scratch guard;
     writeArchive(scratch() / "units.scd", {{"units/UEL0201/UEL0201_unit.bp", "stock"},
                                           {"units/UEL0105/UEL0105_unit.bp", "untouched"}});
@@ -159,30 +164,43 @@ TEST_CASE("the last mount wins, which is what makes a mod a mod") {
     REQUIRE(vfs.mountArchive(scratch() / "units.scd"));
     REQUIRE(vfs.mountArchive(scratch() / "mod.scd"));
 
-    // The mod's file shadows the stock one...
-    CHECK(asText(*vfs.read("/units/UEL0201/UEL0201_unit.bp")) == "modded");
-    // ...and everything it does not contain still resolves. This is the half that
-    // makes layering useful and the half a flat extraction cannot express.
+    // The stock file shadows the later mount...
+    CHECK(asText(*vfs.read("/units/UEL0201/UEL0201_unit.bp")) == "stock");
+    // ...and everything only the later mount contains still resolves.
     CHECK(asText(*vfs.read("/units/UEL0105/UEL0105_unit.bp")) == "untouched");
     CHECK(vfs.fileCount() == 2);
 }
+TEST_CASE("the first mount wins, like retail CVFSImpl (C-267)") {
+    // Retail lookup `0x00466c60` iterates the mount vector forward and returns
+    // on the first prefix match: `lua.scd` (6th ascending) shadows
+    // `mohodata.scd` (9th) because it mounts FIRST, not last.
+    const Scratch guard;
+    writeArchive(scratch() / "lua.scd", {{"lua/sim/unit.lua", "game lua"}});
+    writeArchive(scratch() / "mohodata.scd", {{"lua/sim/unit.lua", "engine stub"}});
 
-TEST_CASE("a directory can shadow an archive and an archive a directory") {
+    rm::vfs::Vfs vfs;
+    REQUIRE(vfs.mountArchive(scratch() / "lua.scd"));
+    REQUIRE(vfs.mountArchive(scratch() / "mohodata.scd"));
+
+    CHECK(asText(*vfs.read("/lua/sim/unit.lua")) == "game lua");
+}
+
+TEST_CASE("the first mount wins, whichever medium it arrives on") {
     const Scratch guard;
     writeArchive(scratch() / "units.scd", {{"units/x.bp", "from the archive"}});
     writeFile(scratch() / "loose/units/x.bp", "from the directory");
 
-    SECTION("directory mounted last") {
+    SECTION("archive mounted first") {
         rm::vfs::Vfs vfs;
         REQUIRE(vfs.mountArchive(scratch() / "units.scd"));
         vfs.mountDirectory(scratch() / "loose");
-        CHECK(asText(*vfs.read("/units/x.bp")) == "from the directory");
-    }
-    SECTION("archive mounted last") {
-        rm::vfs::Vfs vfs;
-        vfs.mountDirectory(scratch() / "loose");
-        REQUIRE(vfs.mountArchive(scratch() / "units.scd"));
         CHECK(asText(*vfs.read("/units/x.bp")) == "from the archive");
+    }
+    SECTION("directory mounted first") {
+        rm::vfs::Vfs vfs;
+        vfs.mountDirectory(scratch() / "loose");
+        REQUIRE(vfs.mountArchive(scratch() / "units.scd"));
+        CHECK(asText(*vfs.read("/units/x.bp")) == "from the directory");
     }
 }
 

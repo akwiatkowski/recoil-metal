@@ -601,7 +601,7 @@ local function platoonIssue(self, entries, queued)
     local id = self.__cmdSeq
     for _, u in ipairs(platoonUnits(self)) do
         for _, e in ipairs(entries) do
-            pending[#pending + 1] = { kind = e.kind, h = u.h, cmd = id,
+            pending[#pending + 1] = { kind = e.kind, h = u.h, cmd = id, target = e.target,
                                       x = e.x, z = e.z, queued = queued == true }
         end
     end
@@ -614,6 +614,27 @@ moho.platoon_methods.MoveToLocation = function(self, dest, queued)
 end
 moho.platoon_methods.AggressiveMoveToLocation = function(self, dest, queued)
     return platoonIssue(self, {{ kind = 'attackmove', x = dest[1], z = dest[3] }}, queued)
+end
+moho.platoon_methods.AttackTarget = function(self, target)
+    if target == nil or target.Dead then return nil end
+    return platoonIssue(self, {{ kind = 'attack', target = target.h }})
+end
+moho.platoon_methods.GuardTarget = function(self, target)
+    if target == nil or target.Dead then return nil end
+    return platoonIssue(self, {{ kind = 'guard', target = target.h }})
+end
+moho.platoon_methods.MoveToTarget = function(self, target)
+    if target == nil or target.Dead then return nil end
+    local pos = target.GetPosition and target:GetPosition() or nil
+    local x, z = pos and pos[1] or target.x, pos and pos[3] or target.z
+    return platoonIssue(self, {{ kind = 'move', x = x, z = z }})
+end
+moho.platoon_methods.Patrol = function(self, dest)
+    return platoonIssue(self, {{ kind = 'patrol', x = dest[1], z = dest[3] }}, true)
+end
+moho.platoon_methods.CanAttackTarget = function(self, squad, target)
+    if target == nil or target.Dead then return false end
+    return #platoonUnits(self) > 0
 end
 -- `CPlatoon:IsCommandsActive`: the poll predicate behind `CheckCommandsCompleted`
 -- (platoon.lua:268). A token reads active while its issue sits queued and
@@ -2603,6 +2624,15 @@ function __rm_faf_decide(army, snap)
                     elseif e.kind == 'attackmove' then
                         decisions[#decisions + 1] = { kind = 'attackmove', builder = e.h,
                             x = e.x, z = e.z, queued = e.queued }
+                    elseif e.kind == 'attack' then
+                        decisions[#decisions + 1] = { kind = 'attack_target', builder = e.h,
+                            target = e.target }
+                    elseif e.kind == 'guard' then
+                        decisions[#decisions + 1] = { kind = 'guard', builder = e.h,
+                            target = e.target }
+                    elseif e.kind == 'patrol' then
+                        decisions[#decisions + 1] = { kind = 'patrol', builder = e.h,
+                            x = e.x, z = e.z, queued = e.queued }
                     end
                 end
             end
@@ -4378,6 +4408,38 @@ void FafOpponent::convertDecision(lua_State* lua) {
                 .toX = rm::sim::fxFromFloat(x), .toZ = rm::sim::fxFromFloat(z),
                 .queued = queued, .attackMove = true});
         }
+        return;
+    }
+    // `CPlatoon:AttackTarget` (`0x007365e0`): one targeted attack per live
+    // squad unit. The target handle resolves fresh through the script-object
+    // seam; a dead/gone target drops the order like a dead unit drops on read.
+    if (kind == "attack_target") {
+        const auto unit = handleAt(0);
+        if (!unit) return;
+        lua_getfield(lua, -1, "target");
+        const auto target = resolveHandle(lua_tointeger(lua, -1));
+        lua_pop(lua, 1);
+        if (target) decisions_.push_back({.kind = Decision::Kind::Attack,
+            .unit = *unit, .target = *target});
+        return;
+    }
+    // `CPlatoon:Patrol` (`0x00737d70`): one patrol leg per live squad unit,
+    // always queued behind the existing orders like the corpus's base-patrol
+    // loops (platoon.lua:1408-1414: MoveToLocation first, Patrol after).
+    if (kind == "patrol") {
+        const auto unit = handleAt(0);
+        if (!unit) return;
+        lua_getfield(lua, -1, "x");
+        lua_getfield(lua, -2, "z");
+        const float x = static_cast<float>(lua_tonumber(lua, -2));
+        const float z = static_cast<float>(lua_tonumber(lua, -1));
+        const bool valid = lua_isnumber(lua, -2) && lua_isnumber(lua, -1)
+            && std::isfinite(x) && std::isfinite(z) && x >= 0 && z >= 0
+            && x <= static_cast<float>(world_->field.squaresX * rm::kSquareSize)
+            && z <= static_cast<float>(world_->field.squaresZ * rm::kSquareSize);
+        lua_pop(lua, 2);
+        if (valid) decisions_.push_back({.kind = Decision::Kind::Patrol, .unit = *unit,
+            .toX = rm::sim::fxFromFloat(x), .toZ = rm::sim::fxFromFloat(z), .queued = true});
         return;
     }
 

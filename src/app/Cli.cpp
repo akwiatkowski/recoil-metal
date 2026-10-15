@@ -282,16 +282,11 @@ WindowOptions parseWindow(int argc, const char* argv[]) {
 }
 [[nodiscard]] std::vector<std::filesystem::path>
 orderArchivesForMount(std::vector<std::filesystem::path> archives) {
-    // The iterator promises no order, and a mount is priority — so name order first.
+    // Retail's own rule (`C-266`): `FindFirstFile`/`FindNextFile` matches at
+    // `0x004692b0`, sorted ascending by filename — and resolution is
+    // first-mount-wins (`C-267`, `CVFSImpl` `0x00466c60`), so `lua.scd` (6th)
+    // shadows `mohodata.scd` (9th) with no reordering step. Pure name order.
     std::ranges::sort(archives);
-    // Then retail's own overrides mount later (higher priority). `lua.scd` shadows
-    // `mohodata.scd`'s short Moho stubs — `lua/sim/Unit.lua` is 142,533 bytes of game
-    // against 3,757 bytes of stub — and alphabetical order mounts mohodata later,
-    // resolving the stubs. The game reads its own Lua through the winning layer.
-    const auto rank = [](const std::filesystem::path& archive) {
-        return archive.filename() == "lua.scd" ? 1 : 0;
-    };
-    std::ranges::stable_sort(archives, {}, rank);
     return archives;
 }
 
@@ -299,10 +294,10 @@ orderArchivesForMount(std::vector<std::filesystem::path> archives) {
 /// Mounts the game's content: `--gamedata <dir>` for a whole install, `--archive
 /// <scd>` for one archive, `--data-dir <dir>` for a loose directory.
 ///
-/// MOUNT ORDER IS PRIORITY, last wins (core/vfs/Vfs.hpp), and the command line's
-/// order is honoured verbatim so a mod can be layered over stock content by naming
-/// it second. `--gamedata` mounts every `.scd` it finds through
-/// `orderArchivesForMount`: name order, with retail's own override layers last.
+/// MOUNT ORDER IS PRIORITY, first wins (`C-267`, core/vfs/Vfs.hpp), and the
+/// command line's order is honoured verbatim: `--gamedata` mounts every `.scd`
+/// it finds in ascending-name order (`orderArchivesForMount`, `C-266`), so
+/// `lua.scd` shadows `mohodata.scd` exactly as retail's sorted list does.
 ///
 /// This replaced extracting archives to a temporary directory. That worked, and it
 /// is not what a game does: it duplicated 2.4 GiB for the two big archives, went

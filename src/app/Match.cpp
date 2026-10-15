@@ -1176,6 +1176,30 @@ void applyDecisions(UnitScene& scene, const rm::vfs::Vfs& content, const rm::sim
                 playerDriving(scene,army.index),tickIndex,decision.target,decision.queued);
             break;
         }
+        case rm::ai::Decision::Kind::Attack: {
+            // `CPlatoon:AttackTarget` (`0x007365e0`): issueAttack's shape — one
+            // command through applyCommand, recorded only when it took. The
+            // target's current position seeds the pursuit's first leg.
+            if (!scene.store.alive(decision.unit) || !scene.store.alive(decision.target)) {
+                break;  // died between the census and the order
+            }
+            const auto& at = scene.store.transforms()[decision.target.index];
+            (void)issueAttack(scene, std::span{&decision.unit, std::size_t{1}},
+                playerDriving(scene, army.index), tickIndex, decision.target, at.x, at.z,
+                false);
+            break;
+        }
+        case rm::ai::Decision::Kind::Patrol: {
+            // `CPlatoon:Patrol` (`0x00737d70`): issueMove's shape with the
+            // patrol kind — always queued behind existing orders.
+            if (!scene.store.alive(decision.unit)) {
+                break;  // died between the census and the order
+            }
+            (void)issueMove(scene, decision.unit, playerDriving(scene, army.index),
+                tickIndex, decision.toX, decision.toZ, true,
+                rm::sim::CommandKind::Patrol);
+            break;
+        }
         case rm::ai::Decision::Kind::Reclaim: {
             if (!scene.store.alive(decision.unit)) {
                 break;

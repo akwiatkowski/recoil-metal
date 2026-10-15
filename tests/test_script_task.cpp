@@ -1571,3 +1571,134 @@ TEST_CASE("C-228: ScriptHost decodes scriptData bytes into the OnCreate commandD
     CHECK(roster.store.orders()[unit.index].empty());
     CHECK(host.errors().empty());
 }
+TEST_CASE("C-436: ScriptHost runs the shipped Enhancing loop on funded beats to Done") {
+    // `C-436` (`/lua/sim/tasks/EnhanceTask.lua:44-84`): the shipped `Enhancing`
+    // beat accrues ONLY when funded (`obtained > 0`), scales by
+    // `(1 / (WorkItemBuildTime / GetBuildRate())) * obtained * SecondsPerTick()`,
+    // edge-triggers the 0.25/0.50/0.75 milestones off the pre-tick
+    // `LastProgress`, and finishes via `OnWorkEnd` + `Success` at >= 1.0.
+    // The host currently starves the loop three ways: `GetResourceConsumed`
+    // is a hard zero, `SecondsPerTick` is a number field the shipped call
+    // `SecondsPerTick()` cannot invoke, and `WorkItemBuildTime` is absent —
+    // so the task errors out on its first `Enhancing` beat and the queue
+    // retires Done with no progress. This case publishes a funded economy
+    // (build time 1.0 s at rate 1, fully funded) and requires ten 0.1 beats
+    // to complete through the shipped shape.
+    rm::vfs::Vfs content;
+    rm::app::ScriptHost host{content};
+    host.registerTask("C436Funded", rm::app::ScriptTaskRegistration{
+        .source =
+            "TASKSTATUS = { Done = -1, Suspend = -2, Abort = -3, Delay = -4,"
+            " Repeat = 0, Wait = 1 }\n"
+            "AIRESULT = { Unknown = 0, Success = 1, Fail = 2, Ignored = 3 }\n"
+            "C436Task = Class({}) {\n"
+            "  OnCreate = function(self, commandData)\n"
+            "    self.CommandData = commandData\n"
+            "    self:GetUnit():SetWorkProgress(0.0)\n"
+            "    self.LastProgress = 0\n"
+            "    ChangeState(self, self.Stopping)\n"
+            "  end,\n"
+            "  OnDestroy = function(self)\n"
+            "    self:GetUnit():SetWorkProgress(0.0)\n"
+            "    if self.Success then\n"
+            "      self:SetAIResult(AIRESULT.Success)\n"
+            "    else\n"
+            "      self:SetAIResult(AIRESULT.Fail)\n"
+            "      self:GetUnit():OnWorkFail(self.CommandData.Enhancement)\n"
+            "    end\n"
+            "  end,\n"
+            "  Stopping = State {\n"
+            "    TaskTick = function(self)\n"
+            "      local unit = self:GetUnit()\n"
+            "      if unit:IsMobile() and unit:IsMoving() then\n"
+            "        unit:GetNavigator():AbortMove()\n"
+            "        return TASKSTATUS.Wait\n"
+            "      else\n"
+            "        unit:OnWorkBegin(self.CommandData.Enhancement)\n"
+            "        ChangeState(self, self.Enhancing)\n"
+            "        return TASKSTATUS.Repeat\n"
+            "      end\n"
+            "    end,\n"
+            "  },\n"
+            "  Enhancing = State {\n"
+            "    TaskTick = function(self)\n"
+            "      local unit = self:GetUnit()\n"
+            "      if unit:IsPaused() then return TASKSTATUS.Wait end\n"
+            "      local current = unit.WorkProgress\n"
+            "      local obtained = unit:GetResourceConsumed()\n"
+            "      if obtained > 0 then\n"
+            "        local frac = ( 1 / ( unit.WorkItemBuildTime / unit:GetBuildRate()) )"
+            "          * obtained * SecondsPerTick()\n"
+            "        current = current + frac\n"
+            "        unit.WorkProgress = current\n"
+            "      end\n"
+            "      if( ( self.LastProgress < 0.25 and current >= 0.25 ) or\n"
+            "          ( self.LastProgress < 0.50 and current >= 0.50 ) or\n"
+            "          ( self.LastProgress < 0.75 and current >= 0.75 ) ) then\n"
+            "        unit:OnBuildProgress(self.LastProgress,current)\n"
+            "      end\n"
+            "      self.LastProgress = current\n"
+            "      unit:SetWorkProgress(current)\n"
+            "      if( current < 1.0 ) then return TASKSTATUS.Wait end\n"
+            "      G_c436final = current\n"
+            "      self.Success = true\n"
+            "      return TASKSTATUS.Done\n"
+            "    end,\n"
+            "  },\n"
+            "}\n"
+            "TypeClass = C436Task\n",
+    });
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c436_funded";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+    const std::string name = "AdvancedEngineering";
+    const std::vector<std::uint8_t> data{name.begin(), name.end()};
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "C436Funded",
+                              .scriptData = data},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    // Retail's `OnWorkBegin` derives `WorkItemBuildTime` from the blueprint;
+    // this stub host takes the test's value: 1.0 s of work at rate 1, fully
+    // funded, so each beat accrues exactly one 0.1 s tick of progress.
+    host.publishTaskFunding(unit, 1.0, 1.0);
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    auto advance = [&] {
+        return rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                       nullptr, nullptr, nullptr, nullptr, nullptr, armies,
+                                       nullptr, nullptr, &host);
+    };
+    // `OnCreate` + `Stopping` (Repeat loops into `Enhancing` on the same
+    // advance): the first funded beat banks 0.1 and waits.
+    REQUIRE(advance() == 1);
+    CHECK_FALSE(roster.store.orders()[unit.index].empty());
+    CHECK(host.taskWorkProgress(unit) == Catch::Approx(0.1));
+    for (int i = 0; i < 4; ++i) REQUIRE(advance() == 0);
+    CHECK(host.taskWorkProgress(unit) == Catch::Approx(0.5));
+    int beats = 0;
+    while (!roster.store.orders()[unit.index].empty() && beats < 8) {
+        REQUIRE(advance() == 0);
+        ++beats;
+    }
+    CHECK(roster.store.orders()[unit.index].empty());
+    // The shipped `OnDestroy` zeroes `WorkProgress` AFTER `Success`, so the
+    // post-completion table reads 0 — the completion-time global `G_c436final`
+    // (written on the retiring beat before `OnWorkEnd`) proves the funded
+    // loop banked ten 0.1 beats to >= 1.0.
+    CHECK(host.taskGlobalNumber("G_c436final") >= 1.0);
+    for (const auto& err : host.errors()) WARN("lua: " << err);
+    CHECK(host.errors().empty());
+}

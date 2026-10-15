@@ -85,8 +85,8 @@ TEST_CASE("mounting the whole gamedata directory gives one namespace", "[corpus]
     }
     rm::vfs::Vfs vfs;
     std::size_t mounted = 0;
-    // Retail mount order, not directory order: lua.scd shadows mohodata.scd, and
-    // the count below stays reproducible either way.
+    // Retail's own order (`C-266`/`C-267`): ascending by filename, first mount
+    // wins — `lua.scd` shadows `mohodata.scd`, and the count stays reproducible.
     std::vector<std::filesystem::path> archives;
     for (const auto& item : std::filesystem::directory_iterator{gamedata()}) {
         if (item.path().extension() == ".scd") {
@@ -111,7 +111,9 @@ TEST_CASE("mounting the whole gamedata directory gives one namespace", "[corpus]
 
     // The one retail override pair in the install: lua.scd and mohodata.scd both
     // carry lua/sim/Unit.lua, and the game reads lua.scd's 142,533-byte game file,
-    // not the 3,757-byte Moho stub. Alphabetical mounting would resolve the stub.
+    // not the 3,757-byte Moho stub — because lua.scd sorts earlier (6th vs 9th)
+    // and the first mount wins (`C-267`). Pure ascending mounting would have
+    // resolved the stub under our old last-wins rule; now it resolves the game file.
     rm::vfs::Vfs luaOnly;
     REQUIRE(luaOnly.mountArchive(gamedata() / "lua.scd"));
     const auto layered = vfs.read("/lua/sim/Unit.lua");

@@ -161,13 +161,12 @@ Scenario = {
 
 } // namespace
 
-TEST_CASE("C-266: the mount order makes lua.scd shadow mohodata.scd",
+TEST_CASE("C-266/C-267: ascending mount order makes lua.scd shadow mohodata.scd",
           "[fa-content]") {
-    // The player-visible outcome of retail's mount list: the game Lua wins
-    // over the engine stubs. Retail gets there with first-mount-wins over a
-    // sorted list; we get there with last-mount-wins over a list that puts the
-    // override archives last (the mechanism divergence is documented in the
-    // coverage audit — the observable shadow is what this pins).
+    // Retail's own mechanism, now ours too: `gamedata/*.scd` mounts ascending
+    // by filename (`C-266`, `FindFirstFile` sort at `0x004692b0`) and lookup
+    // returns the first mount's file (`C-267`, `CVFSImpl` `0x00466c60`), so
+    // `lua.scd`'s game Lua (6th) shadows `mohodata.scd`'s Moho stubs (9th).
     const Scratch guard;
 
     writeArchive(scratch() / "gamedata/mohodata.scd",

@@ -109,11 +109,12 @@ public:
     /// milliseconds, where extracting them is gigabytes.
     [[nodiscard]] bool mountArchive(const std::filesystem::path& archive);
 
-    /// LAST MOUNT WINS — the layering rule the game's own override archives
-    /// rely on (lua.scd over mohodata.scd). Mount stock content first and an
-    /// override after, and the override's `UEL0201_unit.bp` shadows the stock
-    /// one while every file it does not contain still resolves. The opposite
-    /// order would make the layer inert, silently.
+    /// FIRST MOUNT WINS (`C-267`): retail `CVFSImpl` lookup (`0x00466c60`)
+    /// iterates the mount vector forward and returns on the first
+    /// directory-prefix match, so the earliest mount of a path resolves.
+    /// Mount stock content in ascending-name order (`orderArchivesForMount`)
+    /// and `lua.scd`'s game Lua shadows `mohodata.scd`'s Moho stubs the way
+    /// retail's own sorted list does. Mounting the same path again is inert.
     ///
     /// This is NOT how retail mods work — `C-268` refutes mod shadowing; see
     /// `mountMod`. It is how the mount list's own ordering works.
