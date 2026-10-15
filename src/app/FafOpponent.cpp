@@ -592,22 +592,38 @@ end
 -- `AIUtils.RandomLocation` both build them that way. Dead units leave no
 -- order, like `liveSquad` on read.
 local function platoonIssue(self, entries, queued)
-    if not queued then self.__pendingOrders = {} end
+    if not queued then self.__pendingOrders = {} self.__activeCmds = {} end
     local pending = self.__pendingOrders
     if pending == nil then pending = {} self.__pendingOrders = pending end
+    local active = self.__activeCmds
+    if active == nil then active = {} self.__activeCmds = active end
+    self.__cmdSeq = (self.__cmdSeq or 0) + 1
+    local id = self.__cmdSeq
     for _, u in ipairs(platoonUnits(self)) do
         for _, e in ipairs(entries) do
-            pending[#pending + 1] = { kind = e.kind, h = u.h,
+            pending[#pending + 1] = { kind = e.kind, h = u.h, cmd = id,
                                       x = e.x, z = e.z, queued = queued == true }
         end
     end
+    active[id] = true
+    return { __cmd = id }
 end
-moho.platoon_methods.Stop = function(self) platoonIssue(self, {{ kind = 'stop' }}) end
+moho.platoon_methods.Stop = function(self) return platoonIssue(self, {{ kind = 'stop' }}) end
 moho.platoon_methods.MoveToLocation = function(self, dest, queued)
-    platoonIssue(self, {{ kind = 'move', x = dest[1], z = dest[3] }}, queued)
+    return platoonIssue(self, {{ kind = 'move', x = dest[1], z = dest[3] }}, queued)
 end
 moho.platoon_methods.AggressiveMoveToLocation = function(self, dest, queued)
-    platoonIssue(self, {{ kind = 'attackmove', x = dest[1], z = dest[3] }}, queued)
+    return platoonIssue(self, {{ kind = 'attackmove', x = dest[1], z = dest[3] }}, queued)
+end
+-- `CPlatoon:IsCommandsActive`: the poll predicate behind `CheckCommandsCompleted`
+-- (platoon.lua:268). A token reads active while its issue sits queued and
+-- inactive once the pass drain consumes it; anything else is never active.
+moho.platoon_methods.IsCommandsActive = function(self, cmd)
+    if type(cmd) ~= 'table' then return false end
+    local id = cmd.__cmd
+    if id == nil then return false end
+    local active = self.__activeCmds
+    return active ~= nil and active[id] == true
 end
 function __rm_faf_platoon_orders()
     local out = {}
@@ -2591,6 +2607,7 @@ function __rm_faf_decide(army, snap)
                 end
             end
             platoon.__pendingOrders = {}
+            platoon.__activeCmds = {}
         end
     end
 

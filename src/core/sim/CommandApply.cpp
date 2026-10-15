@@ -914,18 +914,26 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     // Stable: ties keep canonical order, so a homogeneous group fills exactly as
     // before and selection order stays presentation-only.
     std::ranges::stable_sort(formationMembers, {}, formationClass);
-    // Retail routes each layer class through its own blocks (`GrowthFormation`
-    // formations.lua:679-723, `AttackFormation` formations.lua:622-668): land
-    // hulls through the land widths, surface hulls through the naval ones, and
-    // submerged hulls through the sub blocks. A surface hull is the `surfaceWater`
-    // motion flag; a submerged hull is the `submersible` flag `SceneBuild` derives
-    // from `MotionType::SurfacingSub`.
-    const bool allSurfaceWater = std::ranges::all_of(formationMembers, [&](UnitId unit) {
-        return store.motion()[unit.index].surfaceWater;
-    });
-    const bool allSubmerged = std::ranges::all_of(formationMembers, [&](UnitId unit) {
-        return store.motion()[unit.index].submersible;
-    });
+    // Retail splits `formationUnits` into land/sea/air lists BEFORE block choice
+    // (`GrowthFormation` formations.lua:679-723, `AttackFormation` 622-668): each
+    // domain fills its own blocks on the same anchor/facing. Submerged hulls sail
+    // apart from surface hulls (the `submersible` flag `SceneBuild` derives from
+    // `MotionType::SurfacingSub` takes precedence over `surfaceWater`).
+    std::vector<UnitId> landMembers;
+    std::vector<UnitId> seaMembers;
+    std::vector<UnitId> subMembers;
+    landMembers.reserve(formationMembers.size());
+    seaMembers.reserve(formationMembers.size());
+    subMembers.reserve(formationMembers.size());
+    for (const UnitId unit : formationMembers) {
+        if (store.motion()[unit.index].submersible) {
+            subMembers.push_back(unit);
+        } else if (store.motion()[unit.index].surfaceWater) {
+            seaMembers.push_back(unit);
+        } else {
+            landMembers.push_back(unit);
+        }
+    }
     // Retail `BlockBuilderLand` multiplies every sea/sub slot by the call-site
     // `spacing` argument: `GrowthFormation` passes 1.5 for both sea and sub
     // lists (formations.lua:722-723) and `AttackFormation` passes 1.5 too
@@ -933,21 +941,12 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     // additionally set `LineBreak = 0.5` (formations.lua:451-587), adding half
     // a row step per row transition — columns spread 1.5 diameters and rows
     // advance 1.5 diameters. Fixed-point `3/2` throughout (C-178, ART-S007).
-    const Fx seaSlotSpacing =
-        (allSubmerged || allSurfaceWater) ? Fx::fromRatio(3, 2) : Fx::fromInt(1);
-    const Fx seaRowSpacing =
-        (allSubmerged || allSurfaceWater) ? Fx::fromRatio(3, 2) : Fx::fromInt(1);
-    const std::size_t formationWidth = allSubmerged
-                                           ? subFormationWidth(formationMembers.size(),
-                                                               isAttackOrder)
-                                           : (allSurfaceWater
-                                                  ? navalFormationWidth(
-                                                        formationMembers.size(), isAttackOrder)
-                                                  : (isAttackOrder
-                                                         ? attackFormationWidth(
-                                                               formationMembers.size())
-                                                         : growthFormationWidth(
-                                                               formationMembers.size())));
+    const Fx landSpacing = Fx::fromInt(1);
+    const Fx seaSpacing = Fx::fromRatio(3, 2);
+    const std::size_t landWidth = isAttackOrder ? attackFormationWidth(landMembers.size())
+                                                : growthFormationWidth(landMembers.size());
+    const std::size_t seaWidth = navalFormationWidth(seaMembers.size(), isAttackOrder);
+    const std::size_t subWidth = subFormationWidth(subMembers.size(), isAttackOrder);
     // The formation's facing. Retail carries it on the wire command as an orientation
     // quaternion (`C-151`, `CDecoder::DecodeCommandData` +0x3c..+0x48) that the engine
     // applies to the Lua `FormationPos` offsets — the script itself returns unrotated
@@ -1417,26 +1416,34 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                 localX = chevronX + spacing * (blockOff + firstBlockOffset);
                 localZ = chevronZ;
             } else {
+                const bool isSubMember = std::ranges::find(subMembers, unit) != subMembers.end();
+                const bool isSeaMember = std::ranges::find(seaMembers, unit) != seaMembers.end();
+                const std::span<const UnitId> domainList = isSubMember
+                                                               ? std::span<const UnitId>{subMembers}
+                                                               : (isSeaMember ? std::span<const UnitId>{seaMembers}
+                                                                              : std::span<const UnitId>{landMembers});
+                const std::size_t domainWidth = isSubMember ? subWidth : (isSeaMember ? seaWidth : landWidth);
+                const Fx slotSpacing = (isSubMember || isSeaMember) ? seaSpacing : landSpacing;
                 const std::size_t formationRank = static_cast<std::size_t>(
-                    std::ranges::find(formationMembers, unit) - formationMembers.begin());
-                const std::size_t column = formationRank % formationWidth;
-                const std::size_t row = formationRank / formationWidth;
+                    std::ranges::find(domainList, unit) - domainList.begin());
+                const std::size_t column = formationRank % domainWidth;
+                const std::size_t row = formationRank / domainWidth;
                 const Fx radius = store.motion()[unit.index].radiusElmos;
                 const Fx diameter = Fx::fromRaw(saturate(FxWide{radius.raw()} * 2));
-                if (formationWidth % 2 == 0) {
+                if (domainWidth % 2 == 0) {
                     const FxWide halfDiameterOffsets = column % 2 == 0
                                                            ? -static_cast<FxWide>(column + 1)
                                                            : static_cast<FxWide>(column);
                     localX = Fx::fromRaw(
-                        saturate(FxWide{(radius * seaSlotSpacing).raw()} * halfDiameterOffsets));
+                        saturate(FxWide{(radius * slotSpacing).raw()} * halfDiameterOffsets));
                 } else {
                     const FxWide diameterOffsets = column % 2 == 0
                                                        ? -static_cast<FxWide>(column / 2)
                                                        : static_cast<FxWide>((column + 1) / 2);
                     localX = Fx::fromRaw(
-                        saturate(FxWide{(diameter * seaSlotSpacing).raw()} * diameterOffsets));
+                        saturate(FxWide{(diameter * slotSpacing).raw()} * diameterOffsets));
                 }
-                localZ = Fx::fromRaw(saturate(-FxWide{(diameter * seaRowSpacing).raw()}
+                localZ = Fx::fromRaw(saturate(-FxWide{(diameter * slotSpacing).raw()}
                                               * static_cast<FxWide>(row)));
             }
         } else if ((issue.kind == CommandKind::Move || issue.kind == CommandKind::AttackMove)

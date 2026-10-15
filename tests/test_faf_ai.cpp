@@ -1201,6 +1201,52 @@ TEST_CASE("CPlatoon order verbs queue pending orders the port drains",
     INFO(ai.lastError());
     REQUIRE(ok);
 }
+// `CPlatoon:IsCommandsActive` (the poll predicate behind `CheckCommandsCompleted`
+// at platoon.lua:268, the ferry poll at ScenarioPlatoonAI.lua:1143, and the 30-cap
+// at platoon.lua:2662): an order verb returns a command token; the token reads active
+// while its orders sit queued and inactive once the pass drain consumes them.
+TEST_CASE("CPlatoon order verbs return a token IsCommandsActive polls",
+          "[faf][ai][platoon-orders]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_type('UEL0201', { 'MOBILE', 'LAND', 'TECH1', 'DIRECTFIRE' })
+        local mk = function(idx)
+            local u = { bp = 'UEL0201', h = __rm_faf_handle(idx, 1),
+                        x = 100, z = 100, __cats = __rm_faf.cats.UEL0201 }
+            setmetatable(u, __rm_faf.unitMeta)
+            return u
+        end
+        local tank, wing = mk(7), mk(8)
+        __rm_faf_boot(0, { faction = 1, startX = 100, startZ = 100,
+            sizeX = 512, sizeZ = 512, armies = 2, base = 'NormalMain', markers = {} })
+        local brain = __rm_faf.brains[0]
+        local platoon = brain:MakePlatoon('Scouts', 'none')
+        brain:AssignUnitsToPlatoon(platoon, { tank, wing }, 'Attack', 'GrowthFormation')
+        local cmd = platoon:MoveToLocation({ 200, 0, 300 }, false)
+        assert(cmd ~= nil, 'the move verb returns a command token')
+        assert(platoon:IsCommandsActive(cmd), 'the token is active while queued')
+        assert(not platoon:IsCommandsActive(nil), 'a nil token is never active')
+        assert(not platoon:IsCommandsActive({}), 'a foreign token is never active')
+        brain.snap = { units = { tank, wing }, occupied = {}, underway = {},
+                       mass = 400, energy = 1500, massStorage = 650, energyStorage = 4000,
+                       massIncome = 0.2, energyIncome = 10,
+                       massRequested = 0, energyRequested = 0,
+                       massUsage = 0, energyUsage = 0,
+                       structuresUnderway = 0, mobileUnderway = 0, tick = 99 }
+        brain.builders = {}
+        __rm_faf_decide(0, brain.snap)
+        assert(not platoon:IsCommandsActive(cmd), 'the drain retires the token')
+        local again = platoon:Stop()
+        assert(platoon:IsCommandsActive(again), 'a fresh issue is active again')
+        assert(not platoon:IsCommandsActive(cmd), 'the retired token stays retired')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
 TEST_CASE("FAF factory upgrades reserve production until the current product finishes",
           "[faf][ai][factory-upgrade]") {
     const auto root = corpusRoot();

@@ -1515,3 +1515,59 @@ TEST_CASE("C-313: ScriptHost keeps ui_only mods out of the sim session") {
     CHECK(host.errors().empty());
     std::filesystem::remove_all(scratch);
 }
+TEST_CASE("C-228: ScriptHost decodes scriptData bytes into the OnCreate commandData table") {
+    // `C-228` (`ScriptTask.lua:61-63`): retail's N->L `OnCreate(commandData:TABLE)`
+    // stores the order table as `self.CommandData` — the shipped `EnhanceTask`
+    // reads `self.CommandData.Enhancement` on every beat (`EnhanceTask.lua:28,40,76`).
+    // The native intake carries the order table's bytes (`C-387`'s shared `Issue*`
+    // parser + `0x009741c0` Lua-object decode); the live producer encodes the
+    // enhancement name as raw bytes (`Match.cpp:1147`, `EnhancementTasks::taskTick`
+    // decodes `std::string(data.begin(), data.end())`). The host currently pushes
+    // an EMPTY table (`ScriptHost.cpp:620`), so `self.CommandData.Enhancement`
+    // reads nil and the shipped shape can never name its work. This case issues
+    // non-empty scriptData and requires the instance to see it as `Enhancement`.
+    rm::vfs::Vfs content;
+    rm::app::ScriptHost host{content};
+    host.registerTask("C228Data", rm::app::ScriptTaskRegistration{
+        .source =
+            "TypeClass = Class({}) {\n"
+            "  OnCreate = function(self, commandData)\n"
+            "    self.CommandData = commandData\n"
+            "    G_c228enh = commandData.Enhancement\n"
+            "  end,\n"
+            "  TaskTick = function(self, result)\n"
+            "    if G_c228enh ~= 'AdvancedEngineering' then return 1 end\n"
+            "    return -1\n"
+            "  end,\n"
+            "}\n",
+    });
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c228_data";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+    const std::string name = "AdvancedEngineering";
+    const std::vector<std::uint8_t> data{name.begin(), name.end()};
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "C228Data",
+                              .scriptData = data},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    REQUIRE(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                   nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                   nullptr, &host) == 1);
+    CHECK(roster.store.orders()[unit.index].empty());
+    CHECK(host.errors().empty());
+}

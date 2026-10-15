@@ -437,7 +437,7 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
                                                 std::string_view task,
                                                 rm::sim::ScriptTaskState& state,
                                                 std::span<const std::uint8_t> commandData) {
-    (void)state; (void)commandData;
+(void)state;
     Instance out{};
     lua_State* lua = lua_;
     if (lua == nullptr) {
@@ -613,11 +613,17 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
         return out;
     }
     lua_insert(lua, -2);  // __rm_construct, TypeClass
-    // Retail's N->L `OnCreate(commandData:TABLE, 1 arg)`: the script's first
-    // beat stores it as `self.CommandData`. Push an (empty) table so
-    // `self.CommandData.X` reads nil instead of erroring; byte decoding rides
-    // a later slice.
+    // `C-228` (`ScriptTask.lua:61-63`, `EnhanceTask.lua:28,40,76`): retail's
+    // N->L `OnCreate(commandData:TABLE)` stores the order table as
+    // `self.CommandData`. The native intake carries the order table's bytes
+    // (live producer `Match.cpp:1147`, decoded as `std::string(data.begin(),`
+    // `data.end())` in `Enhancement.cpp:588`); mirror it here so
+    // `self.CommandData.Enhancement` names the work.
     lua_newtable(lua);
+    if (!commandData.empty()) {
+        lua_pushlstring(lua, reinterpret_cast<const char*>(commandData.data()), commandData.size());
+        lua_setfield(lua, -2, "Enhancement");
+    }
     {
         // `OnPreCreate`/`OnCreate` already call `self:GetUnit()`, so the
         // native context must be live across construction, not only after.

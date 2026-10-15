@@ -483,3 +483,41 @@ TEST_CASE("a grouped naval move spreads slots at sea spacing", "[formation]") {
     CHECK(front == 3);
     CHECK(back == 1);
 }
+
+TEST_CASE("a mixed land-and-sea group fans out per domain", "[formation]") {
+    // Retail splits `formationUnits` into land/sea/air lists BEFORE block choice
+    // (`GrowthFormation` formations.lua:679-723): nine tanks fill their own
+    // FourWide land block (4-wide: 4+4+1) while four frigates fill their own
+    // ThreeNaval block (3-wide: 3+1) on the same anchor — seven hulls on the
+    // anchor line. One shared 13-count block (5-wide: 5+5+3) would hold only
+    // five abreast.
+    // Both domains centre on the click's z (tanks 205-285, frigates 230-260,
+    // each mean 245) so the shared centroid-to-click facing is exact-east like
+    // every other case in this file: front rows land exactly on the anchor line
+    // and the count below is exact, not tilt-noise.
+    Fixture fix;
+    std::vector<UnitId> group;
+    for (int i = 0; i < 9; ++i) {
+        group.push_back(fix.roster.add(fix.tank, 200.0f,
+                                       205.0f + 10.0f * static_cast<float>(i),
+                                       0, 500.0f));
+    }
+    for (int i = 0; i < 4; ++i) {
+        group.push_back(fix.roster.add(fix.ship, 200.0f,
+                                       230.0f + 10.0f * static_cast<float>(i),
+                                       0, 500.0f));
+    }
+    const rm::sim::ApplyCommandResult result = fix.issueMove(group, 900.0f, 245.0f);
+    REQUIRE(result.accepted == group);
+
+    std::size_t front = 0;
+    for (const UnitId member : group) {
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        if (rm::test::asFloat(entries.front().targetX())
+            == Catch::Approx(900.0f).margin(0.01f)) {
+            ++front;
+        }
+    }
+    CHECK(front == 7);
+}

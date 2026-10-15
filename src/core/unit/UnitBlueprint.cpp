@@ -367,12 +367,29 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     def.meshExtentsXElmos = numberOr(*physics, "MeshExtentsX", 0.0f) * scmap::kElmosPerOgrid;
     def.meshExtentsZElmos = numberOr(*physics, "MeshExtentsZ", 0.0f) * scmap::kElmosPerOgrid;
     // `C-218`: `Physics.InertiaTensorX/Y/Z` (entity schema `EntityBlueprint.lua:22-27`)
-    // — the diagonal of the rigid-body inertia tensor, in mass × ogrid². No shipped
-    // unit author them; reading the absent key as zero is the safe-degenerate default
-    // (a sphere whose every axis agrees), which is what a body without a tensor IS.
-    def.inertiaTensorX = numberOr(*physics, "InertiaTensorX", 0.0f);
-    def.inertiaTensorY = numberOr(*physics, "InertiaTensorY", 0.0f);
-    def.inertiaTensorZ = numberOr(*physics, "InertiaTensorZ", 0.0f);
+    // — the diagonal of the rigid-body inertia tensor, in mass × ogrid². The
+    // native guard (`0x00518C8B`) is on the PRODUCT: one zeroed axis discards
+    // the other two authored values and all three fall back to the box
+    // derivation `(1/12)(a^2+b^2)` from the root `SizeX/Y/Z` (same derivation
+    // the all-absent body rides, which is why 0 of 568 shipped units stating
+    // any axis reads exactly like explicit zero).
+    {
+        const float authoredX = numberOr(*physics, "InertiaTensorX", 0.0f);
+        const float authoredY = numberOr(*physics, "InertiaTensorY", 0.0f);
+        const float authoredZ = numberOr(*physics, "InertiaTensorZ", 0.0f);
+        if (authoredX == 0.0f || authoredY == 0.0f || authoredZ == 0.0f) {
+            const float sizeX = numberOr(*parsed, "SizeX", 0.0f);
+            const float sizeY = numberOr(*parsed, "SizeY", 0.0f);
+            const float sizeZ = numberOr(*parsed, "SizeZ", 0.0f);
+            def.inertiaTensorX = (sizeY * sizeY + sizeZ * sizeZ) / 12.0f;
+            def.inertiaTensorY = (sizeX * sizeX + sizeZ * sizeZ) / 12.0f;
+            def.inertiaTensorZ = (sizeX * sizeX + sizeY * sizeY) / 12.0f;
+        } else {
+            def.inertiaTensorX = authoredX;
+            def.inertiaTensorY = authoredY;
+            def.inertiaTensorZ = authoredZ;
+        }
+    }
 
     // Where a builder's construction effect leaves from. Read for every unit — 143 build, and
     // the rest simply have no block — because the effect asks by name and a missing list is

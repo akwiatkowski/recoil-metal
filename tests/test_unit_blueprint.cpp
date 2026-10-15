@@ -1162,12 +1162,12 @@ TEST_CASE("a unit with no staging block is not a pad", "[unitbp][airstaging]") {
     CHECK(def->refuelingMultiplier == 0.0f);
 }
 
-TEST_CASE("C-218 (1): the inertia tensor reads its three diagonal components") {
-    // `C-218`'s first explicit-0-vs-absent site: no shipped unit authors `InertiaTensor{X,Y,Z}`
-    // (entity schema `Engine/Core/Blueprints/EntityBlueprint.lua:22-27`), and the absent
-    // default has to read the same as the explicit-zero default — both leave the unit on
-    // a spherical degenerate tensor (every axis zero), which is what a body without a
-    // declared inertia IS. The test fixes the authored and the absent case both.
+TEST_CASE("C-218 (1): one zeroed tensor axis discards the other two authored values") {
+    // `C-218`'s first explicit-0-vs-absent site (`fa-exe-analysis-plan.md`, `0x00518C8B`):
+    // the guard is on the PRODUCT, so one zero discards the other two authored
+    // values and all three become `(1/12)(a^2+b^2)` box inertia. Corpus census:
+    // 0 of the 568 shipped units state any `InertiaTensor` axis, so every retail
+    // unit rides the derived box — absence reads exactly like explicit zero.
     const Blueprint absent{"XXB0401_unit.bp", R"(
         UnitBlueprint {
             Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
@@ -1176,25 +1176,42 @@ TEST_CASE("C-218 (1): the inertia tensor reads its three diagonal components") {
     )"};
     const auto bare = rm::unitbp::loadFile(absent.path());
     REQUIRE(bare.has_value());
-    CHECK(bare->inertiaTensorX == 0.0f);
-    CHECK(bare->inertiaTensorY == 0.0f);
-    CHECK(bare->inertiaTensorZ == 0.0f);
+    // Absent reads exactly like explicit zero: SizeX=1, SizeY absent (0),
+    // SizeZ=1, so Ix=(0+1)/12, Iy=(1+1)/12, Iz=(1+0)/12.
+    CHECK(bare->inertiaTensorX == Catch::Approx(1.0f / 12.0f));
+    CHECK(bare->inertiaTensorY == Catch::Approx(2.0f / 12.0f));
+    CHECK(bare->inertiaTensorZ == Catch::Approx(1.0f / 12.0f));
 
-    // An explicit authored triple is read verbatim from `Physics` (the loader calls
-    // `numberOr` per axis; an explicit-0 axis IS distinguishable here, because a unit
-    // can declare one axis while leaving another absent, and they do not have to agree).
-    const Blueprint explicitUnit{"XXB0402_unit.bp", R"(
+    // One explicit zero poisons the other two authored axes: all three fall back
+    // to the box derivation instead of reading any axis verbatim.
+    const Blueprint oneZero{"XXB0402_unit.bp", R"(
         UnitBlueprint {
             Physics = {
                 MotionType = 'RULEUMT_Land', MaxSpeed = 1,
                 InertiaTensorX = 0, InertiaTensorY = 4, InertiaTensorZ = 9,
+            },
+            SizeX = 1, SizeY = 1, SizeZ = 1,
+        }
+    )"};
+    const auto poisoned = rm::unitbp::loadFile(oneZero.path());
+    REQUIRE(poisoned.has_value());
+    CHECK(poisoned->inertiaTensorX != 0.0f);
+    CHECK(poisoned->inertiaTensorX == poisoned->inertiaTensorY);
+    CHECK(poisoned->inertiaTensorY == poisoned->inertiaTensorZ);
+
+    // All three authored nonzero: read verbatim, no derivation.
+    const Blueprint explicitUnit{"XXB0403_unit.bp", R"(
+        UnitBlueprint {
+            Physics = {
+                MotionType = 'RULEUMT_Land', MaxSpeed = 1,
+                InertiaTensorX = 2, InertiaTensorY = 4, InertiaTensorZ = 9,
             },
             SizeX = 1, SizeZ = 1,
         }
     )"};
     const auto def = rm::unitbp::loadFile(explicitUnit.path());
     REQUIRE(def.has_value());
-    CHECK(def->inertiaTensorX == 0.0f);    // explicit zero, NOT absent
+    CHECK(def->inertiaTensorX == 2.0f);
     CHECK(def->inertiaTensorY == 4.0f);
     CHECK(def->inertiaTensorZ == 9.0f);
 }
