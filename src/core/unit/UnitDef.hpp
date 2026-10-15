@@ -477,7 +477,11 @@ struct UnitDef {
     // three-axis solver `Movement.hpp` names). Zero `KRoll`/`BankFactor` means no bank.
     float airKRoll = 0.0f;
     float airBankFactor = 0.0f;
-    float airTightTurnMultiplier = 1.0f;
+    /// `Air.CirclingTurnMult` (`C-411`, `Air+0x60`, schema `0x00e62768` — "Adjust turning
+    /// ability when in circling mode"): scales the divided `KTurn` on retail's `0x6c4960`
+    /// circling branch (the sustained-turn states 3/4/5). 1 when unauthored; 3 on the
+    /// XSA0203 gunship, 2 on the XEA3204. Unitless multiplier, never damped.
+    float airCirclingTurnMult = 1.0f;
     float airBreakOffTrigger = 0.0f;
     float airBreakOffDistance = 0.0f;
     float airRandomBreakOffMultiplier = 1.5f;

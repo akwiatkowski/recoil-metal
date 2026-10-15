@@ -1155,14 +1155,33 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 if (prey.has_value()) {
                     const bool targetAirborne = store.motion()[prey->index].airborne;
                     MoveState& chase = store.motion()[slot];
-                    const Fx gap = groundDistanceElmos(positionOf(sight[slot]),
-                                                       positionOf(sight[prey->index]));
-                    // `CAiAttackerImpl` arbitration: the longest-range weapon
-                    // that can hit — its [minRange, maxRange] envelope covers
-                    // the gap — owns the hold. `reach` is that weapon's
-                    // maxRange; `widest` is the longest envelope at all, the
-                    // fallback when the target sits inside every dead zone or
-                    // outside every maxRange.
+                    // Automatic acquisition scores at the blip (`C-277` family; 96 elmos per
+                    // `LosHandler.h:322`), so this hold/chase gate reads the same estimate:
+                    // a radar/sonar contact holds at its blip, a sighting at truth. Units:
+                    // elmos. No sim RNG — `radarBlipPosition` is a pure function of identity.
+                    const Fx gap = [&] {
+                        if (intel != nullptr) {
+                            const Army* mine = armyFor(store.motion()[slot].armyIndex, armies);
+                            const std::optional<ContactKind> kind =
+                                mine != nullptr
+                                    ? contactKindForUnit(mine->alliance, prey->index, store,
+                                                         catalog, armies, *intel)
+                                    : std::nullopt;
+                            if (kind == ContactKind::Radar || kind == ContactKind::Sonar) {
+                                const auto [blipX, blipZ] = radarBlipPosition(
+                                    *prey, sight[prey->index].x, sight[prey->index].z, tick,
+                                    rate);
+                                return groundDistanceElmos(positionOf(sight[slot]),
+                                                           {blipX, sight[slot].y, blipZ});
+                            }
+                        }
+                        return groundDistanceElmos(positionOf(sight[slot]),
+                                                   positionOf(sight[prey->index]));
+                    }();
+                    // `CAiAttackerImpl` arbitration: the longest-range weapon that can hit —
+                    // its [minRange, maxRange] envelope covers the gap — owns the hold.
+                    // `reach` is that weapon's maxRange; `widest` is the longest envelope at all, the
+                    // fallback when the target sits inside every dead zone or outside every maxRange.
                     Fx reach{};
                     Fx widest{};
                     for (const unitdef::Weapon& weapon : guardDef->weapons) {

@@ -1344,6 +1344,31 @@ namespace {
 }
 
 }  // namespace
+TEST_CASE("C-411: a circling flyer turns with its authored CirclingTurnMult", "[air-combat]") {
+    // `C-411` (`0x006c5130`-`0x006c58cf`, `Air+0x60`): `CirclingTurnMult` scales the
+    // divided `KTurn` on the `0x6c4960` circling branch. Two identical sustained-turn
+    // flyers — one mult 1 (UEA0104 gunship), one mult 3 (XSA0203 gunship) — so the
+    // tripled gain integrates triple the yaw velocity in one tick.
+    const HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Transform> units{unitAt(100.0f, 100.0f),
+                                          unitAt(100.0f, 100.0f)};
+    std::vector<MoveState> motion{flyer(), flyer()};
+    for (std::size_t i = 0; i < 2; ++i) {
+        units[i].y = rm::sim::Fx::fromInt(80);
+        motion[i].altitudeRef = rm::sim::Fx::fromInt(80);
+        motion[i].airTurnSpeed = rm::sim::Fx::fromInt(20);
+        motion[i].airCombatState = MoveState::AirCombatState::Turn;
+        rm::sim::orderTo(motion[i], terrain, rm::test::fx(700.0f), rm::test::fx(100.0f));
+    }
+    motion[0].airCirclingTurnMult = rm::sim::Fx::fromInt(1);
+    motion[1].airCirclingTurnMult = rm::sim::Fx::fromInt(3);
+    rm::sim::tick(units, motion, terrain);
+    CHECK(motion[1].airYawVelocity > motion[0].airYawVelocity);
+    CHECK(rm::sim::fxToFloat(motion[1].airYawVelocity)
+          == Approx(3.0 * rm::sim::fxToFloat(motion[0].airYawVelocity)).margin(0.01));
+}
+
 
 TEST_CASE("a flyer integrates velocity trapezoidally") {
     // `C-221`: `pos += (v_old + v_new) x 0.05` with `v_new = v_old + a*dt`, velocity in

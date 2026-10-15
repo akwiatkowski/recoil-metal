@@ -180,6 +180,10 @@ constexpr std::uint32_t kVersion53 = 53;
 // decode with both at zero, which means the prop blocking overlay reads them as
 // wreck-shape: a saved prop is no longer blocking until the map re-asserts it.
 constexpr std::uint32_t kVersion54 = 54;
+// v55 adds the air circling multiplier (`CirclingTurnMult`, `C-411`) to the aircraft
+// controller snapshot. Pre-v55 saves decode with 1 — the unauthored default retail
+// implies anyway, so ordinary turns are untouched.
+constexpr std::uint32_t kVersion55 = 55;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1741,7 +1745,6 @@ constexpr std::array kAirControllerFx{
     &MoveState::airCombatTurnSpeed,
     &MoveState::airKTurn,
     &MoveState::airKTurnDamping,
-    &MoveState::airTightTurnMultiplier,
     &MoveState::airBreakOffTrigger,
     &MoveState::airBreakOffDistance,
     &MoveState::airRandomBreakOffMultiplier,
@@ -1883,7 +1886,8 @@ bool readSubMotion(PayloadReader& r, std::vector<MoveState>& motion) {
     return true;
 }
 
-void writeAirController(PayloadWriter& w, std::span<const MoveState> motion, bool bank) {
+void writeAirController(PayloadWriter& w, std::span<const MoveState> motion, bool bank,
+                        bool circling) {
     w.count(motion.size());
     for (const auto& state : motion) {
         w.u64(state.airCombatDeadline);
@@ -1900,13 +1904,17 @@ void writeAirController(PayloadWriter& w, std::span<const MoveState> motion, boo
             w.i32(state.airKRoll.raw());
             w.i32(state.airBankFactor.raw());
         }
+        if (circling) {
+            w.i32(state.airCirclingTurnMult.raw());
+        }
     }
 }
 
-bool readAirController(PayloadReader& r, std::vector<MoveState>& motion, bool bank) {
+bool readAirController(PayloadReader& r, std::vector<MoveState>& motion, bool bank,
+                       bool circling) {
     std::size_t count{};
-    const std::size_t kRecordBytes =
-        8 + 5 * 4 + 3 + kAirControllerFx.size() * 4 + (bank ? 2 * 4 : 0);
+    const std::size_t kRecordBytes = 8 + 5 * 4 + 3 + kAirControllerFx.size() * 4
+                                     + (bank ? 2 * 4 : 0) + (circling ? 4 : 0);
     if (!r.count(count, kRecordBytes) || count != motion.size()) return false;
     for (auto& state : motion) {
         std::uint8_t winged{}, transport{}, near{};
@@ -1928,6 +1936,13 @@ bool readAirController(PayloadReader& r, std::vector<MoveState>& motion, bool ba
             if (!r.i32(roll) || !r.i32(factor)) return false;
             state.airKRoll = Fx::fromRaw(roll);
             state.airBankFactor = Fx::fromRaw(factor);
+        }
+        if (circling) {
+            std::int32_t mult{};
+            if (!r.i32(mult)) return false;
+            state.airCirclingTurnMult = Fx::fromRaw(mult);
+        } else {
+            state.airCirclingTurnMult = kFxOne;
         }
     }
     return true;
@@ -2394,7 +2409,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                                                   version >= kVersion43, version >= kVersion47,
                                                   version >= kVersion53);
     if (version >= kVersion16)
-        writeAirController(payloadWriter, state.units.motion, version >= kVersion21);
+        writeAirController(payloadWriter, state.units.motion, version >= kVersion21,
+                           version >= kVersion55);
     if (version >= kVersion18) writeSubMotion(payloadWriter, state.units.motion);
     if (version >= kVersion19) {
         writeEnhancements(payloadWriter, state.enhancements);
@@ -2477,7 +2493,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion48 && version != kVersion49
                && version != kVersion50 && version != kVersion51
                && version != kVersion52 && version != kVersion53
-               && version != kVersion54)
+               && version != kVersion54 && version != kVersion55)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2529,7 +2545,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                                                     version >= kVersion43, version >= kVersion47,
                                                     version >= kVersion53)) return std::nullopt;
     if (version >= kVersion16
-        && !readAirController(reader, units.motion, version >= kVersion21))
+        && !readAirController(reader, units.motion, version >= kVersion21,
+                              version >= kVersion55))
         return std::nullopt;
     if (version >= kVersion18 && !readSubMotion(reader, units.motion)) return std::nullopt;
     std::vector<EnhancementWork> enhancements;
@@ -2626,7 +2643,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion54);
+    return rm::sim::encode(state, kVersion55);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

@@ -594,6 +594,14 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
                 alignment *= alignment;
             }
             Fx gain = state.airKTurn * invMass;
+            // `C-411` (`Air+0x60`, `0x6c4960` branch): the circling multiplier scales the
+            // divided `KTurn` for the sustained-turn states 3/4/5 — never `KMove`, never
+            // the damping. 1 when unauthored, so ordinary turns are untouched.
+            if (state.airCombatState == MoveState::AirCombatState::HardTurn
+                || state.airCombatState == MoveState::AirCombatState::Turn
+                || state.airCombatState == MoveState::AirCombatState::FastTurn) {
+                gain = gain * state.airCirclingTurnMult;
+            }
             if (hard || state.airCombatState == MoveState::AirCombatState::HeadOn
                      || state.airCombatState == MoveState::AirCombatState::TailChase) {
                 gain += (hard ? state.airTightTurnMultiplier : kFxOne)

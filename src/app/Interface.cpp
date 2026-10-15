@@ -693,12 +693,49 @@ void gatherBuildOptions(const UnitScene& scene, rm::sim::UnitId activeBuilder,
     };
 
     if (isFactory || role == rm::unitdef::Role::Commander || role == rm::unitdef::Role::Builder) {
-        auto products = scene.roster.buildableBy(faction, def->buildableCategory);
+        // `C-255`: the tray honours installed enhancements the way the sim's
+        // `canBuild` does. The authored expression stays the whole query —
+        // retail's own T2-commander term is how T1 storage reaches the tray —
+        // and each installed enhancement's `BuildableCategoryAdds` term joins
+        // it, so products only the enhancement's tag admits arrive too. Above
+        // T1 a commander product additionally needs an installed enhancement
+        // whose adds cover its categories: the authored T2 term over-admits
+        // (storage carries the tag without needing the suite), and the sim
+        // refuses those without the install.
+        rm::unitdef::CategoryExpression menuExpression = def->buildableCategory;
+        if ((role == rm::unitdef::Role::Commander || role == rm::unitdef::Role::Builder)
+            && scene.store.alive(activeBuilder)
+            && activeBuilder.index < scene.store.slotCount()) {
+            for (const auto& [position, installed] :
+                 scene.store.enhancements()[activeBuilder.index]) {
+                const auto* effects = scene.catalog.enhancementEffects(
+                    scene.store.typeAt(activeBuilder.index), installed);
+                if (effects != nullptr && !effects->buildableAdds.empty()) {
+                    menuExpression.push_back(effects->buildableAdds);
+                }
+            }
+        }
+        auto products = scene.roster.buildableBy(faction, menuExpression);
         std::sort(products.begin(), products.end(), menuOrder);
         for (const rm::data::RosterEntry& entry : products) {
-            // ACU blueprints include T2/T3 engineering enhancement categories even at spawn.
-            // Enhancement installation is not modelled yet; keep the initial ACU menu at T1.
-            if (role == rm::unitdef::Role::Commander && entry.tech > 1) continue;
+            if (role == rm::unitdef::Role::Commander && entry.tech > 1
+                && scene.store.alive(activeBuilder)) {
+                const auto& slots = scene.store.enhancements()[activeBuilder.index];
+                const bool unlocked = std::any_of(
+                    slots.begin(), slots.end(), [&](const auto& slot) {
+                        const auto* effects = scene.catalog.enhancementEffects(
+                            scene.store.typeAt(activeBuilder.index), slot.second);
+                        return effects != nullptr && !effects->buildableAdds.empty()
+                            && std::all_of(effects->buildableAdds.begin(),
+                                           effects->buildableAdds.end(),
+                                           [&](const std::string& tag) {
+                                               return std::binary_search(
+                                                   entry.categories.begin(),
+                                                   entry.categories.end(), tag);
+                                           });
+                    });
+                if (!unlocked) continue;
+            }
             if (entry.id == def->upgradesTo) continue; // Already offered as an upgrade.
             const float mass = rm::sim::magToFloat(entry.costMass);
             const float seconds =

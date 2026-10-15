@@ -282,6 +282,9 @@ struct MoveState {
     Fx airKRoll{};
     Fx airBankFactor{};
     Fx airTightTurnMultiplier = kFxOne;
+    /// `CirclingTurnMult` (`C-411`, `Air+0x60`, schema `0x00e62768`): scales the divided
+    /// `KTurn` on the `0x6c4960` circling branch — the sustained-turn states 3/4/5.
+    Fx airCirclingTurnMult = kFxOne;
     Fx airBreakOffTrigger{};
     Fx airBreakOffDistance{};
     Fx airRandomBreakOffMultiplier = Fx::fromRatio(3, 2);

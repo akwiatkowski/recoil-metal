@@ -19,6 +19,8 @@
 #include "app/Interface.hpp"
 #include "app/Scene.hpp"
 #include "app/SceneBuild.hpp"
+#include "core/lua/LuaTable.hpp"
+#include "core/sim/Enhancement.hpp"
 
 #include <algorithm>
 #include <array>
@@ -166,6 +168,41 @@ TEST_CASE("a selected engineer is offered its faction's tier-one structures", "[
     CHECK(fixture.offers(got, "UEB1101"));
     CHECK(fixture.offers(got, "UEB0101"));
     CHECK(fixture.offers(got, "UEB0103"));
+}
+TEST_CASE("an enhanced commander is offered what its enhancements unlock", "[ui][build]") {
+    // THE `canBuild` HALF OF C-255 THE MENU NEVER HONOURED. The sim gates
+    // `BUILTBYTIER2COMMANDER` products on the installed `AdvancedEngineering`
+    // (`BuildableCategoryAdds`); the tray still reads only the authored
+    // `BuildableCategory`, so an enhanced ACU keeps the T1 menu — the retail
+    // player watches the tier arrive, ours never does.
+    Fixture fixture;
+    // A commander whose authored menu is T1-only, with the retail T2 ladder:
+    // AdvancedEngineering adds the T2-commander tag.
+    rm::unitdef::UnitDef commander =
+        aDef("UEL0001", {"UEF", "COMMAND", "LAND"}, 0.0f, 10.0f);
+    commander.buildableCategory.push_back(
+        rm::unitdef::parseCategoryTerm("BUILTBYCOMMANDER UEF STRUCTURE TECH1"));
+    rm::lua::Value params = *rm::lua::parseTable("{ BuildableCategoryAdds='BUILTBYTIER2COMMANDER UEF' }");
+    commander.enhancements.push_back({.name = "AdvancedEngineering", .slot = "LCH",
+        .buildCostMass = rm::sim::magFromFloat(1.0f),
+        .buildCostEnergy = rm::sim::magFromFloat(1.0f),
+        .buildTime = rm::sim::Fx::fromInt(1), .parameters = std::move(params)});
+    // Corpus: one T1 structure the authored menu admits, one T2 structure only
+    // the enhancement's tag admits.
+    fixture.add(aDef("UEB1103", {"BUILTBYCOMMANDER", "STRUCTURE", "TECH1", "UEF"}, 36.0f));
+    fixture.add(aDef("UEB1201", {"BUILTBYTIER2COMMANDER", "STRUCTURE", "TECH2", "UEF"}, 900.0f));
+    fixture.scene.roster = rm::data::Roster::build(fixture.corpus, fixture.ids);
+    const rm::sim::UnitId acu = fixture.spawn(std::move(commander), 0);
+    // Unenhanced: the T1 tray, exactly as today.
+    const auto before = fixture.optionsFor({acu});
+    CHECK(fixture.offers(before, "UEB1103"));
+    CHECK_FALSE(fixture.offers(before, "UEB1201"));
+    // Enhanced: the T2 product arrives on the same commander's tray.
+    REQUIRE(rm::sim::installEnhancement(fixture.scene.store, fixture.scene.catalog, acu,
+                                        "AdvancedEngineering"));
+    const auto after = fixture.optionsFor({acu});
+    CHECK(fixture.offers(after, "UEB1103"));
+    CHECK(fixture.offers(after, "UEB1201"));
 }
 
 TEST_CASE("a commander is offered the same structures as an engineer", "[ui][build]") {

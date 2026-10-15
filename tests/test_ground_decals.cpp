@@ -476,19 +476,22 @@ TEST_CASE("impact marks draw scorch beside the wrecks", "[decals]") {
     CHECK(scene.wreckDecals.size() == 2 * rm::wreckVertexCount(12));
 }
 TEST_CASE("impact marks cover the blast that made them", "[decals]") {
-    // Retail scorches by blast size (`defaultexplosions.lua` C-290): a bigger
-    // explosion leaves a bigger mark. Ours carries the shot's damage radius
-    // on the mark and draws it 1:1 — the scorch covers the blast area, with
-    // no invented multiplier (retail's x3/x4 need explosion-scale content
-    // this engine does not parse). A direct hit with no blast keeps the
-    // legacy 2.5-elmo boot-print.
+    // Retail scorches by explosion scale (`defaultexplosions.lua` C-290):
+    // scale above 1.2 lays a decal at x3, otherwise a splat at x4. Marks
+    // carry the shot's blast radius in elmos, so the scale is radius/8
+    // (8 elmos per ogrid, Scmap.hpp `kElmosPerOgrid`): 8 elmos is scale 1.0
+    // and draws 32 elmos; 24 elmos is scale 3.0 and draws 72 elmos. A direct
+    // hit with no blast keeps the legacy 2.5-elmo boot-print.
     const HeightField field = flatAt(64, 0);
     rm::app::UnitScene direct;
-    rm::app::UnitScene blast;
+    rm::app::UnitScene splat;
+    rm::app::UnitScene decal;
     rm::app::noteImpactMark(direct, 10.0f, 20.0f, 0.0f);
-    rm::app::noteImpactMark(blast, 10.0f, 20.0f, 12.0f);
+    rm::app::noteImpactMark(splat, 10.0f, 20.0f, 8.0f);
+    rm::app::noteImpactMark(decal, 10.0f, 20.0f, 24.0f);
     rm::app::refreshWreckDecals(direct, field);
-    rm::app::refreshWreckDecals(blast, field);
+    rm::app::refreshWreckDecals(splat, field);
+    rm::app::refreshWreckDecals(decal, field);
     const auto extent = [](const std::vector<DecalVertex>& out) {
         float far = 0.0f;
         for (const DecalVertex& vertex : out) {
@@ -499,7 +502,8 @@ TEST_CASE("impact marks cover the blast that made them", "[decals]") {
         return far;
     };
     CHECK(extent(direct.wreckDecals) == Approx(2.5f));
-    CHECK(extent(blast.wreckDecals) == Approx(12.0f));
+    CHECK(extent(splat.wreckDecals) == Approx(32.0f));
+    CHECK(extent(decal.wreckDecals) == Approx(72.0f));
 }
 TEST_CASE("impact marks carry deterministic rotation", "[decals]") {
     // Retail rotates every scorch by a random 0..2pi angle (`defaultexplosions.lua`
@@ -707,3 +711,4 @@ TEST_CASE("a queue node is always the louder half of its segment", "[queue-colou
         CHECK(colours.node[2] == Approx(colours.line[2]));
     }
 }
+

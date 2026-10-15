@@ -148,10 +148,30 @@ void setAppTickRate(std::uint32_t ticksPerSecond) {
 /// Guarded on the count so a match that kills nothing this tick does no work. Cheap even when
 /// it does fire: a wreck is a handful of triangles and a long match leaves tens of them.
 namespace {
-/// One impact's scorch: a boot-print, not a crater — the wrecks own the drama and
-/// hundreds of these share the ground. Twelve segments keeps a full cap cheap.
+/// One impact's scorch: a boot-print for a blast-less direct hit, not a crater —
+/// the wrecks own the drama and hundreds of these share the ground. Twelve
+/// segments keeps a full cap cheap.
 inline constexpr float kImpactMarkRadiusElmos = 2.5f;  // elmos (legacy blast-less mark)
 inline constexpr int kImpactMarkSegments = 12;
+/// Retail sizes scorch from the explosion scale (`defaultexplosions.lua`
+/// C-290): scale above 1.2 lays a decal at x3, otherwise a splat at x4. The
+/// mark carries the shot's blast radius in elmos (Combat.hpp C-290), so the
+/// scale is recovered by dividing back through 8 elmos per ogrid (Scmap.hpp
+/// `kElmosPerOgrid`): radius/8 <= 1.2 draws x4, above draws x3.
+inline constexpr float kImpactMarkScaleSplit = 1.2f;  // (C-290 `CreateScorchMark` gate)
+inline constexpr float kImpactMarkSplatFactor = 4.0f;  // (C-290 splat x4)
+inline constexpr float kImpactMarkDecalFactor = 3.0f;  // (C-290 decal x3)
+[[nodiscard]] float impactMarkRadius(float blastRadiusElmos) noexcept {
+    if (!(blastRadiusElmos > 0.0f)) {
+        return kImpactMarkRadiusElmos;  // elmos (legacy blast-less mark)
+    }
+    // Elmos per ogrid: 8 (Scmap.hpp `kElmosPerOgrid`), written out so this
+    // app-side projection does not include a map header for one divisor.
+    const float scale = blastRadiusElmos / 8.0f;  // ogrids (C-290 scale)
+    const float factor = scale > kImpactMarkScaleSplit ? kImpactMarkDecalFactor
+                                                      : kImpactMarkSplatFactor;
+    return blastRadiusElmos * factor;  // elmos (C-290 x3/x4)
+}
 /// Retail scorch lifetime floor in seconds (`defaultexplosions.lua` C-290:
 /// lifetime 300-600); each mark retires at its own point in the spread,
 /// derived from the mark's own position bits like the rotation angle below —
@@ -260,15 +280,15 @@ void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field,
                                 * rm::kWreckMarkRadiusFactor);
     }
     // Impact scorch beside the wrecks: dark discs where shots hit ground that
-    // killed nothing. Sized from the shot's blast radius, so an artillery
-    // strike reads bigger than a rifle hit (`defaultexplosions.lua` C-290).
-    // Wreck marks stay permanent: the corpse is the record, and reclaim
-    // removes it. Twelve segments, not thirty-two — a bombardment leaves
-    // hundreds and nobody inspects one up close.
+    // killed nothing. Sized by retail's splat/decal split (`defaultexplosions.lua`
+    // C-290): the mark's blast radius recovers the explosion scale (radius/8),
+    // scale above 1.2 draws x3, otherwise x4 — so an artillery strike reads
+    // bigger than a rifle hit. Wreck marks stay permanent: the corpse is the
+    // record, and reclaim removes it. Twelve segments, not thirty-two — a
+    // bombardment leaves hundreds and nobody inspects one up close.
     for (const UnitScene::ImpactMark& mark : scene.impactMarks) {
-        const float radius = mark.blastRadiusElmos > 0.0f ? mark.blastRadiusElmos
-                                                          : kImpactMarkRadiusElmos;
-        rm::appendWreckMark(scene.wreckDecals, field, {mark.x, 0.0f, mark.z}, radius,
+        rm::appendWreckMark(scene.wreckDecals, field, {mark.x, 0.0f, mark.z},
+                            impactMarkRadius(mark.blastRadiusElmos),
                             kImpactMarkSegments, impactMarkRotation(mark.x, mark.z));
     }
     scene.wreckDecalsFrom = scene.features.revision();

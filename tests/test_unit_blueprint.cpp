@@ -1409,3 +1409,28 @@ TEST_CASE("C-218 (6): StartTurnDistance derives from SizeZ x 3 when unauthored")
     REQUIRE(none.has_value());
     CHECK(none->startTurnDistance == Catch::Approx(4.2f));
 }
+TEST_CASE("C-411: CirclingTurnMult parses with a 1 default when unauthored") {
+    // `C-411` (`Air+0x60`, schema `0x00e62768` "Adjust turning ability when in
+    // circling mode"): the XSA0203 gunship authors 3, the UEA0104 gunship 1, and
+    // an absent key defaults to 1 — ordinary turns are untouched. Unitless, never
+    const Blueprint authored{"XXB0708_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true, CirclingTurnMult = 3 },
+            SizeX = 0.8, SizeY = 1, SizeZ = 1,
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(authored.path());
+    REQUIRE(def.has_value());
+    CHECK(def->airCirclingTurnMult == Catch::Approx(3.0f));
+    const Blueprint bare{"XXB0709_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
+            Air = { MaxAirspeed = 12, Winged = true },
+            SizeX = 0.8, SizeY = 0.25, SizeZ = 1.4,
+        }
+    )"};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->airCirclingTurnMult == Catch::Approx(1.0f));
+}

@@ -196,6 +196,7 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
         feed(h, motion.airCombatDeadline);
         feed(h, static_cast<std::uint64_t>(motion.airSustainedTicks));
         feed(h, motion.airYawVelocity);
+        feed(h, motion.airCirclingTurnMult);
         feed(h, motion.velocity);
         feed(h, motion.altitudeRef);
         feed(h, motion.fuelRatio);
