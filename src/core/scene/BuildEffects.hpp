@@ -38,6 +38,13 @@ struct BuildBeamEnds {
 [[nodiscard]] std::array<float, 3> aeonBuildBeamEnd(float siteX, float siteY,
                                                     float siteZ) noexcept;
 
+/// Seraphim's engineer beam end (`CreateSeraphimUnitEngineerBuildingEffects`
+/// in retail `lua/EffectUtilities.lua:600-611`): each `BuildEffectBones` bone
+/// streams one `SeraphimBuildBeams01` beam builder-bone -> target — no sweep,
+/// no offset.
+[[nodiscard]] std::array<float, 3> seraphimBuildBeamEnd(float siteX, float siteY,
+                                                        float siteZ) noexcept;
+
 
 
 }  // namespace rm

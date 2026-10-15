@@ -424,6 +424,12 @@ public:
     /// the grids match without a priming pass. Empty `placements` means a
     /// pre-v59 save: grids stay clear and the next `update` re-stamps.
     struct Snapshot {
+        /// The coverage rule the grids were stamped under (`C-552`, v60).
+        /// False for a pre-v60 save, which carries no style byte — the
+        /// restore then keeps the configured style (the C-426 re-stamp
+        /// contract covers the grids).
+        bool hasStyle = false;
+        VisionStyle style = VisionStyle::ForgedAlliance;
         std::vector<std::vector<RetainedRadarContact>> retained;
         std::vector<std::vector<UnitId>> seenEver;
         std::vector<TickCount> intelRecovery;
@@ -444,7 +450,9 @@ public:
     /// Captures the recon history a save must carry, including each slot's
     /// stamp record (v59) so the restore re-adds the grids directly.
     [[nodiscard]] Snapshot snapshot() const {
-        Snapshot out{.retained = retainedRadarContacts_,
+        Snapshot out{.hasStyle = true,
+                     .style = style_,
+                     .retained = retainedRadarContacts_,
                      .seenEver = seenEver_,
                      .intelRecovery = intelRecovery_,
                      .intelRecoveryUnit = intelRecoveryUnit_,
@@ -487,6 +495,13 @@ public:
     /// pre-v59 save carries no stamp records: grids and placements stay empty
     /// until the next `update` re-stamps them (the C-426 contract).
     void restore(const Snapshot& state) {
+        // v60: the save names the coverage rule the grids were stamped
+        // under, so the restore adopts it rather than reading stamped
+        // squares under the wrong rule. Pre-v60 saves carry no style —
+        // the configured style (and the C-426 re-stamp) stands.
+        if (state.hasStyle) {
+            style_ = state.style;
+        }
         retainedRadarContacts_ = state.retained;
         seenEver_ = state.seenEver;
         intelRecovery_ = state.intelRecovery;

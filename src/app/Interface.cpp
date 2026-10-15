@@ -1126,8 +1126,63 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
                 }
             }
         }
+        // Seraphim's engineer beams (`CreateSeraphimUnitEngineerBuildingEffects`,
+        // retail `lua/EffectUtilities.lua:600-611`): each `BuildEffectBones`
+        // bone streams one `SeraphimBuildBeams01` beam to the pad — no sweep,
+        // no offset.
+        bool emittedSeraphim = false;
+        if (!emittedUefPair && !emittedCybran && !emittedAeon
+            && faction == rm::sim::Faction::Seraphim && builderDef != nullptr
+            && !builderDef->buildEffectBones.empty()
+            && work.builder.index < scene.drawIndexOf.size()) {
+            const rm::SelectionEntry where = scene.drawIndexOf[work.builder.index];
+            if (where.batch < scene.batches.size() && where.batch < scene.drawScratch.size()
+                && where.batch < scene.drawSlotOf.size()
+                && where.instance < scene.drawScratch[where.batch].size()
+                && where.instance < scene.drawSlotOf[where.batch].size()
+                && scene.drawSlotOf[where.batch][where.instance] == work.builder.index) {
+                const rm::UnitBatch& batch = scene.batches[where.batch];
+                if (batch.model != nullptr) {
+                    const rm::UnitInstance& drawn = scene.drawScratch[where.batch][where.instance];
+                    const float padY = field.heightAtWorld(x, z);
+                    const std::array<float, 3> end =
+                        rm::seraphimBuildBeamEnd(x, padY, z);
+                    const rm::InstancePlacement placement{
+                        .position = drawn.position,
+                        .rotationX = drawn.rotationX,
+                        .rotationY = drawn.rotationY,
+                        .rotationZ = drawn.rotationZ,
+                        .scale = drawn.scale,
+                    };
+                    for (const std::string& name : builderDef->buildEffectBones) {
+                        const auto bone = std::find_if(
+                            batch.model->bones.begin(), batch.model->bones.end(),
+                            [&name](const rm::ModelBone& candidate) {
+                                return candidate.name == name;
+                            });
+                        if (bone == batch.model->bones.end()) {
+                            continue;
+                        }
+                        const std::size_t flat = static_cast<std::size_t>(
+                            std::distance(batch.model->bones.begin(), bone));
+                        rm::BoneTransform rest{};
+                        rest.translation = bone->globalOffset;
+                        if (flat < batch.builderAim.boneFlags.size()) {
+                            rest.translation = rm::applyBuilderAim(
+                                rest.translation, batch.builderAim.boneFlags[flat],
+                                batch.builderAim,
+                                rm::BuilderAimAngles{.yaw = drawn.builderYaw,
+                                                     .pitch = drawn.builderPitch});
+                        }
+                        appendBuildBeam(particles, rm::boneWorldPosition(rest, placement),
+                                        end, energy);
+                        emittedSeraphim = true;
+                    }
+                }
+            }
+        }
 
-        if (!emittedUefPair && !emittedCybran && !emittedAeon) {
+        if (!emittedUefPair && !emittedCybran && !emittedAeon && !emittedSeraphim) {
              appendBuildBeam(particles, {{fx, fy + 4.0f, fz}}, {{x, toY, z}}, energy);
          }
     }

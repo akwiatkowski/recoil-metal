@@ -550,3 +550,100 @@ TEST_CASE("C-552: a pre-placement save still decodes and re-stamps", "[fa-persis
         ++tick;
     }
 }
+
+TEST_CASE("C-552/v60: an intel save resumes under its saved coverage style", "[fa-persist]") {
+    // The v60 style byte: a Recoil match raycasts sight and radar against
+    // the ground, so a resume decoded into a ForgedAlliance-configured
+    // object must still read the saved rule, not the configured one.
+    Scenario live;
+    rm::unitdef::UnitDef dish = tankDef();
+    dish.name = "test_dish";
+    dish.visionRadiusElmos = 80.0f;
+    dish.radarRadiusElmos = 400.0f;
+    dish.sonarRadiusElmos = 200.0f;
+    dish.sizeYElmos = 60.0f;  // the sensor mount: Recoil reads eye level, not the ground
+    (void)live.spawn(dish, 300, 300, 0);
+    rm::unitdef::UnitDef quiet = tankDef();
+    quiet.name = "test_quiet";
+    quiet.sizeYElmos = 60.0f;
+    (void)live.spawn(quiet, 500, 300, 1);
+    live.scene.intel.configure(2, rm::sim::fxFromFloat(live.field.widthElmos()),
+                               rm::sim::fxFromFloat(live.field.depthElmos()),
+                               rm::sim::VisionStyle::Recoil);
+    auto runner = live.runner();
+    runner.match.intel = &live.scene.intel;
+    for (int tick = 0; tick < 40; ++tick) {
+        runner.match.intel->update(live.scene.store, live.scene.catalog, runner.match.armies,
+                                   nullptr);
+    }
+    REQUIRE_FALSE(runner.match.intel->retainedRadarContacts(0).empty());
+
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+        .tick = 40,
+        .random = runner.match.random.snapshot(),
+        .pathServiceBeats = runner.pathService.serviceBeats(),
+        .units = live.scene.store.snapshot(),
+        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+        .pathService = runner.pathService.snapshot(),
+        .intel = runner.match.intel->snapshot()}));
+    REQUIRE(saved);
+    REQUIRE(saved->intel.has_value());
+    CHECK(saved->intel->hasStyle);
+    CHECK(saved->intel->style == rm::sim::VisionStyle::Recoil);
+
+    Scenario resumed;
+    (void)resumed.registerType(dish);
+    (void)resumed.registerType(quiet);
+    resumed.scene.store = rm::sim::UnitStore{saved->units};
+    resumed.scene.intel.configure(2, rm::sim::fxFromFloat(resumed.field.widthElmos()),
+                                  rm::sim::fxFromFloat(resumed.field.depthElmos()),
+                                  rm::sim::VisionStyle::ForgedAlliance);
+    resumed.scene.intel.restore(*saved->intel);
+    CHECK(resumed.scene.intel.style() == rm::sim::VisionStyle::Recoil);
+}
+
+TEST_CASE("C-552/v60: the playable rect rides the economy save", "[fa-persist]") {
+    // The v60 rect: automatic acquisition's scenario bounds gate targeting,
+    // so a resume restores them onto the match rather than dropping back to
+    // unrestricted scenes.
+    Scenario live;
+    auto runner = live.runner();
+    runner.match.playableRect = rm::sim::PlayableRect{.minX = rm::sim::fxFromFloat(100.0f),
+                                                     .maxX = rm::sim::fxFromFloat(900.0f),
+                                                     .minZ = rm::sim::fxFromFloat(100.0f),
+                                                     .maxZ = rm::sim::fxFromFloat(900.0f)};
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+        .tick = 1,
+        .random = runner.match.random.snapshot(),
+        .pathServiceBeats = runner.pathService.serviceBeats(),
+        .units = live.scene.store.snapshot(),
+        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+        .pathService = runner.pathService.snapshot()}));
+    REQUIRE(saved);
+    REQUIRE(saved->economyArmies.has_value());
+    REQUIRE(saved->economyArmies->playableRect.has_value());
+    CHECK(saved->economyArmies->playableRect->minX == rm::sim::fxFromFloat(100.0f));
+    CHECK(saved->economyArmies->playableRect->maxZ == rm::sim::fxFromFloat(900.0f));
+
+    Scenario resumed;
+    auto continued = resumed.runner();
+    REQUIRE_FALSE(continued.match.playableRect.has_value());
+    saved->economyArmies->restore(continued.match, resumed.scene.economies,
+                                  resumed.scene.commandersEver);
+    REQUIRE(continued.match.playableRect.has_value());
+    CHECK(continued.match.playableRect->maxX == rm::sim::fxFromFloat(900.0f));
+
+    // A pre-v60 save carries no rect — the restore leaves the caller's
+    // setup untouched rather than clearing bounds it configured.
+    const auto legacy = rm::sim::SaveState::decode(rm::sim::SaveState::encodeAtVersion(
+        {.tick = 1,
+         .random = runner.match.random.snapshot(),
+         .pathServiceBeats = runner.pathService.serviceBeats(),
+         .units = live.scene.store.snapshot(),
+         .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+         .pathService = runner.pathService.snapshot()},
+        59));
+    REQUIRE(legacy);
+    REQUIRE(legacy->economyArmies.has_value());
+    CHECK_FALSE(legacy->economyArmies->playableRect.has_value());
+}

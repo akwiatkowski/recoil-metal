@@ -202,6 +202,13 @@ constexpr std::uint32_t kVersion58 = 58;
 // owes no priming update. Pre-v59 saves decode with empty stamp records,
 // which keeps the C-426 re-stamp contract.
 constexpr std::uint32_t kVersion59 = 59;
+// v60 adds the intel coverage style byte (the `VisionStyle` the grids were
+// stamped under) and the economy army's playable rect (the scenario's
+// automatic-acquisition bounds). Both feed the state hash but rode no save,
+// so a resume silently depended on the caller re-supplying identical
+// config. Pre-v60 saves decode with no style (the configured style stands)
+// and no rect (unrestricted scenes unchanged).
+constexpr std::uint32_t kVersion60 = 60;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -338,7 +345,8 @@ bool readMag(PayloadReader& r, Mag& value) {
 
 void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>& state,
                         bool includesOfferingDraw, bool includesUnitCap,
-                        bool includesCheat, bool includesDiplomacy, bool includesHandicap) {
+                        bool includesCheat, bool includesDiplomacy, bool includesHandicap,
+                        bool includesPlayableRect) {
     w.u8(state.has_value());
     if (!state) return;
     const auto& s = *state;
@@ -378,6 +386,15 @@ void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>&
     w.count(s.commandersEver.size());
     for (const int value : s.commandersEver) w.i32(value);
     w.u8(static_cast<std::uint8_t>(s.victoryMode)); writeResources(w, s.baseStorage);
+    // v60: the scenario's acquisition bounds. Absent in older saves —
+    // the restore keeps unrestricted scenes unrestricted.
+    if (includesPlayableRect) {
+        w.u8(s.playableRect.has_value());
+        if (s.playableRect) {
+            w.i32(s.playableRect->minX.raw()); w.i32(s.playableRect->maxX.raw());
+            w.i32(s.playableRect->minZ.raw()); w.i32(s.playableRect->maxZ.raw());
+        }
+    }
     w.u8(s.over); w.u8(s.winnerPending); w.u8(s.pendingWinner.has_value());
     if (s.pendingWinner) w.i32(*s.pendingWinner);
     w.u32(s.winnerStableTicks); w.u32(s.defeatPollElapsedTicks);
@@ -387,7 +404,8 @@ void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>&
 }
 bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
                        bool includesOfferingDraw, bool includesUnitCap,
-                       bool includesCheat, bool includesDiplomacy, bool includesHandicap) {
+                       bool includesCheat, bool includesDiplomacy, bool includesHandicap,
+                       bool includesPlayableRect) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) return true;
@@ -443,9 +461,28 @@ bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
     // never produced values above Supremacy, so widening the accepted range cannot
     // misread an old file.
     if (!r.u8(mode) || mode > static_cast<int>(VictoryMode::Sandbox)
-        || !readResources(r, s.baseStorage) || !readFlag(r, s.over)
-        || !readFlag(r, s.winnerPending) || !readFlag(r, winner)) return false;
-    s.victoryMode = static_cast<VictoryMode>(mode);
+        || !readResources(r, s.baseStorage)) return false;
+    if (includesPlayableRect) {
+        bool hasRect{};
+        if (!readFlag(r, hasRect)) return false;
+        if (hasRect) {
+            PlayableRect rect{};
+            std::int32_t raw{};
+            if (!r.i32(raw)) return false;
+            rect.minX = Fx::fromRaw(raw);
+            if (!r.i32(raw)) return false;
+            rect.maxX = Fx::fromRaw(raw);
+            if (!r.i32(raw)) return false;
+            rect.minZ = Fx::fromRaw(raw);
+            if (!r.i32(raw)) return false;
+            rect.maxZ = Fx::fromRaw(raw);
+            if (!(rect.minX <= rect.maxX && rect.minZ <= rect.maxZ)) return false;
+            s.playableRect = rect;
+        } else {
+            s.playableRect.reset();
+        }
+    }
+    if (!readFlag(r, s.over) || !readFlag(r, s.winnerPending) || !readFlag(r, winner)) return false;
     if (winner) {
         int alliance{};
         if (!r.i32(alliance)) return false;
@@ -1407,10 +1444,16 @@ void writePathService(PayloadWriter& w, const std::optional<PathService::Snapsho
 }
 
 void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state,
-                bool withExplored, bool withPlacements) {
+                bool withExplored, bool withPlacements, bool withStyle) {
     w.u8(state.has_value());
     if (!state) {
         return;
+    }
+    if (withStyle) {
+        // v60: the coverage rule the grids were stamped under. 0 means a
+        // pre-v60 save with no style carried — the restore keeps whatever
+        // the caller configured.
+        w.u8(state->hasStyle ? static_cast<std::uint8_t>(state->style) + 1 : 0);
     }
     w.count(state->retained.size());
     for (const auto& contacts : state->retained) {
@@ -1468,7 +1511,7 @@ void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state,
 }
 
 [[nodiscard]] bool readIntel(PayloadReader& r, std::optional<Intel::Snapshot>& state,
-                             bool withExplored, bool withPlacements) {
+                             bool withExplored, bool withPlacements, bool withStyle) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) {
@@ -1476,6 +1519,13 @@ void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state,
         return true;
     }
     state.emplace();
+    if (withStyle) {
+        std::uint8_t style{};
+        if (!r.u8(style) || style > static_cast<std::uint8_t>(VisionStyle::Recoil) + 1) return false;
+        state->hasStyle = style != 0;
+        state->style = style == 0 ? VisionStyle::ForgedAlliance
+                                  : static_cast<VisionStyle>(style - 1);
+    }
     std::size_t alliances{};
     if (!r.count(alliances, 4)) return false;
     state->retained.resize(alliances);
@@ -2518,7 +2568,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion15) writeEconomyArmies(payloadWriter, state.economyArmies,
                                                   version >= kVersion40, version >= kVersion41,
                                                   version >= kVersion43, version >= kVersion47,
-                                                  version >= kVersion53);
+                                                  version >= kVersion53, version >= kVersion60);
     if (version >= kVersion16)
         writeAirController(payloadWriter, state.units.motion, version >= kVersion21,
                            version >= kVersion55, version >= kVersion56,
@@ -2549,7 +2599,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                                                version >= kVersion53);
     if (version >= kVersion37) writePathService(payloadWriter, state.pathService);
     if (version >= kVersion37)
-        writeIntel(payloadWriter, state.intel, version >= kVersion52, version >= kVersion59);
+        writeIntel(payloadWriter, state.intel, version >= kVersion52, version >= kVersion59,
+                   version >= kVersion60);
     if (version >= kVersion42) writeProductionOverrides(payloadWriter, state.productionOverrides);
     if (version >= kVersion44) writeUnitPose(payloadWriter, state.units);
     if (version >= kVersion45) writeEffects(payloadWriter, state.effects);
@@ -2607,7 +2658,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion52 && version != kVersion53
                && version != kVersion54 && version != kVersion55
                && version != kVersion56 && version != kVersion57
-               && version != kVersion58 && version != kVersion59)
+               && version != kVersion58 && version != kVersion59 && version != kVersion60)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2657,7 +2708,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion15 && !readEconomyArmies(reader, economyArmies,
                                                     version >= kVersion40, version >= kVersion41,
                                                     version >= kVersion43, version >= kVersion47,
-                                                    version >= kVersion53)) return std::nullopt;
+                                                    version >= kVersion53, version >= kVersion60)) return std::nullopt;
     if (version >= kVersion16
         && !readAirController(reader, units.motion, version >= kVersion21,
                               version >= kVersion55, version >= kVersion56,
@@ -2692,7 +2743,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion37 && !readPathService(reader, pathService)) return std::nullopt;
     std::optional<Intel::Snapshot> intel;
     if (version >= kVersion37
-        && !readIntel(reader, intel, version >= kVersion52, version >= kVersion59))
+        && !readIntel(reader, intel, version >= kVersion52, version >= kVersion59,
+                      version >= kVersion60))
         return std::nullopt;
     std::optional<std::vector<Resources>> productionOverrides;
     if (version >= kVersion42 && !readProductionOverrides(reader, productionOverrides)) {
@@ -2759,7 +2811,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion59);
+    return rm::sim::encode(state, kVersion60);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {
@@ -2772,6 +2824,7 @@ EconomyArmyState EconomyArmyState::capture(const Match& match) {
         .building = match.building != nullptr ? *match.building : std::vector<Construction>{},
         .commandersEver = {match.commandersEver.begin(), match.commandersEver.end()},
         .victoryMode = match.victoryMode, .baseStorage = match.baseStorage,
+        .playableRect = match.playableRect,
         .over = match.over, .winnerPending = match.winnerPending,
         .pendingWinner = match.pendingWinner, .winnerStableTicks = match.winnerStableTicks,
         .pendingSurvivorMask = match.pendingSurvivorMask,
@@ -2792,6 +2845,12 @@ void EconomyArmyState::restore(Match& match, std::vector<Economy>& economyStorag
     if (match.building != nullptr) *match.building = building;
     match.victoryMode = victoryMode;
     match.baseStorage = baseStorage;
+    // v60: the rect is match configuration, but it gates targeting — a
+    // resume adopts the saved bounds only when the save carried them, so
+    // pre-v60 saves leave the caller's setup untouched.
+    if (playableRect) {
+        match.playableRect = playableRect;
+    }
     match.over = over;
     match.winnerPending = winnerPending;
     match.pendingWinner = pendingWinner;

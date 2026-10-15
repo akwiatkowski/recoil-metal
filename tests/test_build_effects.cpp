@@ -90,3 +90,14 @@ TEST_CASE("Aeon engineer beams end at the target pad, one beam per bone") {
     CHECK(end[1] == Approx(12.0f));
     CHECK(end[2] == Approx(200.0f));
 }
+
+TEST_CASE("Seraphim engineer beams end at the target pad, one beam per bone") {
+    // `CreateSeraphimUnitEngineerBuildingEffects` (retail EffectUtilities.lua
+    // :600-611): each `BuildEffectBones` bone streams one
+    // `SeraphimBuildBeams01` beam builder-bone -> target — no sweep, no offset.
+    const std::array<float, 3> end =
+        rm::seraphimBuildBeamEnd(100.0f, 12.0f, 200.0f);
+    CHECK(end[0] == Approx(100.0f));
+    CHECK(end[1] == Approx(12.0f));
+    CHECK(end[2] == Approx(200.0f));
+}

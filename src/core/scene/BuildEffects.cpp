@@ -81,4 +81,12 @@ std::array<float, 3> aeonBuildBeamEnd(float siteX, float siteY,
     return {{siteX, siteY, siteZ}};
 }
 
+std::array<float, 3> seraphimBuildBeamEnd(float siteX, float siteY,
+                                          float siteZ) noexcept {
+    // `CreateSeraphimUnitEngineerBuildingEffects` (`lua/EffectUtilities.lua`
+    // :600-611): one `SeraphimBuildBeams01` beam per `BuildEffectBones` bone,
+    // builder-bone -> target — no sweep, no offset.
+    return {{siteX, siteY, siteZ}};
+}
+
 }  // namespace rm

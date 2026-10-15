@@ -23,6 +23,11 @@ struct EconomyArmyState {
     std::vector<int> commandersEver;
     VictoryMode victoryMode = VictoryMode::Assassination;
     Resources baseStorage;
+    /// The scenario's automatic-acquisition bounds (v60): match
+    /// configuration, but it gates targeting, so a resume that dropped it
+    /// would acquire at targets the live match ignores. Empty keeps
+    /// unrestricted scenes unchanged.
+    std::optional<PlayableRect> playableRect;
     bool over = false;
     bool winnerPending = false;
     std::optional<int> pendingWinner;
