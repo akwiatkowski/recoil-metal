@@ -64,8 +64,8 @@ void promoteOneLevel(UnitStore& store, const UnitCatalog& catalog, UnitId unit, 
 
 } // namespace
 
-bool creditKill(UnitStore& store, const UnitCatalog& catalog, UnitId killer,
-                EventQueue* events) {
+bool creditKill(UnitStore& store, const UnitCatalog& catalog, UnitId killer, EventQueue* events,
+                UnitId victim) {
     // A STALE KILLER EARNS NOTHING, and that is the retail answer as well as the only one
     // available: `Health::lastHitBy` deliberately outlives its unit so a death can name who
     // did it, so the handle arriving here may belong to something that died on the same
@@ -91,6 +91,22 @@ bool creditKill(UnitStore& store, const UnitCatalog& catalog, UnitId killer,
         return false;
     }
 
+    // `C-449` (`Entity:Kill 0x00698aef`-`0x00698b0d`): the native KILLS writer
+    // sits after the BENIGN-category gate and the same-army check — friendly
+    // fire is damage, not a kill. A default-constructed victim id (the direct
+    // unit-test path) skips both gates; `retireDead` always names the corpse.
+    if (victim.generation != 0) {
+        const std::span<const MoveState> motion = store.motion();
+        if (victim.index < motion.size() && slot < motion.size()
+            && motion[victim.index].armyIndex != kNoArmy
+            && motion[victim.index].armyIndex == motion[slot].armyIndex) {
+            return false;
+        }
+        if (const unitdef::UnitDef* victimDef = catalog.def(store.typeAt(victim.index));
+            victimDef != nullptr && victimDef->hasCategory("BENIGN")) {
+            return false;
+        }
+    }
     ++health.veterancy.kills;
 
     // AGAINST THIS TYPE'S OWN LADDER. Most combat units state one and it is far shorter than

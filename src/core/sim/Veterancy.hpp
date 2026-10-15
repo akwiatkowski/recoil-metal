@@ -161,7 +161,8 @@ class EventQueue;
 class UnitCatalog;
 class UnitStore;
 
-/// Credits one kill to `killer` and promotes it if that crossed a threshold.
+/// Credits one kill to `killer` for felling `victim` and promotes it if that crossed
+/// a threshold.
 ///
 /// Called once per death from `retireDead`, which is where retail calls `OnKilledUnit` on the
 /// instigator — before the death weapon fires and before the wreck is made. Returns whether a
@@ -170,8 +171,13 @@ class UnitStore;
 /// A killer that is already dead earns nothing and this is not an error: `lastHitBy` outlives
 /// its unit on purpose, so a duel where both sides die on the same tick reaches here with a
 /// stale handle routinely.
+///
+/// `C-449` (`Entity:Kill 0x00698aef`-`0x00698b0d`): the native KILLS writer sits
+/// after the BENIGN-category gate and the same-army check, so a same-army or
+/// BENIGN victim earns nothing. The victim defaults to "unnamed" for the direct
+/// unit-test path; `retireDead` always names the corpse.
 bool creditKill(UnitStore& store, const UnitCatalog& catalog, UnitId killer,
-                EventQueue* events);
+                EventQueue* events, UnitId victim = {});
 
 /// Adds a scripted batch of kills and promotes through every cleared threshold.
 ///

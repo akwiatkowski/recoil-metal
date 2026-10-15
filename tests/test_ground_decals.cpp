@@ -719,6 +719,37 @@ TEST_CASE("impact marks keep a weapon's own decal when retail scripts one", "[de
     }
 }
 
+TEST_CASE("impact marks tag a weapon's own decal from the shot's projectile id", "[decals]") {
+    // The second C-484 half: `Match.cpp` must wire the tag from projectile
+    // identity at impact — the `ProjectileImpact` event already carries
+    // `visualId` (= `weapon.projectileId`, e.g.
+    // `/projectiles/AIFSonanceShell02/AIFSonanceShell02_proj.bp`), so the
+    // app maps that string to the corpus `OnImpact` override that laid its
+    // own decal (`AIFSonanceShell02_script.lua:19-20`,
+    // `CIFArtilleryProton01_script.lua:15`,
+    // `TIFNapalmCarpetBomb01_script.lua:13`,
+    // `CIFEMPFluxWarhead02_script.lua:116`). Unknown or empty ids keep the
+    // base splat/decal split; hash-neutral, presentation only.
+    using Script = rm::app::UnitScene::ImpactMarkScript;
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/AIFSonanceShell02/AIFSonanceShell02_proj.bp")
+          == Script::SonanceCrater);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/CIFArtilleryProton01/CIFArtilleryProton01_proj.bp")
+          == Script::ProtonScorch);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/TIFNapalmCarpetBomb01/TIFNapalmCarpetBomb01_proj.bp")
+          == Script::NapalmScorch);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/CIFEMPFluxWarhead02/CIFEMPFluxWarhead02_proj.bp")
+          == Script::EmpScorch);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/TDFGauss01/TDFGauss01_proj.bp")
+          == Script::BaseScorch);
+    CHECK(rm::app::scriptTagForProjectile("") == Script::BaseScorch);
+}
+
+
 
 TEST_CASE("a chamfered square cuts its corners at 45 degrees", "[selection-square]") {
     const auto field = flatAt(64, 0);

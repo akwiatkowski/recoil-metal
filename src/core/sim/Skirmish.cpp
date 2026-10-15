@@ -67,7 +67,8 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
         //
         // The same `radiusElmos > 0` guard makes this once per death too, which matters more
         // here than for the event: a kill counted twice is a unit promoted at half the cost.
-        (void)creditKill(store, catalog, healths[slot].lastHitBy, events);
+        // `C-449`: the corpse names itself so the same-army/BENIGN gate can refuse it.
+        (void)creditKill(store, catalog, healths[slot].lastHitBy, events, store.idAt(slot));
 
         // `CArmyStats` (`C-227`): the victim's army loses a unit, the killer's army
         // gains a kill — the two counters `aibrain.lua` reads for score and taunts.

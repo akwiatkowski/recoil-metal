@@ -3366,3 +3366,70 @@ TEST_CASE("an attack-move prefers its blip-nearer prey over its truth-nearer one
     REQUIRE(roster.store.orders()[mover.index].current() != nullptr);
     CHECK(roster.store.orders()[mover.index].current()->target() == far);
 }
+TEST_CASE("an attack-move holds when a radar contact's blip reads in reach", "[intel][targeting]") {
+    // FA-INTEL (`C-277` family; 96 elmos per `LosHandler.h:322`): the hold/chase
+    // gate must read the same deterministic blip each weapon acquires and fires
+    // at — truth for sightings. A target out of reach at truth but in reach at
+    // its blip holds fire instead of chasing truth.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef moverDef;
+    moverDef.name = "attacker";
+    moverDef.categories = {"LAND"};
+    moverDef.speedElmosPerSecond = 20.0f;
+    rm::unitdef::Weapon gun;
+    gun.label = "gun";
+    gun.role = rm::unitdef::WeaponRole::DirectFire;
+    gun.targetPriorities = {{"LAND"}};
+    gun.targetRestrictOnlyAllow = std::vector<std::string>{"LAND"};
+    gun.damage = rm::sim::magFromFloat(10.0f);
+    gun.maxRange = rm::sim::fxFromFloat(40.0f);
+    gun.rateOfFire = 1.0f;
+    moverDef.weapons.push_back(gun);
+    moverDef.radarRadiusElmos = 500.0f;  // vision stays zero: every contact is radar-only
+    const rm::UnitTypeIndex moverType = roster.addType(moverDef);
+    rm::unitdef::UnitDef enemyDef;
+    enemyDef.name = "land enemy";
+    enemyDef.categories = {"LAND"};
+    const UnitId mover = roster.add(moverType, 0.0f, 0.0f, 0, 100.0f);
+    const UnitId enemy = roster.add(roster.addType(enemyDef), 0.0f, 60.0f, 1, 100.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    rm::sim::Intel intel;
+    intel.configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                    rm::sim::VisionStyle::ForgedAlliance);
+    intel.update(roster.store, roster.catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, enemy.index, roster.store, roster.catalog,
+                                        armies, intel)
+            == rm::sim::ContactKind::Radar);
+    // Truth sits 60 elmos out — past the 40-elmo envelope. The blip paces the
+    // full 96-elmo circle (`LosHandler.h:322`), so the error direction
+    // opposite the target reads ~36 elmos out — in reach — on exactly those
+    // ticks. Deterministic: the blip is a pure function of unit, tick, rate.
+    rm::TickIndex holdTick = 0;
+    bool inReach = false;
+    for (rm::TickIndex tick = 0; tick < 4000 && !inReach; ++tick) {
+        const auto [blipX, blipZ] = rm::sim::radarBlipPosition(
+            enemy, rm::sim::Fx::fromInt(0), rm::sim::Fx::fromInt(60), tick, roster.rate);
+        const rm::sim::Fx dx = blipX - rm::sim::Fx::fromInt(0);
+        const rm::sim::Fx dz = blipZ - rm::sim::Fx::fromInt(0);
+        // Squared distance against the 40-elmo envelope, in fixed point.
+        if (dx * dx + dz * dz <= rm::sim::Fx::fromInt(40) * rm::sim::Fx::fromInt(40)) {
+            holdTick = tick;
+            inReach = true;
+        }
+    }
+    REQUIRE(inReach);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+    Command attackMove = moveTo(500.0f, 0.0f, mover);
+    attackMove.kind = CommandKind::AttackMove;
+    REQUIRE(rm::sim::applyCommand(attackMove, roster.store, roster.catalog, players, armies, terrain, grid, roster.rate));
+    (void)rm::sim::updateAggressiveOrders(roster.store, roster.catalog, armies, terrain, grids,
+                                          roster.rate, &intel, nullptr, holdTick);
+    REQUIRE(roster.store.orders()[mover.index].current() != nullptr);
+    CHECK(roster.store.orders()[mover.index].current()->target() == enemy);
+    CHECK_FALSE(roster.store.motion()[mover.index].moving);
+}

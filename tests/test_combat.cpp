@@ -1681,6 +1681,46 @@ TEST_CASE("automatic bomb-drop release leads from the blip, not truth",
            || shots[0].aimPoint[2]
                   != roster.transform(target).z + stepZ * leadFx));
 }
+TEST_CASE("a bomb-drop holds between threshold and twice threshold off the nose",
+          "[bomb-drop]") {
+    // `C-494` (CanFire Winged path, `0x006db8d8`-`0x006dbc55`): inside
+    // `BombDropThreshold` the bomb leaves; past twice the threshold it
+    // holds; between, it leaves only with the nose on the release point —
+    // aim dot > 0 then dot >= 0.866 (the same 30-degree cone as `C-224`).
+    // Currently fails: the fire pass releases anywhere inside the
+    // threshold and holds anywhere outside it, with no cone band.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon bomb = directFire(10.0f, 500.0f);
+    bomb.needToComputeBombDrop = true;
+    bomb.bombDropThreshold = rm::test::fx(40.0f);
+    UnitDef bomberDef = gunnerDef(bomb);
+    const UnitId bomber =
+        roster.add(roster.addType(bomberDef), 0.0f, 0.0f, 0, 100.0f);
+    (void)roster.add(roster.addType(targetDef()), 0.0f, 60.0f, 1, 100.0f);
+    roster.reindex();
+
+    // Release point equals truth here (zero target step, zero horizon lead effect
+    // on position: the target sits still, so the led point is the target).
+    // 60 elmos sits between 40 and 80 — the cone band.
+    // Nose pointed away: bearing to target is +Z (heading 0); face -Z instead.
+    roster.transform(bomber).heading = rm::sim::kBradHalfTurn;
+    std::vector<Projectile> held;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, held,
+                               roster.rate)
+          == 0);
+    CHECK(held.empty());
+
+    // Nose on: same geometry, hull facing the release point — the bomb leaves.
+    roster.transform(bomber).heading = 0;
+    roster.health(bomber).reloadRemaining[0] = 0;
+    std::vector<Projectile> fired;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, fired,
+                               roster.rate)
+          == 1);
+    CHECK(fired.size() == 1);
+}
 
 
 TEST_CASE("automatic targeting does not acquire sonar-only contacts") {

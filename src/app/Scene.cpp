@@ -311,6 +311,7 @@ inline constexpr float kImpactMarkLifetimeSecondsWidth = 300.0f;  // s (C-290 60
     return gAppTickRate.ticks(rm::sim::seconds(seconds));  // ticks (C-290)
 }
 
+
 } // namespace
 
 void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
@@ -328,6 +329,18 @@ void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
         .lod = impactMarkLod(x, z),
         .script = script});
     ++scene.impactMarksRevision;
+}
+UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId) noexcept {
+    using Script = UnitScene::ImpactMarkScript;
+    // The filename stem names the script family (`.../NAME/NAME_proj.bp`):
+    // match the four corpus `OnImpact` decal writers (C-484), everything
+    // else rides the base splat/decal split.
+    const auto stem = projectileId.substr(projectileId.find_last_of('/') + 1);
+    if (stem.starts_with("AIFSonanceShell02")) return Script::SonanceCrater;
+    if (stem.starts_with("CIFArtilleryProton01")) return Script::ProtonScorch;
+    if (stem.starts_with("TIFNapalmCarpetBomb01")) return Script::NapalmScorch;
+    if (stem.starts_with("CIFEMPFluxWarhead02")) return Script::EmpScorch;
+    return Script::BaseScorch;
 }
 
 void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field,

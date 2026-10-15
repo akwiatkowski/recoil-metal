@@ -2028,7 +2028,25 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
         const Transform& mineAt = store.transforms()[slot];
         const Transform& targetAt = store.transforms()[order->target().index];
         const bool targetAirborne = store.motion()[order->target().index].airborne;
-        const Fx gap = groundDistanceElmos(positionOf(mineAt), positionOf(targetAt));
+        // Automatic acquisition scores at the blip (`C-277` family; 96 elmos per
+        // `LosHandler.h:322`), so the hold/chase gate reads the same estimate
+        // each weapon acquired at: a radar/sonar contact holds at its
+        // deterministic blip and chases toward it, a sighting (or intel-less
+        // caller) at truth. No sim RNG — `radarBlipPosition` is a pure
+        // function of identity.
+        std::optional<std::array<Fx, 2>> blipAt;
+        if (intel != nullptr && mine != nullptr) {
+            const std::optional<ContactKind> kind = contactKindForUnit(
+                mine->alliance, order->target().index, store, catalog, armies, *intel);
+            if (kind == ContactKind::Radar || kind == ContactKind::Sonar) {
+                const auto [blipX, blipZ] = radarBlipPosition(
+                    order->target(), targetAt.x, targetAt.z, tick, rate);
+                blipAt = std::array<Fx, 2>{blipX, blipZ};
+            }
+        }
+        const Fx gap = blipAt.has_value()
+            ? groundDistanceElmos(positionOf(mineAt), {(*blipAt)[0], mineAt.y, (*blipAt)[1]})
+            : groundDistanceElmos(positionOf(mineAt), positionOf(targetAt));
         const bool canEngage = std::any_of(
             def->weapons.begin(), def->weapons.end(),
             [&, gap, targetAirborne](const unitdef::Weapon& weapon) {
@@ -2060,7 +2078,9 @@ void updateAggressiveOrders(UnitStore& store, const UnitCatalog& catalog,
         }
 
         if (!motion.moving) {
-            if (!routeUnit(slot, targetAt.x, targetAt.z, store, terrain, *grid)) {
+            const Fx chaseX = blipAt.has_value() ? (*blipAt)[0] : targetAt.x;
+            const Fx chaseZ = blipAt.has_value() ? (*blipAt)[1] : targetAt.z;
+            if (!routeUnit(slot, chaseX, chaseZ, store, terrain, *grid)) {
                 order->setTarget(UnitId{});
                 (void)resumeWaypoint();
             }

@@ -397,3 +397,23 @@ TEST_CASE("C-437: a chain kill from a victim's death blast credits the original 
     CHECK(healthOf(roster, killer).veterancy.kills == 1);
     CHECK(healthOf(roster, killer).veterancy.level == 1);
 }
+TEST_CASE("C-449: a same-army kill earns no credit") {
+    // `C-449` (`Entity:Kill 0x00698aef`-`0x00698b0d`): the native KILLS writer
+    // sits after the BENIGN-category gate and the same-army check — friendly
+    // fire is damage, not a kill. The credit call names the victim so the
+    // gate can compare armies: a killer whose army owns the victim earns
+    // nothing, while an enemy kill on the same ladder still promotes.
+    Roster roster;
+    UnitDef def = bodyDef(1000.0f);
+    def.veterancyKills = {1, 1, 1, 1, 1};
+    const rm::UnitTypeIndex type = roster.addType(def);
+    const UnitId gunner = roster.add(type, 0.0f, 0.0f, 0, 1000.0f);
+    const UnitId mate = roster.add(type, 10.0f, 0.0f, 0, 1000.0f);
+    const UnitId foe = roster.add(type, 20.0f, 0.0f, 1, 1000.0f);
+    CHECK_FALSE(rm::sim::creditKill(roster.store, roster.catalog, gunner, nullptr, mate));
+    CHECK(healthOf(roster, gunner).veterancy.kills == 0);
+    CHECK(healthOf(roster, gunner).veterancy.level == 0);
+    CHECK(rm::sim::creditKill(roster.store, roster.catalog, gunner, nullptr, foe));
+    CHECK(healthOf(roster, gunner).veterancy.kills == 1);
+    CHECK(healthOf(roster, gunner).veterancy.level == 1);
+}

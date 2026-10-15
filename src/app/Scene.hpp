@@ -1663,6 +1663,14 @@ void setAppTickRate(std::uint32_t ticksPerSecond);
 /// literal. `now` defaults to 0 so existing callers project without ageing
 /// anything out — every mark stamped at tick 0 or later then reads as fresh.
 void refreshWreckDecals(UnitScene& scene, const HeightField& field, TickIndex now = 0);
+/// Maps a shot's projectile id (`weapon.projectileId`, carried on the
+/// `ProjectileImpact` event as `visualId`) to the per-weapon `OnImpact`
+/// decal tag it lays (C-484): the four corpus scripts with their own decal
+/// beside the base-class scorch — `AIFSonanceShell02` crater pair,
+/// `CIFArtilleryProton01` scorch_011, `TIFNapalmCarpetBomb01` napalm scorch,
+/// `CIFEMPFluxWarhead02` nuke scorch. Anything else is `BaseScorch`.
+/// Presentation only, never hashed.
+[[nodiscard]] UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId) noexcept;
 /// Records one non-lethal ground hit for the scorch projection, stamped with
 /// the app tick so the projection can retire it at retail's scorch lifetime.
 /// Drops the oldest sixty-four past the cap — amortised, so a bombardment

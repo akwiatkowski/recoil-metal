@@ -2458,11 +2458,31 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     continue;
                 }
             } else if (weapon.needToComputeBombDrop) {
-                // `C-224`: the bomb leaves when the aircraft is within
-                // `BombDropThreshold` of the release point — the range/arc
-                // envelope does not apply to a drop.
-                if (groundDistanceElmos(from, to) > weapon.bombDropThreshold) {
+                // `C-494` (CanFire Winged path, `0x006db8d8`-`0x006dbc55`):
+                // the bomb leaves inside `BombDropThreshold` of the release
+                // point; past twice the threshold it holds; between, it leaves
+                // only with the nose on the release point — aim dot > 0, then
+                // dot >= 0.866 (the same 30-degree cone as `C-224`'s
+                // attack-run transitions, 0.866f at `.rdata`). The 0.25x
+                // MaxAirSpeed gate and the MakingAttackRun state gate stay
+                // open: `_SpeedMult` has no sim-side plumbing and the state
+                // bit is not carried into this pass yet.
+                const Fx dropDistance = groundDistanceElmos(from, to);
+                if (dropDistance > weapon.bombDropThreshold * Fx::fromInt(2)) {
                     continue;
+                }
+                if (dropDistance > weapon.bombDropThreshold) {
+                    const Fx aimDx = to[0] - from[0];
+                    const Fx aimDz = to[2] - from[2];
+                    const Fx aimLeg = fxHypot(aimDx, aimDz);
+                    const Fx noseX = fxSin(transforms[slot].heading);
+                    const Fx noseZ = fxCos(transforms[slot].heading);
+                    const Fx dot = aimLeg > Fx{}
+                        ? (aimDx * noseX + aimDz * noseZ) / aimLeg
+                        : Fx{};
+                    if (dot <= Fx{} || dot < Fx::fromRatio(866, 1000)) {
+                        continue;
+                    }
                 }
             } else if (!canFireAt(weapon, transforms[slot].heading, bearingTo(from, to))) {
                 continue;

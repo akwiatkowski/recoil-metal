@@ -1777,7 +1777,8 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             noteImpactMark(scene, rm::sim::fxToFloat(event.at[0]),
                            rm::sim::fxToFloat(event.at[2]),
                            rm::sim::fxToFloat(event.blastRadiusElmos),
-                           static_cast<rm::TickIndex>(tickIndex));
+                           static_cast<rm::TickIndex>(tickIndex),
+                           scriptTagForProjectile(event.visualId));
         } else if (event.kind == rm::sim::EventKind::WeaponFired) {
             // The kick: a full slide the tick the shot leaves — retail's
             // `SetSpeed(-1)` instant goal (defaultweapons.lua:276). Gated on
