@@ -1005,3 +1005,66 @@ TEST_CASE("C-169: a shot climbing out of the waterline dies as a Water impact", 
     }));
     CHECK(rm::test::asFloat(roster.health(boat).current) < 1000.0f);
 }
+TEST_CASE("C-328: a dive completion announces Bottom, a surfacing Top", "[fa-navy]") {
+    // `HandleDivingAndSurfacing` (`0x006c9ca0`) fires the vert event only on
+    // change at the endpoint — `Bottom` (1) when the dive commits to Sub,
+    // `Top` (0) when the surfacing breaks Water. The player hears the sonar
+    // contact change, not the propeller pitch mid-ease.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);  // waterline at 80
+    const rm::sim::PassabilityGrid water =
+        rm::sim::buildSurfaceWaterPassability(field, 80.0f);
+
+    rm::test::Roster roster;
+    const UnitDef sub = subDef();
+    const rm::UnitTypeIndex subType = roster.addType(sub);
+    const UnitId boat = spawnDef(roster, subType, sub, 300.0f, 300.0f, 0);
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &water);
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    match.passabilitySubmerged = grids;
+    rm::sim::EventQueue events;
+    match.events = &events;
+
+    auto& motion = roster.motion(boat);
+    REQUIRE(motion.submerged);
+    // Prime the edge sweep silently: nothing announced for a settled hull.
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    const std::size_t settled = events.size();
+
+    // Commit to the surface, then run to the endpoint and collect the vert
+    // events the dive's own completion raised.
+    motion.diveTargetSubmerged = false;
+    std::vector<int> surfacingVert;
+    for (int i = 0; i < 600 && motion.submerged; ++i) {
+        const std::size_t before = events.size();
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        for (std::size_t e = before; e < events.size(); ++e) {
+            const rm::sim::Event& event = events.all()[e];
+            if (event.kind == rm::sim::EventKind::MotionVert && event.unit == boat) {
+                surfacingVert.push_back(event.motionVert);
+            }
+        }
+    }
+    REQUIRE_FALSE(motion.submerged);
+    CHECK(surfacingVert == std::vector<int>{0});  // Top on breaking the surface
+
+    // And back down: the dive commits with Bottom (1).
+    motion.diveTargetSubmerged = true;
+    std::vector<int> divingVert;
+    for (int i = 0; i < 600 && !motion.submerged; ++i) {
+        const std::size_t before = events.size();
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        for (std::size_t e = before; e < events.size(); ++e) {
+            const rm::sim::Event& event = events.all()[e];
+            if (event.kind == rm::sim::EventKind::MotionVert && event.unit == boat) {
+                divingVert.push_back(event.motionVert);
+            }
+        }
+    }
+    REQUIRE(motion.submerged);
+    CHECK(divingVert == std::vector<int>{1});  // Bottom on committing to Sub
+    (void)settled;
+}

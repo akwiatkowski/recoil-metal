@@ -248,8 +248,43 @@ __rm_faf.unitMeta = {
         -- resolves to the unit it reports. Our blip IS the unit table, so the
         -- source is itself.
         GetSource = function(u) return u end,
+        -- `C-257`/`C-380` (`Unit.lua:2806-2821`): the scenario callback
+        -- registry `DoUnitCallbacks` walks. `AddUnitCallback(fn, type)`
+        -- appends to `EventCallbacks[type]` (retail errors on a nil fn);
+        -- `RemoveCallback(fn)` clears it from every list, skipping the
+        -- non-table `SpecialToggle(Enable/Disable)Function` leaves.
+        -- Per-table, so a registration survives as long as the snapshot's
+        -- unit table does.
+        AddUnitCallback = function(u, fn, type)
+            if not fn then error('*ERROR: Tried to add a callback type - ' .. type .. ' with a nil function') end
+            u.EventCallbacks = u.EventCallbacks or {}
+            local list = u.EventCallbacks[type]
+            if not list then list = {} u.EventCallbacks[type] = list end
+            table.insert(list, fn)
+        end,
+        RemoveCallback = function(u, fn)
+            if not u.EventCallbacks then return end
+            for _, list in pairs(u.EventCallbacks) do
+                if type(list) == 'table' then
+                    for i, cb in pairs(list) do
+                        if cb == fn then list[i] = nil end
+                    end
+                end
+            end
+        end,
     },
 }
+-- `C-257`/`C-380` (`Unit.lua:2814-2821`): `DoUnitCallbacks(type, param)`
+-- walks `EventCallbacks[type]`, calling each entry as `cb(self, param)`.
+-- A missing table or list is a no-op, like retail's guarded loop.
+function __rm_faf_do_unit_callbacks(u, type, arg)
+    local lists = u.EventCallbacks
+    local list = lists and lists[type]
+    if not list then return end
+    for _, cb in pairs(list) do
+        if cb then cb(u, arg) end
+    end
+end
 -- The attacker handle `GetAttacker` returns. `GetUnit` is the owner back-link
 -- (`CAiAttackerImpl:GetUnit`); the weapon leaves read zero until snapshot
 -- units carry authored armament — no corpus caller reaches them today
@@ -3330,15 +3365,33 @@ void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> ev
             return;
         }
         lua_getfield(lua, -1, method);
-        if (!lua_isfunction(lua, -1)) {
-            lua_settop(lua, top);
-            return;  // no callback installed: a no-op, like retail's absent body
+        if (lua_isfunction(lua, -1)) {
+            lua_pushvalue(lua, -2);  // self
+            unitFor(arg);
+            if (lua_pcall(lua, 2, 0, 0) != LUA_OK) {
+                std::printf("faf-opponent: %s failed: %s\n", method,
+                            lua_tostring(lua, -1));
+            }
+            lua_settop(lua, top + 1);  // [unit]: the registry walk below needs it
+        } else {
+            lua_pop(lua, 1);  // [unit]
         }
-        lua_pushvalue(lua, -2);  // self
-        unitFor(arg);
-        if (lua_pcall(lua, 2, 0, 0) != LUA_OK) {
-            std::printf("faf-opponent: %s failed: %s\n", method,
-                        lua_tostring(lua, -1));
+        // `C-257`/`C-380` (`Unit.lua:2814-2821`): `DoUnitCallbacks(type, param)`
+        // walks the unit's `EventCallbacks[type]` registry — the functions
+        // scenario code registered with `AddUnitCallback`. Runs after the
+        // method above, which is the adapter's stand-in for the unit script's
+        // own body; a missing registry is a no-op like retail's guarded loop.
+        lua_getglobal(lua, "__rm_faf_do_unit_callbacks");
+        if (lua_isfunction(lua, -1)) {
+            lua_pushvalue(lua, -2);  // the unit table
+            lua_pushstring(lua, method);
+            unitFor(arg);
+            if (lua_pcall(lua, 3, 0, 0) != LUA_OK) {
+                std::printf("faf-opponent: %s callbacks failed: %s\n", method,
+                            lua_tostring(lua, -1));
+            }
+        } else {
+            lua_pop(lua, 1);
         }
         lua_settop(lua, top);
     };

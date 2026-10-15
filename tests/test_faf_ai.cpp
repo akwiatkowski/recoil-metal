@@ -3656,6 +3656,79 @@ TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
         assert(c[12] == 'progress:0.375:0.5', 'OnBuildProgress with old then new fraction')
     )"));
 }
+TEST_CASE("C-257/C-380: a promotion reaches scenario callbacks in the unit's EventCallbacks registry",
+          "[faf][ai][veterancy]") {
+    // `C-257`/`C-380` (`Unit.lua:2814`, `Unit.lua:3190-3191`): `SetVeteranLevel`
+    // ends in `DoUnitCallbacks('OnVeteran')`, which walks the unit's
+    // `EventCallbacks.OnVeteran` list — the functions scenario code registered
+    // with `AddUnitCallback(fn, 'OnVeteran')` (`CreateUnitVeterancyTrigger`,
+    // `scenariotriggers.lua:387-389`). A same-named method on the unit table
+    // is NOT what retail calls; the registry is.
+    const auto root = corpusRoot();
+    const char* home = std::getenv("HOME");
+    const auto contentRoot = home ? std::filesystem::path{home} / "projects/llm/input/faf"
+                                  : std::filesystem::path{};
+    if (root.empty() || !std::filesystem::exists(contentRoot / "units/UEL0001/UEL0001_unit.bp")) {
+        SKIP("requires the vendored FAF corpus and extracted retail unit blueprints");
+    }
+    rm::vfs::Vfs content;
+    content.mountDirectory(contentRoot);
+    auto scene = std::make_unique<rm::app::UnitScene>();
+    scene->armies = {{.index = 0, .alliance = 0}, {.index = 1, .alliance = 1}};
+    scene->economies.resize(scene->armies.size());
+    auto commander = rm::unitbp::loadFile(contentRoot / "units/UEL0001/UEL0001_unit.bp");
+    REQUIRE(commander);
+    scene->definitions.push_back(*commander);
+    const auto type = scene->catalog.add(&scene->definitions.back(), rm::sim::TickRate{});
+    const rm::sim::UnitId own = scene->store.spawn({
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(10), .z = rm::sim::fxFromFloat(100)},
+        .motion = {.armyIndex = 0},
+        .health = {.current = rm::sim::magFromFloat(100),
+                   .maximum = rm::sim::magFromFloat(100)},
+    });
+    rm::HeightField field{.squaresX = 64, .squaresZ = 64};
+    field.raw.resize(field.sampleCount());
+    const std::array<rm::mapinfo::StartPosition, 2> starts{{
+        {.x = 0, .z = 100}, {.x = 50, .z = 100},
+    }};
+    const rm::ai::World world{.scene = *scene, .content = content, .field = field,
+                              .starts = starts, .markers = {}};
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    rm::ai::FafOpponent opponent(ai, 0);
+    opponent.observe(world, {});
+    opponent.advance(0);
+    // Retail's registration shape: a per-unit `EventCallbacks` table holding
+    // an `OnVeteran` list, filled through `AddUnitCallback`. Installed on the
+    // snapshot's own unit table so the dispatch must find it there.
+    REQUIRE(ai.eval(R"(
+        __rm_faf.vetCalls = {}
+        local brain = __rm_faf.brains[0]
+        local target = nil
+        for _, u in ipairs(brain.snap.units) do
+            if u.bp == 'UEL0001' then target = u break end
+        end
+        assert(target ~= nil, 'the commander is in the snapshot')
+        target.EventCallbacks = { OnVeteran = {} }
+        target.AddUnitCallback = function(self, fn, type)
+            table.insert(self.EventCallbacks[type], fn)
+        end
+        target:AddUnitCallback(function(self)
+            __rm_faf.vetCalls[#__rm_faf.vetCalls + 1] = 'registered'
+        end, 'OnVeteran')
+    )"));
+    const std::array<rm::sim::Event, 1> events{{
+        {.kind = rm::sim::EventKind::UnitVeteranPromoted, .unit = own, .army = 0,
+         .amount = rm::sim::magFromFloat(1)}}};
+    opponent.observe(world, events);
+    INFO(ai.lastError());
+    REQUIRE(ai.eval(R"(
+        assert(#__rm_faf.vetCalls == 1, 'the registered OnVeteran callback ran once')
+        assert(__rm_faf.vetCalls[1] == 'registered', 'the registry entry fired')
+    )"));
+}
 TEST_CASE("FAF air scouts release must-scout areas on the flyby pass",
           "[faf][ai][scouting]") {
     const auto root = corpusRoot();

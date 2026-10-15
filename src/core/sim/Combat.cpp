@@ -2479,15 +2479,28 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                     continue;
                 }
             } else if (weapon.needToComputeBombDrop) {
-                // `C-494` (CanFire Winged path, `0x006db8d8`-`0x006dbc55`):
-                // the bomb leaves inside `BombDropThreshold` of the release
-                // point; past twice the threshold it holds; between, it leaves
-                // only with the nose on the release point — aim dot > 0, then
-                // dot >= 0.866 (the same 30-degree cone as `C-224`'s
-                // attack-run transitions, 0.866f at `.rdata`). The 0.25x
-                // MaxAirSpeed gate and the MakingAttackRun state gate stay
-                // open: `_SpeedMult` has no sim-side plumbing and the state
-                // bit is not carried into this pass yet.
+                // `C-494` (CanFire Winged path, `0x006db8d8`-`0x006dbc55`,
+                // FAF `UnitWeapon.lua:42-56`): two head gates before the zone.
+                // A winged bomber slower than 0.25 x MaxAirspeed holds its
+                // bombs, and outside an attack run (`MakingAttackRun`: HeadOn,
+                // TailChase or BreakOff, `C-224`) they stay racked too — unless
+                // the weapon auto-initiates (`AutoInitiateAttackCommand` skips
+                // the speed arm per `UnitWeapon.lua:42-43`). Horizontal speed
+                // is the planar hypotenuse of the per-second velocity.
+                const MoveState& hull = motions[slot];
+                if (hull.airWinged && !weapon.autoInitiateAttackCommand
+                    && fxHypot(hull.velocity[0], hull.velocity[2])
+                           < hull.airMaxSpeedElmosPerSec * Fx::fromRatio(1, 4)) {
+                    continue;
+                }
+                if (hull.airWinged && !hull.makingAttackRun()) {
+                    continue;
+                }
+                // The zone itself: the bomb leaves inside `BombDropThreshold`
+                // of the release point; past twice the threshold it holds;
+                // between, it leaves only with the nose on the release point
+                // — aim dot > 0, then dot >= 0.866 (the same 30-degree cone as
+                // `C-224`'s attack-run transitions, 0.866f at `.rdata`).
                 const Fx dropDistance = groundDistanceElmos(from, to);
                 if (dropDistance > weapon.bombDropThreshold * Fx::fromInt(2)) {
                     continue;

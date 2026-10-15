@@ -1842,6 +1842,92 @@ TEST_CASE("a bomb-drop holds between threshold and twice threshold off the nose"
           == 1);
     CHECK(fired.size() == 1);
 }
+TEST_CASE("a bomb-drop holds when the hull is slower than a quarter of max airspeed",
+          "[bomb-drop]") {
+    // `C-494` (CanFire Winged path head, `0x006db8d8`, matching FAF
+    // `UnitWeapon.lua:42-43` verbatim): a winged bomber whose horizontal speed
+    // is below 0.25 x MaxAirspeed holds its bombs even inside the threshold.
+    // Currently fails: the fire pass has no speed arm.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon bomb = directFire(10.0f, 500.0f);
+    bomb.needToComputeBombDrop = true;
+    bomb.bombDropThreshold = rm::test::fx(400.0f);
+    bomb.autoInitiateAttackCommand = false;
+    UnitDef bomberDef = gunnerDef(bomb);
+    bomberDef.canFly = true;
+    bomberDef.motion = rm::unitdef::MotionType::Air;
+    const UnitId bomber =
+        roster.add(roster.addType(bomberDef), 0.0f, 0.0f, 0, 100.0f);
+    (void)roster.add(roster.addType(targetDef()), 0.0f, 60.0f, 1, 100.0f);
+    roster.reindex();
+
+    // Nose on and inside the threshold, but crawling: 20 elmos/s is under
+    // 0.25 x 160 = 40, so the bomb stays racked.
+    roster.motion(bomber).airWinged = true;
+    roster.motion(bomber).airMaxSpeedElmosPerSec = rm::test::fx(160.0f);
+    roster.motion(bomber).airCombatState =
+        rm::sim::MoveState::AirCombatState::HeadOn;
+    std::vector<Projectile> held;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, held,
+                               roster.rate)
+          == 0);
+    CHECK(held.empty());
+
+    // At full cruise the same geometry releases.
+    roster.motion(bomber).velocity = {rm::test::fx(0.0f), {}, rm::test::fx(160.0f)};
+    roster.health(bomber).reloadRemaining[0] = 0;
+    std::vector<Projectile> fired;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, fired,
+                               roster.rate)
+          == 1);
+    CHECK(fired.size() == 1);
+}
+
+TEST_CASE("a bomb-drop holds outside an attack run", "[bomb-drop]") {
+    // `C-494` (FAF `UnitWeapon.lua:46-51`): even at cruise speed and inside
+    // the threshold, a bomb leaves only while the hull reports
+    // `MakingAttackRun` — HeadOn, TailChase or BreakOff (`C-224`).
+    // Currently fails: the fire pass does not read the combat state.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Weapon bomb = directFire(10.0f, 500.0f);
+    bomb.needToComputeBombDrop = true;
+    bomb.bombDropThreshold = rm::test::fx(400.0f);
+    bomb.autoInitiateAttackCommand = false;
+    UnitDef bomberDef = gunnerDef(bomb);
+    bomberDef.canFly = true;
+    bomberDef.motion = rm::unitdef::MotionType::Air;
+    const UnitId bomber =
+        roster.add(roster.addType(bomberDef), 0.0f, 0.0f, 0, 100.0f);
+    (void)roster.add(roster.addType(targetDef()), 0.0f, 60.0f, 1, 100.0f);
+    roster.reindex();
+
+    // Cruising at full speed, nose on, inside the threshold — but in no
+    // combat state, so the bomb stays racked.
+    roster.motion(bomber).airWinged = true;
+    roster.motion(bomber).airMaxSpeedElmosPerSec = rm::test::fx(160.0f);
+    roster.motion(bomber).velocity = {rm::test::fx(0.0f), {}, rm::test::fx(160.0f)};
+    roster.motion(bomber).airCombatState = rm::sim::MoveState::AirCombatState::None;
+    std::vector<Projectile> held;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, held,
+                               roster.rate)
+          == 0);
+    CHECK(held.empty());
+
+    // Entering the head-on run releases the same geometry.
+    roster.motion(bomber).airCombatState =
+        rm::sim::MoveState::AirCombatState::HeadOn;
+    roster.health(bomber).reloadRemaining[0] = 0;
+    std::vector<Projectile> fired;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, fired,
+                               roster.rate)
+          == 1);
+    CHECK(fired.size() == 1);
+}
+
 
 
 TEST_CASE("automatic targeting does not acquire sonar-only contacts") {

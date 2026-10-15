@@ -382,6 +382,52 @@ TEST_CASE("C-290: a beam striking terrain leaves scorch at the strike point", "[
     }
 }
 
+TEST_CASE("C-290: only ScorchThread beam classes scorch", "[fa-terrain]") {
+    // Retail's scorch opt-out (`defaultcollisionbeams.lua` C-290): 8 of the 16
+    // collision-beam classes fork `ScorchThread` on `impactType == 'Terrain'`
+    // (`QuantumBeamGenerator`, both `MicrowaveLaser`, `PhasonLaser`,
+    // `ExperimentalPhasonLaser`, `UnstablePhasonLaser`, `UltraChromatic`,
+    // `TDFHiro`, `OrbitalDeathLaser` — plus `MicrowaveLaser02`/`Ultra02` by
+    // inheritance); the rest — `Ginsu`, `ParticleCannon`, `Zapper`,
+    // `DisruptorBeam`, the FX-only `TractorClaw` — lay nothing. The gate is a
+    // per-class table consulted from the `BeamFired` event's beam class: a
+    // scorch-less class marks nothing, a scorching class marks through the
+    // same water gate as before.
+    CHECK_FALSE(rm::app::beamClassScorches("GinsuCollisionBeam"));
+    CHECK_FALSE(rm::app::beamClassScorches("ParticleCannonCollisionBeam"));
+    CHECK_FALSE(rm::app::beamClassScorches("ZapperCollisionBeam"));
+    CHECK_FALSE(rm::app::beamClassScorches("DisruptorBeamCollisionBeam"));
+    CHECK_FALSE(rm::app::beamClassScorches("TractorClawCollisionBeam"));
+    CHECK(rm::app::beamClassScorches("QuantumBeamGeneratorCollisionBeam"));
+    CHECK(rm::app::beamClassScorches("MicrowaveLaserCollisionBeam01"));
+    CHECK(rm::app::beamClassScorches("MicrowaveLaserCollisionBeam02"));
+    CHECK(rm::app::beamClassScorches("PhasonLaserCollisionBeam"));
+    CHECK(rm::app::beamClassScorches("ExperimentalPhasonLaserCollisionBeam"));
+    CHECK(rm::app::beamClassScorches("UnstablePhasonLaserCollisionBeam"));
+    CHECK(rm::app::beamClassScorches("UltraChromaticBeamGeneratorCollisionBeam"));
+    CHECK(rm::app::beamClassScorches(
+        "UltraChromaticBeamGeneratorCollisionBeam02"));
+    CHECK(rm::app::beamClassScorches("TDFHiroCollisionBeam"));
+    CHECK(rm::app::beamClassScorches("OrbitalDeathLaserCollisionBeam"));
+    // Unknown classes scorch: retail's default `CollisionBeam` base lays no
+    // `ScorchThread`, but an unrecognised name is a content gap, not a proved
+    // opt-out — failing closed would silently drop scorch for every future
+    // beam.
+    CHECK(rm::app::beamClassScorches("SomeFutureCollisionBeam"));
+    // End to end through the helper: a scorch-less class leaves no mark even
+    // above dry ground; a scorching class marks.
+    rm::app::UnitScene dry = makeScene(false, 0.0f);
+    rm::sim::Event zapper{};
+    zapper.kind = rm::sim::EventKind::BeamFired;
+    zapper.at = rm::test::at(500, 40, 500);
+    (void)rm::app::noteBeamScorch(dry, zapper, 40.0f, 0.0f, 0,
+                                  "ZapperCollisionBeam");
+    CHECK(dry.impactMarks.empty());
+    (void)rm::app::noteBeamScorch(dry, zapper, 40.0f, 0.0f, 0,
+                                  "QuantumBeamGeneratorCollisionBeam");
+    CHECK(dry.impactMarks.size() == 1);
+}
+
 TEST_CASE("C-292: only a land-layer death scorches the ground", "[fa-terrain]") {
     // Retail's `Unit::OnKilled` gates `CreateScorchableDecal` on
     // `layer == 'Land'` — a crashed gunship or a sunk hull leaves no mark.

@@ -342,6 +342,22 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     if (stem.starts_with("CIFEMPFluxWarhead02")) return Script::EmpScorch;
     return Script::BaseScorch;
 }
+/// Whether a collision-beam class forks `ScorchThread` (C-290): the 8 classes
+/// in `defaultcollisionbeams.lua` whose `OnImpact` forks the thread on
+/// `impactType == 'Terrain'`, plus the two subclasses that inherit it
+/// (`MicrowaveLaserCollisionBeam02` from `...01`, `Ultra...02` from `Ultra`).
+/// The `SCCollisionBeam` base and the 5 remaining leaves state no thread.
+/// Unknown names return true — an unmapped class is a content gap, not a
+/// proved opt-out. Presentation only, never hashed.
+[[nodiscard]] bool beamClassScorches(std::string_view beamClass) noexcept {
+    // The 5 scorch-less leaves (`defaultcollisionbeams.lua` C-290): no
+    // `ScorchThread` in their class body and no scorching parent.
+    return beamClass != "GinsuCollisionBeam"
+           && beamClass != "ParticleCannonCollisionBeam"
+           && beamClass != "ZapperCollisionBeam"
+           && beamClass != "DisruptorBeamCollisionBeam"
+           && beamClass != "TractorClawCollisionBeam";
+}
 /// One beam strike's scorch (C-290 `ScorchThread` half). Retail forks the
 /// thread when the beam's `OnImpact` sees `impactType == 'Terrain'`
 /// (`defaultcollisionbeams.lua` — 8 of 16 classes; the rest scorch nothing),
@@ -354,7 +370,10 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
 /// replay-identical, off the sim RNG (C-297), presentation only, never hashed.
 [[nodiscard]] bool noteBeamScorch(UnitScene& scene, const rm::sim::Event& event,
                                  float strikeHeightElmos, float waterLevelElmos,
-                                 rm::TickIndex tick) {
+                                 rm::TickIndex tick, std::string_view beamClass) {
+    if (!beamClassScorches(beamClass)) {
+        return false;
+    }
     if (waterLevelElmos > 0.0f && strikeHeightElmos <= waterLevelElmos) {
         return false;
     }

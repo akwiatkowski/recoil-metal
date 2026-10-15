@@ -1314,17 +1314,22 @@ void emitMotionEvents(UnitStore& store, EventQueue* events) {
         // horz: Cruise while moving, Stopped otherwise. TopSpeed/Stopping are
         // unreachable — the movers have no acceleration model.
         const std::uint8_t horz = state.moving ? 0 : 3;
-        // vert: the air layer's own state, for flyers only, translated to
-        // retail's `EUnitMotionVertEvent` codes — Top 0, Bottom 1, Up 2,
-        // Down 3, Hover 4 (`C-125`/`C-328`, table `0xfb8234`). Our `AirState`
-        // enum orders the same four states differently (Bottom/Up/Top/Down),
-        // so the wire value goes through this table rather than a cast.
-        // A ground unit keeps whatever it last reported — Bottom is its spawn
-        // state and there is no transition to announce. Hover is unmodelled.
+        // vert: the flyer reports its own state, the submersible its dive
+        // endpoint (`C-200`/`C-328`, table `0xfb8234`): retail's
+        // `EUnitMotionVertEvent` codes — Top 0, Bottom 1, Up 2, Down 3,
+        // Hover 4. Our `AirState` enum orders the same four states
+        // differently (Bottom/Up/Top/Down), so the wire value goes through
+        // this table rather than a cast. A diving boat is Underway while the
+        // ease runs (the committed layer has not flipped yet) and reports
+        // only at the endpoint — Top when surfacing breaks Water, Bottom
+        // when the dive commits to Sub — because `HandleDivingAndSurfacing`
+        // (`0x006c9ca0`) fires only on the change. A ground unit keeps
+        // whatever it last reported — Bottom is its spawn state and there
+        // is no transition to announce. Hover is unmodelled.
         static constexpr std::array<std::uint8_t, 4> kVertCode{1, 2, 0, 3};
         const std::uint8_t vert = state.canFly
             ? kVertCode[static_cast<std::uint8_t>(state.airState)]
-            : state.lastMotionVert;
+            : (state.submersible ? (state.submerged ? 1 : 0) : state.lastMotionVert);
         // turn: heading error against the destination while moving — a quarter
         // turn or more is SharpTurn, anything less a Turn, aligned Straight.
         std::uint8_t turn = 0;
