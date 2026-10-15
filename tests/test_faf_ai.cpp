@@ -3576,6 +3576,13 @@ TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
         function brain:OnBrainUnitVeterancyLevel(unit, level)
             __rm_faf.calls[#__rm_faf.calls + 1] = 'veteran:' .. tostring(level)
         end
+        -- C-257/C-380 (Unit.lua:3190-3191): `SetVeteranLevel` calls the brain
+        -- hook FIRST, then the promoted unit's own
+        -- `DoUnitCallbacks('OnVeteran')`. The unit-side half must dispatch
+        -- from the same event, after the brain notification.
+        function meta:OnVeteran()
+            __rm_faf.calls[#__rm_faf.calls + 1] = 'unitVeteran'
+        end
         -- C-301/C-372: the collision manipulator's three contact callbacks,
         -- (self, bone, x, y, z) like retail's Unit.lua:2289 signatures.
         function meta:OnAnimCollision(bone, x, y, z)
@@ -3640,12 +3647,13 @@ TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
         assert(c[5] == 'stats:Economy_Ratio', 'OnStatsTrigger with the registered name')
         assert(c[6] == 'cap', 'OnUnitCapLimitReached')
         assert(c[7] == 'veteran:2', 'OnBrainUnitVeterancyLevel with the new level')
+        assert(c[8] == 'unitVeteran', 'OnVeteran on the promoted unit after the brain hook')
         assert(__rm_faf.lastBlip ~= nil, 'the blip reached Lua')
         assert(__rm_faf.lastBlip:GetSource() == __rm_faf.lastBlip, 'blip:GetSource()')
-        assert(c[8] == 'anim:3', 'OnAnimCollision with the bone index')
-        assert(c[9] == 'terrain:100.0', 'OnAnimTerrainCollision with the contact point')
-        assert(c[10] == 'terrainEnd', 'OnNotAnimTerrainCollision on the leaving edge')
-        assert(c[11] == 'progress:0.375:0.5', 'OnBuildProgress with old then new fraction')
+        assert(c[9] == 'anim:3', 'OnAnimCollision with the bone index')
+        assert(c[10] == 'terrain:100.0', 'OnAnimTerrainCollision with the contact point')
+        assert(c[11] == 'terrainEnd', 'OnNotAnimTerrainCollision on the leaving edge')
+        assert(c[12] == 'progress:0.375:0.5', 'OnBuildProgress with old then new fraction')
     )"));
 }
 TEST_CASE("FAF air scouts release must-scout areas on the flyby pass",

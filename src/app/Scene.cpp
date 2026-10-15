@@ -342,6 +342,26 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     if (stem.starts_with("CIFEMPFluxWarhead02")) return Script::EmpScorch;
     return Script::BaseScorch;
 }
+/// One beam strike's scorch (C-290 `ScorchThread` half). Retail forks the
+/// thread when the beam's `OnImpact` sees `impactType == 'Terrain'`
+/// (`defaultcollisionbeams.lua` — 8 of 16 classes; the rest scorch nothing),
+/// and the thread lays `CreateSplat` marks at the beam's tracked end while it
+/// dwells. A beam is hitscan — no projectile, no `ProjectileImpact` — so the
+/// `BeamFired` event's `at` is the strike record. With water present, a strike
+/// at or under the level leaves no mark (C-292); a waterless field (level 0,
+/// dry ground) never refuses — the gate is water, not height. Blast-less, so
+/// the mark rides the base splat path at the event's own tick —
+/// replay-identical, off the sim RNG (C-297), presentation only, never hashed.
+[[nodiscard]] bool noteBeamScorch(UnitScene& scene, const rm::sim::Event& event,
+                                 float strikeHeightElmos, float waterLevelElmos,
+                                 rm::TickIndex tick) {
+    if (waterLevelElmos > 0.0f && strikeHeightElmos <= waterLevelElmos) {
+        return false;
+    }
+    noteImpactMark(scene, rm::sim::fxToFloat(event.at[0]),
+                   rm::sim::fxToFloat(event.at[2]), 0.0f, tick);
+    return true;
+}
 
 void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field,
                         rm::TickIndex now) {

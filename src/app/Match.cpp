@@ -1803,6 +1803,18 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                            rm::sim::fxToFloat(event.blastRadiusElmos),
                            static_cast<rm::TickIndex>(tickIndex),
                            scriptTagForProjectile(event.visualId));
+        } else if (event.kind == rm::sim::EventKind::BeamFired) {
+            // A beam's scorch: hitscan, no projectile, so no `ProjectileImpact`
+            // — the strike point rides `BeamFired.at` (C-290 `ScorchThread`
+            // half). Retail forks the thread on `impactType == 'Terrain'`
+            // (`defaultcollisionbeams.lua`); here the water gate decides, from
+            // the sim terrain the tick ran on. Blast-less: beams carry no
+            // damage radius on the event, so the mark rides the base splat path.
+            const rm::sim::Terrain terrain = scene.terrain(runner.field);
+            (void)noteBeamScorch(scene, event,
+                                 rm::sim::fxToFloat(event.at[1]),
+                                 rm::sim::fxToFloat(terrain.waterLevel()),
+                                 static_cast<rm::TickIndex>(tickIndex));
         } else if (event.kind == rm::sim::EventKind::WeaponFired) {
             // The kick: a full slide the tick the shot leaves — retail's
             // `SetSpeed(-1)` instant goal (defaultweapons.lua:276). Gated on

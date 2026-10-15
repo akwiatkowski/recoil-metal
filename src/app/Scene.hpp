@@ -1681,6 +1681,18 @@ void refreshWreckDecals(UnitScene& scene, const HeightField& field, TickIndex no
 void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos = 0.0f,
                     TickIndex tick = 0,
                     UnitScene::ImpactMarkScript script = UnitScene::ImpactMarkScript::BaseScorch);
+/// Notes one beam strike's scorch (C-290 `ScorchThread` half): a beam is
+/// hitscan — no projectile, no `ProjectileImpact` — so the `BeamFired` event
+/// is the only record of where the strike landed. Retail's `OnImpact` forks
+/// the thread on `impactType == 'Terrain'` (`defaultcollisionbeams.lua`);
+/// here the caller passes the strike height and the water level and only a
+/// strike above water notes a mark — the C-292 gate, with a waterless field
+/// (level 0, dry ground) never refusing. The strike point is `event.at`;
+/// beams carry no blast radius, so the mark is blast-less and rides the base
+/// splat path. Returns true when a mark was noted.
+[[nodiscard]] bool noteBeamScorch(UnitScene& scene, const rm::sim::Event& event,
+                                 float strikeHeightElmos, float waterLevelElmos,
+                                 TickIndex tick = 0);
 
 [[nodiscard]] rm::data::OpeningStep stepForRole(const rm::data::Opening& opening,
                                                 rm::unitdef::Role role);

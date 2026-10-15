@@ -25,6 +25,7 @@
 #include "support/FxMatchers.hpp"
 #include "support/TestRoster.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -298,6 +299,86 @@ TEST_CASE("C-292: a shot into the sea leaves no scorch", "[fa-terrain]") {
         REQUIRE(impact != nullptr);
         CHECK(impact->impactType == rm::sim::ImpactType::Unit);
         CHECK(scene.impactMarks.empty());
+    }
+}
+TEST_CASE("C-290: a beam striking terrain leaves scorch at the strike point", "[fa-terrain]") {
+    // Retail's collision beams scorch through `ScorchThread`
+    // (`defaultcollisionbeams.lua`: `OnImpact` forks the thread on
+    // `impactType == 'Terrain'`; the thread lays `CreateSplat` marks at the
+    // beam's tracked end while it dwells). A beam is hitscan — no projectile,
+    // no `ProjectileImpact` — so the `BeamFired` event is the only record of
+    // where the strike landed, and the app must note the mark from it. Water
+    // strikes leave nothing, matching the C-292 gate.
+    SECTION("a terrain strike marks, a water strike does not") {
+        rm::app::UnitScene scene = makeScene(true, 32.0f);
+        rm::sim::Event land{};
+        land.kind = rm::sim::EventKind::BeamFired;
+        land.at = rm::test::at(500, 40, 500);
+        (void)rm::app::noteBeamScorch(scene, land, 40.0f, 32.0f);
+        REQUIRE(scene.impactMarks.size() == 1);
+        CHECK(scene.impactMarks[0].x == Catch::Approx(500.0f));
+        CHECK(scene.impactMarks[0].z == Catch::Approx(500.0f));
+        CHECK(scene.impactMarks[0].blastRadiusElmos == 0.0f);
+        rm::sim::Event sea{};
+        sea.kind = rm::sim::EventKind::BeamFired;
+        sea.at = rm::test::at(600, 10, 600);
+        (void)rm::app::noteBeamScorch(scene, sea, 10.0f, 32.0f);
+        CHECK(scene.impactMarks.size() == 1);
+    }
+    SECTION("a beam strike scorches through the match drain") {
+        // End to end: a real beam weapon firing through `advanceMatch` notes
+        // a mark at the strike point — the wire the unit-level SECTION pins
+        // the helper for. Turreted beam tank with vision vs a LAND victim in
+        // range: the strike lands on the hull, above water, so one mark.
+        rm::app::UnitScene scene = makeScene(false, 0.0f);
+        rm::unitdef::Weapon gun;
+        gun.label = "BeamGun";
+        gun.beam = true;
+        gun.role = rm::unitdef::WeaponRole::DirectFire;
+        gun.targetPriorities = {{"LAND"}};
+        gun.damage = rm::test::mag(10.0f);
+        gun.maxRange = rm::test::fx(600.0f);
+        gun.rateOfFire = 1.0f;
+        gun.turreted = true;
+        gun.muzzleVelocityElmosPerSecond = 100.0f;
+        rm::unitdef::UnitDef gunner;
+        gunner.name = "test_beam_tank";
+        gunner.visionRadiusElmos = 600.0f;
+        gunner.weapons.push_back(gun);
+        rm::unitdef::UnitDef target;
+        target.name = "test_target";
+        target.categories = {"LAND"};
+        scene.definitions.push_back(gunner);
+        scene.definitions.push_back(target);
+        const rm::UnitTypeIndex gunnerType =
+            scene.catalog.add(&scene.definitions[scene.definitions.size() - 2],
+                              rm::app::gAppTickRate);
+        const rm::UnitTypeIndex targetType =
+            scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+        scene.setTypeTraits(gunnerType, rm::data::moveDefFor(gunner), 1.0f);
+        scene.setTypeTraits(targetType, rm::data::moveDefFor(target), 1.0f);
+        (void)scene.store.spawn(rm::sim::UnitStore::Spawn{
+            .type = gunnerType,
+            .transform = {.x = rm::test::fx(400.0f), .z = rm::test::fx(500.0f)},
+            .motion = rm::app::motionFor(gunner, 0),
+            .health = rm::sim::initialHealth(rm::test::mag(100.0f)),
+        });
+        (void)scene.store.spawn(rm::sim::UnitStore::Spawn{
+            .type = targetType,
+            .transform = {.x = rm::test::fx(500.0f), .z = rm::test::fx(500.0f)},
+            .motion = rm::app::motionFor(target, 1),
+            .health = rm::sim::initialHealth(rm::test::mag(100.0f)),
+        });
+        rm::HeightField field = flatField(128, 0.0f);
+        rm::app::PassabilitySet passability{field, false, 0.0f};
+        rm::vfs::Vfs content;
+        rm::app::MatchRunner runner =
+            rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+        runner.scripts.clear();
+        for (int tick = 0; tick < 30 && scene.impactMarks.empty(); ++tick) {
+            (void)rm::app::advanceMatch(runner, tick, 0.0f);
+        }
+        CHECK(scene.impactMarks.size() == 1);
     }
 }
 

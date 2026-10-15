@@ -3537,15 +3537,17 @@ void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> ev
             callBrain("OnUnitCapLimitReached", 0, [] {});
             break;
         case rm::sim::EventKind::UnitVeteranPromoted:
-            // `C-257` -> `brain:OnBrainUnitVeterancyLevel(unit, level)`: the
-            // promotion notifies the owning brain, which walks its
-            // `VeterancyTriggerList` for scenario triggers.
+            // `C-257`/`C-380` (`Unit.lua:3190-3191`): `SetVeteranLevel` calls
+            // the brain hook FIRST, then the promoted unit's own
+            // `DoUnitCallbacks('OnVeteran')` — scenario `AddUnitCallback`
+            // handlers observe the brain notification before the unit one.
             if (event.army != army_) break;
             callBrain("OnBrainUnitVeterancyLevel", 2, [&] {
                 unitFor(event.unit);
                 lua_pushinteger(lua, static_cast<lua_Integer>(
                                        rm::sim::magToFloat(event.amount)));
             });
+            callUnit(event.unit, "OnVeteran", event.unit);
             break;
         case rm::sim::EventKind::PingSpawned: {
             // `C-346` -> `brain:DoPingCallbacks(data)`: `SimPing.lua:55` calls
