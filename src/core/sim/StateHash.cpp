@@ -836,6 +836,12 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         for (const TickCount ticks : match.intel->intelRecovery()) {
             feed(h, static_cast<std::uint64_t>(ticks));
         }
+        // C-284's fog-of-war flag grants LOSNow outright when off, so it is
+        // live targeting state like the latches above — and it rides the
+        // save (v52), so the hash must cover what the save preserves.
+        for (std::size_t alliance = 0; alliance < match.intel->alliances(); ++alliance) {
+            feed(h, match.intel->fogOfWar(static_cast<int>(alliance)));
+        }
     }
 
     // Shots in flight. Nullable because a decorative crowd has no projectile list, and

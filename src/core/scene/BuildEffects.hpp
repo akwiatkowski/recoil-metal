@@ -45,6 +45,25 @@ struct BuildBeamEnds {
 [[nodiscard]] std::array<float, 3> seraphimBuildBeamEnd(float siteX, float siteY,
                                                         float siteZ) noexcept;
 
+/// The factory build-base pool both Seraphim and Aeon factories lay under the
+/// product (`CreateSeraphimFactoryBuildingEffects` /
+/// `CreateAeonFactoryBuildingEffects` in retail `lua/EffectUtilities.lua`):
+/// `mul = 1`, `sx = MeshExtentsX or Footprint.SizeX * mul` (same for Z),
+/// `sy = MeshExtentsY or sx + sz`; the base projectile takes
+/// `SetScale(sx, 1, sz)` and warps to `(x, y + factoryBaseWarpYOffset, z)`.
+/// Mesh inputs are elmos with 0 meaning unauthored; footprint inputs are the
+/// blueprint's `Footprint.SizeX/Z` ogrids. `kFactoryBaseMul` is retail's `mul`.
+inline constexpr float kFactoryBaseMul = 1.0f;
+inline constexpr float factoryBaseWarpYOffset = -0.05f;
+struct FactoryBaseScale {
+    float sx{};
+    float sy{};
+    float sz{};
+};
+[[nodiscard]] FactoryBaseScale factoryBaseScale(float meshXElmos, float meshYElmos,
+                                                float meshZElmos, float footprintX,
+                                                float footprintZ) noexcept;
+
 
 
 }  // namespace rm

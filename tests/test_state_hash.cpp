@@ -294,6 +294,24 @@ TEST_CASE("visual identification history changes the hash after sight is gone") 
     CHECK(historyHash != hashMatch(fixture.store, match));
 }
 
+TEST_CASE("the fog-of-war flag changes the hash") {
+    // C-284's flag rides the save (v52) and grants LOSNow outright when off,
+    // so a match with fog off must hash differently from one with fog on.
+    Fixture fixture;
+    rm::sim::Intel fogOn;
+    rm::sim::Intel fogOff;
+    for (rm::sim::Intel* intel : {&fogOn, &fogOff}) {
+        intel->configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                         rm::sim::VisionStyle::ForgedAlliance);
+    }
+    fogOff.setFogOfWar(0, false);
+    rm::sim::Match match = fixture.match();
+    match.intel = &fogOn;
+    const rm::StateHash withFog = hashMatch(fixture.store, match);
+    match.intel = &fogOff;
+    CHECK(withFog != hashMatch(fixture.store, match));
+}
+
 TEST_CASE("shield power and recovery timers change the hash") {
     const auto hashWith = [](rm::sim::ShieldState shield) {
         Fixture fixture;

@@ -373,3 +373,91 @@ TEST_CASE("the silo queue and auto flag survive a save round-trip", "[silo][queu
     CHECK(decoded->siloQueue[0].slot == 0);
     CHECK(decoded->siloQueue[1].slot == 1);
 }
+
+TEST_CASE("cheat ammo adds to the tube with no clamp at capacity", "[silo][queue]") {
+    // C-533: GiveNukeSiloAmmo/GiveTacticalSiloAmmo share one guard — resolve the
+    // unit, silent no-op on null/non-silo, coerce, dispatch the slot. The impl is a
+    // bare add with no max check: a full silo overfills.
+    const UnitId owner{5, 1};
+    std::vector<SiloAmmo> ammo{record(owner, false, 1)};
+    ammo[0].stored = 1;
+
+    REQUIRE(rm::sim::giveSiloAmmo(ammo, owner, 0, 1));
+    CHECK(ammo[0].stored == 2);
+}
+
+TEST_CASE("cheat ammo on a unit with no silo record is a silent no-op",
+          "[silo][queue]") {
+    // C-533's guard shape: null/non-silo resolves to nothing and neither crashes
+    // nor invents a record.
+    const UnitId owner{5, 1};
+    const UnitId stranger{7, 1};
+    std::vector<SiloAmmo> ammo{record(owner, false, 1)};
+
+    CHECK_FALSE(rm::sim::giveSiloAmmo(ammo, stranger, 0, 1));
+    CHECK(ammo.size() == 1);
+    CHECK(ammo[0].stored == 0);
+}
+
+TEST_CASE("remove cheat negates with no floor at zero", "[silo][queue]") {
+    // C-533: RemoveTacticalSiloAmmo/RemoveNukeSiloAmmo negate the add with no
+    // floor — an empty tube goes negative.
+    const UnitId owner{5, 1};
+    std::vector<SiloAmmo> ammo{record(owner, false, 2)};
+
+    REQUIRE(rm::sim::removeSiloAmmo(ammo, owner, 0, 1));
+    CHECK(ammo[0].stored == -1);
+}
+
+TEST_CASE("stored-count readers report per-slot stock; strangers read zero",
+          "[silo][queue]") {
+    // C-534: GetTactical/GetNukeSiloAmmoCount dispatch the indexed int load per
+    // slot (Lua float at the boundary); a unit with no record reads zero.
+    const UnitId owner{5, 1};
+    const UnitId stranger{7, 1};
+    std::vector<SiloAmmo> ammo{record(owner, false, 2), record(owner, true, 1)};
+    ammo[0].stored = 2;
+
+    CHECK(rm::sim::siloStoredCount(ammo, owner, 0) == 2);
+    CHECK(rm::sim::siloStoredCount(ammo, owner, 1) == 0);
+    CHECK(rm::sim::siloStoredCount(ammo, stranger, 0) == 0);
+}
+
+TEST_CASE("stop silo build drops queued entries and halts mid-build progress",
+          "[silo][queue]") {
+    // C-534: StopSiloBuild dispatches with a null-impl silent skip — queued builds
+    // for the owner die and the half-funded head resets, but stored rounds stay.
+    const UnitId owner{5, 1};
+    const UnitId stranger{7, 1};
+    std::vector<SiloAmmo> ammo{record(owner, false, 2)};
+    ammo[0].stored = 1;
+    ammo[0].elapsedTicks = 4;
+    ammo[0].delivered = res(50.0f, 500.0f);
+    std::vector<SiloBuild> queue;
+    REQUIRE(rm::sim::queueSiloBuild(queue, ammo, owner, 0));
+
+    rm::sim::stopSiloBuild(queue, ammo, stranger);
+    CHECK(queue.size() == 1);
+
+    rm::sim::stopSiloBuild(queue, ammo, owner);
+    CHECK(queue.empty());
+    CHECK(ammo[0].stored == 1);
+    CHECK(ammo[0].elapsedTicks == 0);
+    CHECK(ammo[0].delivered.mass == rm::sim::Mag{});
+    CHECK(ammo[0].delivered.energy == rm::sim::Mag{});
+}
+
+TEST_CASE("build count walks the queue", "[silo][queue]") {
+    // C-534: SiloGetBuildCount counts in-queue builds by linear walk, per owner.
+    const UnitId owner{5, 1};
+    const UnitId other{7, 1};
+    std::vector<SiloAmmo> ammo{record(owner, false, 3), record(other, false, 3)};
+    std::vector<SiloBuild> queue;
+    REQUIRE(rm::sim::queueSiloBuild(queue, ammo, owner, 0));
+    REQUIRE(rm::sim::queueSiloBuild(queue, ammo, owner, 0));
+    REQUIRE(rm::sim::queueSiloBuild(queue, ammo, other, 0));
+
+    CHECK(rm::sim::siloBuildCount(queue, owner) == 2);
+    CHECK(rm::sim::siloBuildCount(queue, other) == 1);
+    CHECK(rm::sim::siloBuildCount(queue, UnitId{9, 1}) == 0);
+}

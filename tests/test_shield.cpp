@@ -848,3 +848,45 @@ TEST_CASE("a pass-overkill shield forwards the excess to its owner's hull") {
     CHECK(roster.health(generator).shield.current == rm::sim::Mag{});
     CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(85.0f));
 }
+
+TEST_CASE("a strategic missile penetrates a bubble instead of striking it") {
+    // `shield.lua` `Shield.OnCollisionCheck` (`C-397`): a STRATEGIC+MISSILE
+    // shot answers false, so the sweep never stages a shield impact for it —
+    // the shot reaches the hull beneath while the bubble pays nothing.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    rm::sim::Projectile shot;
+    // The sweep enters the radius-80 bubble at z=-80, before reaching its owner at z=0.
+    shot.position = rm::test::at(0, 1, -100);
+    shot.velocity = rm::test::at(0, 0, 120);
+    shot.damage = rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40));
+    shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    shot.categories = {"MISSILE", "STRATEGIC"};
+    std::vector<rm::sim::Projectile> shots{shot};
+
+    rm::HeightField field;
+    field.squaresX = 100;
+    field.squaresZ = 100;
+    field.baseHeight = -100.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, nullptr, &roster.catalog);
+
+    REQUIRE(shots.size() == 1);
+    CHECK(shots.front().pendingImpact == rm::sim::ImpactType::Unit);
+    CHECK(shots.front().impactTarget == generator);
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, nullptr, &roster.catalog);
+
+    CHECK(shots.empty());
+    CHECK(rm::test::asFloat(roster.health(generator).shield.current) == Approx(100.0f));
+    CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(60.0f));
+}

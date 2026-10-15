@@ -89,4 +89,15 @@ std::array<float, 3> seraphimBuildBeamEnd(float siteX, float siteY,
     return {{siteX, siteY, siteZ}};
 }
 
+FactoryBaseScale factoryBaseScale(float meshXElmos, float meshYElmos, float meshZElmos,
+                                  float footprintX, float footprintZ) noexcept {
+    // `CreateSeraphimFactoryBuildingEffects` / `CreateAeonFactoryBuildingEffects`
+    // (`lua/EffectUtilities.lua:537-552,613-628`): `mul = 1` and per-axis `or`
+    // fallback — zero MeshExtents means unauthored (UnitDef keeps zero).
+    const float sx = meshXElmos > 0.0f ? meshXElmos : footprintX * kFactoryBaseMul;
+    const float sz = meshZElmos > 0.0f ? meshZElmos : footprintZ * kFactoryBaseMul;
+    const float sy = meshYElmos > 0.0f ? meshYElmos : sx + sz;
+    return {.sx = sx, .sy = sy, .sz = sz};
+}
+
 }  // namespace rm

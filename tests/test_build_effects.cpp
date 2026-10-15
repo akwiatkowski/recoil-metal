@@ -101,3 +101,23 @@ TEST_CASE("Seraphim engineer beams end at the target pad, one beam per bone") {
     CHECK(end[1] == Approx(12.0f));
     CHECK(end[2] == Approx(200.0f));
 }
+
+TEST_CASE("Seraphim/Aeon factory build-base scale follows authored mesh "
+          "extents with footprint fallback") {
+    // `CreateSeraphimFactoryBuildingEffects` (`EffectUtilities.lua:613-628`)
+    // and its Aeon twin (:537-552): `mul = 1`, `sx = MeshExtentsX or
+    // Footprint.SizeX * mul` (same for Z), `sy = MeshExtentsY or sx + sz`,
+    // base projectile `SetScale(sx, 1, sz)` warped to `(x, y - 0.05, z)`.
+    // Zero MeshExtents means unauthored (UnitDef keeps zero, never a
+    // default), so each axis falls back independently.
+    const rm::FactoryBaseScale authored = rm::factoryBaseScale(5.0f, 9.0f, 7.0f, 0.0f, 0.0f);
+    CHECK(authored.sx == Approx(5.0f));
+    CHECK(authored.sy == Approx(9.0f));
+    CHECK(authored.sz == Approx(7.0f));
+    const rm::FactoryBaseScale fallback =
+        rm::factoryBaseScale(0.0f, 0.0f, 0.0f, 3.0f, 4.0f);
+    CHECK(fallback.sx == Approx(3.0f));
+    CHECK(fallback.sy == Approx(3.0f + 4.0f));
+    CHECK(fallback.sz == Approx(4.0f));
+    CHECK(rm::factoryBaseWarpYOffset == Approx(-0.05f));
+}

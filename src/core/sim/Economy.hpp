@@ -501,6 +501,31 @@ struct SiloBuild {
 /// push could not take. No-op when the queue is non-empty — the unit is already busy.
 [[nodiscard]] bool siloAutoRefill(std::vector<SiloBuild>& queue,
                                   std::span<const SiloAmmo> ammo, UnitId owner) noexcept;
+/// C-533's four ammo-cheat bindings (`0x006d57c0`/`0x006d5910`/`0x006d5bd0`/
+/// `0x006d5d20` through `0x005d5a70`): one guard shape — resolve the unit, silent
+/// no-op on null/non-silo, coerce, dispatch the slot (`1` nuke, `0` tactical).
+/// The impl is a bare add plus the dirty set — no clamp, no max check — so a full
+/// tube overfills. `false` when no record on that slot took the add.
+[[nodiscard]] bool giveSiloAmmo(std::span<SiloAmmo> ammo, UnitId owner,
+                                std::uint8_t slot, int amount) noexcept;
+/// C-533's remove arm: the same guard with the add negated and no floor at zero —
+/// an empty tube goes negative.
+[[nodiscard]] bool removeSiloAmmo(std::span<SiloAmmo> ammo, UnitId owner,
+                                  std::uint8_t slot, int amount) noexcept;
+/// C-534's count readers (`0x006d5a60`/`0x006d5e70` through slot `+0x14`, Lua float
+/// at the boundary): the stored int on `owner`'s `slot`, zero when no record sits
+/// there.
+[[nodiscard]] int siloStoredCount(std::span<const SiloAmmo> ammo, UnitId owner,
+                                  std::uint8_t slot) noexcept;
+/// C-534's `StopSiloBuild` (`0x006cd980` through slot `+0x2c`, null-impl silent
+/// skip): drops every queued build the owner carries and resets the half-funded
+/// head (progress and delivered costs), keeping stored rounds.
+void stopSiloBuild(std::vector<SiloBuild>& queue, std::span<SiloAmmo> ammo,
+                   UnitId owner) noexcept;
+/// C-534's `SiloGetBuildCount` (`0x005d5a20`): counts in-queue builds by linear
+/// walk, for one owner.
+[[nodiscard]] int siloBuildCount(std::span<const SiloBuild> queue,
+                                 UnitId owner) noexcept;
 
 /// One Cybran Loyalist-style missile redirector (`C-088`, ART-S007
 /// `lua/sim/defaultantiprojectile.lua:MissileRedirect`). Match-owned like `SiloAmmo`:

@@ -621,6 +621,28 @@ int runWindowed(const Session& session) {
                     }
                     std::fflush(stdout);
                 }
+            } else if (event.key == rm::Key::K && event.modifiers.control && !event.repeat
+                       && !selected.empty()) {
+                // SELF-DESTRUCT (`C-345`): retail's Ctrl+K `confirmunitdestroy.lua`
+                // confirmation issues `ToggleSelfDestruct` through the one sink;
+                // here the same semantic kill-switch command starts the
+                // five-second countdown, and a second press cancels it.
+                // Silent unless something eligible took it.
+                if (runnerForKeys != nullptr) {
+                    const bool issued = submitCommand(units, rm::sim::CommandIssue{
+                        .tick = runnerForKeys->tick,
+                        .phase = rm::sim::CommandPhase::PreTick,
+                        .source = static_cast<rm::CommandSource>(
+                            playerDriving(units, units.playerArmy)),
+                        .player = playerDriving(units, units.playerArmy),
+                        .kind = rm::sim::CommandKind::SelfDestruct,
+                        .units = selected,
+                    }).has_value();
+                    if (issued) {
+                        std::printf("self-destruct toggled\n");
+                        std::fflush(stdout);
+                    }
+                }
             } else if (const std::optional<std::size_t> digit = rm::digitForKey(event.key)) {
                 auto& group = controlGroups[*digit];
                 if (event.modifiers.control) {

@@ -359,6 +359,11 @@ struct UnitScene {
     /// the one `queueSiloBuild` admission rule.
     std::vector<rm::sim::SiloBuild> siloQueue;
 
+    /// Self-destruct countdowns (`C-345`): match-owned like `siloQueue`. The
+    /// `SelfDestruct` command toggles an entry on and off; the tick counts each
+    /// down and kills the unit on zero through the ordinary death path.
+    std::vector<rm::sim::SelfDestructWork> selfDestructs;
+
     /// Missile-redirector components, likewise distinct from units (`C-088`).
     std::vector<rm::sim::MissileRedirect> redirects;
 

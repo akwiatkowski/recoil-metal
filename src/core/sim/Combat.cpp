@@ -387,7 +387,7 @@ struct SweptHit {
                                int byArmy, UnitStore& store, std::span<const Army> armies,
                                const UnitCatalog* catalog, UnitId by, EventQueue* events,
                                unitdef::TargetLayerMask targetLayers,
-                               bool friendlyFire = false);
+                               bool friendlyFire = false, bool shieldPenetrating = false);
 
 /// Whether the original three-dimensional tick motion is strictly below retail's 0.01-elmo
 /// sweep threshold (`C-168`). Compare the exact rational in raw units because Q18.14 cannot
@@ -665,6 +665,17 @@ struct ProjectileTickStart {
     return segmentBoxEntry(from, to, minimum, maximum, minimumFraction, maximumFraction);
 }
 
+/// Retail `shield.lua` `Shield.OnCollisionCheck` (`C-397`): a STRATEGIC+MISSILE
+/// shot penetrates — the gate answers false, so the sweep never stages a shield
+/// impact for it and it reaches the hull beneath. Categories ride the shot
+/// (`C-088`), sorted for binary search like every other category check here.
+[[nodiscard]] bool penetratesShield(const Projectile& shot) noexcept {
+    return std::binary_search(shot.categories.begin(), shot.categories.end(),
+                              std::string{"MISSILE"})
+        && std::binary_search(shot.categories.begin(), shot.categories.end(),
+                              std::string{"STRATEGIC"});
+}
+
 /// First hostile body hit by this tick's extended 3D segment, or by C-168's radius-one sphere
 /// at the old position when the motion is below 0.01 elmo. Blast radius belongs to damage after
 /// impact, not the projectile's physical body.
@@ -717,7 +728,7 @@ struct ProjectileTickStart {
         // An active shield is its own swept collision primitive. It is considered
         // before the owner's body and is deliberately independent of unit target layers: the
         // native shield primitive occupies its own collision layer (`C-169`).
-        if (!proximityFallback && catalog != nullptr) {
+        if (!proximityFallback && catalog != nullptr && !penetratesShield(shot)) {
             const UnitCatalog::ShieldInfo& shield = shieldFor(store, *catalog, slot);
             if (shield.exists() && store.health()[slot].shield.active()
                 && !store.scriptBitDisabledAt(slot, 0)) {
@@ -3135,7 +3146,8 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
                   EventQueue* events, unitdef::TargetLayerMask targetLayers, bool damageFriendly,
                   std::optional<UnitIndex> exactTarget,
                   std::optional<UnitIndex> impactTarget, FeatureStore* features = nullptr,
-                  bool damageSelf = false, Fx innerRadiusElmos = Fx{}) {
+                  bool damageSelf = false, Fx innerRadiusElmos = Fx{},
+                  bool shieldPenetrating = false) {
     Mag dealt{};
 
     // C-086/C-137: area queries (0xF00) include props; ordinary projectile sweeps (0xD00)
@@ -3210,7 +3222,8 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
     std::vector<BlastShield> shields;
     const bool areaBlast = radiusElmos > Fx{};
 
-    if (catalog != nullptr && damage.harmful() && catalog->largestShieldRadius() > Fx{}) {
+    if (catalog != nullptr && damage.harmful() && catalog->largestShieldRadius() > Fx{}
+        && !shieldPenetrating) {
         // A bubble whose CENTRE is far outside the blast can still cover a target inside it,
         // so the search has to be widened by the largest bubble's radius. Querying at the
         // blast radius alone is how the old code came to miss shields it should have found.
@@ -3596,7 +3609,7 @@ namespace {
                                int byArmy, UnitStore& store, std::span<const Army> armies,
                                const UnitCatalog* catalog, UnitId by, EventQueue* events,
                                unitdef::TargetLayerMask targetLayers,
-                               bool friendlyFire) {
+                               bool friendlyFire, bool shieldPenetrating) {
     if (target >= store.transforms().size()) {
         return Mag{};
     }
@@ -3604,7 +3617,7 @@ namespace {
     // point hit admits the source side, the launcher included.
     return damageTargets(positionOf(store.transforms()[target]), Fx{}, damage, byArmy, store,
                           armies, catalog, by, events, targetLayers, friendlyFire, target,
-                          std::nullopt, nullptr, friendlyFire);
+                          std::nullopt, nullptr, friendlyFire, Fx{}, shieldPenetrating);
 }
 
 } // namespace
@@ -3909,11 +3922,15 @@ void resolvePendingImpact(Projectile& shot, UnitStore& store,
                      .visualId = shot.visualId,
                      .visualDirection = shot.velocity,
                  });
+    // `shield.lua` `Shield.OnCollisionCheck` (`C-397`): a penetrating shot's
+    // shield refused the collision, so its damage admits no bubble either —
+    // the point hit and its blast land on the hull beneath.
+    const bool shieldPenetrating = penetratesShield(shot);
     if (shot.damageRadiusElmos <= Fx{}) {
         if (target.generation != 0) {
             (void)damageTarget(target.index, shot.damage, shot.firedByArmy, store,
                                armies, catalog, shot.firedBy, events,
-                               shot.targetLayers, shot.friendlyFire);
+                               shot.targetLayers, shot.friendlyFire, shieldPenetrating);
         }
     } else {
         const std::optional<UnitIndex> impactTarget = target.generation != 0
@@ -3929,19 +3946,20 @@ void resolvePendingImpact(Projectile& shot, UnitStore& store,
                                  shot.innerRing, shot.firedByArmy, store, armies,
                                  catalog, shot.firedBy, events, shot.targetLayers,
                                  shot.friendlyFire, std::nullopt, impactTarget,
-                                 features, shot.friendlyFire);
+                                 features, shot.friendlyFire, Fx{}, shieldPenetrating);
         }
         if (shot.outerRing.harmful() && shot.outerRingRadiusElmos > Fx{}) {
             (void)damageTargets(shot.position, shot.outerRingRadiusElmos,
                                  shot.outerRing, shot.firedByArmy, store, armies,
                                  catalog, shot.firedBy, events, shot.targetLayers,
                                  shot.friendlyFire, std::nullopt, impactTarget,
-                                 features, shot.friendlyFire);
+                                 features, shot.friendlyFire, Fx{}, shieldPenetrating);
         }
         (void)damageTargets(shot.position, shot.damageRadiusElmos, shot.damage,
                              shot.firedByArmy, store, armies, catalog, shot.firedBy,
                              events, shot.targetLayers, shot.friendlyFire, std::nullopt,
-                             impactTarget, features, shot.friendlyFire);
+                             impactTarget, features, shot.friendlyFire, Fx{},
+                             shieldPenetrating);
     }
 
     // Recoil Metal has no Lua projectile lifecycle yet, so retain its established

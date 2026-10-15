@@ -18,6 +18,7 @@
 #include "core/ui/Hud.hpp"
 #include "core/ui/ProductionPanel.hpp"
 #include "core/ui/Viewport.hpp"
+#include "platform/KeyInput.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -396,4 +397,31 @@ TEST_CASE("C-369: the shield toggle lights from the sim script-bit mask", "[fa-u
     (void)rm::app::advanceMatch(runner, 0, 0);
     REQUIRE(job.scene.store.scriptBitDisabled(unit, 0));
     CHECK_FALSE(rm::ui::toggleEngaged(defs(), unpaused, masks())[0]);
+}
+
+TEST_CASE("C-345: the Ctrl+K key reaches self-destruct through the one sink", "[fa-ui]") {
+    // The UI half of `ToggleSelfDestruct`: retail's Ctrl+K issues through the
+    // command sink (`confirmunitdestroy.lua:24`), and the sim starts the
+    // five-second countdown the `[fa-match]` tests pin. This is the same
+    // `submitCommand` issue the session's Ctrl+K branch sends — the key's
+    // own entry (`Key::K`, `keyForCharacter('k')`) plus the sink round trip.
+    REQUIRE(rm::keyForCharacter('k') == rm::Key::K);
+    Scenario job;
+    const rm::sim::UnitId tank = job.spawn(tankDef(), 300, 300);
+    const std::vector<rm::sim::UnitId> selection{tank};
+    auto runner = job.runner();
+
+    REQUIRE(rm::app::submitCommand(job.scene, rm::sim::CommandIssue{
+        .tick = 0,
+        .phase = rm::sim::CommandPhase::PreTick,
+        .source = 0,
+        .player = 0,
+        .kind = rm::sim::CommandKind::SelfDestruct,
+        .units = selection,
+    }).has_value());
+    (void)rm::app::advanceMatch(runner, 0, 0);
+    const auto armed = std::ranges::find_if(job.scene.selfDestructs,
+        [&](const rm::sim::SelfDestructWork& work) { return work.unit == tank; });
+    REQUIRE(armed != job.scene.selfDestructs.end());
+    CHECK(armed->remainingTicks == rm::app::gAppTickRate.ticks(rm::sim::seconds(5.0f)));
 }

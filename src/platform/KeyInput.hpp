@@ -17,6 +17,7 @@ enum class Key : std::uint8_t {
     F,
     G,
     I,
+    K,
     N,
     O,
     P,
@@ -71,6 +72,7 @@ struct KeyEvent {
         case 'e': return Key::E;
         case 'f': return Key::F;
         case 'i': return Key::I;
+        case 'k': return Key::K;
         case 'n': return Key::N;
         case 'o': return Key::O;
         case 'g': return Key::G;

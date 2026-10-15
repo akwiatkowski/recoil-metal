@@ -144,6 +144,55 @@ bool siloAutoRefill(std::vector<SiloBuild>& queue, std::span<const SiloAmmo> amm
     // exact `0x005d5d60`–`0x005d5d78` ordering C-241 records.
     return queueSiloBuild(queue, ammo, owner, 0) || queueSiloBuild(queue, ammo, owner, 1);
 }
+bool giveSiloAmmo(std::span<SiloAmmo> ammo, UnitId owner, std::uint8_t slot,
+                  int amount) noexcept {
+    // The shared `0x005d5a70` body: one record, one bare add, no clamp. The `Unit+0x68e`
+    // dirty set has no model here — derived UI state, not match state.
+    for (SiloAmmo& record : ammo) {
+        if (record.owner == owner && record.slot == slot) {
+            record.stored += amount;
+            return true;
+        }
+    }
+    return false;
+}
+bool removeSiloAmmo(std::span<SiloAmmo> ammo, UnitId owner, std::uint8_t slot,
+                    int amount) noexcept {
+    // The remove arm negates the add before dispatch — and retail never floors.
+    return giveSiloAmmo(ammo, owner, slot, -amount);
+}
+int siloStoredCount(std::span<const SiloAmmo> ammo, UnitId owner,
+                    std::uint8_t slot) noexcept {
+    // The slot `+0x14` indexed int load: stored rounds on that slot, zero when the
+    // unit carries no such record (the silent-skip arm of the reader).
+    for (const SiloAmmo& record : ammo) {
+        if (record.owner == owner && record.slot == slot) {
+            return record.stored;
+        }
+    }
+    return 0;
+}
+void stopSiloBuild(std::vector<SiloBuild>& queue, std::span<SiloAmmo> ammo,
+                   UnitId owner) noexcept {
+    // Slot `+0x2c` with the null-impl silent skip: no record, no queue work to do.
+    if (std::ranges::none_of(ammo, [&](const SiloAmmo& record) {
+            return record.owner == owner;
+        })) {
+        return;
+    }
+    std::erase_if(queue, [&](const SiloBuild& entry) { return entry.owner == owner; });
+    for (SiloAmmo& record : ammo) {
+        if (record.owner == owner) {
+            record.elapsedTicks = 0;
+            record.delivered = Resources{};
+        }
+    }
+}
+int siloBuildCount(std::span<const SiloBuild> queue, UnitId owner) noexcept {
+    // `0x005d5a20`: the linear walk over the queue, counting one owner's entries.
+    return static_cast<int>(std::ranges::count_if(
+        queue, [&](const SiloBuild& entry) { return entry.owner == owner; }));
+}
 
 void advanceConstruction(Construction& work) noexcept {
     if (work.paused || work.finished()) {
