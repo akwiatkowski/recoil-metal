@@ -614,6 +614,13 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 feed(h, word);
             }
         }
+        // `C-240`'s custom name (`Unit+0x2CC`) is live unit state — a renamed
+        // unit and an unnamed one diverge in the UI now, so they must hash
+        // apart. Unnamed stays silent, keeping the pre-name stream.
+        if (const std::string name = store.customName(store.idAt(slot)); !name.empty()) {
+            feed(h, std::uint8_t{13});
+            feedText(h, name);
+        }
         // WHETHER THE SLOT IS OCCUPIED, which the generation cannot say on its own. Death is
         // a tombstone: `kill` leaves every array untouched and deliberately does NOT advance
         // the generation mirror, because a stale mirror is what makes a dead unit's handle

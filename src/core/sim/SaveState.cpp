@@ -213,6 +213,10 @@ constexpr std::uint32_t kVersion60 = 60;
 // aircraft controller snapshot. Pre-v61 saves decode with false — the
 // unauthored default retail implies anyway (no shipped unit states it).
 constexpr std::uint32_t kVersion61 = 61;
+// v62 adds the per-slot custom names (`C-240`'s `Unit+0x2CC`), sparse like
+// the unit pose — a unit that was never renamed writes nothing, so older
+// saves decode with every unit unnamed.
+constexpr std::uint32_t kVersion62 = 62;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1775,6 +1779,36 @@ void writeUnitPose(PayloadWriter& w, const UnitStore::Snapshot& s) {
     return true;
 }
 
+// V62 trails the payload after the feature flags: the per-slot custom names
+// (`C-240`'s `Unit+0x2CC`), sparse — a unit that was never renamed writes
+// nothing, which is the pre-name stream for the matches that never rename.
+// An emitted empty name is the absent case, like the pose's all-zero mask:
+// accepting it would admit a second encoding of the same state.
+void writeCustomNames(PayloadWriter& w, const UnitStore::Snapshot& s) {
+    w.count(static_cast<std::size_t>(std::count_if(s.customNames.begin(),
+        s.customNames.end(), [](const std::string& name) { return !name.empty(); })));
+    for (std::size_t slot = 0; slot < s.customNames.size(); ++slot) {
+        if (s.customNames[slot].empty()) {
+            continue;
+        }
+        w.u32(static_cast<std::uint32_t>(slot));
+        w.text(s.customNames[slot]);
+    }
+}
+
+[[nodiscard]] bool readCustomNames(PayloadReader& r, UnitStore::Snapshot& s) {
+    std::size_t count{};
+    if (!r.count(count, 8) || count > s.transforms.size()) return false;
+    s.customNames.resize(s.transforms.size());
+    for (std::size_t entry = 0; entry < count; ++entry) {
+        std::uint32_t slot{};
+        std::string name;
+        if (!r.u32(slot) || slot >= s.customNames.size() || !r.text(name)
+            || name.empty() || !s.customNames[slot].empty()) return false;
+        s.customNames[slot] = std::move(name);
+    }
+    return true;
+}
 // V45 trails the payload after the unit pose: the emitter pool, nullable like
 // `features` — a match with no effect manager saves the absent byte, and an
 // older reader keeps no effects.
@@ -2620,6 +2654,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion45) writeEffects(payloadWriter, state.effects);
     if (version >= kVersion48) writeTerrainStamps(payloadWriter, state.terrainStamps);
     if (version >= kVersion51) writeFeatureFlags(payloadWriter, state.features);
+    if (version >= kVersion62) writeCustomNames(payloadWriter, state.units);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -2673,7 +2708,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion54 && version != kVersion55
                && version != kVersion56 && version != kVersion57
                && version != kVersion58 && version != kVersion59 && version != kVersion60
-               && version != kVersion61)
+               && version != kVersion61 && version != kVersion62)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2775,6 +2810,9 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion51 && !readFeatureFlags(reader, features)) {
         return std::nullopt;
     }
+    if (version >= kVersion62 && !readCustomNames(reader, units)) {
+        return std::nullopt;
+    }
     // Pre-v51 saves predate the flag: every feature they hold is a wreck, and
     // every wreck then marked the ground — restore that, or a loaded match
     // loses its scorch.
@@ -2826,7 +2864,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion61);
+    return rm::sim::encode(state, kVersion62);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

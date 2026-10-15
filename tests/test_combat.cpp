@@ -4423,3 +4423,35 @@ TEST_CASE("equidistant targets resolve deterministically, incumbent first (C-107
     REQUIRE(held.has_value());
     CHECK(*held == incumbent);
 }
+
+TEST_CASE("a worse-class challenger never dislodges the incumbent on row alone (C-091)") {
+    // `C-091` (`0x005de9f9`-`0x005dea7f`): selection orders (class, row,
+    // score, incumbency) — a challenger whose reach class is worse than the
+    // incumbent's is dropped outright, even with a better priority row.
+    // Class is not folded into the row comparison: an out-of-arc row-0
+    // challenger does not dislodge an in-arc row-1 incumbent.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const rm::UnitTypeIndex landType = roster.addType(targetDef());
+    UnitDef highDef = targetDef();
+    highDef.name = "test_high_pri";
+    highDef.categories = {"HIGH", "LAND"};  // sorted: `hasCategory` binary-searches
+    const rm::UnitTypeIndex highType = roster.addType(highDef);
+    const UnitId shooter = roster.add(landType, 0.0f, 0.0f, 0, 100.0f);
+    const UnitId incumbent = roster.add(landType, 0.0f, 100.0f, 1, 100.0f);  // ahead: class 0, row 1
+    const UnitId challenger = roster.add(highType, 50.0f, 0.0f, 1, 100.0f);  // abeam: class 2, row 0
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.targetPriorities = {{"HIGH"}, {"LAND"}};
+    weapon.arcRangeDegrees = 30.0f;
+    weapon.arcRangeBrads = rm::unitdef::arcRangeBradsFromDegrees(weapon.arcRangeDegrees);
+    const auto pick = [&](std::optional<UnitId> held) {
+        return rm::sim::nearestTarget(rm::sim::positionOf(roster.store.transforms()[shooter.index]), 0, shooter.index, weapon,
+                                      roster.store, armies, nullptr, &roster.catalog, rm::Brad{}, held);
+    };
+
+    // Sanity: with no incumbent the row-0 challenger wins outright.
+    CHECK(pick(std::nullopt) == challenger);
+    // With the in-arc incumbent held, the out-of-arc challenger is dropped
+    // on class before its better row is ever compared.
+    CHECK(pick(incumbent) == incumbent);
+}

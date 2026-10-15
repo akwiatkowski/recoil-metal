@@ -437,6 +437,10 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
     // and fuel.
     const auto installedEnhancements = store.enhancements()[victim];
     const bool shieldToggledOff = store.scriptBitDisabledAt(victim, 0);
+    // `C-240` (`0x0074E1B1`-`0x0074E1CE`): the native transfer copies the
+    // custom name (`Unit+0x2CC`) through the `+0x6C`/`+0x68` getter/setter
+    // pair — snapshot before `kill`, restore on the replacement below.
+    const std::string keptCustomName = store.customName(unit);
     motion.armyIndex = armyIndex;
     motion.moving = false;
     motion.path.clear();
@@ -482,6 +486,9 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
     store.enhancements()[replacement.index] = installedEnhancements;
     if (shieldToggledOff) {
         (void)store.setScriptBitDisabled(replacement, 0, true);
+    }
+    if (!keptCustomName.empty()) {
+        (void)store.setCustomName(replacement, keptCustomName);
     }
     // `C-240`/`C-404` aliasing, second half: the kept manipulator list and
     // bone mask land on the replacement. The spawn wiped both (newcomers

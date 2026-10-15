@@ -1095,8 +1095,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // toward the route's far end here — the beacon's own active command
         // target (`C-348`'s route contract) — so the carrier moves the beat
         // the guard order stands rather than waiting a tick or chasing the
-        // beacon with the build-reach hold. A beacon with no command, or a
-        // command with no position, has no far end yet and yields like before.
+        // beacon with no command has no far end yet and yields like before.
         if (isGuardCommand(current->kind()) && store.alive(current->target())) {
             const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
             const unitdef::UnitDef* beaconDef =
@@ -1104,10 +1103,14 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             if (guardDef != nullptr && guardDef->isTransport()
                 && beaconDef != nullptr && beaconDef->isFerryBeacon()) {
                 const QueuedCommand* route = orders[current->target().index].active();
-                if (route != nullptr
-                    && (route->kind() == CommandKind::Move
-                        || route->kind() == CommandKind::Ferry
-                        || route->kind() == CommandKind::UnloadTransport)) {
+                // `C-348` names no route-kind restriction: the beacon carries
+                // the route's destination on its command, whatever kind that
+                // command is. The kind filter here once admitted only
+                // Move/Ferry/UnloadTransport; an AttackMove- or Patrol-routed
+                // beacon fell through to the leash hold, disagreeing with the
+                // carrier-side loop (`advanceGuardFerry`), which reads the
+                // beacon's active command target unconditionally.
+                if (route != nullptr) {
                     if (const PassabilityGrid* ferryGrid = gridFor(*current)) {
                         (void)routeUnit(slot, route->targetX(), route->targetZ(), store,
                                         terrain, *ferryGrid);

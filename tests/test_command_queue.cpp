@@ -3145,6 +3145,67 @@ TEST_CASE("C-183: a fueled transport guarding a ferry beacon flies the beacon ro
     REQUIRE(roster.store.orders()[carrier.index].active() != nullptr);
     CHECK(roster.store.orders()[carrier.index].active()->kind() == CommandKind::Guard);
 }
+TEST_CASE("C-183/C-348: a transport guarding an attack-move-routed beacon commits the leg",
+          "[guard][ferry]") {
+    // `C-348` names no route-kind restriction: the beacon carries the route's
+    // destination on its command, whatever kind that command is. The dispatch
+    // rung (CommandAdvance.cpp) must commit the leg for an AttackMove-routed
+    // beacon exactly as it does for Move/Ferry/UnloadTransport — otherwise
+    // the two passes disagree and the guard falls through to the leash hold.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef carrierDef;
+    carrierDef.name = "test_transport";
+    carrierDef.categories = {"AIR", "MOBILE", "TRANSPORTATION"};
+    carrierDef.motion = rm::unitdef::MotionType::Air;
+    carrierDef.canFly = true;
+    carrierDef.speedElmosPerSecond = 10.0f;
+    carrierDef.transport.transportClass = 6;
+    const rm::UnitTypeIndex carrierType = roster.addType(carrierDef);
+    rm::unitdef::UnitDef beaconDef;
+    beaconDef.name = "test_beacon";
+    beaconDef.categories = {"FERRYBEACON", "UNTARGETABLE"};
+    const rm::UnitTypeIndex beaconType = roster.addType(beaconDef);
+    const UnitId carrier = roster.add(carrierType, 30.0f, 30.0f, 0, 500.0f);
+    roster.store.motion()[carrier.index].canFly = true;
+    roster.store.motion()[carrier.index].airborne = true;
+    roster.store.motion()[carrier.index].fuelRatio = rm::sim::Fx::fromInt(1);
+    roster.store.motion()[carrier.index].fuelDrainPerTick = rm::sim::Fx::fromRatio(1, 5000);
+    const UnitId beacon = roster.add(beaconType, 30.0f, 30.0f, 0, 10.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+    std::vector<rm::sim::Construction> building;
+    // The beacon's route is an AttackMove, not a plain Move — same destination.
+    REQUIRE(rm::sim::applyCommand(CommandIssue{.source = 0, .id = rm::commandId(0, 1), .player = 0,
+                                                .kind = CommandKind::AttackMove, .units = {beacon},
+                                                .targetX = rm::sim::fxFromFloat(400.0f),
+                                                .targetZ = rm::sim::fxFromFloat(400.0f)},
+                                   roster.store, roster.catalog, players, armies, terrain,
+                                   [&grid](UnitId) { return &grid; }, roster.rate)
+                .accepted.size()
+            == 1);
+    const auto apply = [&](const CommandIssue& issue) {
+        return rm::sim::applyCommand(issue, roster.store, roster.catalog, players, armies,
+                                     terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                     &building);
+    };
+    REQUIRE(apply(CommandIssue{.source = 0, .id = rm::commandId(0, 2), .player = 0,
+                               .kind = CommandKind::Guard, .units = {carrier},
+                               .target = beacon}));
+
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building, nullptr, nullptr, nullptr, nullptr, armies);
+
+    // The ferry rung owns the tick: routed toward the drop, Guard still head.
+    CHECK(roster.store.motion()[carrier.index].moving);
+    REQUIRE(roster.store.orders()[carrier.index].active() != nullptr);
+    CHECK(roster.store.orders()[carrier.index].active()->kind() == CommandKind::Guard);
+}
+
 
 // --- Predicted times -------------------------------------------------------------
 //

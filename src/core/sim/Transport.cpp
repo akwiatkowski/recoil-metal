@@ -810,6 +810,11 @@ void advanceGuardFerry(UnitStore& store, const UnitCatalog& catalog, const Terra
     const Transform& beaconAt = store.transforms()[beacon.index];
     if (!order.transportAnchor()) {
         order.beginFerry({beaconAt.x, beaconAt.z});
+    } else {
+        // `C-413`: the beacon is re-derived from the head of the command queue on every
+        // call (`0x006d4160` reads only the first queue entry, no Unit field). The guard's
+        // route anchor follows the beacon unit's live position; the leg phase survives.
+        order.reanchorFerry({beaconAt.x, beaconAt.z});
     }
     // The drop is the beacon's own active command target — retail's beacon
     // unit carries the route's destination on its command. No command, or a

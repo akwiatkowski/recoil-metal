@@ -675,3 +675,25 @@ TEST_CASE("a transfer rebuilds transport attachments and carries manipulator sta
     CHECK(f.roster.store.manipulators()[newCarrier.index][0].slideBone == 7);
     CHECK(f.roster.store.boneHiddenAt(newCarrier.index, 9));
 }
+TEST_CASE("a captured unit keeps its custom name on the replacement", "[capture]") {
+    // `C-240` (`0x0074E1B1`-`0x0074E1CE`): the native transfer copies the
+    // custom name (`Unit+0x2CC`) onto the replacement through the `+0x6C`/`+0x68`
+    // getter/setter pair — a renamed unit keeps its name when captured.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.roster.store.setCustomName(target, "Bob"));
+    REQUIRE(f.capture(captor, target));
+    f.tick(120);
+    CHECK_FALSE(f.roster.store.alive(target));
+    const UnitId replacement = f.roster.store.idAt(target.index);
+    REQUIRE(f.roster.store.alive(replacement));
+    // The name is saved state too: a mid-transfer save keeps it across the
+    // round trip (SaveState v62).
+    const rm::sim::SaveState mid{.tick = 7, .units = f.roster.store.snapshot()};
+    const auto bytes = rm::sim::SaveState::encode(mid);
+    const auto back = rm::sim::SaveState::decode(bytes);
+    REQUIRE(back);
+    rm::sim::UnitStore reloaded(back->units);
+    CHECK(reloaded.customName(reloaded.idAt(replacement.index)) == "Bob");
+}

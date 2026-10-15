@@ -572,3 +572,56 @@ TEST_CASE("a mixed sea-and-sub group shares retail's sea counter", "[formation]"
     CHECK(seaFront == 2);
     CHECK(subFront == 7);
 }
+
+TEST_CASE("a grouped attack-move fills per-slot category ranks inside rows",
+          "[formation]") {
+    // Retail `AttackFormation` rows carry per-slot category ranks, not one filler
+    // per family (ART-S007 lua/formations.lua:191-197 `TwoRowAttackFormationBlock`):
+    // the 8-wide front row is all DFFirst, but the second row reads
+    // Util, AA, Shield, Art, Art, Shield, AA, Util — support hulls take the
+    // flanks there, not a second combat line. Nine tanks plus an engineer: the
+    // engineer owns the second row's leftmost Util flank (column 0 under the
+    // BlockBuilderLand centre-out walk), so the ninth tank drops to row two
+    // instead of holding the front line — never ahead of a tank in row one is
+    // retail's walk, not a front-row guarantee for every tank.
+    // (TDD: fails — the intake fills families front-to-back, rank-blind.)
+    Fixture fix;
+    rm::unitdef::UnitDef engDef;
+    engDef.name = "test_engineer";
+    engDef.categories = {"LAND", "ENGINEER", "CONSTRUCTION", "TECH1"};
+    const rm::UnitTypeIndex engineer = fix.roster.addType(engDef);
+    std::vector<UnitId> group;
+    for (int i = 0; i < 9; ++i) {
+        group.push_back(fix.roster.add(fix.tank, 200.0f,
+                                       200.0f + 10.0f * static_cast<float>(i),
+                                       0, 500.0f));
+    }
+    const UnitId eng = fix.roster.add(engineer, 200.0f, 300.0f, 0, 500.0f);
+    group.push_back(eng);
+    const rm::sim::ApplyCommandResult result =
+        fix.issueMove(group, 900.0f, 245.0f, CommandKind::AttackMove);
+    REQUIRE(result.accepted == group);
+    const auto& engEntries = fix.roster.store.orders()[eng.index].entries();
+    REQUIRE(engEntries.size() == 1);
+    // The Util flank is column 0 of the 8-wide second row, one diameter behind
+    // the anchor: world -x under the exact-east facing.
+    CHECK(rm::test::asFloat(engEntries.front().targetX())
+          == Catch::Approx(892.0f).margin(0.01f));
+    std::size_t frontTanks = 0;
+    std::size_t backTanks = 0;
+    for (const UnitId member : group) {
+        if (member == eng) {
+            continue;
+        }
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        const float x = rm::test::asFloat(entries.front().targetX());
+        if (x == Catch::Approx(900.0f).margin(0.01f)) {
+            ++frontTanks;
+        } else if (x == Catch::Approx(892.0f).margin(0.01f)) {
+            ++backTanks;
+        }
+    }
+    CHECK(frontTanks == 8);
+    CHECK(backTanks == 1);
+}

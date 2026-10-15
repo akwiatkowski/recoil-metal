@@ -759,3 +759,51 @@ TEST_CASE("C-210: a civilian army stands outside the victory verdict",
     }
     CHECK_FALSE(armies[2].defeated);
 }
+
+TEST_CASE("C-408: a first defeat with two alliances left decides nothing",
+          "[fa-match]") {
+    // `victory.lua`'s defeat arm calls `CallEndGame(false, true)` — stats
+    // submitted, `gameOver` untouched — so the first fall in a three-way
+    // decides nothing: two alliances still stand, there is no pending winner,
+    // no draw, and the match plays on.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex commander = roster.addType(commanderDef());
+    (void)roster.add(commander, 0.0f, 0.0f, 0, 12000.0f);
+    (void)roster.add(commander, 400.0f, 0.0f, 1, 12000.0f);
+    const UnitId doomed = roster.add(commander, 800.0f, 0.0f, 2, 12000.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(3);
+    std::vector<rm::sim::Economy> economies(3);
+    std::vector<rm::sim::Projectile> projectiles;
+    const std::vector<int> commandersEver{1, 1, 1};
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .commandersEver = commandersEver};
+    const rm::sim::TickRate rate{};
+    const rm::TickCount pollTicks = rate.ticks(rm::sim::seconds(3.0f));
+    const rm::TickCount confirmTicks = rate.ticks(rm::sim::seconds(15.0f));
+
+    roster.health(doomed).current = rm::sim::Mag{};
+    TickReport report{};
+    for (rm::TickCount tick = 0; tick < pollTicks; ++tick) {
+        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    REQUIRE(armies[2].defeated);
+    CHECK_FALSE(report.matchEnded);
+    CHECK_FALSE(match.over);
+    CHECK_FALSE(match.pendingWinner.has_value());
+    CHECK_FALSE(report.winner.has_value());
+
+    // Fifteen seconds of two alliances standing still decides nothing — the
+    // defeat arm never ends the match on its own.
+    for (rm::TickCount tick = 0; tick < confirmTicks; ++tick) {
+        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    CHECK_FALSE(match.over);
+    CHECK_FALSE(report.matchEnded);
+    CHECK_FALSE(match.pendingWinner.has_value());
+}

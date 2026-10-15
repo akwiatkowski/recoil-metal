@@ -1236,6 +1236,7 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
 
     struct Candidate {
         UnitIndex slot;
+        ReachClass reach;
         std::size_t row;
         std::uint64_t score;
     };
@@ -1399,7 +1400,7 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
                 score *= 4;
             }
         }
-        return Candidate{.slot = slot, .row = row, .score = score};
+        return Candidate{.slot = slot, .reach = reach, .row = row, .score = score};
     };
 
     // An incumbent is evaluated before the grid walk, so insertion order cannot dislodge it on
@@ -1420,9 +1421,18 @@ std::optional<UnitId> nearestTarget(std::array<Fx, 3> from, int fromArmy,
     const Fx baseRange = weaponMaxRangeFor(store, *catalog, shooter, weapon);
     const Fx queryRange = intel != nullptr ? baseRange + Fx::fromInt(kRadarErrorElmos)
                                            : baseRange;
+    const bool hasIncumbent = best.has_value();
     for (const UnitIndex slot : store.space().within(from[0], from[2], queryRange)) {
         const std::optional<Candidate> candidate = classifyCandidate(slot);
         if (!candidate) {
+            continue;
+        }
+        // `C-091` (`0x005de9f9`-`0x005dea7f`): selection orders (class, row,
+        // score, incumbency) — a candidate whose class is worse than the
+        // INCUMBENT's is dropped outright, before row or score are compared.
+        // Fresh challengers compare among themselves by row then score only:
+        // the gate is incumbent-relative, not a running best-class filter.
+        if (hasIncumbent && best && candidate->reach > best->reach) {
             continue;
         }
         if (!best || candidate->row < best->row

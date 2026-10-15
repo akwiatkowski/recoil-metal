@@ -207,6 +207,8 @@ public:
         std::vector<std::vector<Manipulator>> manipulators;
         std::vector<std::vector<std::uint64_t>> boneHidden;
         std::vector<std::map<std::string, std::string>> enhancements;
+        /// `C-240`'s per-slot custom names (`Unit+0x2CC`) — see `customName`.
+        std::vector<std::string> customNames;
     };
 
     UnitStore() = default;
@@ -541,6 +543,15 @@ public:
         return slot < boneHidden_.size() ? std::span<const std::uint64_t>{boneHidden_[slot]}
                                          : std::span<const std::uint64_t>{};
     }
+    /// `C-240`'s custom name — retail's `Unit+0x2CC` string, written by
+    /// `Unit:SetCustomName` and copied onto the replacement by the native
+    /// transfer (`0x0074E1B1`-`0x0074E1CE`). An empty name means "unnamed":
+    /// the unit view falls back to its blueprint name. Live-unit state, like
+    /// the manipulator list: a newcomer spawns unnamed.
+    [[nodiscard]] bool setCustomName(UnitId unit, std::string name) noexcept;
+    /// The custom name, empty when the unit was never renamed. A dead handle
+    /// reads empty — the name left with the unit, not the slot.
+    [[nodiscard]] std::string customName(UnitId unit) const noexcept;
 
     /// Shared repeat/count operations. Exhaustion removes this exact object from every member
     /// queue, matching retail's cross-queue `DecreaseCommandCount` path.
@@ -642,6 +653,8 @@ private:
     /// `C-303`'s bone-visibility masks, one word-vector per slot — see
     /// `setBoneHidden`. A set bit means the bone is hidden.
     std::vector<std::vector<std::uint64_t>> boneHidden_;
+    /// `C-240`'s per-slot custom names — see `setCustomName`.
+    std::vector<std::string> customNames_;
 
     CommandSerial nextCommandSerial_ = 0;
     std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters_{};

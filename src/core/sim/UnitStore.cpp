@@ -39,6 +39,7 @@ UnitStore::UnitStore(const Snapshot& snapshot)
        lifetimeRemainingTicks_(snapshot.lifetimeRemainingTicks),
        manipulators_(snapshot.manipulators),
        boneHidden_(snapshot.boneHidden),
+       customNames_(snapshot.customNames),
        nextCommandSerial_(snapshot.nextCommandSerial),
         nextCommandCounters_(snapshot.nextCommandCounters) {
     std::vector<std::shared_ptr<SharedCommand>> mutableCommands;
@@ -98,6 +99,9 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     // the pre-manipulator defaults, so the resize recovers both.
     manipulators_.resize(transforms_.size());
     boneHidden_.resize(transforms_.size());
+    // Older snapshots (and `Snapshot{}` defaults) carry no names: unnamed is
+    // the default — a restored unit without a rename keeps its blueprint name.
+    customNames_.resize(transforms_.size());
     for (std::size_t child = 0; child < transforms_.size(); ++child) {
         if (parents_[child]) {
             if (deriveAttachmentHeights) {
@@ -156,6 +160,7 @@ UnitStore::Snapshot UnitStore::snapshot() const {
     saved.manipulators = manipulators_;
     saved.boneHidden = boneHidden_;
     saved.enhancements = enhancements_;
+    saved.customNames = customNames_;
     return saved;
 }
 
@@ -190,6 +195,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         attachmentHeights_.emplace_back();
         manipulators_.emplace_back();
         boneHidden_.emplace_back();
+        customNames_.emplace_back();
         attachmentParentBones_.emplace_back(kNoBone);
         attachmentSelfBones_.emplace_back(kNoBone);
         attachmentParentRest_.emplace_back();
@@ -232,6 +238,11 @@ UnitId UnitStore::spawn(const Spawn& request) {
     // state — the newcomer starts with no manipulators and every bone shown.
     manipulators_[slot].clear();
     boneHidden_[slot].clear();
+    // `C-240`: the name is live-unit state — a recycled slot never inherits
+    // its tombstone's rename.
+    if (slot < customNames_.size()) {
+        customNames_[slot].clear();
+    }
     attachmentParentRest_[slot] = {};
     attachmentParentRestHeights_[slot] = {};
     attachmentSelfRest_[slot] = {};
@@ -814,6 +825,24 @@ bool UnitStore::boneHiddenAt(UnitIndex slot, std::int32_t bone) const noexcept {
     const std::vector<std::uint64_t>& mask = boneHidden_[slot];
     return word < mask.size()
         && (mask[word] & (std::uint64_t{1} << (static_cast<std::size_t>(bone) % 64))) != 0;
+}
+
+bool UnitStore::setCustomName(UnitId unit, std::string name) noexcept {
+    if (!alive(unit)) {
+        return false;
+    }
+    if (unit.index >= customNames_.size()) {
+        customNames_.resize(static_cast<std::size_t>(unit.index) + 1);
+    }
+    customNames_[unit.index] = std::move(name);
+    return true;
+}
+
+std::string UnitStore::customName(UnitId unit) const noexcept {
+    if (!alive(unit) || unit.index >= customNames_.size()) {
+        return {};
+    }
+    return customNames_[unit.index];
 }
 
 } // namespace rm::sim

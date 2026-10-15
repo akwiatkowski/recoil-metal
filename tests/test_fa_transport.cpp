@@ -1397,3 +1397,77 @@ TEST_CASE("C-458: unload lands in slot order, single cargo at the keel",
     CHECK(solo.transform(lone).x == solo.transform(soloTransport).x);
     CHECK(solo.transform(lone).z == solo.transform(soloTransport).z);
 }
+
+TEST_CASE("C-413: a guard ferry tracks the beacon's live position, not a stored point",
+          "[fa-transport]") {
+    // `Unit:GetTransportFerryBeacon` (`0x006d4160`) re-derives the beacon from the head of
+    // the command queue on every call — no Unit field is consulted, so re-ordering the head
+    // changes the beacon. The player-visible half: a transport holding at a beacon follows
+    // the beacon when IT moves, and a squad sent to the beacon's new spot still boards —
+    // instead of sitting on the stored point where the route started while the cargo's
+    // move retires at the live pickup.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const rm::UnitTypeIndex beaconType = roster.addType(beaconDef());
+    const UnitId transport = landedTransport(roster, transportType, 30.0f, 30.0f);
+    const UnitId beacon = roster.add(beaconType, 30.0f, 30.0f, 0, 10.0f);
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+
+    // The beacon carries no route command, so the guard holds at the pickup.
+    REQUIRE(rm::sim::applyCommand(
+                CommandIssue{.source = 0,
+                             .id = rm::commandId(0, 1),
+                             .player = 0,
+                             .kind = CommandKind::Guard,
+                             .units = {transport},
+                             .target = beacon},
+                roster.store, roster.catalog, players, armies, terrain, gridFor,
+                roster.rate)
+                .accepted.size()
+            == 1);
+
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    for (int i = 0; i < 120; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    }
+    // Holding at the pickup: still near where the route started.
+    {
+        const Fx dx = roster.transform(transport).x - rm::sim::fxFromFloat(30.0f);
+        const Fx dz = roster.transform(transport).z - rm::sim::fxFromFloat(30.0f);
+        REQUIRE(dx * dx + dz * dz
+                <= rm::sim::kFerryPickupRadius * rm::sim::kFerryPickupRadius * 4);
+    }
+
+    // The beacon itself moves — retail's beacon is a live unit. The cargo is sent to the
+    // beacon's NEW spot, the way a player re-points the pickup by dragging the beacon.
+    roster.transform(beacon).x = rm::sim::fxFromFloat(150.0f);
+    roster.transform(beacon).z = rm::sim::fxFromFloat(150.0f);
+    roster.reindex();
+    const UnitId cargo = roster.add(cargoType, 150.0f, 130.0f, 0, 500.0f);
+    REQUIRE(rm::sim::applyCommand(moveIssue(cargo, 150.0f, 150.0f, 2), roster.store,
+                                  roster.catalog, players, armies, terrain, gridFor,
+                                  roster.rate)
+                .accepted.size()
+            == 1);
+
+    // The beacon still carries no route command (drop == pickup), so a boarded carrier
+    // holds its cargo: boarding is the whole assertion.
+    bool boarded = false;
+    for (int i = 0; i < 6000 && !boarded; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        boarded = roster.motion(cargo).attached;
+    }
+    CHECK(boarded);
+}

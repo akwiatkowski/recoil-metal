@@ -342,6 +342,26 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     return 20;
 }
 
+/// ART-S007 `AttackFormation`'s land half fills per-slot category ranks, not one
+/// filler per family (formations.lua:192-197 `TwoRowAttackFormationBlock`): the
+/// 8-wide front row is all DFFirst, but the second row reads Util, AA, Shield,
+/// Art, Art, Shield, AA, Util. `BlockBuilderLand` visits columns centre-outward
+/// (`GetColSpot`, formations.lua:915-930), so physical column 1 takes the row's
+/// leftmost rank. Only the <=16-member two-row land block carries ranks here;
+/// wider attack blocks stay deferred with the rest of C-178's category order.
+[[nodiscard]] int attackLandSlotRank(std::size_t row, std::size_t column) noexcept {
+    // Row 0 is all DFFirst: every combat family outranks support there.
+    // Columns are 1-based physical slots; row 1 in left-to-right order reads
+    // Util, AA, Shield, Art, Art, Shield, AA, Util. Combat families share rank
+    // 1; support ranks run lower (more negative = earlier) so each flank fills
+    // before any combat spillover.
+    if (row != 1) {
+        return 1;
+    }
+    constexpr int kSecondRowRanks[8] = {-4, -2, -1, 0, 0, -1, -2, -4};
+    return column >= 1 && column <= 8 ? kSecondRowRanks[column - 1] : 1;
+}
+
 /// ART-S007 `GrowthFormation`'s naval half (formations.lua:709-721) selects
 /// these land-independent surface widths by the shared sea counter: three-wide
 /// up to nine, five-wide up to twenty-five, seven-wide past that
@@ -941,6 +961,41 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             landMembers.push_back(unit);
         }
     }
+    // Retail `AttackFormation` land blocks fill per-slot category ranks inside
+    // each row (`BlockBuilderLand`, formations.lua:838-913): the <=16-member
+    // two-row block reads Util, AA, Shield, Art, Art, Shield, AA, Util across
+    // its second row (formations.lua:192-197), so support hulls take the flanks
+    // there instead of a second combat line. Replay that walk by ordering land
+    // members into slot order — row-major over the centre-out column walk — keyed
+    // by each slot's rank, so an engineer owns the Util flank before any combat
+    // spillover reaches row two. Other domains and wider blocks keep intake order.
+    if (isAttackOrder && landMembers.size() > 8 && landMembers.size() <= 16) {
+        // `GetColSpot` (formations.lua:915-930) maps the visit order to physical
+        // slots: visit c takes physical column (half - floor(c/2)) on odd visits
+        // and (half + c/2) on even visits — for width 8: 4,5,3,6,2,7,1,8.
+        constexpr std::size_t kWalk[8] = {4, 5, 3, 6, 2, 7, 1, 8};
+        std::vector<UnitId> ranked;
+        ranked.reserve(landMembers.size());
+        std::vector<UnitId> pool = landMembers;
+        for (std::size_t slot = 0; slot < landMembers.size(); ++slot) {
+            const std::size_t row = slot / 8;
+            const std::size_t column = kWalk[slot % 8];
+            const int want = attackLandSlotRank(row, column);
+            auto pick = pool.end();
+            for (auto it = pool.begin(); it != pool.end(); ++it) {
+                if (formationClass(*it).first == want) {
+                    pick = it;
+                    break;
+                }
+            }
+            if (pick == pool.end()) {
+                pick = pool.begin();
+            }
+            ranked.push_back(*pick);
+            pool.erase(pick);
+        }
+        landMembers = std::move(ranked);
+    }
     // Retail `BlockBuilderLand` multiplies every sea/sub slot by the call-site
     // `spacing` argument: `GrowthFormation` passes 1.5 for both sea and sub
     // lists (formations.lua:722-723) and `AttackFormation` passes 1.5 too
@@ -1434,7 +1489,15 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                 const Fx slotSpacing = (isSubMember || isSeaMember) ? seaSpacing : landSpacing;
                 const std::size_t formationRank = static_cast<std::size_t>(
                     std::ranges::find(domainList, unit) - domainList.begin());
-                const std::size_t column = formationRank % domainWidth;
+                // Retail visits slots centre-outward (`GetColSpot`), but the
+                // engine lays them left-to-right: visit c of an 8-wide row
+                // lands on physical column 4,5,3,6,2,7,1,8. Un-walk the rank
+                // so the offset math below keeps its left-to-right columns.
+                constexpr std::size_t kUnwalk[8] = {6, 4, 2, 0, 1, 3, 5, 7};
+                const std::size_t visit = formationRank % domainWidth;
+                const std::size_t column = domainWidth == 8
+                                               ? kUnwalk[visit]
+                                               : visit;
                 const std::size_t row = formationRank / domainWidth;
                 const Fx radius = store.motion()[unit.index].radiusElmos;
                 const Fx diameter = Fx::fromRaw(saturate(FxWide{radius.raw()} * 2));
