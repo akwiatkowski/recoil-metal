@@ -215,12 +215,6 @@ public:
         transportAnchor_ = beacon;
         transportPhase_ = TransportPhase::ToBeacon;
     }
-    /// Re-points a live ferry route at a moved beacon without restarting its
-    /// leg: `C-413` re-derives the beacon from the queue head on every call,
-    /// so a guard ferry follows the beacon unit's current position while the
-    /// phase (`Loading`, `ToDrop`) survives. A `Ferry` order's own anchor has
-    /// no live source and keeps `beginFerry`'s capture.
-    void reanchorFerry(std::array<Fx, 2> beacon) noexcept { transportAnchor_ = beacon; }
 
     /// `C-190`'s mobile-build retry counter — retail's `task+0xb4`, which
     /// `CUnitMobileBuildTask` state 3 reads as "give up after 10". Lives on the

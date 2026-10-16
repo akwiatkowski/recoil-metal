@@ -328,6 +328,43 @@ TEST_CASE("C-279/C-285: sonar hears a hull but never identifies it", "[fa-intel]
           == rm::sim::ContactKind::Sonar);
     CHECK(intel.hasSeenEver(0, boat));
 }
+TEST_CASE("C-279: a dead sonar contact lingers as a sonar blip", "[fa-intel]") {
+    // Sonar memory, the radar rule's sibling: a submerged hull heard on sonar
+    // alone leaves a last-known sonar blip behind when it dies — detection
+    // without identification, even in death. A retained sonar return projects
+    // as Sonar, never as radar or a sighting.
+    rm::unitdef::UnitDef listening = seer(0.0f, 0.0f, 400.0f);
+    rm::unitdef::UnitDef hull;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex ear = catalog.add(&listening);
+    const rm::UnitTypeIndex boat = catalog.add(&hull);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, ear, 0, 200.0f, 200.0f);
+    const rm::sim::UnitId diver = place(store, boat, 1, 300.0f, 200.0f);
+    store.motion()[diver.index].submersible = true;
+    store.motion()[diver.index].submerged = true;
+
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, diver.index, store, catalog, armies, intel)
+            == rm::sim::ContactKind::Sonar);
+
+    store.kill(diver);
+    intel.update(store, catalog, armies, nullptr);
+
+    const auto contacts = seenBy(0, store, catalog, armies, intel);
+    const auto blip = std::ranges::find_if(
+        contacts, [diver](const rm::sim::Contact& contact) { return contact.unit == diver; });
+    REQUIRE(blip != contacts.end());
+    CHECK(blip->kind == rm::sim::ContactKind::Sonar);
+    CHECK(blip->maybeDead);
+}
 TEST_CASE("C-279: a seabed unit is a sonar contact, never radar or vision", "[fa-intel]") {
     // The layer byte's other half: retail's flag computation (`0x005D1E30`)
     // routes `layer ∈ {Seabed, Sub}` targets to sonar alone (`0x005C83C0`'s

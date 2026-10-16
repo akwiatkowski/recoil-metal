@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 
 #include <fstream>
 #include <string>
@@ -90,6 +91,45 @@ template <typename Exists, typename FromGamePath>
     }
     if (const std::optional<std::string_view> cls = table->stringAt("ScriptClass")) {
         blueprint.scriptClass = *cls;
+    }
+    // `C-287`: the blocking footprint — the top-level `Footprint.SizeX/Z` pair
+    // the COGrid placement reads, plus its `OccupancyCaps` layer mask. 91 of the
+    // 92 footprinted shipped props carry the block at top level; one DevTest prop
+    // (`Platpipes_01`) nests it under `Physics`, so both sites are read with the
+    // top-level one winning. Sizes ceil like the unit loader's footprint squares
+    // (a fractional ogrid still claims its whole square); caps stays -1 when no
+    // block is stated at all, so "unstated" never collapses into explicit zero.
+    // `Physics.BlockPath` rides alongside: 186 true / 140 false / 8 markers
+    // absent in the corpus, and absent reads false so editor markers block nothing.
+    if (const lua::Value* footprint = table->path("Footprint")) {
+        if (const std::optional<double> sizeX = footprint->numberAt("SizeX")) {
+            blueprint.footprintSquaresX = static_cast<int>(std::ceil(*sizeX));
+        }
+        if (const std::optional<double> sizeZ = footprint->numberAt("SizeZ")) {
+            blueprint.footprintSquaresZ = static_cast<int>(std::ceil(*sizeZ));
+        }
+        if (const std::optional<double> caps = footprint->numberAt("OccupancyCaps")) {
+            blueprint.occupancyCaps = static_cast<int>(*caps);
+        } else {
+            blueprint.occupancyCaps = 0;
+        }
+    } else if (const lua::Value* nested = table->path("Physics", "Footprint")) {
+        if (const std::optional<double> sizeX = nested->numberAt("SizeX")) {
+            blueprint.footprintSquaresX = static_cast<int>(std::ceil(*sizeX));
+        }
+        if (const std::optional<double> sizeZ = nested->numberAt("SizeZ")) {
+            blueprint.footprintSquaresZ = static_cast<int>(std::ceil(*sizeZ));
+        }
+        if (const std::optional<double> caps = nested->numberAt("OccupancyCaps")) {
+            blueprint.occupancyCaps = static_cast<int>(*caps);
+        } else {
+            blueprint.occupancyCaps = 0;
+        }
+    }
+    if (const lua::Value* physics = table->path("Physics")) {
+        if (const lua::Value* block = physics->find("BlockPath")) {
+            blueprint.blockPath = block->asBoolean().value_or(false);
+        }
     }
 
     // The LOD table decides how many levels there are, what each is painted with,

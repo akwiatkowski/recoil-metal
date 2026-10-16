@@ -684,8 +684,14 @@ end
 function __rm_faf_platoon_orders()
     local out = {}
     -- `__platoons` is a set (platoons are keys, values are `true`), so the
-    -- loop takes keys, not values.
+    -- loop takes keys, not values; drain in creation order like the port
+    -- (retail lockstep: `pairs` order is hash-address nondeterminism).
+    local serials = {}
     for platoon in pairs(__rm_faf.brains[0].__platoons or {}) do
+        serials[#serials + 1] = platoon
+    end
+    table.sort(serials, function(a, b) return (a.__serial or 0) < (b.__serial or 0) end)
+    for _, platoon in ipairs(serials) do
         for _, e in ipairs(platoon.__pendingOrders or {}) do
             local live = false
             for _, u in ipairs(platoonUnits(platoon)) do

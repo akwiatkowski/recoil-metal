@@ -426,7 +426,10 @@ TEST_CASE("C-183: a transport guarding a ferry beacon flies its route",
 
     // The beacon's own command carries the drop point — retail's beacon unit
     // holds the route's destination on its command.
-    REQUIRE(rm::sim::applyCommand(moveIssue(beacon, 80.0f, 80.0f, 1), roster.store,
+    auto routeIssue = moveIssue(beacon, 80.0f, 80.0f, 1);
+    SECTION("move-routed beacon") {}
+    SECTION("attack-move-routed beacon") { routeIssue.kind = CommandKind::AttackMove; }
+    REQUIRE(rm::sim::applyCommand(routeIssue, roster.store,
                                   roster.catalog, players, armies, terrain, gridFor,
                                   roster.rate)
                 .accepted.size()
@@ -1217,6 +1220,7 @@ namespace {
     def.canFly = true;
     def.speedElmosPerSecond = 12.0f;
     def.buildTime = rm::sim::magFromFloat(1.0f);
+    def.health = rm::sim::Mag::fromInt(100);  // live test aircraft, not a zero-HP corpse
     return def;
 }
 
@@ -1398,14 +1402,11 @@ TEST_CASE("C-458: unload lands in slot order, single cargo at the keel",
     CHECK(solo.transform(lone).z == solo.transform(soloTransport).z);
 }
 
-TEST_CASE("C-413: a guard ferry tracks the beacon's live position, not a stored point",
+TEST_CASE("C-413: replacing the guard queue head selects a new ferry beacon",
           "[fa-transport]") {
-    // `Unit:GetTransportFerryBeacon` (`0x006d4160`) re-derives the beacon from the head of
-    // the command queue on every call — no Unit field is consulted, so re-ordering the head
-    // changes the beacon. The player-visible half: a transport holding at a beacon follows
-    // the beacon when IT moves, and a squad sent to the beacon's new spot still boards —
-    // instead of sitting on the stored point where the route started while the cargo's
-    // move retires at the live pickup.
+    // C-413 (0x006d4160) selects the beacon through the queue head, not
+    // through a persistent Unit field. Replacing Guard must discard the old
+    // route's pickup/phase and let passengers board at the new beacon.
     const rm::HeightField field = flatField();
     const rm::sim::Terrain terrain{field};
     const rm::sim::PassabilityGrid grid =
@@ -1450,13 +1451,15 @@ TEST_CASE("C-413: a guard ferry tracks the beacon's live position, not a stored 
                 <= rm::sim::kFerryPickupRadius * rm::sim::kFerryPickupRadius * 4);
     }
 
-    // The beacon itself moves — retail's beacon is a live unit. The cargo is sent to the
-    // beacon's NEW spot, the way a player re-points the pickup by dragging the beacon.
-    roster.transform(beacon).x = rm::sim::fxFromFloat(150.0f);
-    roster.transform(beacon).z = rm::sim::fxFromFloat(150.0f);
-    roster.reindex();
+    const UnitId replacement = roster.add(beaconType, 150.0f, 150.0f, 0, 10.0f);
+    REQUIRE(rm::sim::applyCommand(
+                CommandIssue{.source = 0, .id = rm::commandId(0, 2), .player = 0,
+                             .kind = CommandKind::Guard, .units = {transport},
+                             .target = replacement},
+                roster.store, roster.catalog, players, armies, terrain, gridFor,
+                roster.rate).accepted.size() == 1);
     const UnitId cargo = roster.add(cargoType, 150.0f, 130.0f, 0, 500.0f);
-    REQUIRE(rm::sim::applyCommand(moveIssue(cargo, 150.0f, 150.0f, 2), roster.store,
+    REQUIRE(rm::sim::applyCommand(moveIssue(cargo, 150.0f, 150.0f, 3), roster.store,
                                   roster.catalog, players, armies, terrain, gridFor,
                                   roster.rate)
                 .accepted.size()

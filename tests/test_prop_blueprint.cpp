@@ -379,3 +379,77 @@ PropBlueprint {
     REQUIRE(blueprint->lods.size() == 1);
     CHECK(blueprint->lods[0].mesh.filename() == "Elsewhere_lod0.scm");
 }
+
+TEST_CASE("C-287: a prop blueprint yields its authored blocking footprint", "[fa-content]") {
+    // Retail's map-placed props take the top-level `Footprint.SizeX/Z` and register
+    // it on the COGrid so a unit walks around the prop (`C-287`). The corpus shape:
+    // 91 of 92 footprinted props carry `{ OccupancyCaps = 3 }` only (the rock/crystal
+    // shape), one DevTest prop carries `{ SizeX = 4, SizeZ = 4 }` nested under
+    // `Physics`, and 242 carry no block at all. `Physics.BlockPath` (186 true /
+    // 140 false / 8 markers absent) rides alongside.
+    const Sandbox box;
+    box.write("Rock_prop.bp", R"BP(
+PropBlueprint {
+    Display = { Mesh = { LODs = { { ShaderName = 'VertexNormal' } } } },
+    Footprint = { OccupancyCaps = 3 },
+    Physics = { BlockPath = true },
+    SizeX = 2, SizeY = 0.75, SizeZ = 3,
+}
+)BP");
+    box.touch("Rock_lod0.scm");
+    const auto rock = rm::prop::loadFile(box.root(), "/env/Test/Props/Rock_prop.bp");
+    REQUIRE(rock.has_value());
+    CHECK(rock->footprintSquaresX == 0);
+    CHECK(rock->footprintSquaresZ == 0);
+    CHECK(rock->occupancyCaps == 3);
+    CHECK(rock->blockPath);
+
+    // The crystal discriminator: explicit zero caps is "occupies no layer", not
+    // "unstated" (-1) — the three Crystalline crystals ship `OccupancyCaps = 0`.
+    box.write("Crystal_prop.bp", R"BP(
+PropBlueprint {
+    Display = { Mesh = { LODs = { { ShaderName = 'VertexNormal' } } } },
+    Footprint = { OccupancyCaps = 0 },
+    Physics = { BlockPath = true },
+    SizeX = 0.5, SizeY = 0.5, SizeZ = 1,
+}
+)BP");
+    box.touch("Crystal_lod0.scm");
+    const auto crystal = rm::prop::loadFile(box.root(), "/env/Test/Props/Crystal_prop.bp");
+    REQUIRE(crystal.has_value());
+    CHECK(crystal->occupancyCaps == 0);
+    CHECK(crystal->blockPath);
+
+    // The Platpipes shape: sizes nested under Physics, no caps — caps derives 0
+    // (explicit block, no mask) rather than staying -1 (no block at all).
+    box.write("Pipes_prop.bp", R"BP(
+PropBlueprint {
+    Display = { Mesh = { LODs = { { ShaderName = 'VertexNormal' } } } },
+    Physics = { BlockPath = true, Footprint = { SizeX = 4, SizeZ = 4 } },
+    SizeX = 1, SizeY = 1, SizeZ = 1,
+}
+)BP");
+    box.touch("Pipes_lod0.scm");
+    const auto pipes = rm::prop::loadFile(box.root(), "/env/Test/Props/Pipes_prop.bp");
+    REQUIRE(pipes.has_value());
+    CHECK(pipes->footprintSquaresX == 4);
+    CHECK(pipes->footprintSquaresZ == 4);
+    CHECK(pipes->occupancyCaps == 0);
+    CHECK(pipes->blockPath);
+
+    // No Footprint block at all (242 of 334): zeros with caps -1 (unstated), and
+    // an absent BlockPath reads false so editor markers block nothing.
+    box.write("Bush_prop.bp", R"BP(
+PropBlueprint {
+    Display = { Mesh = { LODs = { { ShaderName = 'VertexNormal' } } } },
+    Physics = { BlockPath = false },
+}
+)BP");
+    box.touch("Bush_lod0.scm");
+    const auto bush = rm::prop::loadFile(box.root(), "/env/Test/Props/Bush_prop.bp");
+    REQUIRE(bush.has_value());
+    CHECK(bush->footprintSquaresX == 0);
+    CHECK(bush->footprintSquaresZ == 0);
+    CHECK(bush->occupancyCaps == -1);
+    CHECK_FALSE(bush->blockPath);
+}

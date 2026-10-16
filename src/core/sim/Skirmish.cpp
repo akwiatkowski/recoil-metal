@@ -38,8 +38,8 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
         if (slot >= motion.size() || slot >= transforms.size()) {
             continue;
         }
-        if (motion[slot].radiusElmos <= Fx{}) {
-            continue;  // already retired on an earlier tick
+        if (!store.slotAlive(slot)) {
+            continue;  // already retired on an earlier tick, regardless of radius
         }
 
         report.died.push_back(Death{
@@ -48,10 +48,9 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
             .radiusElmos = motion[slot].radiusElmos,
         });
 
-        // EXACTLY ONCE PER DEATH, which is the property §7 P6.1's test asserts — and it is this
-        // loop's `radiusElmos > 0` guard that provides it, not anything about events. A corpse
-        // sits in its slot for the rest of the match; without the guard it would be reported
-        // every tick forever, which is both a wrong answer and an unbounded one.
+        // Exactly once per death: the handle is invalidated below after
+        // reporting. Radius is geometry, not lifecycle state; valid units
+        // with no collision volume still need death events and retirement.
         emit(events, Event{
                          .kind = EventKind::UnitDestroyed,
                          .unit = store.idAt(slot),

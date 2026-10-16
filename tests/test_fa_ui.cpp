@@ -410,6 +410,8 @@ TEST_CASE("C-345: the Ctrl+K key reaches self-destruct through the one sink", "[
     const rm::sim::UnitId tank = job.spawn(tankDef(), 300, 300);
     const std::vector<rm::sim::UnitId> selection{tank};
     auto runner = job.runner();
+    // A countdown test must keep ticking with no enemy army fielded.
+    runner.match.victoryMode = rm::sim::VictoryMode::Sandbox;
 
     REQUIRE(rm::app::submitCommand(job.scene, rm::sim::CommandIssue{
         .tick = 0,
@@ -423,5 +425,15 @@ TEST_CASE("C-345: the Ctrl+K key reaches self-destruct through the one sink", "[
     const auto armed = std::ranges::find_if(job.scene.selfDestructs,
         [&](const rm::sim::SelfDestructWork& work) { return work.unit == tank; });
     REQUIRE(armed != job.scene.selfDestructs.end());
-    CHECK(armed->remainingTicks == rm::app::gAppTickRate.ticks(rm::sim::seconds(5.0f)));
+    const auto countdown = rm::app::gAppTickRate.ticks(rm::sim::seconds(5.0f));
+    // advanceMatch already executed the issuing tick; it consumed one beat.
+    CHECK(armed->remainingTicks == countdown - 1);
+    for (rm::TickCount tick = 1; tick < countdown - 1; ++tick)
+        (void)rm::app::advanceMatch(runner, static_cast<int>(tick),
+            static_cast<float>(tick) / static_cast<float>(rm::app::gAppTickRate.ticksPerSecond()));
+    REQUIRE(job.scene.store.alive(tank));
+    REQUIRE(job.scene.selfDestructs.size() == 1);
+    CHECK(job.scene.selfDestructs.front().remainingTicks == 1);
+    (void)rm::app::advanceMatch(runner, static_cast<int>(countdown - 1), 5.0f);
+    CHECK_FALSE(job.scene.store.alive(tank));
 }

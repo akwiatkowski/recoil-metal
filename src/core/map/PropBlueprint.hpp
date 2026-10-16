@@ -104,6 +104,24 @@ struct Blueprint {
     /// convention covers nearly everything shipped.
     std::string scriptModule;
     std::string scriptClass;
+    /// `C-287`: the prop's authored blocking footprint in ogrids — the top-level
+    /// `Footprint.SizeX/Z` pair the COGrid placement reads so a unit walks around
+    /// the prop rather than through it. Zero both axes when the file states no
+    /// `Footprint` block (242 of 334 shipped prop blueprints): a footprint-less
+    /// prop blocks only its centre, and a wreck (no footprint at all) writes
+    /// nothing. One DevTest prop nests the block under `Physics` instead
+    /// (`Platpipes_01`); both sites are read, the top-level one winning.
+    int footprintSquaresX = 0;
+    int footprintSquaresZ = 0;
+    /// `C-287`: the authored layer mask — top-level `Footprint.OccupancyCaps`.
+    /// 88 of the 92 footprinted shipped props state 3 (Land|Air); the three
+    /// Crystalline crystals state 0 ("occupies no layer"). -1 when no `Footprint`
+    /// block is stated at all, so "unstated" stays distinct from explicit zero.
+    int occupancyCaps = -1;
+    /// Whether the prop blocks pathing — `Physics.BlockPath`. 186 of 334 shipped
+    /// props state true, 140 false, 8 editor markers omit it. False when
+    /// unauthored: defaulting true would strand units on invisible markers.
+    bool blockPath = false;
 
     /// Beyond this distance the prop is not drawn at all: the coarsest level's
     /// cutoff, which is the same thing said from the other end.

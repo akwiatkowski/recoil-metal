@@ -1702,3 +1702,80 @@ TEST_CASE("C-436: ScriptHost runs the shipped Enhancing loop on funded beats to 
     for (const auto& err : host.errors()) WARN("lua: " << err);
     CHECK(host.errors().empty());
 }
+
+TEST_CASE("C-228: ScriptHost runs the REAL EnhanceTask.lua with a moho stub base") {
+    // `C-228`/`C-388` (`0x00629530`): retail resolves an unregistered `Script`
+    // task name through the VFS as `/lua/sim/tasks/<TaskName>.lua` — not a
+    // registered inline source. This case mounts a scratch VFS carrying the
+    // REAL `EnhanceTask.lua` (copied verbatim from `build/re-fa/corpus`, which
+    // is gitignored and absent on fresh checkouts, hence SKIP) plus the real
+    // `ScriptTask.lua` base, and requires the host to run the shipped
+    // `OnCreate` -> `Stopping` -> `Enhancing` shape to `Done` on funded beats.
+    // The one retail precondition the host cannot meet is `ScriptTask.lua:58`'s
+    // `Class(moho.ScriptTask_Methods)` base: `moho` is an engine global, so the
+    // host seeds a stub `moho.ScriptTask_Methods` engine-object table the way
+    // the FAF sandbox seeds its `moho.*_methods` tables. Fail-first: the host
+    // has no `moho` global, so the real file errors with `attempt to index a
+    // nil value (global 'moho')` and the queue retires at once.
+    const std::filesystem::path corpus = std::filesystem::path{"build/re-fa/corpus"};
+    const std::filesystem::path taskFile =
+        corpus / "lua/lua/sim/tasks/EnhanceTask.lua";
+    const std::filesystem::path baseFile =
+        corpus / "mohodata/lua/sim/ScriptTask.lua";
+    if (!std::filesystem::exists(taskFile) || !std::filesystem::exists(baseFile)) {
+        SKIP(std::string{"requires extracted retail corpus at "} + corpus.string());
+    }
+    const std::filesystem::path scratch = std::filesystem::temp_directory_path()
+        / "rm-script-host-real-enhance";
+    std::filesystem::remove_all(scratch);
+    std::filesystem::create_directories(scratch / "lua/sim/tasks");
+    std::filesystem::copy_file(taskFile, scratch / "lua/sim/tasks/EnhanceTask.lua");
+    std::filesystem::copy_file(baseFile, scratch / "lua/sim/ScriptTask.lua");
+    rm::vfs::Vfs content;
+    content.mountDirectory(scratch);
+    rm::app::ScriptHost host{content};
+    // NOTE: no registerTask — the task resolves through the `C-388` VFS path.
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "real_enhance";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+    const std::string name = "AdvancedEngineering";
+    const std::vector<std::uint8_t> data{name.begin(), name.end()};
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "EnhanceTask",
+                              .scriptData = data},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    host.publishTaskFunding(unit, 1.0, 1.0);
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    auto advance = [&] {
+        return rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                       nullptr, nullptr, nullptr, nullptr, nullptr, armies,
+                                       nullptr, nullptr, &host);
+    };
+    REQUIRE(advance() == 1);
+    CHECK_FALSE(roster.store.orders()[unit.index].empty());
+    CHECK(host.taskWorkProgress(unit) == Catch::Approx(0.1));
+    int beats = 0;
+    while (!roster.store.orders()[unit.index].empty() && beats < 12) {
+        REQUIRE(advance() == 0);
+        ++beats;
+    }
+    CHECK(roster.store.orders()[unit.index].empty());
+    CHECK(host.taskWorkProgress(unit) == Catch::Approx(0.0));
+    for (const auto& err : host.errors()) WARN("lua: " << err);
+    CHECK(host.errors().empty());
+    std::filesystem::remove_all(scratch);
+}

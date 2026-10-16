@@ -32,6 +32,19 @@ constexpr const char* kBootstrap = R"lua(
 -- present. Retail also kills the old `Main` thread and forks the new state's
 -- `Main` here; this host has no threads (`ForkThread`/`WaitFor` live in the
 -- FAF sandbox), so `Main` is ignored.
+-- `moho` engine-method tables (`C-228`/`C-388`): retail's `ScriptTask.lua:58`
+-- runs `Class(moho.ScriptTask_Methods)` — `moho` is an engine global, so the
+-- host seeds a stub table carrying an (empty) metatable that marks it an
+-- engine object, the way the FAF sandbox seeds its `moho.*_methods` tables
+-- (`src/app/FafAi.cpp`, `kEngineObjects`). The stub contributes no methods:
+-- the task natives arrive from the host's class/instance stamping below.
+-- `table.getn` (Lua 5.0): `class.lua:77` captures it at load; 5.4 dropped
+-- it. Same floor as the FAF sandbox's `kDialectShims`.
+table.getn = table.getn or function(t) return #t end
+local __rm_engineMeta = {}
+moho = {
+    ScriptTask_Methods = setmetatable({}, __rm_engineMeta),
+}
 local ClassTag = {}
 function Class(...)
     local bases = {...}
@@ -90,16 +103,40 @@ local function importModule(path)
     if modules[path] then return modules[path] end
     local source = __rm_read(path)
     if not source then error('missing script module: '..path) end
-    local env = setmetatable({}, {__index = _G})
-    env.import = importModule
+    -- The module env falls back to `_G` (`Class`, `State`, `ChangeState`,
+    -- `moho`, `SecondsPerTick`, `__rm_iter`, `table.getn` all live there), so
+    -- shipped `import` chains resolve host globals the same way a file loaded
+    -- straight into the global env would. `import` itself is pinned on the
+    -- env so nested `import(...)` calls inside the loaded chunk keep working.
+    -- The loaded module's globals (`ScriptTask`, `TASKSTATUS`, `AIRESULT`,
+    -- `EnhanceTask`) stay on the env table, which is what `import` returns —
+    -- so the importer's `local X = import(...).X` reads them. They are ALSO
+    -- mirrored onto `_G`: retail's task chunks run in the shared global env,
+    -- and sibling hooks concatenated by `C-311` may reference each other's
+    -- globals without importing.
+    local env = setmetatable({ import = importModule }, {__index = _G})
     modules[path] = env
+    setmetatable(env, {__index = _G, __newindex = _G})
     local chunk, why = load(source, '@'..path, 't', env)
+    setmetatable(env, {__index = _G})
     if not chunk then modules[path] = nil; error(why) end
     local ok, why = pcall(chunk)
     if not ok then modules[path] = nil; error(why) end
     return env
 end
 import = importModule
+
+-- Bare-table `for ... in <table>` is legal LuaPlus and the corpus does it
+-- 1,134 times (`class.lua`'s own object model is built on it). The load-path
+-- rewrite wraps every generic-for in-list in `__rm_iter(...)`, which passes
+-- a function triple straight through and turns a bare table into
+-- `next, t, nil` (same shim as the FAF sandbox's `kDialectShims`).
+function __rm_iter(f, s, v)
+    if type(f) == 'table' then
+        return next, f, nil
+    end
+    return f, s, v
+end
 
 -- `doscript` is the same `C-311` hook-aware concat as `import`, run in the
 -- caller's environment rather than a fresh module one (`C-311`:
@@ -652,14 +689,17 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
         lua_settop(lua, 0);
         return out;
     }
+    // Run the chunk. Lua 5.4's default chunk env is `_G`, so `TypeClass = ...` lands
+    // there and `lua_getglobal` will find it below. Shipped task files use
+    // `import(...)` for their own bases (`EnhanceTask.lua` imports
+    // `ScriptTask.lua`); the bootstrap publishes that global, so no per-chunk
+    // module env is needed here.
     if (luaL_loadbuffer(lua, effectiveSource.data(), effectiveSource.size(),
                         effectiveChunkName.c_str()) != LUA_OK) {
         impl_->errors.emplace_back("load failed: " + toString(lua, -1));
         lua_settop(lua, 0);
         return out;
     }
-    // Run the chunk. Lua 5.4's default chunk env is `_G`, so `TypeClass = ...` lands
-    // there and `lua_getglobal` will find it below.
     if (lua_pcall(lua, 0, 0, 0) != LUA_OK) {
         impl_->errors.emplace_back("chunk error: " + toString(lua, -1));
         lua_settop(lua, 0);
@@ -667,10 +707,23 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
     }
     lua_settop(lua, 0);  // drop host/instances/tasks; construction starts clean
 
+    // Most task chunks declare their own `TypeClass`, which the host reads
+    // back here. Real `EnhanceTask.lua` does NOT — it declares `EnhanceTask`
+    // and leaves `TypeClass` to the retail loader's `TypeClass = EnhanceTask`
+    // postfix (`C-388`). Fall back to the `import` return: the task chunk ran
+    // in a module env, so its last `import('/lua/sim/ScriptTask.lua')` return
+    // is long gone — instead re-import the task path and read the class the
+    // chunk's globals named (the chunk mirrored them onto `_G`, so the global
+    // matching the task name is the class).
     lua_getglobal(lua, "TypeClass");
     if (!lua_istable(lua, -1)) {
-        // The chunk ran but did not bind `TypeClass` to a table — report what `_G` has
-        // so the test can debug without attaching a debugger.
+        lua_pop(lua, 1);
+        lua_getglobal(lua, std::string{task}.c_str());
+    }
+    if (!lua_istable(lua, -1)) {
+        // The chunk ran but bound neither `TypeClass` nor the task-named
+        // global — report what `_G` has so the test can debug without
+        // attaching a debugger.
         std::string details = "source does not declare TypeClass";
         if (lua_isnil(lua, -1)) {
             lua_pop(lua, 1);

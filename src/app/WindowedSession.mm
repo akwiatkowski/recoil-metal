@@ -754,6 +754,7 @@ int runWindowed(const Session& session) {
         std::vector<const rm::unitdef::UnitDef*> commandSelection;
         // Pause flags aligned with `commandSelection` — the production toggle's cell
         // lighting and inspector card read them; rebuilt each frame beside it.
+        std::vector<std::uint8_t> productionPaused;
         // Sim-side script-bit masks aligned with `commandSelection` (`C-369`):
         // a set bit means that feature is OFF — the rack lighting and the
         // toggle inspector cards read them; rebuilt each frame beside it.
@@ -2608,6 +2609,7 @@ int runWindowed(const Session& session) {
                     commandEngaged[rackSlot] = lit[*cell.toggle];
                     commandMixed[rackSlot] = split[*cell.toggle];
                 }
+            }
             // Auto-build lights a silo-build cell the way auto-expand lights AUTO MEX:
             // every silo record the cell covers is set to refill itself.
             for (std::size_t rackSlot = 0; rackSlot < commandPage.size(); ++rackSlot) {

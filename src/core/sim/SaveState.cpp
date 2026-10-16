@@ -217,6 +217,10 @@ constexpr std::uint32_t kVersion61 = 61;
 // the unit pose — a unit that was never renamed writes nothing, so older
 // saves decode with every unit unnamed.
 constexpr std::uint32_t kVersion62 = 62;
+// v63 adds the retained-blip sense byte (`C-279` sonar memory): a dead sonar
+// source resumes as Sonar, not radar. Pre-v63 saves decode with every
+// retained contact as radar — the only sense retention knew.
+constexpr std::uint32_t kVersion63 = 63;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1452,7 +1456,7 @@ void writePathService(PayloadWriter& w, const std::optional<PathService::Snapsho
 }
 
 void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state,
-                bool withExplored, bool withPlacements, bool withStyle) {
+                bool withExplored, bool withPlacements, bool withStyle, bool withBlipSense) {
     w.u8(state.has_value());
     if (!state) {
         return;
@@ -1472,6 +1476,11 @@ void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state,
             w.i32(contact.z.raw());
             w.u8(contact.maybeDead ? 1 : 0);
             w.u32(contact.deadTicks);
+            if (withBlipSense) {
+                // v63: the sense that confirmed the return — sonar resumes as
+                // Sonar, everything older reads as radar.
+                w.u8(contact.sonar ? 1 : 0);
+            }
         }
     }
     w.count(state->seenEver.size());
@@ -1519,7 +1528,8 @@ void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state,
 }
 
 [[nodiscard]] bool readIntel(PayloadReader& r, std::optional<Intel::Snapshot>& state,
-                             bool withExplored, bool withPlacements, bool withStyle) {
+                             bool withExplored, bool withPlacements, bool withStyle,
+                             bool withBlipSense) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) {
@@ -1551,6 +1561,12 @@ void writeIntel(PayloadWriter& w, const std::optional<Intel::Snapshot>& state,
             contact.x = Fx::fromRaw(x);
             contact.z = Fx::fromRaw(z);
             contact.maybeDead = dead != 0;
+            contact.sonar = false;
+            if (withBlipSense) {
+                std::uint8_t sense{};
+                if (!r.u8(sense) || sense > 1) return false;
+                contact.sonar = sense != 0;
+            }
         }
     }
     if (!r.count(alliances, 4)) return false;
@@ -2648,7 +2664,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion37) writePathService(payloadWriter, state.pathService);
     if (version >= kVersion37)
         writeIntel(payloadWriter, state.intel, version >= kVersion52, version >= kVersion59,
-                   version >= kVersion60);
+                   version >= kVersion60, version >= kVersion63);
     if (version >= kVersion42) writeProductionOverrides(payloadWriter, state.productionOverrides);
     if (version >= kVersion44) writeUnitPose(payloadWriter, state.units);
     if (version >= kVersion45) writeEffects(payloadWriter, state.effects);
@@ -2708,7 +2724,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion54 && version != kVersion55
                && version != kVersion56 && version != kVersion57
                && version != kVersion58 && version != kVersion59 && version != kVersion60
-               && version != kVersion61 && version != kVersion62)
+               && version != kVersion61 && version != kVersion62 && version != kVersion63)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2794,7 +2810,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     std::optional<Intel::Snapshot> intel;
     if (version >= kVersion37
         && !readIntel(reader, intel, version >= kVersion52, version >= kVersion59,
-                      version >= kVersion60))
+                      version >= kVersion60, version >= kVersion63))
         return std::nullopt;
     std::optional<std::vector<Resources>> productionOverrides;
     if (version >= kVersion42 && !readProductionOverrides(reader, productionOverrides)) {
@@ -2864,7 +2880,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion62);
+    return rm::sim::encode(state, kVersion63);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

@@ -253,7 +253,7 @@ void intelSquares(const IntelGrid& grid, const Terrain* terrain, VisionStyle sty
 inline constexpr int kVisionMipLevel = 1;
 inline constexpr int kRadarMipLevel = 2;
 
-/// A radar source's last confirmed position for one viewing alliance.
+/// A blip source's last confirmed position for one viewing alliance.
 ///
 /// This belongs to Intel rather than the source unit: once the source dies, the viewer still
 /// has a blip but cannot know whether that blip is a wreck or a live unit. Dead entries
@@ -278,6 +278,9 @@ struct RetainedRadarContact {
     bool maybeDead = false;
     /// Updates since the source died (or 0 while it lives). Past the linger, reaped.
     std::uint32_t deadTicks = 0;
+    /// The sense that last confirmed this return (`C-279` sonar memory):
+    /// a retained sonar return projects as Sonar, never as radar.
+    bool sonar = false;
 };
 
 // The pass: every unit's coverage, kept up to date as the match moves.

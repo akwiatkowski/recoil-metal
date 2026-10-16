@@ -811,6 +811,7 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                     feed(h, contact.z);
                     feed(h, contact.maybeDead);
                     feed(h, static_cast<std::size_t>(contact.deadTicks));
+                    feed(h, contact.sonar);
                 }
             }
         }
@@ -842,6 +843,13 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         feed(h, match.intel->intelRecovery().size());
         for (const TickCount ticks : match.intel->intelRecovery()) {
             feed(h, static_cast<std::uint64_t>(ticks));
+        }
+        // C-007's explored bitmap never goes back: a cell once seen stays
+        // explored after the seer dies, and it rides the save (v52), so the
+        // hash must cover what the save preserves. Fed unconditionally like
+        // the recovery counts above — an unconfigured intel feeds only sizes.
+        for (std::size_t alliance = 0; alliance < match.intel->alliances(); ++alliance) {
+            feedBytes(h, match.intel->exploredCells(static_cast<int>(alliance)));
         }
         // C-284's fog-of-war flag grants LOSNow outright when off, so it is
         // live targeting state like the latches above — and it rides the

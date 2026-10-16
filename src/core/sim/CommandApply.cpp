@@ -350,16 +350,37 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
 /// leftmost rank. Only the <=16-member two-row land block carries ranks here;
 /// wider attack blocks stay deferred with the rest of C-178's category order.
 [[nodiscard]] int attackLandSlotRank(std::size_t row, std::size_t column) noexcept {
-    // Row 0 is all DFFirst: every combat family outranks support there.
-    // Columns are 1-based physical slots; row 1 in left-to-right order reads
-    // Util, AA, Shield, Art, Art, Shield, AA, Util. Combat families share rank
-    // 1; support ranks run lower (more negative = earlier) so each flank fills
-    // before any combat spillover.
-    if (row != 1) {
-        return 1;
-    }
-    constexpr int kSecondRowRanks[8] = {-4, -2, -1, 0, 0, -1, -2, -4};
-    return column >= 1 && column <= 8 ? kSecondRowRanks[column - 1] : 1;
+    // Family IDs match formationClass below. Retail's complete fallback lists
+    // (formations.lua:91-97) matter: a slot accepts the next family when its
+    // preferred family is absent, rather than reserving holes in the row.
+    constexpr int kDirect = 1;
+    constexpr int kArtillery = 2;
+    constexpr int kAntiAir = 3;
+    constexpr int kShield = 4;
+    constexpr int kUtility = 6;
+    if (row != 1) return kDirect;
+    constexpr int kSecondRowRanks[] = {
+        kUtility, kAntiAir, kShield, kArtillery,
+        kArtillery, kShield, kAntiAir, kUtility};
+    return column >= 1 && column <= std::size(kSecondRowRanks)
+               ? kSecondRowRanks[column - 1] : kDirect;
+}
+
+/// Family-level projection of retail slot tables (formations.lua:91-97).
+/// IDs are formationClass's experimental/direct/artillery/AA/shield/build/
+/// utility/remaining families. Within-family tech order stays stable.
+[[nodiscard]] std::size_t attackLandFamilyPriority(int slotType, int family) noexcept {
+    constexpr int kDirect[] = {0, 1, 2, 3, 4, 5, 6, 7};
+    constexpr int kArtillery[] = {2, 3, 1, 4, 5, 6, 7, 0};
+    constexpr int kAntiAir[] = {3, 1, 2, 4, 5, 6, 7, 0};
+    constexpr int kShield[] = {4, 3, 2, 1, 5, 6, 7, 0};
+    constexpr int kUtility[] = {6, 3, 2, 1, 4, 5, 7, 0};
+    const auto& priorities = slotType == 2 ? kArtillery
+                             : slotType == 3 ? kAntiAir
+                             : slotType == 4 ? kShield
+                             : slotType == 6 ? kUtility : kDirect;
+    return static_cast<std::size_t>(
+        std::ranges::find(priorities, family) - std::begin(priorities));
 }
 
 /// ART-S007 `GrowthFormation`'s naval half (formations.lua:709-721) selects
@@ -969,7 +990,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     // members into slot order — row-major over the centre-out column walk — keyed
     // by each slot's rank, so an engineer owns the Util flank before any combat
     // spillover reaches row two. Other domains and wider blocks keep intake order.
-    if (isAttackOrder && landMembers.size() > 8 && landMembers.size() <= 16) {
+    if (isAttackOrder && landMembers.size() >= 5 && landMembers.size() <= 16) {
         // `GetColSpot` (formations.lua:915-930) maps the visit order to physical
         // slots: visit c takes physical column (half - floor(c/2)) on odd visits
         // and (half + c/2) on even visits — for width 8: 4,5,3,6,2,7,1,8.
@@ -981,16 +1002,11 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             const std::size_t row = slot / 8;
             const std::size_t column = kWalk[slot % 8];
             const int want = attackLandSlotRank(row, column);
-            auto pick = pool.end();
-            for (auto it = pool.begin(); it != pool.end(); ++it) {
-                if (formationClass(*it).first == want) {
-                    pick = it;
-                    break;
-                }
-            }
-            if (pick == pool.end()) {
-                pick = pool.begin();
-            }
+            // min_element keeps the first equal-priority member, preserving
+            // canonical and tech ordering within the chosen family.
+            const auto pick = std::ranges::min_element(pool, {}, [&](UnitId member) {
+                return attackLandFamilyPriority(want, formationClass(member).first);
+            });
             ranked.push_back(*pick);
             pool.erase(pick);
         }

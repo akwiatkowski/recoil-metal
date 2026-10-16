@@ -312,6 +312,41 @@ TEST_CASE("the fog-of-war flag changes the hash") {
     CHECK(withFog != hashMatch(fixture.store, match));
 }
 
+TEST_CASE("explored marks change the hash after coverage is gone") {
+    // C-007's bitmap rides the save (v52) but no hash reads it: a match
+    // whose seer died after seeing ground must hash differently from one
+    // that never saw it — even though both grids stand empty now.
+    Fixture fixture;
+    rm::unitdef::UnitDef seer;
+    seer.visionRadiusElmos = 150.0f;
+    const rm::UnitTypeIndex seerType = fixture.catalog.add(&seer);
+    rm::sim::MoveState motion = defaultMotionFor(0);
+    const rm::sim::UnitId scout = fixture.store.spawn({
+        .type = seerType,
+        .transform = {.x = rm::test::fx(100.0f), .z = rm::test::fx(100.0f)},
+        .motion = motion,
+        .health = {.current = rm::test::mag(100.0f), .maximum = rm::test::mag(100.0f)},
+    });
+    rm::sim::Intel remembered;
+    rm::sim::Intel neverSeen;
+    for (rm::sim::Intel* intel : {&remembered, &neverSeen}) {
+        intel->configure(2, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                         rm::sim::VisionStyle::ForgedAlliance);
+    }
+    remembered.update(fixture.store, fixture.catalog, fixture.armies, nullptr);
+    // Kill a COPY's scout, not the hashed store's: both hashes read the same
+    // live store, so only the explored bitmaps can separate them.
+    rm::sim::UnitStore widowed{fixture.store.snapshot()};
+    widowed.kill(widowed.idAt(scout.index));
+    remembered.update(widowed, fixture.catalog, fixture.armies, nullptr);
+    neverSeen.update(fixture.store, fixture.catalog, fixture.armies, nullptr);
+    rm::sim::Match match = fixture.match();
+    match.intel = &remembered;
+    const rm::StateHash historyHash = hashMatch(fixture.store, match);
+    match.intel = &neverSeen;
+    CHECK(historyHash != hashMatch(fixture.store, match));
+}
+
 TEST_CASE("shield power and recovery timers change the hash") {
     const auto hashWith = [](rm::sim::ShieldState shield) {
         Fixture fixture;

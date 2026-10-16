@@ -1088,34 +1088,17 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
             continue;
         }
 
-        // C-183's FERRY rung outranks the leash and every assist: a transport
-        // guarding a FERRYBEACON flies the beacon's route. The carrier-side
-        // loop itself lives in the transport pass (`advanceGuardFerry`), but
-        // the guard ladder owns the SAME tick: a fueled guard commits the leg
-        // toward the route's far end here — the beacon's own active command
-        // target (`C-348`'s route contract) — so the carrier moves the beat
-        // the guard order stands rather than waiting a tick or chasing the
-        // beacon with no command has no far end yet and yields like before.
+        // C-183's ferry rung outranks the leash and every assist. The
+        // transport pass below dispatch owns pickup/loading/drop phase and
+        // commits its movement in this same beat. Do not route directly to
+        // the drop here: that marks movement active before commitLeg can
+        // send an empty carrier to pickup, starving its waiting passengers.
         if (isGuardCommand(current->kind()) && store.alive(current->target())) {
             const unitdef::UnitDef* guardDef = catalog.def(store.typeAt(slot));
             const unitdef::UnitDef* beaconDef =
                 catalog.def(store.typeAt(current->target().index));
             if (guardDef != nullptr && guardDef->isTransport()
                 && beaconDef != nullptr && beaconDef->isFerryBeacon()) {
-                const QueuedCommand* route = orders[current->target().index].active();
-                // `C-348` names no route-kind restriction: the beacon carries
-                // the route's destination on its command, whatever kind that
-                // command is. The kind filter here once admitted only
-                // Move/Ferry/UnloadTransport; an AttackMove- or Patrol-routed
-                // beacon fell through to the leash hold, disagreeing with the
-                // carrier-side loop (`advanceGuardFerry`), which reads the
-                // beacon's active command target unconditionally.
-                if (route != nullptr) {
-                    if (const PassabilityGrid* ferryGrid = gridFor(*current)) {
-                        (void)routeUnit(slot, route->targetX(), route->targetZ(), store,
-                                        terrain, *ferryGrid);
-                    }
-                }
                 continue;
             }
         }

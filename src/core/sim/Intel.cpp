@@ -909,9 +909,9 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
     }
     reconPrimed_ = true;
 
-    // A radar return is knowledge owned by its VIEWER, not by the observed unit. Refresh the
-    // last known position while radar sees a live source; leave it behind briefly if that
-    // source dies, then reap it. A later generation in the same slot is concrete contrary
+    // A blip return is knowledge owned by its VIEWER, not by the observed unit. Refresh the
+    // last known position while radar or sonar sees a live source; leave it behind briefly if
+    // that source dies, then reap it. A later generation in the same slot is concrete contrary
     // evidence: retaining both would project one stale blip alongside the replacement forever.
     for (std::vector<RetainedRadarContact>& contacts : retainedRadarContacts_) {
         std::erase_if(contacts, [&store, slots](const RetainedRadarContact& contact) {
@@ -937,8 +937,9 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
             if (!store.slotAlive(slot)) {
                 continue;
             }
-            if (contactKindForUnit(alliance, slot, store, catalog, armies, *this)
-                != ContactKind::Radar) {
+            const std::optional<ContactKind> kind =
+                contactKindForUnit(alliance, slot, store, catalog, armies, *this);
+            if (!kind || (*kind != ContactKind::Radar && *kind != ContactKind::Sonar)) {
                 continue;
             }
 
@@ -950,12 +951,14 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
                         && contact.unit.generation == unit.generation;
                 });
             if (found == contacts.end()) {
-                contacts.push_back({.unit = unit, .x = at.x, .z = at.z});
+                contacts.push_back(
+                    {.unit = unit, .x = at.x, .z = at.z, .sonar = *kind == ContactKind::Sonar});
             } else {
                 found->x = at.x;
                 found->z = at.z;
                 found->maybeDead = false;
                 found->deadTicks = 0;
+                found->sonar = *kind == ContactKind::Sonar;
             }
         }
     }
@@ -1322,7 +1325,7 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
     }
 
     // A dead source cannot contribute to the live-slot projection above, but the alliance's
-    // retained radar knowledge still projects as a blip at its last confirmed position.
+    // retained blip knowledge still projects at its last confirmed position, in its own sense.
     for (const RetainedRadarContact& retained : intel.retainedRadarContacts(alliance)) {
         // A slot can be recycled after `Intel::update` and before this projection. The new
         // generation is decisive contrary evidence even before the next retained-contact pass.
@@ -1341,7 +1344,7 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
         contacts.push_back(Contact{.unit = retained.unit,
                                     .x = x,
                                     .z = z,
-                                    .kind = ContactKind::Radar,
+                                    .kind = retained.sonar ? ContactKind::Sonar : ContactKind::Radar,
                                     .maybeDead = retained.maybeDead});
     }
 }

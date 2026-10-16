@@ -601,6 +601,47 @@ TEST_CASE("C-552/v60: an intel save resumes under its saved coverage style", "[f
     resumed.scene.intel.restore(*saved->intel);
     CHECK(resumed.scene.intel.style() == rm::sim::VisionStyle::Recoil);
 }
+TEST_CASE("C-279/v63: a sonar blip's sense survives a save", "[fa-persist]") {
+    // The v63 retained-kind byte: a dead sonar source resumes as Sonar, not
+    // radar — the sense is knowledge, and the save carries it.
+    Scenario live;
+    rm::unitdef::UnitDef ear = tankDef();
+    ear.name = "test_ear";
+    ear.sonarRadiusElmos = 400.0f;
+    (void)live.spawn(ear, 300, 300, 0);
+    rm::unitdef::UnitDef hull = tankDef();
+    hull.name = "test_hull";
+    hull.motion = rm::unitdef::MotionType::SurfacingSub;
+    const rm::sim::UnitId diver = live.spawn(hull, 500, 300, 1);
+    live.scene.store.motion()[diver.index].submerged = true;
+    live.scene.intel.configure(2, rm::sim::fxFromFloat(live.field.widthElmos()),
+                               rm::sim::fxFromFloat(live.field.depthElmos()),
+                               rm::sim::VisionStyle::ForgedAlliance);
+    auto runner = live.runner();
+    runner.match.intel = &live.scene.intel;
+    runner.match.intel->update(live.scene.store, live.scene.catalog, runner.match.armies,
+                               nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, diver.index, live.scene.store, live.scene.catalog,
+                                         runner.match.armies, *runner.match.intel)
+            == rm::sim::ContactKind::Sonar);
+    live.scene.store.kill(diver);
+    runner.match.intel->update(live.scene.store, live.scene.catalog, runner.match.armies,
+                               nullptr);
+    REQUIRE_FALSE(runner.match.intel->retainedRadarContacts(0).empty());
+    REQUIRE(runner.match.intel->retainedRadarContacts(0).front().sonar);
+
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+        .tick = 2,
+        .random = runner.match.random.snapshot(),
+        .pathServiceBeats = runner.pathService.serviceBeats(),
+        .units = live.scene.store.snapshot(),
+        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+        .pathService = runner.pathService.snapshot(),
+        .intel = runner.match.intel->snapshot()}));
+    REQUIRE(saved);
+    REQUIRE(saved->intel.has_value());
+    CHECK(saved->intel->retained.front().front().sonar);
+}
 
 TEST_CASE("C-552/v60: the playable rect rides the economy save", "[fa-persist]") {
     // The v60 rect: automatic acquisition's scenario bounds gate targeting,

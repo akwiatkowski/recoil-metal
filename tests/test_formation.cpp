@@ -58,7 +58,7 @@ struct Fixture {
     Fixture() {
         rm::unitdef::UnitDef def;
         def.name = "test_tank";
-        def.categories = {"LAND", "DIRECTFIRE", "TECH1"};
+        def.categories = {"DIRECTFIRE", "LAND", "TECH1"};
         tank = roster.addType(def);
         rm::unitdef::UnitDef hull;
         hull.name = "test_frigate";
@@ -573,55 +573,74 @@ TEST_CASE("a mixed sea-and-sub group shares retail's sea counter", "[formation]"
     CHECK(subFront == 7);
 }
 
-TEST_CASE("a grouped attack-move fills per-slot category ranks inside rows",
+TEST_CASE("a short attack front falls back to construction units",
           "[formation]") {
-    // Retail `AttackFormation` rows carry per-slot category ranks, not one filler
-    // per family (ART-S007 lua/formations.lua:191-197 `TwoRowAttackFormationBlock`):
-    // the 8-wide front row is all DFFirst, but the second row reads
-    // Util, AA, Shield, Art, Art, Shield, AA, Util — support hulls take the
-    // flanks there, not a second combat line. Nine tanks plus an engineer: the
-    // engineer owns the second row's leftmost Util flank (column 0 under the
-    // BlockBuilderLand centre-out walk), so the ninth tank drops to row two
-    // instead of holding the front line — never ahead of a tank in row one is
-    // retail's walk, not a front-row guarantee for every tank.
-    // (TDD: fails — the intake fills families front-to-back, rank-blind.)
+    // Retail DFFirst's fallback includes Com (formations.lua:91): a short
+    // front is filled before the second row starts, even with engineers.
+    // Engineers are construction, not the Util radar/scout family (:38-41).
     Fixture fix;
     rm::unitdef::UnitDef engDef;
     engDef.name = "test_engineer";
-    engDef.categories = {"LAND", "ENGINEER", "CONSTRUCTION", "TECH1"};
+    engDef.categories = {"CONSTRUCTION", "ENGINEER", "LAND", "TECH1"};
     const rm::UnitTypeIndex engineer = fix.roster.addType(engDef);
     std::vector<UnitId> group;
-    for (int i = 0; i < 9; ++i) {
+    for (int i = 0; i < 4; ++i) {
         group.push_back(fix.roster.add(fix.tank, 200.0f,
                                        200.0f + 10.0f * static_cast<float>(i),
                                        0, 500.0f));
     }
-    const UnitId eng = fix.roster.add(engineer, 200.0f, 300.0f, 0, 500.0f);
+    const UnitId eng = fix.roster.add(engineer, 200.0f, 260.0f, 0, 500.0f);
     group.push_back(eng);
     const rm::sim::ApplyCommandResult result =
-        fix.issueMove(group, 900.0f, 245.0f, CommandKind::AttackMove);
+        fix.issueMove(group, 900.0f, 224.0f, CommandKind::AttackMove);
     REQUIRE(result.accepted == group);
     const auto& engEntries = fix.roster.store.orders()[eng.index].entries();
     REQUIRE(engEntries.size() == 1);
-    // The Util flank is column 0 of the 8-wide second row, one diameter behind
-    // the anchor: world -x under the exact-east facing.
+    // All five units fit the eight-wide front; no empty category slots.
     CHECK(rm::test::asFloat(engEntries.front().targetX())
-          == Catch::Approx(892.0f).margin(0.01f));
+          == Catch::Approx(900.0f).margin(0.01f));
     std::size_t frontTanks = 0;
-    std::size_t backTanks = 0;
     for (const UnitId member : group) {
         if (member == eng) {
             continue;
         }
         const auto& entries = fix.roster.store.orders()[member.index].entries();
         REQUIRE(entries.size() == 1);
-        const float x = rm::test::asFloat(entries.front().targetX());
-        if (x == Catch::Approx(900.0f).margin(0.01f)) {
+        if (rm::test::asFloat(entries.front().targetX())
+            == Catch::Approx(900.0f).margin(0.01f)) {
             ++frontTanks;
-        } else if (x == Catch::Approx(892.0f).margin(0.01f)) {
-            ++backTanks;
         }
     }
-    CHECK(frontTanks == 8);
-    CHECK(backTanks == 1);
+    CHECK(frontTanks == 4);
+}
+
+TEST_CASE("attack-row shield slots prefer shields over remaining anti-air", "[formation]") {
+    // formations.lua:93 and :196: ShieldFirst tries Shield before AA.
+    // Eight tanks fill DFFirst; ArtFirst takes two AA in row two, then the
+    // next centre-out slot (physical column 3) must take the shield, not AA.
+    Fixture fix;
+    rm::unitdef::UnitDef antiAir;
+    antiAir.name = "test_aa";
+    antiAir.categories = {"ANTIAIR", "LAND", "TECH1"};
+    const auto aaType = fix.roster.addType(antiAir);
+    rm::unitdef::UnitDef shield;
+    shield.name = "test_shield";
+    shield.categories = {"LAND", "SHIELD", "TECH1"};
+    const auto shieldType = fix.roster.addType(shield);
+    std::vector<UnitId> group;
+    constexpr int kFrontWidth = 8;  // TwoRowAttackFormationBlock, :194.
+    for (int i = 0; i < kFrontWidth; ++i)
+        group.push_back(fix.roster.add(fix.tank, 200.0f, 200.0f, 0, 500.0f));
+    constexpr int kAntiAirCount = 3;  // two centre slots plus one fallback competitor.
+    for (int i = 0; i < kAntiAirCount; ++i)
+        group.push_back(fix.roster.add(aaType, 200.0f, 200.0f, 0, 500.0f));
+    const auto protectedUnit = fix.roster.add(shieldType, 200.0f, 200.0f, 0, 500.0f);
+    group.push_back(protectedUnit);
+    REQUIRE(fix.issueMove(group, 900.0f, 200.0f, CommandKind::AttackMove).accepted == group);
+    const auto& entries = fix.roster.store.orders()[protectedUnit.index].entries();
+    REQUIRE(entries.size() == 1);
+    // TestRoster radius=4: row two trails 8 elmos, third visited column
+    // lies 12 elmos left of centre. Facing east rotates these to (-8,+12).
+    CHECK(rm::test::asFloat(entries.front().targetX()) == Catch::Approx(892.0f));
+    CHECK(rm::test::asFloat(entries.front().targetZ()) == Catch::Approx(212.0f));
 }
