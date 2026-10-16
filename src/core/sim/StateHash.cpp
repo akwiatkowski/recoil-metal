@@ -844,6 +844,22 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         for (const TickCount ticks : match.intel->intelRecovery()) {
             feed(h, static_cast<std::uint64_t>(ticks));
         }
+        // The count's owner: a recycled slot resets to powered, so two runs
+        // that agree on counts but disagree on who banked them are two
+        // different matches. Empty stays silent — a no-economy pass never
+        // assigns an owner, and the pre-owner stream is the compatible one.
+        const std::span<const UnitId> owners = match.intel->intelRecoveryUnits();
+        const bool anyOwner = std::ranges::any_of(owners, [](UnitId unit) {
+            return unit != UnitId{};
+        });
+        if (anyOwner) {
+            feed(h, true);
+            feed(h, owners.size());
+            for (const UnitId unit : owners) {
+                feed(h, static_cast<std::size_t>(unit.index));
+                feed(h, static_cast<std::size_t>(unit.generation));
+            }
+        }
         // C-007's explored bitmap never goes back: a cell once seen stays
         // explored after the seer dies, and it rides the save (v52), so the
         // hash must cover what the save preserves. Fed unconditionally like

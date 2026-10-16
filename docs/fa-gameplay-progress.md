@@ -73,6 +73,71 @@ self-destruct replay still renders `TEAM 1 WINS` (`/tmp/recoil-metal-parity-smok
 Uncommitted at this checkpoint: `src/app/FafOpponent.cpp`,
 `tests/test_faf_ai.cpp`, `tests/test_fa_intel.cpp` (+ this doc).
 
+## Parity push checkpoint 2 (2026-10-16, in progress)
+
+- FA-LAND wide attack ranks: `attackLandSlotRank` transcribes the wider
+  `AttackFormation` land rows (formations.lua:200-310) instead of only the
+  two-row block, and the intake walks each width's own centre-out column
+  order (`src/core/sim/CommandApply.cpp`,
+  `tests/test_formation.cpp:"a wide attack-move ranks shields into row
+  two"`). Focused `[formation]` green (191 assertions, 17 cases).
+- FA-PERSIST recovery ownership: the brownout recovery count's owning unit
+  generation now feeds the state hash (`Intel::intelRecoveryUnits`,
+  `src/core/sim/StateHash.cpp`,
+  `tests/test_state_hash.cpp:"brownout recovery ownership changes the
+  hash"`). A recycled slot that reset to powered hashes apart from one still
+  banking its predecessor's count — closing a save-covers-it-but-hash-ignored
+  gap of the same shape as C-284/C-007. Focused green with formation.
+- Correction, not a gap: arrival re-forming is retail-absent
+  (`PickBestFinalFormationIndex` returns -1, C-178) — the FA-LAND text no
+  longer lists it as deferred work.
+
+Full serial gate: **2,261 registered cases, 0 failures** (610.53 s; same
+asset/performance skip kinds as the prior gate).
+
+## What remains from 100% (2026-10-16, measured against the dashboard)
+
+Dashboard `Implemented` scores average 70.0% across the 20 gameplay rows
+(1,400 / 20); 4 rows read 100%, 16 below the goal's 97% bar. The new slices
+above do not move any row score yet — row updates stay with the subsystem
+owners' rescore pass. Per-row gaps, from the sections below:
+
+- FA-CONTENT 50%: exact retail SCD mount/override precedence beyond the
+  pinned lua/mohodata collision; remaining blueprint/bootstrap surface.
+- FA-LUA 25%: general gameplay-script scheduler/threading and mod surface
+  beyond the EnhanceTask adapter and hook/mod-table plumbing.
+- FA-CMD 75%: remaining guard-ladder branches and factory intake edge cases.
+- FA-ECON 75%: transfer-parity remainder (fuel/ammo/shield edge cases,
+  concurrent captors, COMMAND targets).
+- FA-LAND 75%: naval/sub/air category ranks, HPA*, reservations. Arrival
+  re-forming is retail-absent, not a gap.
+- FA-AIR 75%: full three-axis solver (quaternion pitch, roll-rate state);
+  planar reduction with visual banking is the documented boundary (ADR-091).
+- FA-NAVY 75%: `OnEnterWater`/`OnExitWater` Lua hooks, `OnCollisionCheck`
+  default-deny gate — both need a script surface the sim lacks.
+- FA-TRANSPORT 75%: pickup-beacon exact semantics (spawned unit vs order
+  anchor); transport-shield cargo coverage is implemented.
+- FA-INTEL 50%: non-radar recon families beyond the pinned linger/expiry
+  loop and slot-reuse reaping.
+- FA-PROGRESS 75%: enhancement/special-unit remainder past the implemented
+  lifecycle, tray, toggle-cap, and veterancy slices.
+- FA-TERRAIN 75%: dwell-trail beam marks, weapon→beam-class mapping for the
+  opt-out drain; wreck/terrain-type behavior remainder.
+- FA-AI 50%: native retail brain/platoon architecture and naval combat
+  parity beyond the FAF binding surface.
+- FA-UI 75%: remaining WP-40 surface (idle selectors, overlays, key
+  contexts, split views).
+- FA-PRESENT 75%: reload/charge animation, Seraphim factory effects, native
+  emitter flags, some audio filters/curves, dynamic music.
+- FA-PERSIST 50%: general mid-combat app saves (external input, opponent
+  VM), retail replay transport. Recovery ownership now hashes.
+- FA-MATCH/WEAPONS/MISSILES/DAMAGE 100%: hold their bars; remaining work is
+  validation depth, not declared scope.
+
+No subsystem is fully absent. The >97% bar needs 20/20 rows at 97%+ or an
+equivalent measured denominator; the current count is 4/20 rows at 100%.
+
+
 **Accuracy review (2026-09-23, `b845a1a`):** `ART-E001` still hashes to
 `c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`.
 The current 16 local `build/re-fa/coverage/FA-*.md` files report 298 TESTED,
@@ -715,14 +780,17 @@ aboard. Small land attack blocks now select families using the slot's ordered fa
 list (`DFFirst`, `ArtFirst`, `AAFirst`, `ShieldFirst`, `UtilFirst`;
 `formations.lua:91-97,192-197`). A short front can include engineers; construction is
 not the radar/scout utility family. Wider land blocks, naval/sub/air category ranks,
-HPA*, reservations, and arrival re-forming remain deferred.
+HPA*, and reservations remain deferred. Arrival re-forming is NOT deferred work:
+retail never re-forms on arrival (`PickBestFinalFormationIndex` returns -1
+unconditionally, C-178) — implementing it would be an invention, not parity.
 
 ```text
 /goal Advance FA-LAND by porting one bounded formation geometry from ART-S007:lua/formations.lua
 onto the existing deterministic group-move fan-out. Preserve canonical UnitId ordering, shared
 click anchors, per-army FIFO path-service budget, and C-176/C-177 retry semantics. Start with a
-focused group-order regression, leave HPA*, reservations, category matching, and arrival
-re-forming explicitly deferred, run make test and make verify, then refresh FA-LAND.
+focused group-order regression, leave HPA*, reservations, and category matching
+explicitly deferred — never arrival re-forming, which retail lacks — run make
+test and make verify, then refresh FA-LAND.
 ```
 
 ### FA-AIR - Aircraft Flight, Combat, And Staging

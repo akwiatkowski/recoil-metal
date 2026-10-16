@@ -343,13 +343,14 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
 }
 
 /// ART-S007 `AttackFormation`'s land half fills per-slot category ranks, not one
-/// filler per family (formations.lua:192-197 `TwoRowAttackFormationBlock`): the
-/// 8-wide front row is all DFFirst, but the second row reads Util, AA, Shield,
-/// Art, Art, Shield, AA, Util. `BlockBuilderLand` visits columns centre-outward
-/// (`GetColSpot`, formations.lua:915-930), so physical column 1 takes the row's
-/// leftmost rank. Only the <=16-member two-row land block carries ranks here;
-/// wider attack blocks stay deferred with the rest of C-178's category order.
-[[nodiscard]] int attackLandSlotRank(std::size_t row, std::size_t column) noexcept {
+/// filler per family (formations.lua:192-310). Row 0 is all direct fire; the
+/// two-row block's second row reads Util, AA, Shield, Art, Art, Shield, AA,
+/// Util (formations.lua:192-197). Wider blocks follow their own rows: row 1
+/// mixes shields into direct fire, row 2 mixes AA, and deeper rows alternate
+/// shield/AA rhythms until the artillery back rows. `BlockBuilderLand` visits
+/// columns centre-outward (`GetColSpot`, formations.lua:915-930), so physical
+/// column 1 takes the row's leftmost rank.
+[[nodiscard]] int attackLandSlotRank(std::size_t row, std::size_t column, std::size_t width) noexcept {
     // Family IDs match formationClass below. Retail's complete fallback lists
     // (formations.lua:91-97) matter: a slot accepts the next family when its
     // preferred family is absent, rather than reserving holes in the row.
@@ -358,12 +359,55 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     constexpr int kAntiAir = 3;
     constexpr int kShield = 4;
     constexpr int kUtility = 6;
-    if (row != 1) return kDirect;
-    constexpr int kSecondRowRanks[] = {
-        kUtility, kAntiAir, kShield, kArtillery,
-        kArtillery, kShield, kAntiAir, kUtility};
-    return column >= 1 && column <= std::size(kSecondRowRanks)
-               ? kSecondRowRanks[column - 1] : kDirect;
+    // The two-row block is row-special: its second row is the Util/AA/Shield
+    // pair rhythm, not the wider blocks' shield-mix second row.
+    constexpr int kTwoRowSecond[] = {kUtility, kAntiAir, kShield, kArtillery,
+                                     kArtillery, kShield, kAntiAir, kUtility};
+    if (width == 8 && row == 1) {
+        return column >= 1 && column <= std::size(kTwoRowSecond)
+                   ? kTwoRowSecond[column - 1]
+                   : kDirect;
+    }
+    // Wider-block rows, physical columns 1-based left to right. Row 0 is all
+    // direct fire in every block; the tables below transcribe rows 1+ from
+    // formations.lua:200-310 (columns past the row's authored width read as
+    // direct fire, matching the intake's unranked fallback).
+    constexpr int kWideRow1[] = {kUtility, kShield, kDirect, kDirect, kShield, kDirect,
+                                 kShield, kDirect, kDirect, kShield, kDirect, kDirect,
+                                 kShield, kDirect, kDirect, kShield, kDirect, kDirect,
+                                 kShield, kUtility};
+    constexpr int kWideRow2[] = {kDirect, kAntiAir, kDirect, kDirect, kAntiAir, kDirect,
+                                 kDirect, kAntiAir, kDirect, kDirect, kAntiAir, kDirect,
+                                 kDirect, kAntiAir, kDirect, kDirect, kAntiAir, kDirect,
+                                 kDirect, kAntiAir};
+    constexpr int kWideRowShield[] = {kAntiAir, kShield, kDirect, kAntiAir, kShield, kDirect,
+                                      kAntiAir, kShield, kDirect, kShield, kAntiAir, kDirect,
+                                      kShield, kAntiAir, kDirect, kShield, kAntiAir, kDirect,
+                                      kShield, kAntiAir};
+    constexpr int kWideRowMixed[] = {kUtility, kAntiAir, kDirect, kDirect, kAntiAir, kDirect,
+                                     kDirect, kAntiAir, kDirect, kDirect, kAntiAir, kDirect,
+                                     kDirect, kAntiAir, kDirect, kDirect, kAntiAir, kDirect,
+                                     kAntiAir, kUtility};
+    constexpr int kWideRowArt[] = {kArtillery, kAntiAir, kArtillery, kArtillery, kAntiAir,
+                                   kArtillery, kArtillery, kAntiAir, kArtillery, kArtillery,
+                                   kAntiAir, kArtillery, kArtillery, kAntiAir, kArtillery,
+                                   kArtillery, kAntiAir, kArtillery, kArtillery, kArtillery};
+    if (row == 0 || column < 1 || column > 20) {
+        return kDirect;
+    }
+    const int* table = kWideRow1;
+    if (row == 1) {
+        table = kWideRow1;
+    } else if (row == 2) {
+        table = kWideRow2;
+    } else if (row >= 7) {
+        table = kWideRowArt;
+    } else if (row % 2 == 1) {
+        table = kWideRowMixed;
+    } else {
+        table = kWideRowShield;
+    }
+    return table[column - 1];
 }
 
 /// Family-level projection of retail slot tables (formations.lua:91-97).
@@ -985,23 +1029,39 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     // Retail `AttackFormation` land blocks fill per-slot category ranks inside
     // each row (`BlockBuilderLand`, formations.lua:838-913): the <=16-member
     // two-row block reads Util, AA, Shield, Art, Art, Shield, AA, Util across
-    // its second row (formations.lua:192-197), so support hulls take the flanks
-    // there instead of a second combat line. Replay that walk by ordering land
-    // members into slot order — row-major over the centre-out column walk — keyed
-    // by each slot's rank, so an engineer owns the Util flank before any combat
-    // spillover reaches row two. Other domains and wider blocks keep intake order.
-    if (isAttackOrder && landMembers.size() >= 5 && landMembers.size() <= 16) {
+    // its second row (formations.lua:192-197), and wider blocks transcribe
+    // their own rows (formations.lua:200-310), so support hulls take the
+    // flanks there instead of a second combat line. Replay that walk by
+    // ordering land members into slot order — row-major over the centre-out
+    // column walk — keyed by each slot's rank, so an engineer owns the Util
+    // flank before any combat spillover reaches row two. Other domains keep
+    // intake order.
+    const std::size_t landWidthForRanks =
+        isAttackOrder ? attackFormationWidth(landMembers.size()) : 0;
+    if (isAttackOrder && landMembers.size() >= 5
+        && (landWidthForRanks == 8 || landWidthForRanks == 10 || landWidthForRanks == 12
+            || landWidthForRanks == 14 || landWidthForRanks == 16
+            || landWidthForRanks == 18 || landWidthForRanks == 20)) {
         // `GetColSpot` (formations.lua:915-930) maps the visit order to physical
         // slots: visit c takes physical column (half - floor(c/2)) on odd visits
         // and (half + c/2) on even visits — for width 8: 4,5,3,6,2,7,1,8.
-        constexpr std::size_t kWalk[8] = {4, 5, 3, 6, 2, 7, 1, 8};
+        // Wider widths walk the same centre-out rhythm over their own column
+        // count, so build the walk per width instead of pinning width 8.
+        const std::size_t width = landWidthForRanks;
+        std::vector<std::size_t> walk;
+        walk.reserve(width);
+        const std::size_t half = width / 2;
+        for (std::size_t visit = 0; visit < width; ++visit) {
+            const std::size_t step = visit / 2;
+            walk.push_back(visit % 2 == 0 ? half - step : half + 1 + step);
+        }
         std::vector<UnitId> ranked;
         ranked.reserve(landMembers.size());
         std::vector<UnitId> pool = landMembers;
         for (std::size_t slot = 0; slot < landMembers.size(); ++slot) {
-            const std::size_t row = slot / 8;
-            const std::size_t column = kWalk[slot % 8];
-            const int want = attackLandSlotRank(row, column);
+            const std::size_t row = slot / width;
+            const std::size_t column = walk[slot % width];
+            const int want = attackLandSlotRank(row, column, width);
             // min_element keeps the first equal-priority member, preserving
             // canonical and tech ordering within the chosen family.
             const auto pick = std::ranges::min_element(pool, {}, [&](UnitId member) {

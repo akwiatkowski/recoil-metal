@@ -347,6 +347,47 @@ TEST_CASE("explored marks change the hash after coverage is gone") {
     CHECK(historyHash != hashMatch(fixture.store, match));
 }
 
+TEST_CASE("brownout recovery ownership changes the hash") {
+    // C-284's recovery count already hashes, but its owner rides the save
+    // (v37) while the hash ignores it: a recycled slot that reset to powered
+    // must hash differently from one still banking its predecessor's count —
+    // even when both counts read the same number.
+    Fixture fixture;
+    rm::sim::Intel firstOwner;
+    rm::sim::Intel secondOwner;
+    for (rm::sim::Intel* intel : {&firstOwner, &secondOwner}) {
+        intel->configure(1, rm::sim::Fx::fromInt(512), rm::sim::Fx::fromInt(512),
+                         rm::sim::VisionStyle::ForgedAlliance);
+    }
+    std::vector<rm::sim::Economy> economies(1);
+    firstOwner.update(fixture.store, fixture.catalog, fixture.armies, nullptr,
+                      rm::sim::TickRate{}, economies);
+    CHECK_FALSE(firstOwner.intelRecoveryUnits().empty());
+    CHECK(firstOwner.intelRecoveryUnits()[0] == fixture.store.idAt(0));
+    // Same counts, different owner: kill and respawn the slot, then restore
+    // the count so only the generation separates the two histories.
+    const rm::sim::UnitId first = fixture.store.idAt(0);
+    fixture.store.kill(first);
+    const rm::UnitTypeIndex type = fixture.store.typeAt(0);
+    const rm::sim::UnitId second = fixture.store.spawn({
+        .type = type,
+        .transform = {.x = rm::test::fx(100.0f), .z = rm::test::fx(100.0f)},
+        .motion = defaultMotionFor(0),
+        .health = {.current = rm::test::mag(500.0f), .maximum = rm::test::mag(500.0f)},
+    });
+    REQUIRE(second.index == first.index);
+    REQUIRE_FALSE(second == first);
+    secondOwner.update(fixture.store, fixture.catalog, fixture.armies, nullptr,
+                       rm::sim::TickRate{}, economies);
+    CHECK(secondOwner.intelRecoveryUnits()[0] == second);
+    rm::sim::Match match = fixture.match();
+    match.intel = &firstOwner;
+    const rm::StateHash firstHash = hashMatch(fixture.store, match);
+    match.intel = &secondOwner;
+    CHECK(firstHash != hashMatch(fixture.store, match));
+}
+
+
 TEST_CASE("shield power and recovery timers change the hash") {
     const auto hashWith = [](rm::sim::ShieldState shield) {
         Fixture fixture;

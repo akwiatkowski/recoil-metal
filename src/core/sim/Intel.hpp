@@ -393,6 +393,14 @@ public:
         return intelRecovery_;
     }
 
+    /// The unit generation each recovery count belongs to. A recycled slot
+    /// starts powered rather than inheriting its predecessor's blackout, so
+    /// the owner is live state exactly like the count — and rides the save
+    /// (v37) while the hash below ignores it.
+    [[nodiscard]] std::span<const UnitId> intelRecoveryUnits() const noexcept {
+        return intelRecoveryUnit_;
+    }
+
     /// The ACTIVE byte of `C-283`'s (enabled, active) pair — whether this
     /// unit's intel of `type` actually contributes this tick. Enabled AND
     /// powered AND alive: a jammer only actively jams while its enabled flag

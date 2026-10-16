@@ -644,3 +644,27 @@ TEST_CASE("attack-row shield slots prefer shields over remaining anti-air", "[fo
     CHECK(rm::test::asFloat(entries.front().targetX()) == Catch::Approx(892.0f));
     CHECK(rm::test::asFloat(entries.front().targetZ()) == Catch::Approx(212.0f));
 }
+
+// Retail `ThreeRowAttackFormationBlock` (formations.lua:200-208): the 10-wide
+// second row mixes shields into direct fire at physical columns 2, 5 and 9 —
+// so a shield in a 17-tank attack-move lands in row two, not behind the guns.
+TEST_CASE("a wide attack-move ranks shields into row two", "[formation]") {
+    Fixture fix;
+    rm::unitdef::UnitDef shield;
+    shield.name = "test_shield";
+    shield.categories = {"LAND", "SHIELD", "TECH1"};
+    const auto shieldType = fix.roster.addType(shield);
+    std::vector<UnitId> group;
+    for (int i = 0; i < 16; ++i) {
+        group.push_back(fix.roster.add(fix.tank, 200.0f, 200.0f, 0, 500.0f));
+    }
+    const auto shelter = fix.roster.add(shieldType, 200.0f, 200.0f, 0, 500.0f);
+    group.push_back(shelter);
+    REQUIRE(fix.issueMove(group, 900.0f, 200.0f, CommandKind::AttackMove).accepted == group);
+    const auto& entries = fix.roster.store.orders()[shelter.index].entries();
+    REQUIRE(entries.size() == 1);
+    // TestRoster radius=4: row two trails 8 elmos behind the anchor line.
+    // Facing east rotates the local -z row offset onto world -x.
+    CHECK(rm::test::asFloat(entries.front().targetX()) == Catch::Approx(892.0f));
+}
+
