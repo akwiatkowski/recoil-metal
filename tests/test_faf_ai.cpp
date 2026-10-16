@@ -14,6 +14,7 @@
 #include "app/FafAi.hpp"
 #include "app/FafOpponent.hpp"
 #include "app/Match.hpp"
+#include "core/sim/ScriptObject.hpp"
 #include "core/unit/UnitBlueprint.hpp"
 
 #include <cstdlib>
@@ -2764,6 +2765,69 @@ TEST_CASE("FAF completion notifications inherit the founder's current manager", 
         assert(locations[8589934593]==nil,'a recycled index is a different member')
     )"));
 }
+
+// FA-SIM: the driver's orders resolve through the strict script-object seam.
+// A unit destroyed this tick — readable for death callbacks, but dead to
+// orders — issues nothing, while a live unit on the same pass still moves.
+TEST_CASE("FAF driver drops orders from units destroyed this tick", "[faf][ai][lifecycle]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("requires FAF corpus");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(1);
+    scene.economies.resize(1);
+    rm::unitdef::UnitDef tank;
+    tank.name = "test_tank";
+    tank.health = rm::sim::Mag::fromInt(100);  // live driver units, not corpses
+    scene.definitions.push_back(tank);
+    const rm::UnitTypeIndex type =
+        scene.catalog.add(&scene.definitions.back(), rm::sim::TickRate{});
+    const rm::sim::UnitId live = scene.store.spawn({
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(100.0f), .z = rm::sim::fxFromFloat(100.0f)},
+        .motion = {.armyIndex = 0},
+        .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+    });
+    const rm::sim::UnitId fallen = scene.store.spawn({
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(200.0f), .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = {.armyIndex = 0},
+        .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+    });
+    rm::HeightField field{.squaresX = 64, .squaresZ = 64};
+    field.raw.resize(field.sampleCount());
+    rm::vfs::Vfs content;
+    const std::array<rm::mapinfo::StartPosition, 1> starts{{{.x = 0, .z = 0}}};
+    rm::ai::World world{.scene = scene, .content = content, .field = field,
+                        .starts = starts, .markers = {}};
+    rm::ai::FafOpponent opponent(ai, 0, "TechMain");
+    opponent.observe(world, {});
+    // Death queued but not yet retired: zeroed health is the "death is queued"
+    // moment, while the handle stays resolvable until `retireDead` releases
+    // it. The corpse is still readable through the lifecycle family, but the
+    // strict family already refuses it.
+    scene.store.health()[fallen.index].current = rm::sim::Mag{};
+    REQUIRE_FALSE(scene.store.health()[fallen.index].alive());
+    REQUIRE(rm::sim::lifecycleSlot(scene.store, fallen).has_value());
+    REQUIRE_FALSE(rm::sim::requireAlive(scene.store, fallen).has_value());
+    REQUIRE(ai.eval(R"(
+        __rm_faf_decide = function(army, snap)
+            assert(#snap.units == 1, 'the census only ever holds living units')
+            return {
+                {kind='move', builder=snap.units[1].h, x=300, z=300},
+            }
+        end
+    )"));
+    INFO(ai.lastError());
+    opponent.advance(0);
+    const auto decisions = opponent.drain();
+    REQUIRE(decisions.size() == 1);
+    CHECK(decisions[0].kind == rm::ai::Decision::Kind::Move);
+    CHECK(decisions[0].unit == live);
+}
+
 
 TEST_CASE("FAF air and naval factories can train mobile construction units", "[faf][factory-engineer]") {
     const auto root=corpusRoot();

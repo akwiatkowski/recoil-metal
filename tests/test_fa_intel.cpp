@@ -12,7 +12,7 @@
 #include "core/sim/Economy.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/Skirmish.hpp"
-#include "core/sim/Terrain.hpp"
+#include "core/sim/TickRate.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
 
@@ -365,6 +365,49 @@ TEST_CASE("C-279: a dead sonar contact lingers as a sonar blip", "[fa-intel]") {
     CHECK(blip->kind == rm::sim::ContactKind::Sonar);
     CHECK(blip->maybeDead);
 }
+
+// C-276's sibling: a dead contact's blip is knowledge with a shelf life, not
+// a monument. Ten seconds of linger (plus the death tick), then the alliance
+// forgets it — otherwise every battle leaves phantom dots behind forever.
+TEST_CASE("C-276: a dead contact's blip expires after the linger", "[fa-intel]") {
+    rm::unitdef::UnitDef watching = seer(0.0f, 400.0f, 0.0f);
+    rm::unitdef::UnitDef hull;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex target = catalog.add(&hull);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 200.0f, 200.0f);
+    const rm::sim::UnitId victim = place(store, target, 1, 300.0f, 200.0f);
+
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+    REQUIRE_FALSE(seenBy(0, store, catalog, armies, intel).empty());
+
+    store.kill(victim);
+    intel.update(store, catalog, armies, nullptr);
+    const auto lingering = seenBy(0, store, catalog, armies, intel);
+    const auto blip = std::ranges::find_if(
+        lingering, [victim](const rm::sim::Contact& contact) { return contact.unit == victim; });
+    REQUIRE(blip != lingering.end());
+    CHECK(blip->maybeDead);
+
+    const rm::sim::TickRate rate;
+    const int updates = static_cast<int>(rate.ticks(rm::sim::Seconds{11.0f})) + 2;
+    for (int i = 0; i < updates; ++i) {
+        intel.update(store, catalog, armies, nullptr);
+    }
+    const auto cleared = seenBy(0, store, catalog, armies, intel);
+    CHECK(std::ranges::find_if(cleared, [victim](const rm::sim::Contact& contact) {
+              return contact.unit == victim;
+          }) == cleared.end());
+}
+
 TEST_CASE("C-279: a seabed unit is a sonar contact, never radar or vision", "[fa-intel]") {
     // The layer byte's other half: retail's flag computation (`0x005D1E30`)
     // routes `layer ∈ {Seabed, Sub}` targets to sonar alone (`0x005C83C0`'s

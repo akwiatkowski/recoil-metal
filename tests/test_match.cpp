@@ -314,6 +314,7 @@ TEST_CASE("the match runner replays a build and its post-spawn roll-off semantic
         tank.motion = rm::unitdef::MotionType::Land;
         tank.speedElmosPerSecond = 10.0f;
         tank.buildTime = rm::sim::magFromFloat(1.0f);
+        tank.health = rm::sim::Mag::fromInt(100);  // same live-unit HP as the factory fixture
         scene.definitions.push_back(tank);
         const rm::UnitTypeIndex tankType =
             scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
@@ -447,6 +448,7 @@ TEST_CASE("the match runner preserves queued, stopping, replacement, and roll-of
         tank.motion = rm::unitdef::MotionType::Land;
         tank.speedElmosPerSecond = 10.0f;
         tank.buildTime = rm::sim::magFromFloat(1.0f);
+        tank.health = rm::sim::Mag::fromInt(100);  // same live-unit HP as the explicit spawns
         scene.definitions.push_back(tank);
         const rm::UnitTypeIndex tankType =
             scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
@@ -875,6 +877,7 @@ TEST_CASE("a rally click on a lone factory leaves the queue alone and the produc
     tank.speedElmosPerSecond = 100.0f;         // 10 elmos a tick: 200 elmos in 20 ticks
     tank.turnRateRadiansPerSecond = 100.0f;
     tank.buildTime = rm::sim::magFromFloat(60.0f);  // ten ticks on the pad
+    tank.health = rm::sim::Mag::fromInt(100);  // same live-unit HP as the factory fixture
     scene.definitions.push_back(tank);
     const rm::UnitTypeIndex tankType =
         scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);

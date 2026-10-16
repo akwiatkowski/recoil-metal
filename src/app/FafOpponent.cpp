@@ -4419,19 +4419,21 @@ void FafOpponent::convertDecision(lua_State* lua) {
             return std::nullopt;
         }
         const rm::sim::UnitId id = unpackHandle(h);
-        const rm::sim::UnitStore::Resolved resolved = scene.store.resolve(id);
-        if (resolved.state == rm::sim::UnitStore::HandleState::Stale) {
-            if (rm::app::gFafLog) {
-                std::printf("  [faf %d] handle %u:%u: %.*s\n", army_, id.index, id.generation,
-                            static_cast<int>(rm::sim::kDestroyedObjectError.size()),
-                            rm::sim::kDestroyedObjectError.data());
-            }
-            return std::nullopt;
+        // The strict script-object family (`ScriptObject.hpp::requireAlive`): a
+        // destroyed-but-not-yet-released unit is already dead to orders. Retail's
+        // purge delay keeps the corpse readable for death callbacks
+        // (`lifecycleSlot`), but new commands on it are the verbatim error, not
+        // a silent drop — so the driver must not issue them.
+        if (rm::sim::requireAlive(scene.store, id).has_value()) {
+            return id;
         }
-        if (resolved.state == rm::sim::UnitStore::HandleState::Destroyed) {
-            return std::nullopt;
+        if (scene.store.resolve(id).state == rm::sim::UnitStore::HandleState::Stale
+            && rm::app::gFafLog) {
+            std::printf("  [faf %d] handle %u:%u: %.*s\n", army_, id.index, id.generation,
+                        static_cast<int>(rm::sim::kDestroyedObjectError.size()),
+                        rm::sim::kDestroyedObjectError.data());
         }
-        return id;
+        return std::nullopt;
     };
     const auto handleAt = [lua, &resolveHandle](int index) -> std::optional<rm::sim::UnitId> {
         lua_Integer h = 0;
@@ -4547,7 +4549,9 @@ void FafOpponent::convertDecision(lua_State* lua) {
         // The corpus picked WHICH unit upgrades (UnitUpgradeAI's platoon of one); the
         // blueprint says what it becomes. The sim pins the site to the unit itself.
         const std::optional<rm::sim::UnitId> unit = handleAt(0);
-        if (!unit || !scene.store.alive(*unit)) {
+        // `handleAt` already resolves through the strict seam, so a second
+        // `alive` check would only re-ask the same tombstone state.
+        if (!unit) {
             return;
         }
         const rm::unitdef::UnitDef* def = scene.catalog.def(scene.store.typeAt(unit->index));
@@ -4571,7 +4575,7 @@ void FafOpponent::convertDecision(lua_State* lua) {
     if (kind == "reclaim") {
         // The corpus named the cell; the match picks the wreck in it.
         const std::optional<rm::sim::UnitId> builder = handleAt(0);
-        if (!builder || !scene.store.alive(*builder)) {
+        if (!builder) {
             return;
         }
         const auto number = [lua](const char* name) {
@@ -4596,7 +4600,7 @@ void FafOpponent::convertDecision(lua_State* lua) {
 
     if (kind == "build" || kind == "train") {
         const std::optional<rm::sim::UnitId> builder = handleAt(0);
-        if (!builder || !scene.store.alive(*builder)) {
+        if (!builder) {
             return;
         }
         const std::string bp = field("bp");
@@ -4759,7 +4763,7 @@ void FafOpponent::convertDecision(lua_State* lua) {
 
     if (kind == "scout") {
         const auto unit = handleAt(0);
-        if (!unit || !scene.store.alive(*unit)) return;
+        if (!unit) return;
         lua_getfield(lua, -1, "route");
         const auto count = static_cast<lua_Integer>(lua_rawlen(lua, -1));
         for (lua_Integer i = 1; i <= count; ++i) {

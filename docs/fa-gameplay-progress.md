@@ -9,6 +9,70 @@ Detailed retail evidence remains canonical in
 [`fa-exe-analysis-plan.md`](fa-exe-analysis-plan.md). This dashboard summarizes that ledger; it
 does not replace its claims, addresses, counterevidence, or confirmation gate.
 
+## Current verification checkpoint (2026-10-16)
+
+The four failures recorded at restart checkpoint `f6440d8` are fixed in the
+test fixtures, without changing their behavioral assertions or production code.
+Three factory-product definitions in `tests/test_match.cpp` and the spread-move
+definition in `tests/test_unit_scenarios.cpp` had zero HP. With death retirement
+correctly based on handle liveness rather than collision radius, those units
+died before they could execute their movement orders. The fixtures now give
+live movement units explicit positive health.
+
+`mise exec -- nice -n 20 cmake --build build --target rm_tests -j2` succeeds.
+`mise exec -- nice -n 20 ctest --test-dir build --output-on-failure -j1` reports
+**0 failures across 2,257 registered cases: 2,219 passed, 38 skipped**,
+in 589.87 seconds. Skips include the 5,000-unit performance case and
+asset-dependent script, archive, map, effect and audio cases; this is not proof
+that those paths passed. Earlier verification figures below are historical.
+
+A separate native `recoil-metal` SCMP_009 replay smoke runs 60 ticks with one
+self-destruct command: unit `0.1` is destroyed at 4.9 seconds, army 0 is defeated,
+and one commander remains. The 640x360 capture visibly displays `TEAM 1 WINS`.
+This exercises app command intake, countdown, retirement, defeat and rendering;
+it does not establish full retail parity. The runtime still warns about a
+24-bit DDS channel layout and the unresolved
+`SIFInainoStrategicMissileEffect01` TypeClass.
+
+**Scope:** test repairs, documentation, and a source-backed remaining-work audit
+only. No new gameplay features or coverage-score promotion in this checkpoint.
+
+**Audit note (2026-10-16):** the dashboard scores and headline averages in this
+file remain engineering navigation estimates, not measurements. The test runs
+recorded above prove suite/gate state, not a percentage of retail implemented.
+The user goal requires >97% of analyzed retail subsystems implemented, with the
+100% gap listed. No current measured denominator supports that completion
+claim, so this audit cannot mark the goal achieved.
+
+## Parity push checkpoint (2026-10-16, in progress)
+
+Three bounded slices landed with failing-then-green cover; the full serial
+gate is green.
+
+- FA-SIM script-handle routing: `FafOpponent::convertDecision` resolves every
+  order handle through the strict script-object seam (`requireAlive`), so a
+  unit destroyed this tick issues nothing while live units on the same pass
+  still move (`src/app/FafOpponent.cpp`, `tests/test_faf_ai.cpp:"FAF driver
+  drops orders from units destroyed this tick"`). The remaining purge-delay
+  half is now only the representation question (generation vs deferred kill),
+  not order routing.
+- FA-INTEL temporal expiry: dead contacts already lingered ten seconds; the
+  expiry is now pinned end to end — linger as `maybeDead`, then reaped
+  (`tests/test_faf_ai.cpp` C-276 case against the existing `Intel.cpp`
+  `deadTicks`/`kRetainedBlipLingerSeconds` path). Remaining recon work is
+  non-radar families, not the radar linger/expiry loop.
+- FA-CONTENT precedence: the "untraced mount order" gap sentence was stale —
+  ascending SCD mount with first-match-wins lookup is implemented and tested
+  (`Cli.cpp`, `Vfs.hpp`, C-266/C-267 case). No code changed.
+
+`ctest --test-dir build --output-on-failure -j1`: **2,259 registered cases, 0
+failures** (596.57 s; ~38 asset/performance skips unchanged in kind — retail
+archives, maps, effects, audio banks, 5,000-unit clock). Native SCMP_009
+self-destruct replay still renders `TEAM 1 WINS` (`/tmp/recoil-metal-parity-smoke.png`).
+
+Uncommitted at this checkpoint: `src/app/FafOpponent.cpp`,
+`tests/test_faf_ai.cpp`, `tests/test_fa_intel.cpp` (+ this doc).
+
 **Accuracy review (2026-09-23, `b845a1a`):** `ART-E001` still hashes to
 `c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`.
 The current 16 local `build/re-fa/coverage/FA-*.md` files report 298 TESTED,
@@ -439,8 +503,13 @@ and the FA-SIM dashboard row with evidence.
 
 ### FA-CONTENT - VFS, Blueprints, Maps, And Bootstrap
 
-**Largest gap:** content loads through a layered VFS, but exact retail SCD mount and override order
-has not been traced or tested.
+**Audit correction (2026-10-16):** the sentence below is stale. Ascending SCD
+mount with first-match-wins lookup is implemented (`Cli.cpp:287-300`,
+`Vfs.hpp:115-121`) and tested for the `lua.scd`/`mohodata.scd` collision
+(`tests/test_fa_content.cpp:"C-266/C-267: ascending mount order makes lua.scd
+shadow mohodata.scd"`). The remaining content work is the stated next task,
+not this precedence.
+
 
 **Implemented 2026-10-15 (C-218 inertia product guard):** `InertiaTensorX/Y/Z`
 parse with the native product guard (`0x00518C8B`) — one zeroed axis discards
@@ -462,9 +531,13 @@ dashboard row.
 
 ### FA-LUA - Gameplay Lua And Mod Contract
 
-**Largest gap:** the retail Lua dialect, scheduler, script lifecycle, and mod-hook contract are
-now fully specified (`C-305`–`C-319`); hosting the shipped unit/projectile gameplay scripts and
-the `EnhanceTask` adapter remain implementation work, not analysis.
+**Audit correction (2026-10-16):** the sentence below is stale. `ScriptHost`
+already wires `doscript`/`import` hook concat and publishes `__active_mods`
+(`ScriptHost.cpp:141-154,464-502,669-715`), and the `EnhanceTask` adapter runs
+the shipped-shape lifecycle (`Enhancement.cpp:577-630`). The remaining Lua work
+is not these adapters: the full scheduler (`ForkThread`/`WaitFor`, two-ring
+task FIFO, `OnPreCreate`/`OnCreate`/`OnDestroy` ordering for arbitrary gameplay
+scripts), hosting shipped unit/projectile scripts, and the general mod surface.
 
 **Implemented 2026-10-15 (C-228 task natives):** `ScriptHost` binds the four
 `CUnitScriptTask` task natives (`GetUnit`, `SetAIResult`, latent `LUnitMove` /
@@ -803,8 +876,11 @@ run make test and make verify, record divergences in WP-25, and refresh FA-TRANS
 
 ### FA-WEAPONS - Targeting, Weapons, And Projectiles
 
-**Largest gap:** automatic acquisition cannot yet exempt enemy units that an allied engineer is
-reclaiming or capturing, because those commands cannot yet carry a type-safe unit target.
+**Audit correction (2026-10-16):** the former reclaim/capture-exemption gap is
+closed: `Combat.cpp` rejects candidates claimed by an own-side/allied worker,
+including incumbents, before `DoNotTarget`. `Combat.hpp::WorkClaim` carries the
+derived claim data. This is a bounded implementation, not evidence of complete
+retail targeting parity.
 
 **Current slice:** `C-158` now admits automatic acquisition of current radar contacts but gives an
 unidentified target retail's sentinel priority row `9999`, so it competes by score until the
@@ -1358,11 +1434,49 @@ expansion count — the deterministic Dijkstra replays it on restore.
 and the opponent VM remain outside the envelope. Replay is a separate
 compatibility boundary.
 
+**Audit correction (2026-10-16):** the envelope is substantial, not absent:
+`SaveState` versions through at least v62 are exercised for commands,
+enhancements, intel, economy, projectiles, flow fields and AI state, with
+legacy readers retained. The stated gap is only its boundary: general
+mid-combat app saves including external input and the opponent VM, plus retail
+replay transport compatibility.
+
 ```text
 /goal Continue the pool-by-pool envelope: the remaining intel grids and
 external input next with their continued-hash proof. Keep replay transport
 separate, preserve old readers, and update WP-44 and FA-PERSIST.
 ```
+
+## Remaining-work audit (2026-10-16, docs/test fixes only)
+
+This is a source-backed register of what is known to remain; it is not a
+completion percentage. No gameplay code changed in this audit.
+
+- General Lua gameplay hosting: script scheduler/threading for arbitrary
+  unit/projectile scripts, plus the general mod surface. Only the `EnhanceTask`
+  adapter and hook/mod-table plumbing are implemented (`FA-LUA`).
+- Native AI architecture: the deterministic FAF Lua opening speaks through many
+  bindings, but native stand-in managers remain; deeper retail brain/platoon
+  architecture and naval combat parity are separate gaps (`FA-AI`).
+- Mid-combat save boundary: substantial versioned envelope exists, but general
+  mid-combat app saves with external input/opponent VM and retail replay
+  transport are outside it (`FA-PERSIST`).
+- Formations and flight: wider land blocks, naval/sub/air ranks, HPA*,
+  reservations, arrival re-forming; full three-axis flight solver, including
+  quaternion pitch and roll-rate state (`FA-LAND`, `FA-AIR`).
+- Intel/recon: temporal blip expiry and non-radar recon families beyond the
+  implemented slot-reuse reaping (`FA-INTEL`).
+- Presentation: reload/charge animation, Seraphim factory build effects, native
+  emitter flags, some audio filters/curves and dynamic music (`FA-PRESENT`).
+- Verification boundary: 2,219 suite cases pass with 38 asset/performance skips;
+  those skipped paths are not proven, and passing tests are not a retail-percentage
+  measurement.
+
+No subsystem still lacks every implementation: each dashboard row has analyzed
+contracts and at least a bounded slice. The >97% implementation goal therefore
+depends on defining a measured denominator and per-subsystem acceptance proof;
+this register does not supply either.
+
 
 ## Maintenance Contract
 

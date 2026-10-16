@@ -1168,6 +1168,7 @@ TEST_CASE("a spread move gives each unit its own destination off the click",
     rm::unitdef::UnitDef def;
     def.name = "test_tank";
     def.speedElmosPerSecond = 10.0f;
+    def.health = rm::sim::Mag::fromInt(100);  // live movement fixture: 100 HP, not a corpse
     const auto a = scenario.spawn(def, 200, 200);
     const auto b = scenario.spawn(def, 240, 200);
     const auto c = scenario.spawn(def, 220, 240);
