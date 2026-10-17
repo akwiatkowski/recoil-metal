@@ -427,6 +427,49 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
         std::ranges::find(priorities, family) - std::begin(priorities));
 }
 
+/// ART-S007 `GrowthFormation`'s land half fills per-slot category ranks from the same small
+/// travel blocks it selects by count (formations.lua:103-177): row 0 is all direct fire;
+/// row 1 names Shield/Util rhythms, row 2 AA/Art rhythms, deeper rows their own mixes.
+/// Family IDs match formationClass, as for the attack helper above.
+[[nodiscard]] int growthLandSlotRank(std::size_t row, std::size_t column, std::size_t width) noexcept {
+    // The 3-wide block is one all-direct row; ranks begin at width 4.
+    constexpr int kDirect = 1;
+    constexpr int kArtillery = 2;
+    constexpr int kAntiAir = 3;
+    constexpr int kShield = 4;
+    constexpr int kUtility = 6;
+    constexpr int kFourRow1[] = {kUtility, kShield, kShield, kUtility};
+    constexpr int kFourRow2[] = {kAntiAir, kArtillery, kArtillery, kAntiAir};
+    constexpr int kFiveRow1[] = {kDirect, kShield, kDirect, kShield, kDirect};
+    constexpr int kFiveRow2[] = {kUtility, kShield, kDirect, kShield, kUtility};
+    constexpr int kFiveRow3[] = {kAntiAir, kDirect, kArtillery, kDirect, kAntiAir};
+    if (column < 1) {
+        return kDirect;
+    }
+    const std::size_t col = column - 1;
+    if (row == 0) {
+        return kDirect;
+    }
+    // Only the <=12 (4-wide) and <=20 (5-wide) travel blocks are transcribed: larger
+    // groups stay in family order, as they did before this slice.
+    if (width == 4) {
+        if (row == 1) {
+            return col < std::size(kFourRow1) ? kFourRow1[col] : kDirect;
+        }
+        return col < std::size(kFourRow2) ? kFourRow2[col] : kDirect;
+    }
+    if (width == 5) {
+        if (row == 1) {
+            return col < std::size(kFiveRow1) ? kFiveRow1[col] : kDirect;
+        }
+        if (row == 2) {
+            return col < std::size(kFiveRow2) ? kFiveRow2[col] : kDirect;
+        }
+        return col < std::size(kFiveRow3) ? kFiveRow3[col] : kDirect;
+    }
+    return kDirect;
+}
+
 /// ART-S007 naval attack slot ranks (formations.lua:499-528). Each slot names a
 /// `*First` fallback list (formations.lua:439-445); the helpers below project
 /// each list to its first-pick family. IDs are formationSeaClass's
@@ -1209,11 +1252,15 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     // flank before any combat spillover reaches row two. Other domains keep
     // intake order.
     const std::size_t landWidthForRanks =
-        isAttackOrder ? attackFormationWidth(landMembers.size()) : 0;
-    if (isAttackOrder && landMembers.size() >= 5
-        && (landWidthForRanks == 8 || landWidthForRanks == 10 || landWidthForRanks == 12
-            || landWidthForRanks == 14 || landWidthForRanks == 16
-            || landWidthForRanks == 18 || landWidthForRanks == 20)) {
+        isAttackOrder ? attackFormationWidth(landMembers.size())
+                      : growthFormationWidth(landMembers.size());
+    const bool rankGrowthLand = !isAttackOrder && landMembers.size() >= 5
+                                && (landWidthForRanks == 4 || landWidthForRanks == 5);
+    if ((isAttackOrder && landMembers.size() >= 5
+         && (landWidthForRanks == 8 || landWidthForRanks == 10 || landWidthForRanks == 12
+             || landWidthForRanks == 14 || landWidthForRanks == 16
+             || landWidthForRanks == 18 || landWidthForRanks == 20))
+        || rankGrowthLand) {
         // `GetColSpot` (formations.lua:915-930) maps the visit order to physical
         // slots: visit c takes physical column (half - floor(c/2)) on odd visits
         // and (half + c/2) on even visits — for width 8: 4,5,3,6,2,7,1,8.
@@ -1233,7 +1280,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         for (std::size_t slot = 0; slot < landMembers.size(); ++slot) {
             const std::size_t row = slot / width;
             const std::size_t column = walk[slot % width];
-            const int want = attackLandSlotRank(row, column, width);
+            const int want = isAttackOrder ? attackLandSlotRank(row, column, width)
+                                           : growthLandSlotRank(row, column, width);
             // min_element keeps the first equal-priority member, preserving
             // canonical and tech ordering within the chosen family.
             const auto pick = std::ranges::min_element(pool, {}, [&](UnitId member) {

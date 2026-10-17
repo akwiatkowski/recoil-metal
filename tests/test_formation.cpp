@@ -789,3 +789,41 @@ TEST_CASE("a naval group move ranks frigates ahead of destroyers", "[formation]"
           == Catch::Approx(888.0f).margin(0.01f));
 }
 
+TEST_CASE("a group move ranks shields into row two of its growth block", "[formation]") {
+    // Retail `FourWideAttackFormationBlock` (ART-S007 lua/formations.lua:109-113)
+    // doubles as the Growth travel block for up to twelve members: its second
+    // row reads Util, Shield, Shield, Util, so a shield owns the first
+    // centre-out visit of row two ahead of anti-air — on a plain Move, not
+    // just an attack-move. (TDD: fails — Move land members keep family order.)
+    Fixture fix;
+    rm::unitdef::UnitDef antiAir;
+    antiAir.name = "test_aa_growth";
+    antiAir.categories = {"ANTIAIR", "LAND", "TECH1"};
+    const auto aaType = fix.roster.addType(antiAir);
+    rm::unitdef::UnitDef shield;
+    shield.name = "test_shield_growth";
+    shield.categories = {"LAND", "SHIELD", "TECH1"};
+    const auto shieldType = fix.roster.addType(shield);
+    std::vector<UnitId> group;
+    for (int i = 0; i < 4; ++i) {
+        group.push_back(fix.roster.add(fix.tank, 200.0f, 200.0f, 0, 500.0f));
+    }
+    const auto aa = fix.roster.add(aaType, 200.0f, 200.0f, 0, 500.0f);
+    group.push_back(aa);
+    const auto shelter = fix.roster.add(shieldType, 200.0f, 200.0f, 0, 500.0f);
+    group.push_back(shelter);
+    REQUIRE(fix.issueMove(group, 900.0f, 200.0f, CommandKind::Move).accepted == group);
+    const auto& shieldEntries = fix.roster.store.orders()[shelter.index].entries();
+    REQUIRE(shieldEntries.size() == 1);
+    // TestRoster radius=4: row two trails 8 elmos behind the anchor (x=892
+    // facing east). The first centre-out visit lands on physical column 2,
+    // whose even-width offset is -1 half-diameter (world z=204); the second
+    // visit lands on column 3 (+1 half-diameter, world z=196). The shield
+    // owns the first ShieldFirst visit; anti-air falls back to the second.
+    CHECK(rm::test::asFloat(shieldEntries.front().targetX()) == Catch::Approx(892.0f));
+    CHECK(rm::test::asFloat(shieldEntries.front().targetZ()) == Catch::Approx(204.0f));
+    const auto& aaEntries = fix.roster.store.orders()[aa.index].entries();
+    REQUIRE(aaEntries.size() == 1);
+    CHECK(rm::test::asFloat(aaEntries.front().targetZ()) == Catch::Approx(196.0f));
+}
+
