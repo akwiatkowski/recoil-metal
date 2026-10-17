@@ -913,7 +913,8 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
     // last known position while radar or sonar sees a live source; leave it behind briefly if
     // that source dies, then reap it. A later generation in the same slot is concrete contrary
     // evidence: retaining both would project one stale blip alongside the replacement forever.
-    for (std::vector<RetainedRadarContact>& contacts : retainedRadarContacts_) {
+    for (std::size_t alliance = 0; alliance < retainedRadarContacts_.size(); ++alliance) {
+        std::vector<RetainedRadarContact>& contacts = retainedRadarContacts_[alliance];
         std::erase_if(contacts, [&store, slots](const RetainedRadarContact& contact) {
             return contact.unit.index < slots && store.slotAlive(contact.unit.index)
                    && store.idAt(contact.unit.index) != contact.unit;
@@ -926,6 +927,15 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
             contact.maybeDead = !sourceAlive;
             contact.deadTicks = contact.maybeDead ? contact.deadTicks + 1 : 0;
         }
+        // `C-276`'s confirmed-dead reaping (`0x005C83C0`/`ReconCanDetect`):
+        // this alliance's vision covers the blip's last-known position and
+        // sees nothing there — the grave is confirmed empty, so the blip
+        // reaps at once instead of lingering out the ten seconds.
+        std::erase_if(contacts, [this, alliance](const RetainedRadarContact& contact) {
+            return contact.maybeDead
+                   && sees(static_cast<int>(alliance), IntelKind::Vision, contact.x,
+                           contact.z);
+        });
         std::erase_if(contacts, [&rate](const RetainedRadarContact& contact) {
             return contact.deadTicks > rate.ticks(Seconds{kRetainedBlipLingerSeconds});
         });

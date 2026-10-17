@@ -408,6 +408,53 @@ TEST_CASE("C-276: a dead contact's blip expires after the linger", "[fa-intel]")
           }) == cleared.end());
 }
 
+// C-276's confirmed-dead edge: a dead blip's last-known position re-observed
+// by the alliance (vision covers it, nothing there) reaps the blip at once —
+// structural reaping, not the pinned ten-second linger.
+TEST_CASE("C-276: a re-observed dead blip reaps before the linger", "[fa-intel]") {
+    rm::unitdef::UnitDef watching = seer(0.0f, 400.0f, 0.0f);
+    rm::unitdef::UnitDef scouting = seer(200.0f, 0.0f, 0.0f);
+    rm::unitdef::UnitDef hull;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex scout = catalog.add(&scouting);
+    const rm::UnitTypeIndex target = catalog.add(&hull);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 200.0f, 200.0f);
+    const rm::sim::UnitId eyes = place(store, scout, 0, 200.0f, 550.0f);
+    const rm::sim::UnitId victim = place(store, target, 1, 300.0f, 200.0f);
+
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+    REQUIRE_FALSE(seenBy(0, store, catalog, armies, intel).empty());
+
+    store.kill(victim);
+    intel.update(store, catalog, armies, nullptr);
+    const auto lingering = seenBy(0, store, catalog, armies, intel);
+    REQUIRE(std::ranges::any_of(lingering, [victim](const rm::sim::Contact& contact) {
+        return contact.unit == victim;
+    }));
+
+    // Eyes over the grave: the pre-placed scout walks onto the blip's
+    // last-known position. Vision now covers it and sees nothing there, so
+    // the alliance knows the contact is gone. (Placed early so its spawn
+    // cannot recycle the victim's slot, which the slot-reuse edge owns.)
+    store.transforms()[eyes.index].x = rm::sim::fxFromFloat(300.0f);
+    store.transforms()[eyes.index].z = rm::sim::fxFromFloat(200.0f);
+    intel.update(store, catalog, armies, nullptr);
+    const auto cleared = seenBy(0, store, catalog, armies, intel);
+    CHECK(std::ranges::none_of(cleared, [victim](const rm::sim::Contact& contact) {
+        return contact.unit == victim;
+    }));
+}
+
+
 TEST_CASE("C-279: a seabed unit is a sonar contact, never radar or vision", "[fa-intel]") {
     // The layer byte's other half: retail's flag computation (`0x005D1E30`)
     // routes `layer ∈ {Seabed, Sub}` targets to sonar alone (`0x005C83C0`'s
