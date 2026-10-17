@@ -681,8 +681,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // grid for the product's motion class. `startPending`, which does need one, looks it up
         // for itself.
         const QueuedCommand* current = orders[slot].active();
-        if (current->kind() == CommandKind::Guard
-            && (!validGuard(current->asCommand(), store, catalog)
+        if ((current->kind() == CommandKind::Guard || current->kind() == CommandKind::Assist)
+            && ((current->kind() == CommandKind::Guard
+                     ? !validGuard(current->asCommand(), store, catalog)
+                     : !validAssist(current->asCommand(), store, catalog))
                 || !repairStillAllied(slot, current->target(), store, armies))) {
             teardownMovement(store.motion()[slot]);
             (void)orders[slot].finish();

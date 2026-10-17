@@ -1258,3 +1258,18 @@ TEST_CASE("C-183: guard arbitration chases a target outside every envelope",
     CHECK(f.roster.motion(guard).moving);
     CHECK(f.roster.motion(guard).destinationX > rm::sim::Fx::fromInt(220));
 }
+
+TEST_CASE("an assist retires when its guardee dies", "[guard][guard-work-regression]") {
+    // C-183's end rung: Guard retires on a dead guardee at the dispatch head
+    // (`CommandAdvance.cpp`), but legacy Assist has no such beat — a helper
+    // whose founder dies keeps walking its stale route forever.
+    Fixture f;
+    const UnitId founder = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId helper = f.roster.add(f.engineerType, 100.0f, 200.0f, 0, 100.0f);
+    REQUIRE(f.assist(helper, founder));
+    f.tick(1);
+    REQUIRE(f.roster.store.orders()[helper.index].active() != nullptr);
+    f.roster.store.kill(founder);
+    f.tick(1);
+    CHECK(f.roster.store.orders()[helper.index].active() == nullptr);
+}
