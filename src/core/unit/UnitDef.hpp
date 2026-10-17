@@ -583,6 +583,11 @@ struct UnitDef {
     float diveSurfaceSpeedElmosPerSecond = 8.0f;
     float airAutoLandTimeSec = 0.0f;
     float airFuelUseTimeSec = 0.0f;
+    /// `Physics.FuelRechargeRate` (engine schema RUnitBlueprintPhysics+0x308:
+    /// "Unit fuels up at this rate per second"). Unit-less scalar like `FuelUseTime`'s
+    /// seconds sibling; UEA0103 (T1 bomber) authors 5. Recorded for the fuel-rate
+    /// consumer that will read it, not yet consumed.
+    float airFuelRechargeRatePerSec = 0.0f;
     sim::Mag buildCostEnergy{};
     sim::Mag buildTime{};
     /// `C-236`: Lua's `BuildTime or 10` defaults an absent/false value, not an

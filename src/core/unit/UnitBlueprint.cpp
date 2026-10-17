@@ -590,6 +590,7 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         }
         def.airAutoLandTimeSec = numberOr(*airBlock, "AutoLandTime", 0.0f);
         def.airFuelUseTimeSec = numberOr(*airBlock, "FuelUseTime", 0.0f);
+        def.airFuelRechargeRatePerSec = numberOr(*physics, "FuelRechargeRate", 0.0f);
         // `C-224`, `Air+0x8c`: seconds of lead a bomb-drop weapon applies to a
         // moving ground target. Seconds, not ogrids — the only Air key that is
         // a duration rather than a length or a rate.

@@ -1801,3 +1801,32 @@ TEST_CASE("C-218: MaxGroundVariation reads the authored tolerance, defaulting to
     REQUIRE(none.has_value());
     CHECK(none->maxGroundVariationElmos == Catch::Approx(8.0f));
 }
+
+TEST_CASE("Physics.FuelRechargeRate parses the authored refuel scalar, defaulting to zero") {
+    // Native slot RUnitBlueprintPhysics+0x308 (`blueprint_layout.tsv:109`, registrar
+    // `0x00527898`, "Unit fuels up at this rate per second"). Shipped UEA0103 (T1
+    // bomber) authors `FuelRechargeRate = 5` under `Physics` beside `FuelUseTime`;
+    // 55 shipped unit blueprints author the key, all under `Physics`. Currently
+    // fails: the key is unread.
+    const Blueprint authored{"XXB0905_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', FuelUseTime = 400, FuelRechargeRate = 5 },
+            Air = { CanFly = true },
+            SizeX = 1, SizeY = 0.5, SizeZ = 1,
+        }
+    )"};
+    const auto bomber = rm::unitbp::loadFile(authored.path());
+    REQUIRE(bomber.has_value());
+    CHECK(bomber->airFuelRechargeRatePerSec == Catch::Approx(5.0f));
+
+    const Blueprint bare{"XXB0906_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Air', FuelUseTime = 400 },
+            Air = { CanFly = true },
+            SizeX = 1, SizeY = 0.5, SizeZ = 1,
+        }
+    )"};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->airFuelRechargeRatePerSec == Catch::Approx(0.0f));
+}
