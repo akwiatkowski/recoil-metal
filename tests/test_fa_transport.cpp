@@ -388,6 +388,83 @@ TEST_CASE("C-199: a ferry holds at the beacon for a straggler", "[fa-transport]"
     CHECK(rm::sim::fxToFloat(roster.transform(far).z) == Approx(80.0f).margin(10.0f));
 }
 
+TEST_CASE("C-199: an arrived waiter holds its ring spot for the ferry", "[fa-transport]") {
+    // The ferry-wait hold only covers a move that is still open: a unit that
+    // reached the beacon BEFORE the ferry existed retired its move normally,
+    // leaving an empty queue with a leftover leg destination at the beacon.
+    // It is still the ferry's business — standing in the ring for the lift,
+    // not parked there — so the carrier must board it rather than hold in
+    // Loading beside arrived cargo forever.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const UnitId transport = landedTransport(roster, transportType, 30.0f, 30.0f);
+    const UnitId waiter = roster.add(cargoType, 60.0f, 30.0f, 0, 500.0f);
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+
+    // No ferry yet: the walk to the pickup completes like any arrival.
+    REQUIRE(rm::sim::applyCommand(moveIssue(waiter, 30.0f, 30.0f, 1), roster.store,
+                                  roster.catalog, players, armies, terrain, gridFor,
+                                  roster.rate)
+                .accepted.size()
+            == 1);
+
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    bool arrived = false;
+    for (int i = 0; i < 6000 && !arrived; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        arrived = roster.store.orders()[waiter.index].active() == nullptr
+                  && !roster.motion(waiter).moving;
+    }
+    REQUIRE(arrived);
+    // The retired move left its destination at the beacon — the arrived
+    // waiter's mark, as opposed to a unit merely parked in the ring.
+    {
+        const Fx lx = roster.motion(waiter).destinationX - rm::sim::fxFromFloat(30.0f);
+        const Fx lz = roster.motion(waiter).destinationZ - rm::sim::fxFromFloat(30.0f);
+        REQUIRE(lx * lx + lz * lz
+                <= rm::sim::kFerryPickupRadius * rm::sim::kFerryPickupRadius);
+    }
+
+    // Only now does the ferry exist, anchored where the transport stands.
+    REQUIRE(rm::sim::applyCommand(
+                CommandIssue{.source = 0,
+                             .id = rm::commandId(0, 2),
+                             .player = 0,
+                             .kind = CommandKind::Ferry,
+                             .units = {transport},
+                             .targetX = rm::sim::fxFromFloat(80.0f),
+                             .targetZ = rm::sim::fxFromFloat(80.0f)},
+                roster.store, roster.catalog, players, armies, terrain, gridFor,
+                roster.rate)
+                .accepted.size()
+            == 1);
+
+    bool boarded = false;
+    bool delivered = false;
+    for (int i = 0; i < 6000 && !delivered; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        boarded = boarded || roster.motion(waiter).attached;
+        delivered = boarded && !roster.motion(waiter).attached;
+    }
+
+    REQUIRE(boarded);
+    REQUIRE(delivered);
+    CHECK(rm::sim::fxToFloat(roster.transform(waiter).x) == Approx(80.0f).margin(10.0f));
+    CHECK(rm::sim::fxToFloat(roster.transform(waiter).z) == Approx(80.0f).margin(10.0f));
+}
+
 /// A FERRYBEACON-shaped marker: UEB5102's category set, immobile, no command
 /// caps — the engine spawns it, so it never needs to act on its own.
 [[nodiscard]] UnitDef beaconDef() {

@@ -124,13 +124,20 @@ using AirState = MoveState::AirState;
     if (dx * dx + dz * dz > kFerryPickupRadius * kFerryPickupRadius) {
         return false;
     }
-    const QueuedCommand* head = store.orders()[slot].current();
-    if (head == nullptr) {
-        return false;
+    if (const QueuedCommand* head = store.orders()[slot].current(); head != nullptr) {
+        const Fx hx = head->targetX() - beacon[0];
+        const Fx hz = head->targetZ() - beacon[1];
+        return hx * hx + hz * hz <= kFerryPickupRadius * kFerryPickupRadius;
     }
-    const Fx hx = head->targetX() - beacon[0];
-    const Fx hz = head->targetZ() - beacon[1];
-    return hx * hx + hz * hz <= kFerryPickupRadius * kFerryPickupRadius;
+    // An ARRIVED waiter (`C-199`): the beacon move retired before the ferry
+    // existed, so the queue is empty — but the leg's leftover destination is
+    // the beacon, the mark of a unit that walked here for the lift. A unit
+    // merely parked in the ring never ordered a leg at the beacon, so its
+    // leftover destination sits elsewhere.
+    const MoveState& motion = store.motion()[slot];
+    const Fx lx = motion.destinationX - beacon[0];
+    const Fx lz = motion.destinationZ - beacon[1];
+    return lx * lx + lz * lz <= kFerryPickupRadius * kFerryPickupRadius;
 }
 
 } // namespace
@@ -746,6 +753,18 @@ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terra
             return;
         }
         for (UnitIndex other = 0; other < store.slotCount(); ++other) {
+            if (other == slot || !store.slotAlive(other)
+                || store.motion()[other].attached
+                || store.motion()[other].armyIndex != motion.armyIndex) {
+                continue;
+            }
+            const unitdef::UnitDef* def = catalog.def(store.typeAt(other));
+            if (def == nullptr || !def->transportable()) {
+                continue;
+            }
+            if (waitingAtBeacon(store, other, beacon)) {
+                return;  // an arrived waiter still holds its ring spot
+            }
             if (inboundToBeacon(store, catalog, other, beacon, self)) {
                 return;  // someone is still coming
             }
