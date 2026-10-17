@@ -83,6 +83,24 @@ TEST_CASE("FAI: idle units report IsIdleState from the snapshot flag",
     INFO(ai.lastError());
     REQUIRE(ok);
 }
+// `C-341`: `GetFocusArmy` is the client-local viewpoint — the 1-based army the
+// observer watches, `-1` with nobody focused (`aibrain.lua:296`, `ChatPayload.lua:23`).
+// Headless there is no observer, so the default is `-1` (debug-gated call sites
+// stay off); a match that sets one reports it back.
+TEST_CASE("C-341: GetFocusArmy reports the client-local viewpoint, -1 unfocused",
+          "[faf][ai][focus]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(ai.ready());
+    bool ok = ai.eval("assert(GetFocusArmy() == -1, 'headless starts unfocused')");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+    ai.setFocusArmy(0);
+    ok = ai.eval("assert(GetFocusArmy() == 1, 'army 0 reads back 1-based')");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
 
 // C-453: `Unit:GetAttacker` (`0x006cb910`) is one of two native leaves on the
 // AI-manager boundary — a per-unit attacker handle bound to its owner.
@@ -1327,6 +1345,61 @@ TEST_CASE("CPlatoon combat verbs queue targeted orders the port drains",
         assert(decisions[3].kind == 'patrol' and decisions[4].kind == 'patrol')
         assert(decisions[5].kind == 'guard' and decisions[5].target == tank.h)
         assert(not platoon:IsCommandsActive(cmd), 'the drain retires the token')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+// `SetPrioritizedTargetList`/`FindPrioritizedUnit`: the pair `NavalForceAI`
+// and `PatrolForceAI` aim through (platoon.lua:2231-2247) plus the engineer
+// near-unit lookup (platoon.lua:1779-1780). Both are counted stubs returning
+// nil today, so those plans can never pick a target.
+TEST_CASE("CPlatoon prioritized target lists pick the nearest live foe",
+          "[faf][ai][platoon-targets]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_type('TANK', { 'MOBILE', 'LAND', 'TECH1', 'DIRECTFIRE' })
+        __rm_faf_type('FOECMD', { 'MOBILE', 'LAND', 'COMMAND' })
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 2048, sizeZ = 2048, armies = 2, base = 'NormalMain', markers = {} })
+        local brain = __rm_faf.brains[0]
+        local mk = function(bp, x)
+            local u = { bp = bp, x = x, z = 0, __cats = __rm_faf.cats[bp] }
+            setmetatable(u, __rm_faf.unitMeta)
+            return u
+        end
+        local tank, cmdr = mk('TANK', 0), mk('FOECMD', 120)
+        cmdr.__cats = __rm_faf.cats.TANK
+        brain.snap.units = { tank, cmdr }
+        local near, far, dead = mk('FOECMD', 80), mk('FOECMD', 800), mk('FOECMD', 40)
+        dead.Dead = true
+        brain.snap.enemies = { near, far, dead }
+        local platoon = brain:MakePlatoon('Navy', 'none')
+        brain:AssignUnitsToPlatoon(platoon, { tank }, 'Attack', 'GrowthFormation')
+        -- No list yet: no target, not an error.
+        assert(platoon:FindPrioritizedUnit('Attack', 'Enemy', false, {0,0,0}, 200) == nil)
+        platoon:SetPrioritizedTargetList('Attack', { categories.COMMAND, categories.ALLUNITS })
+        local target = platoon:FindPrioritizedUnit('Attack', 'Enemy', false, {0,0,0}, 200)
+        assert(target == near, 'the nearest live COMMAND foe wins over the dead one at 40')
+        near.Dead = true
+        assert(platoon:FindPrioritizedUnit('Attack', 'Enemy', false, {0,0,0}, 200) == far,
+               'killing the nearest falls through to the next live foe')
+        near.Dead = nil
+        -- The no-arg patrol form reads the Attack list with no range gate.
+        assert(platoon:FindPrioritizedUnit() == near, 'the bare call finds the nearest listed foe')
+        -- An allied lookup searches the own snapshot, not the platoon's squads:
+        -- the engineer-near-commander case (platoon.lua:1780).
+        local eng = brain:MakePlatoon('Eng', 'none')
+        brain:AssignUnitsToPlatoon(eng, { tank }, 'Support', 'GrowthFormation')
+        eng:SetPrioritizedTargetList('support', { categories.COMMAND })
+        assert(eng:FindPrioritizedUnit('support', 'Ally', false, {0,0,0}, 50) == nil,
+               'no allied COMMAND unit stands in the own snapshot')
+        cmdr.__cats = __rm_faf.cats.FOECMD
+        assert(eng:FindPrioritizedUnit('support', 'Ally', false, {0,0,0}, 50) == cmdr,
+               'the engineer finds the allied commander')
     )");
     INFO(ai.lastError());
     REQUIRE(ok);

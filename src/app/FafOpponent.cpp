@@ -639,6 +639,45 @@ moho.platoon_methods.FindClosestUnit = function(self, squad, alliance, needToBeI
     end
     return best
 end
+)lua" + R"lua(
+-- `SetPrioritizedTargetList`/`FindPrioritizedUnit`: the pair `NavalForceAI`
+-- and `PatrolForceAI` aim through (platoon.lua:2231-2247) plus the engineer
+-- near-unit lookup (platoon.lua:1779-1780). The list is per-platoon, keyed by
+-- squad name ('Attack', 'support', ...); the lookup walks it in order and
+-- returns the nearest live unit matching the first non-empty category.
+-- 'Enemy' reads the observed-foe snapshot; anything else reads the own
+-- snapshot (the engineer-near-ally case). Public radii are ogrids, positions
+-- elmos. A dead (`Dead`) or destroyed (`BeenDestroyed`) candidate never
+-- wins; an empty list or no live match returns nil, not an error.
+moho.platoon_methods.SetPrioritizedTargetList = function(self, squad, categories)
+    self.__targetLists = self.__targetLists or {}
+    self.__targetLists[tostring(squad)] = categories
+end
+moho.platoon_methods.FindPrioritizedUnit = function(self, squad, alliance, _, position, radius)
+    local lists = self.__targetLists
+    local list = lists and lists[tostring(squad or 'Attack')]
+    if list == nil and squad == nil then list = lists and lists['Attack'] end
+    if list == nil then return nil end
+    local pool = (alliance == 'Enemy' or alliance == nil)
+        and self.__brain.snap.enemies or self.__brain.snap.units
+    local origin = position or self:GetPlatoonPosition()
+    local reach = radius and radius * 8
+    for _, category in ipairs(list) do
+        local best, bestDist
+        for _, u in ipairs(pool or {}) do
+            if not u.Dead and not (u.BeenDestroyed and u:BeenDestroyed())
+                and EntityCategoryContains(category, u) then
+                local dist = origin and VDist2(u.x, u.z, origin[1], origin[3]) or 0
+                if (reach == nil or dist <= reach)
+                    and (bestDist == nil or dist < bestDist) then
+                    best, bestDist = u, dist
+                end
+            end
+        end
+        if best then return best end
+    end
+    return nil
+end
 -- `Destroy` is the native teardown: the corpus's `PlatoonDisband` calls
 -- `aiBrain:DisbandPlatoon`, which lands here through the brain method below.
 moho.platoon_methods.Destroy = function(self)
