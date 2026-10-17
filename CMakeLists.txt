@@ -394,6 +394,7 @@ if(BUILD_TESTING)
         tests/test_text_layout.cpp
         tests/test_ui_viewport.cpp
         tests/test_ui_layers.cpp
+        tests/test_ui_overlay.cpp
         tests/test_key_input.cpp
         tests/test_hud.cpp
         tests/test_production_panel.cpp
