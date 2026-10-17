@@ -453,6 +453,47 @@ TEST_CASE("C-276: a re-observed dead blip reaps before the linger", "[fa-intel]"
         return contact.unit == victim;
     }));
 }
+// C-276's ally-confirmation edge: the blip's owner joins the viewing
+// alliance (`IsAlly` `0x005C4100`) — shared intel confirms the death, so
+// the dead blip reaps at once instead of lingering out the ten seconds.
+TEST_CASE("C-276: an allied owner's word reaps a dead blip at once", "[fa-intel]") {
+    rm::unitdef::UnitDef watching = seer(0.0f, 400.0f, 0.0f);
+    rm::unitdef::UnitDef hull;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex target = catalog.add(&hull);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 200.0f, 200.0f);
+    const rm::sim::UnitId victim = place(store, target, 1, 300.0f, 200.0f);
+
+    std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+    REQUIRE_FALSE(seenBy(0, store, catalog, armies, intel).empty());
+
+    store.kill(victim);
+    intel.update(store, catalog, armies, nullptr);
+    REQUIRE(std::ranges::any_of(seenBy(0, store, catalog, armies, intel),
+                                [victim](const rm::sim::Contact& contact) {
+                                    return contact.unit == victim;
+                                }));
+
+    // Ceasefire: the victim's army joins the viewing alliance. The owner's
+    // intel confirms the grave, so the maybeDead blip reaps on the next
+    // update instead of lingering.
+    armies[1].alliance = 0;
+    intel.update(store, catalog, armies, nullptr);
+    const auto cleared = seenBy(0, store, catalog, armies, intel);
+    CHECK(std::ranges::none_of(cleared, [victim](const rm::sim::Contact& contact) {
+        return contact.unit == victim;
+    }));
+}
+
 
 
 TEST_CASE("C-279: a seabed unit is a sonar contact, never radar or vision", "[fa-intel]") {

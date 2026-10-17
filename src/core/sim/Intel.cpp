@@ -927,6 +927,25 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
             contact.maybeDead = !sourceAlive;
             contact.deadTicks = contact.maybeDead ? contact.deadTicks + 1 : 0;
         }
+        // `C-276`'s ally confirmation (`IsAlly` `0x005C4100`): the blip's
+        // owner army now shares this alliance's vision, so its intel confirms
+        // the death — the grave needs no re-observation. The tombstone keeps
+        // the victim's `armyIndex` (death releases the handle, not the
+        // motion row), so the owner's alliance is still readable after death.
+        const auto ownerAllied = [&store, &armies, alliance](const RetainedRadarContact& contact) {
+            if (contact.unit.index >= store.slotCount()) {
+                return false;
+            }
+            const int army = store.motion()[contact.unit.index].armyIndex;
+            if (army == kNoArmy || static_cast<std::size_t>(army) >= armies.size()) {
+                return false;
+            }
+            return armies[static_cast<std::size_t>(army)].alliance
+                   == static_cast<int>(alliance);
+        };
+        std::erase_if(contacts, [&ownerAllied](const RetainedRadarContact& contact) {
+            return contact.maybeDead && ownerAllied(contact);
+        });
         // `C-276`'s confirmed-dead reaping (`0x005C83C0`/`ReconCanDetect`):
         // this alliance's vision covers the blip's last-known position and
         // sees nothing there — the grave is confirmed empty, so the blip
