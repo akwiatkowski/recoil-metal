@@ -308,7 +308,8 @@ std::size_t applyCaptureWork(UnitStore& store, const UnitCatalog& catalog,
                              std::span<const Army> armies, std::vector<CaptureWork>& captures,
                              std::span<const Construction> building, EventQueue* events,
                              std::span<SiloAmmo> siloAmmo,
-                             std::span<EnhancementWork> enhancements) {
+                             std::span<EnhancementWork> enhancements,
+                             std::span<SiloBuild> siloQueue) {
     std::size_t capturing = 0;
     for (std::size_t i = 0; i < captures.size();) {
         CaptureWork& work = captures[i];
@@ -406,7 +407,7 @@ std::size_t applyCaptureWork(UnitStore& store, const UnitCatalog& catalog,
         }
         const UnitId replacement =
             transferUnitArmy(store, work.target, work.armyIndex, events, siloAmmo,
-                             enhancements);
+                             enhancements, siloQueue);
         (void)replacement;
         captures.erase(captures.begin() + static_cast<std::ptrdiff_t>(i));
     }
@@ -415,7 +416,7 @@ std::size_t applyCaptureWork(UnitStore& store, const UnitCatalog& catalog,
 
 UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
                         EventQueue* events, std::span<SiloAmmo> siloAmmo,
-                        std::span<EnhancementWork> enhancements) {
+                        std::span<EnhancementWork> enhancements, std::span<SiloBuild> siloQueue) {
     if (!store.alive(unit)) {
         return UnitId{};
     }
@@ -472,7 +473,8 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
             continue;
         }
         (void)bones;
-        (void)transferUnitArmy(store, child, armyIndex, events, siloAmmo, enhancements);
+        (void)transferUnitArmy(store, child, armyIndex, events, siloAmmo, enhancements,
+                               siloQueue);
     }
     const UnitId replacement = store.spawn(UnitStore::Spawn{
         .type = type,
@@ -508,10 +510,18 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
     }
     // Lua restores silo ammo and in-flight enhancement work onto the
     // replacement, so a transferred silo keeps its stockpile and a
-    // half-built enhancement keeps its progress.
+    // half-built enhancement keeps its progress. The per-unit build queue
+    // (`SiloBuild`, `CAiSiloBuildImpl+0x20`) rides along too: a queued
+    // missile not yet in the tube is still the silo's build, not the old
+    // handle's.
     for (SiloAmmo& ammo : siloAmmo) {
         if (ammo.owner == unit) {
             ammo.owner = replacement;
+        }
+    }
+    for (SiloBuild& queued : siloQueue) {
+        if (queued.owner == unit) {
+            queued.owner = replacement;
         }
     }
     for (EnhancementWork& work_ : enhancements) {

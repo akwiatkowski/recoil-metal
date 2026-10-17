@@ -1023,14 +1023,14 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
     // lua/formations.lua:676-728): `BlockBuilderAir` lays a staggered chevron
     // (`StaggeredChevronBlock`, formations.lua:371-375) with its own
     // `GetChevronPosition` offsets (formations.lua:1013-1030), not the land
-    // block — so airborne members join the formation set and fan out below.
+    // block — so flyable members join the formation set and fan out below.
     std::vector<UnitId> airMembers;
     for (const UnitId unit : canonical) {
         if (!useGrowthFormation) {
             break;
         }
         if (!store.alive(unit) || issuer == nullptr || !authorised(*issuer, store, unit, armies)
-            || !store.motion()[unit.index].airborne) {
+            || !store.motion()[unit.index].canFly) {
             continue;
         }
         airMembers.push_back(unit);
@@ -1040,7 +1040,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             break;
         }
         if (!store.alive(unit) || issuer == nullptr || !authorised(*issuer, store, unit, armies)
-            || store.motion()[unit.index].airborne || gridForUnit == nullptr
+            || store.motion()[unit.index].canFly || gridForUnit == nullptr
             || gridForUnit(unit) == nullptr) {
             continue;
         }
@@ -1443,12 +1443,13 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                 || !allied(*ownerArmy, *recipientArmy)) {
                 continue;
             }
-            const UnitId replacement =
-                transferUnitArmy(store, unit, recipient, events,
-                                 siloAmmo != nullptr ? *siloAmmo
-                                                     : std::span<SiloAmmo>{},
-                                 enhancements != nullptr ? *enhancements
-                                                         : std::span<EnhancementWork>{});
+            const UnitId replacement = transferUnitArmy(
+                store, unit, recipient, events,
+                siloAmmo != nullptr ? std::span<SiloAmmo>{*siloAmmo} : std::span<SiloAmmo>{},
+                enhancements != nullptr ? std::span<EnhancementWork>{*enhancements}
+                                        : std::span<EnhancementWork>{},
+                siloQueue != nullptr ? std::span<SiloBuild>{*siloQueue}
+                                     : std::span<SiloBuild>{});
             if (replacement.generation != 0) {
                 result.accepted.push_back(unit);
             }
@@ -1735,7 +1736,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                                               * static_cast<FxWide>(row)));
             }
         } else if ((issue.kind == CommandKind::Move || issue.kind == CommandKind::AttackMove)
-                   && canonical.size() > 1 && !store.motion()[unit.index].airborne) {
+                   && canonical.size() > 1 && !store.motion()[unit.index].canFly) {
             // Degenerate fan-out for a group that cannot fill a formation (fewer than two
             // valid members): centre a line on the clicked anchor, adjacent ranks one
             // collision radius apart, rotated by the same facing so the intake stays

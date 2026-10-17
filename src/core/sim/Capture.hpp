@@ -108,19 +108,22 @@ std::size_t applyCaptureWork(UnitStore& store, const UnitCatalog& catalog,
                              std::span<const Army> armies, std::vector<CaptureWork>& captures,
                              std::span<const Construction> building, EventQueue* events,
                              std::span<SiloAmmo> siloAmmo = {},
-                             std::span<EnhancementWork> enhancements = {});
+                             std::span<EnhancementWork> enhancements = {},
+                             std::span<SiloBuild> siloQueue = {});
 /// The replacement-entity ownership transfer both capture and gifting share —
 /// retail's `ChangeUnitArmy` (`C-238`): the old unit leaves silently (no wreck,
 /// no kill credit) and a replacement of the same type, transform and full
 /// health record stands under `armyIndex`. Lua's `SimUtils.lua:68-132` restore
 /// list is what the record carries: kills/veterancy, health, fuel (in
 /// `MoveState`), shield state and toggle, installed enhancements, silo ammo and
-/// in-flight enhancement work. Returns the replacement's handle, or an invalid
+/// its queued builds (`SiloBuild`, `CAiSiloBuildImpl+0x20`) and in-flight
+/// enhancement work. Returns the replacement's handle, or an invalid
 /// `UnitId` when the source is dead.
 [[nodiscard]] UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
                                       EventQueue* events,
                                       std::span<SiloAmmo> siloAmmo = {},
-                                      std::span<EnhancementWork> enhancements = {});
+                                      std::span<EnhancementWork> enhancements = {},
+                                      std::span<SiloBuild> siloQueue = {});
 
 
 /// The units being captured this tick and by whose side, for C-157's targeting

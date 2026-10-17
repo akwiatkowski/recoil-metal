@@ -408,6 +408,43 @@ TEST_CASE("a grouped air move fans out instead of piling onto the click",
     }
 }
 
+TEST_CASE("a grounded flyer keeps its chevron slot in a group move", "[formation]") {
+    // A flyer is flyable (`canFly`) whether it is off the deck (`airborne`) or
+    // parked on it (`Bottom`): retail routes by `Air.CanFly`, not by who is
+    // already up. A grounded bomber in a group move joins the air chevron, not
+    // the pile-on-click fallback.
+    Fixture fix;
+    rm::unitdef::UnitDef bomberDef;
+    bomberDef.name = "test_bomber";
+    bomberDef.categories = {"AIR", "BOMBER", "TECH1"};
+    bomberDef.motion = rm::unitdef::MotionType::Air;
+    const rm::UnitTypeIndex bomber = fix.roster.addType(bomberDef);
+    std::vector<UnitId> group;
+    for (int i = 0; i < 4; ++i) {
+        const UnitId id = fix.roster.add(bomber, 200.0f,
+                                         200.0f + 10.0f * static_cast<float>(i),
+                                         0, 500.0f);
+        fix.roster.store.motion()[id.index].canFly = true;
+        fix.roster.store.motion()[id.index].airborne = false;
+        fix.roster.store.motion()[id.index].airState = rm::sim::MoveState::AirState::Bottom;
+        group.push_back(id);
+    }
+    const rm::sim::ApplyCommandResult result = fix.issueMove(group, 900.0f, 215.0f);
+    REQUIRE(result.accepted == group);
+
+    // The air chevron parks every slot within ~3 elmos of the anchor (0.375-elmo
+    // chevron steps plus the -2/-1 block stagger); the land FourWide block a
+    // misclassified flyer would draw instead spreads +/-12 elmos.
+    for (const UnitId member : group) {
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        const float x = rm::test::asFloat(entries.front().targetX());
+        const float z = rm::test::asFloat(entries.front().targetZ());
+        CHECK(std::abs(x - 900.0f) < 4.0f);
+        CHECK(std::abs(z - 215.0f) < 4.0f);
+    }
+}
+
 TEST_CASE("a grouped sub attack-move sails its own attack blocks", "[formation]") {
     // Retail `AttackFormation` (ART-S007 lua/formations.lua:654-666) sails
     // submerged hulls in their own blocks too: up to ten subs fill a five-wide

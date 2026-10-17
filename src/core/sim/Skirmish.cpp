@@ -1485,7 +1485,9 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                                                          : std::span<SiloAmmo>{},
                                match.enhancements != nullptr
                                    ? std::span<EnhancementWork>{*match.enhancements}
-                                   : std::span<EnhancementWork>{});
+                                   : std::span<EnhancementWork>{},
+                               match.siloQueue != nullptr ? std::span<SiloBuild>{*match.siloQueue}
+                                                          : std::span<SiloBuild>{});
     }
     (void)applyRepairWork(store, catalog, repairs);
 

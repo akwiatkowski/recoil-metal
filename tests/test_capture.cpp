@@ -712,3 +712,46 @@ TEST_CASE("a captured unit keeps its custom name on the replacement", "[capture]
     rm::sim::UnitStore reloaded(back->units);
     CHECK(reloaded.customName(reloaded.idAt(replacement.index)) == "Bob");
 }
+TEST_CASE("a captured silo keeps its queued missile builds on the replacement", "[capture]") {
+    // `C-240`/`SimUtils.lua:68-132`: the transfer's Lua restores ammo onto the
+    // replacement — the match-side records that keyed on the old handle follow
+    // it. Stored rounds already remap (`SiloAmmo.owner`); the per-unit build
+    // queue (`SiloBuild`, `CAiSiloBuildImpl+0x20`) must follow too, or a
+    // captured silo with a missile in flight silently drops the queued build.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    std::vector<rm::sim::SiloAmmo> siloAmmo{
+        rm::sim::SiloAmmo{.owner = target,
+                           .weapon = 0,
+                           .slot = 1,
+                           .capacity = 5,
+                           .totalTicks = 100000,
+                           .costPerTick = {.mass = rm::sim::Mag::fromInt(1)}}};
+    std::vector<rm::sim::SiloBuild> siloQueue{
+        rm::sim::SiloBuild{.owner = target, .slot = 1}};
+    REQUIRE(f.capture(captor, target));
+    const std::vector<const rm::sim::PassabilityGrid*> grids(f.roster.catalog.size(),
+                                                             &f.grid);
+    for (int tick = 0; tick < 120 && f.roster.store.alive(target); ++tick) {
+        rm::sim::Match match{.armies = f.armies,
+                             .economies = f.economies,
+                             .projectiles = &f.shots,
+                             .building = &f.building,
+                             .captures = &f.captures,
+                             .siloAmmo = &siloAmmo,
+                             .siloQueue = &siloQueue,
+                             .events = &f.events,
+                             .passability = grids,
+                             .commandersEver = f.commandersEver,
+                             .baseStorage = {.mass = rm::sim::magFromFloat(1000.0f),
+                                             .energy = rm::sim::magFromFloat(1000.0f)}};
+        (void)rm::sim::tickSkirmish(f.roster.store, f.roster.catalog, match, f.terrain,
+                                    f.roster.rate);
+    }
+    REQUIRE_FALSE(f.roster.store.alive(target));
+    const UnitId replacement = f.roster.store.idAt(target.index);
+    REQUIRE(f.roster.store.alive(replacement));
+    REQUIRE(siloQueue.size() == 1);
+    CHECK(siloQueue.front().owner == replacement);
+}
