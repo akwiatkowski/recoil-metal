@@ -38,10 +38,10 @@ struct ParticleIn {
     float rotation;
     float rotationRate;
     packed_float3 animation;
+    float drag;  // retail `particle.fx` DragEnabled rate; 0 means coast
     uint flags;
     packed_float2 trailRange;
 };
-
 struct ParticleOut {
     float4 position [[position]];
     float4 colour;
@@ -54,7 +54,6 @@ struct ParticleOut {
     float length;
     float4 animation;
 };
-
 // How hard dust is pulled back down, in elmos per second squared.
 //
 // Not gravity: a dust cloud is suspended in air and settles far more slowly than a
@@ -108,7 +107,15 @@ vertex ParticleOut particleVertex(uint vid [[vertex_id]],
     float along = (vid >= 2) ? 1.0 : 0.0;
     float side = (vid == 1 || vid == 3) ? 1.0 : -1.0;
     if (textured) {
-        world = float3(p.origin) + float3(p.velocity) * t + 0.5 * float3(p.acceleration) * t * t;
+        // Retail `particle.fx` drag branch (docs/shader-metal-port.md §3.2):
+        // `e^-kt` with the file's literal 2.71828183 base. Dragged motion
+        // integrates to `v*(1-e^-kt)/k`; k<=0 coasts exactly, so unflagged
+        // particles keep their old path bit-for-bit.
+        const float dragK = max(p.drag, 0.0);
+        const float dragDistance = dragK > 0.0
+            ? (1.0 - pow(2.71828183, -dragK * t)) / dragK
+            : t;
+        world = float3(p.origin) + float3(p.velocity) * dragDistance + 0.5 * float3(p.acceleration) * t * t;
         if (p.length > 0) {
             const float3 axis = float3(p.axis);
             const float3 view = normalize(cross(right, up));

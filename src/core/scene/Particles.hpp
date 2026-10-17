@@ -46,6 +46,11 @@ struct Particle {
     float rotation = 0; ///< radians
     float rotationRate = 0; ///< radians/second
     std::array<float, 3> animation{}; ///< frames/second, texture strip, ramp row [0,1]
+    /// Retail `particle.fx` `DragEnabled` rate (`EmitterBlueprint`
+    /// `ParticleResistance` + emitter-cycle `ResistanceCurve` sample): 0
+    /// coasts; positive decays velocity as `v*(1-e^-kt)/k`
+    /// (`shader-metal-port.md §3.2`). Zero on non-weapon particles.
+    float drag = 0.0f;
     std::uint32_t flags = 0; ///< bit 0: flat in world XZ plane; bit 1: ribbon segment
     /// For a ribbon segment (flags bit 1): the trail-relative coordinate at the strip's
     /// origin end and at its far end, 0 at the projectile's head and 1 at the authored
@@ -54,7 +59,7 @@ struct Particle {
     std::array<float, 2> trailRange{};
 };
 
-static_assert(sizeof(Particle) == 120, "Particle must match the packed shader input");
+static_assert(sizeof(Particle) == 124, "Particle must match the packed shader input");
 
 /// The most particles drawn at once.
 ///

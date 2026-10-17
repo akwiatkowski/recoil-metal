@@ -377,6 +377,25 @@ TEST_CASE("emitter drag reads the authored resistance flag and curve", "[weapon-
     CHECK(material.resistance);
     CHECK(material.resistanceCurve.sample(0.5f) == Catch::Approx(0.018f));
 }
+TEST_CASE("drag-flagged particles decay their birth velocity", "[weapon-visuals]") {
+    // `shader-metal-port.md §3.2`: retail `particle.fx` routes DragEnabled=1
+    // particles down the exponential `e^-kt` branch (literal 2.71828183),
+    // where `k` is the emitter-cycle `ResistanceCurve` sample. Parsed
+    // `ParticleResistance` currently reaches the material but no particle
+    // carries it, so a flagged puff coasts like an unflagged one.
+    rm::WeaponMaterial material;
+    material.resistance = true;
+    material.resistanceCurve.range = 5.0f;
+    material.resistanceCurve.keys = {{2.5f, 0.018f, 0.0f}};
+    material.particleLifetime.keys = {{0.0f, 1.0f, 0.0f}};
+    material.startSize.keys = {{0.0f, 1.0f, 0.0f}};
+    material.endSize.keys = {{0.0f, 1.0f, 0.0f}};
+    std::uint32_t seed = 7;
+    const auto particle = rm::makeWeaponParticle(material, 0, 0.5f, {}, seed);
+    CHECK(particle.drag == Catch::Approx(0.018f));
+    const auto plain = rm::makeWeaponParticle(rm::WeaponMaterial{}, 0, 0.5f, {}, seed);
+    CHECK(plain.drag == Catch::Approx(0.0f));
+}
 
 
 TEST_CASE("a launched shot owns its Lua visual identity", "[weapon-visuals]") {

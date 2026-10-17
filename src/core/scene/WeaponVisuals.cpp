@@ -253,6 +253,10 @@ Particle makeWeaponParticle(const WeaponMaterial& material, std::uint32_t id,
     particle.rotationRate = sample(material.rotationRate) * radiansPerDegree;
     particle.animation = {sample(material.frameRate), sample(material.textureSelection),
         sample(material.rampSelection)};
+    // Retail `particle.fx` `DragEnabled` (docs/shader-metal-port.md §3.2):
+    // the `ResistanceCurve` sample at birth phase is the decay rate; unset
+    // without the flag so a zero curve with the flag reads as still air.
+    particle.drag = material.resistance ? std::max(0.0f, sample(material.resistanceCurve)) : 0.0f;
     return particle;
 }
 
