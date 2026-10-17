@@ -456,6 +456,30 @@ TEST_CASE("C-252: a paused enhancement holds its progress, bills nothing, and re
     CHECK(job.scene.store.enhancements()[acu.index].at("LCH") == "AdvancedEngineering");
 }
 
+TEST_CASE("C-255: installing ShieldHeavy stands its shield up without a toggle cap",
+          "[fa-progress][enhancement]") {
+    // Retail's heavy-shield branch runs `CreateShield` with no `AddToggleCap`
+    // (the scripts only take the cap away on Remove) — but it still stands
+    // the bubble up charging like every other shield branch.
+    rm::test::Roster roster;
+    roster.rate = rm::sim::TickRate{10};
+    rm::unitdef::UnitDef def;
+    def.name = "test_commander";
+    def.health = rm::test::mag(100.0f);
+    const auto params = rm::lua::parseTable(
+        "{ ShieldMaxHealth=800, ShieldRegenRate=10, ShieldRechargeTime=20, "
+        "  ShieldRegenStartTime=5, ShieldSize=12, ShieldVerticalOffset=-1 }");
+    REQUIRE(params);
+    def.enhancements.push_back({.name = "ShieldHeavy", .slot = "Back",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .parameters = *params});
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "ShieldHeavy"));
+    CHECK(roster.store.health()[unit.index].shield.maximum == rm::test::mag(800.0f));
+    CHECK(rm::sim::shieldFor(roster.store, roster.catalog, unit.index).maximum
+          == rm::test::mag(800.0f));
+}
 TEST_CASE("C-254: a dead unit's enhancement registry entry leaves with it",
           "[fa-progress][enhancement]") {
     // `SimUnitEnhancements[id]` is live unit state: `Unit::OnKilled` drops the

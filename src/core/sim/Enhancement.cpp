@@ -166,6 +166,7 @@ constexpr ScriptEffectRow kScriptEffects[] = {
     // spawn/kill, silo-ammo purge. Values ride `EnhancementEffects`; these are
     // the script-side labels and flags.
     {"Shield", {.toggleCapAdds = kToggleShield, .createsShield = true}},
+    {"ShieldHeavy", {.createsShield = true}},
     {"ShieldRemove", {.toggleCapRemoves = kToggleShield, .destroysShield = true}},
     {"ShieldHeavyRemove", {.toggleCapRemoves = kToggleShield,
                            .destroysShield = true}},
