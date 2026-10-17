@@ -699,6 +699,13 @@ struct UnitDef {
     float skirtSquaresX = 0.0f;
     float skirtSquaresZ = 0.0f;
 
+    /// Whether the terrain under this structure's skirt flattens to the placement
+    /// height on spawn — retail's `Physics.FlattenSkirt` native bool slot
+    /// (`blueprint_layout.tsv:73`, RUnitBlueprintPhysics+0x278: "If true, terrain
+    /// under building's skirt will be flattened"). Absent reads as false, the same
+    /// rule the `flagAt` family applies to every other optional bool.
+    bool flattenSkirt = false;
+
     /// Where the skirt rectangle's centre sits relative to the unit position, in ogrids.
     ///
     /// FA authors a lower-corner `SkirtOffset*`, not a centre. Its native rectangle is

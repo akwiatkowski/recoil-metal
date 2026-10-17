@@ -307,6 +307,29 @@ TEST_CASE("retail derives zero footprints and clamps skirt geometry") {
     CHECK(def->skirtCentreOffsetSquaresX == Approx(0.5f));
     CHECK(def->skirtCentreOffsetSquaresZ == Approx(-2.0f));
 }
+TEST_CASE("Physics.FlattenSkirt parses to the unit def") {
+    // Retail's native bool slot at blueprint_layout.tsv:73 (RUnitBlueprintPhysics+0x278,
+    // "If true, terrain under building's skirt will be flattened") — currently unparsed.
+    const Blueprint flat{"UEB0101_unit.bp", R"(
+        UnitBlueprint {
+            Defense = { MaxHealth = 100 },
+            Physics = { MotionType = 'RULEUMT_None', FlattenSkirt = true },
+        }
+    )"};
+    const auto withFlag = rm::unitbp::loadFile(flat.path());
+    REQUIRE(withFlag.has_value());
+    CHECK(withFlag->flattenSkirt);
+    const Blueprint plain{"UEB0102_unit.bp", R"(
+        UnitBlueprint {
+            Defense = { MaxHealth = 100 },
+            Physics = { MotionType = 'RULEUMT_None' },
+        }
+    )"};
+    const auto withoutFlag = rm::unitbp::loadFile(plain.path());
+    REQUIRE(withoutFlag.has_value());
+    CHECK_FALSE(withoutFlag->flattenSkirt);
+}
+
 
 TEST_CASE("a wreck's value and the builder's reach arrive from the economy tables") {
     // The value chain is FA's `Unit.lua:1090-1146`: a wreck holds
