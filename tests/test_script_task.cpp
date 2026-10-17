@@ -1827,3 +1827,51 @@ TEST_CASE("C-228: ScriptHost runs the REAL EnhanceTask.lua with a moho stub base
     CHECK(host.errors().empty());
     std::filesystem::remove_all(scratch);
 }
+TEST_CASE("C-318: ScriptHost onDestroy calls the current state's OnDestroy") {
+    // `C-318` (`mohodata/lua/system/class.lua`): `ChangeState` moves method
+    // lookup to the new state. `taskTick` already re-reads the live
+    // `TaskTick` every beat; `onDestroy` still calls the creation-time
+    // `__rm_hooks.destroy`, so a state-local `OnDestroy` never fires.
+    rm::vfs::Vfs content;
+    rm::app::ScriptHost host{content};
+    host.registerTask("C318Destroy", rm::app::ScriptTaskRegistration{
+        .source =
+            "TypeClass = Class({}) {\n"
+            "  OnCreate = function(self) ChangeState(self, self.Enhancing) end,\n"
+            "  OnDestroy = function(self) G_c318d = 1 end,\n"
+            "  TaskTick = function(self) return 1 end,\n"
+            "  Enhancing = State {\n"
+            "    TaskTick = function(self) return 1 end,\n"
+            "    OnDestroy = function(self) G_c318d = 2 end,\n"
+            "  },\n"
+            "}\n",
+    });
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c318_destroy";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "C318Destroy"},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    REQUIRE(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                   nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                   nullptr, &host) == 1);
+    roster.store.orders()[unit.index].clear();
+    CHECK(host.taskGlobalNumber("G_c318d") == 2.0);
+    // The live state's OnDestroy must win over the creation-time hook.
+    REQUIRE(host.errors().empty());
+}

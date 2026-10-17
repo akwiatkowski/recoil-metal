@@ -963,13 +963,24 @@ void ScriptHost::onDestroy(rm::sim::UnitId unit, std::string_view task,
     if (lua != nullptr && instance.self != 0) {
         lua_rawgeti(lua, LUA_REGISTRYINDEX, static_cast<lua_Integer>(instance.self));
         if (lua_istable(lua, -1)) {
-            lua_getfield(lua, -1, "__rm_hooks");
-            if (lua_istable(lua, -1)) {
-                lua_getfield(lua, -1, "destroy");
-                lua_remove(lua, -2);  // drop __rm_hooks; leave destroy
-            } else {
+            // The instance's `OnDestroy` resolves through its metatable — the
+            // class, or the current state after `ChangeState` swaps it
+            // (`C-318`). A cached copy would freeze dispatch on the
+            // creation-time state, so destroy re-reads the live field the
+            // same way `taskTick` re-reads `TaskTick`; `__rm_hooks.destroy`
+            // is only the no-state fallback (kept for instances whose class
+            // bound `OnDestroy` after construction).
+            lua_getfield(lua, -1, "OnDestroy");
+            if (!lua_isfunction(lua, -1)) {
                 lua_pop(lua, 1);
-                lua_getfield(lua, -1, "OnDestroy");
+                lua_getfield(lua, -1, "__rm_hooks");
+                if (lua_istable(lua, -1)) {
+                    lua_getfield(lua, -1, "destroy");
+                    lua_remove(lua, -2);  // drop __rm_hooks; leave destroy
+                } else {
+                    lua_pop(lua, 1);
+                    lua_getfield(lua, -1, "OnDestroy");
+                }
             }
             if (lua_isfunction(lua, -1)) {
                 lua_insert(lua, -2);
