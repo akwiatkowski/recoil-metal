@@ -791,3 +791,35 @@ TEST_CASE("v64: standing orders capture and restore onto the scene", "[fa-persis
     CHECK(continued.scene.rallyPoints.empty());
     CHECK(continued.autoExpanders.empty());
 }
+// v65: the scripted opponent's one-shot wave flag rides the save — one byte
+// per army (`rm::sim::Opponent::attackLaunched`, the `launchesAttack`
+// once-only gate). A pre-v65 save carries none, and the wave state decodes
+// empty — the match resumes with the wave unlaunched, as before.
+TEST_CASE("v65: scripted wave flags survive a save round-trip", "[fa-persist]") {
+    Scenario live;
+    auto runner = live.runner();
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+        .tick = 1,
+        .random = runner.match.random.snapshot(),
+        .pathServiceBeats = runner.pathService.serviceBeats(),
+        .units = live.scene.store.snapshot(),
+        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+        .pathService = runner.pathService.snapshot(),
+        .opponentWaves = std::vector<std::uint8_t>{1, 0}}));
+    REQUIRE(saved);
+    REQUIRE(saved->opponentWaves.has_value());
+    REQUIRE(saved->opponentWaves->size() == 2);
+    CHECK((*saved->opponentWaves)[0] == 1);
+    CHECK((*saved->opponentWaves)[1] == 0);
+
+    const auto legacy = rm::sim::SaveState::decode(rm::sim::SaveState::encodeAtVersion(
+        {.tick = 1,
+         .random = runner.match.random.snapshot(),
+         .pathServiceBeats = runner.pathService.serviceBeats(),
+         .units = live.scene.store.snapshot(),
+         .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+         .pathService = runner.pathService.snapshot()},
+        64));
+    REQUIRE(legacy);
+    CHECK_FALSE(legacy->opponentWaves.has_value());
+}

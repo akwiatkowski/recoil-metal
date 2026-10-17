@@ -123,6 +123,12 @@ struct SaveState {
         std::vector<AutoExpandOrder> expand;
     };
     std::optional<StandingOrders> standingOrders;
+    /// Scripted-opponent wave flags (v65): one byte per army carrying
+    /// `rm::sim::Opponent::attackLaunched` — the `launchesAttack` once-only
+    /// gate — so a mid-combat app save resumes without re-firing the wave.
+    /// Empty when no opponent state rode the save; absent (nullopt) on
+    /// pre-v65 decodes.
+    std::optional<std::vector<std::uint8_t>> opponentWaves;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);

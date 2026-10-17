@@ -225,6 +225,10 @@ constexpr std::uint32_t kVersion63 = 63;
 // auto-expand flags with retry/refusal state). Pre-v64 saves decode with no
 // standing orders — the match resumes without them, as before.
 constexpr std::uint32_t kVersion64 = 64;
+// v65 adds the scripted-opponent wave flags (one byte per army holding
+// `rm::sim::Opponent::attackLaunched`). Pre-v65 saves decode with no wave
+// state — the match resumes with the wave unlaunched, as before.
+constexpr std::uint32_t kVersion65 = 65;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1919,6 +1923,42 @@ void writeStandingOrders(PayloadWriter& w, const std::optional<SaveState::Standi
     state = std::move(out);
     return true;
 }
+// v65 trails the payload after the standing orders: the scripted-opponent
+// wave flags, nullable like `features` — a match with no opponent state
+// saves the absent byte, and a pre-v65 reader keeps none.
+void writeOpponentWaves(PayloadWriter& w, const std::optional<std::vector<std::uint8_t>>& waves) {
+    w.u8(waves.has_value());
+    if (!waves) {
+        return;
+    }
+    w.count(waves->size());
+    for (std::uint8_t flag : *waves) {
+        if (flag > 1) {
+            throw std::length_error("opponent wave flag is not a bit");
+        }
+        w.u8(flag);
+    }
+}
+
+[[nodiscard]] bool readOpponentWaves(PayloadReader& r, std::optional<std::vector<std::uint8_t>>& waves) {
+    std::uint8_t present{};
+    if (!r.u8(present) || present > 1) return false;
+    if (!present) {
+        waves.reset();
+        return true;
+    }
+    std::size_t count{};
+    if (!r.count(count, 1)) return false;
+    std::vector<std::uint8_t> out;
+    out.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        std::uint8_t flag{};
+        if (!r.u8(flag) || flag > 1) return false;
+        out.push_back(flag);
+    }
+    waves = std::move(out);
+    return true;
+}
 // V45 trails the payload after the unit pose: the emitter pool, nullable like
 // `features` — a match with no effect manager saves the absent byte, and an
 // older reader keeps no effects.
@@ -2766,6 +2806,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion51) writeFeatureFlags(payloadWriter, state.features);
     if (version >= kVersion62) writeCustomNames(payloadWriter, state.units);
     if (version >= kVersion64) writeStandingOrders(payloadWriter, state.standingOrders);
+    if (version >= kVersion65) writeOpponentWaves(payloadWriter, state.opponentWaves);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -2820,7 +2861,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion56 && version != kVersion57
                && version != kVersion58 && version != kVersion59 && version != kVersion60
                && version != kVersion61 && version != kVersion62 && version != kVersion63
-               && version != kVersion64)
+               && version != kVersion64 && version != kVersion65)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2929,6 +2970,10 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion64 && !readStandingOrders(reader, standingOrders)) {
         return std::nullopt;
     }
+    std::optional<std::vector<std::uint8_t>> opponentWaves;
+    if (version >= kVersion65 && !readOpponentWaves(reader, opponentWaves)) {
+        return std::nullopt;
+    }
     // Pre-v51 saves predate the flag: every feature they hold is a wreck, and
     // every wreck then marked the ground — restore that, or a loaded match
     // loses its scorch.
@@ -2953,7 +2998,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        .productionOverrides = std::move(productionOverrides),
                        .effects = std::move(effects),
                        .terrainStamps = std::move(terrainStamps),
-                       .standingOrders = std::move(standingOrders)};
+                       .standingOrders = std::move(standingOrders),
+                       .opponentWaves = std::move(opponentWaves)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -2981,7 +3027,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion64);
+    return rm::sim::encode(state, kVersion65);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {
