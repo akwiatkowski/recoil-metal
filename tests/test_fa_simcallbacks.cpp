@@ -116,6 +116,21 @@ TEST_CASE("C-346: GiveResourcesToPlayer moves a fraction of the sender's stores"
                              {.from = 1, .to = 2, .mass = rm::sim::kFxOne}));
     CHECK(rm::sim::magToFloat(channel.economies[1].stored.mass) == 1000.0f);
 }
+TEST_CASE("C-210: a civilian army is outside the SimCallback channel",
+          "[sim]") {
+    // `SimCallbacks.cpp` names the gap itself: retail's `OkayToMessWithArmy`
+    // (`0x007113a0`) also refuses civilian armies, and `victory.lua:28`
+    // skips them in every poll arm (`ArmyIsCivilian`). A civilian army can
+    // neither give nor receive, and its flags stay untouched.
+    Channel channel;
+    channel.armies[2].civilian = true;
+    CHECK_FALSE(channel.call("GiveResourcesToPlayer",
+                             {.from = 2, .to = 1, .mass = rm::sim::kFxOne}));
+    CHECK_FALSE(channel.call("GiveResourcesToPlayer",
+                             {.from = 1, .to = 2, .mass = rm::sim::kFxOne}));
+    CHECK_FALSE(channel.call("SetOfferDraw", {.army = 2, .value = true}));
+    CHECK_FALSE(channel.armies[2].offeringDraw);
+}
 
 TEST_CASE("C-346: SetResourceSharing and SetOfferDraw write the army flags",
           "[sim]") {

@@ -7,17 +7,22 @@
 // comment's "validate all arguments against cheats and exploits" is the reason the
 // channel exists at all.
 //
-// `OkayToMessWithArmy` (`SimUtils.lua`) is retail's guard: the named army must be a
-// real, living participant. Retail's version also refuses civilian armies and
-// out-of-game brains; the bounded slice's equivalent is "in range and not defeated".
+// `OkayToMessWithArmy` (`SimUtils.lua`, native `0x007113a0`) is retail's guard:
+// the named army must be a real, living, non-civilian participant. Out-of-game
+// brains have no counterpart in the bounded slice; defeated and civilian cover it.
 
 namespace rm::sim {
 namespace {
 
-/// `OkayToMessWithArmy`: a valid, undefeated army index.
+/// `OkayToMessWithArmy` (`0x007113a0`): a valid, undefeated, non-civilian army
+/// index. Civilians sit outside the channel (`victory.lua:28` skips them in
+/// every poll arm via `ArmyIsCivilian`), so their flags and stores are untouched.
 [[nodiscard]] bool okayToMessWith(const SimCallbackContext& context, int army) noexcept {
-    return army >= 0 && static_cast<std::size_t>(army) < context.armies.size()
-           && !context.armies[static_cast<std::size_t>(army)].defeated;
+    if (army < 0 || static_cast<std::size_t>(army) >= context.armies.size()) {
+        return false;
+    }
+    const Army& named = context.armies[static_cast<std::size_t>(army)];
+    return !named.defeated && !named.civilian;
 }
 
 /// `SetAlliance(a, b, 'Ally')` — retail merges TEAMS, not armies: everyone sharing
