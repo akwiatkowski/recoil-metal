@@ -507,6 +507,14 @@ struct UnitScene {
     /// advanceMatch, decayed there every tick at the batch's per-channel
     /// return rates — presentation only, forgotten with the slot.
     std::unordered_map<rm::UnitIndex, rm::RecoilSlide> recoilShown;
+    /// The last beam strike each slot's shooter noted, so a dwelling beam lays
+    /// a trail along its tracked end (C-290 `ScorchThread`): retail lays one
+    /// `CreateSplat` per pass at the end's current position, and a dragged end
+    /// draws a continuous line rather than one point per shot. Keyed by slot
+    /// with the firing handle's generation — a recycled slot's first strike
+    /// notes but does not bridge to its predecessor's end. Presentation only,
+    /// erased with the slot, never hashed.
+    std::unordered_map<rm::UnitIndex, std::pair<rm::Generation, std::array<float, 2>>> beamLastEnd;
     /// The tick each slot's unit deployed (construction finished), for one-shot
     /// deploy animations. Absent means match start — pre-placed units unfold as
     /// the match opens. Erased with the slot, like every other per-slot map.
@@ -1024,6 +1032,9 @@ struct UnitScene {
             return !store.alive(store.idAt(kv.first));
         });
         std::erase_if(recoilShown, [this](const auto& kv) {
+            return !store.alive(store.idAt(kv.first));
+        });
+        std::erase_if(beamLastEnd, [this](const auto& kv) {
             return !store.alive(store.idAt(kv.first));
         });
         std::erase_if(deployedTick, [this](const auto& kv) {

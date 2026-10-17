@@ -377,8 +377,35 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     if (waterLevelElmos > 0.0f && strikeHeightElmos <= waterLevelElmos) {
         return false;
     }
-    noteImpactMark(scene, rm::sim::fxToFloat(event.at[0]),
-                   rm::sim::fxToFloat(event.at[2]), 0.0f, tick);
+    const float x = rm::sim::fxToFloat(event.at[0]);
+    const float z = rm::sim::fxToFloat(event.at[2]);
+    noteImpactMark(scene, x, z, 0.0f, tick);
+    // Retail's `ScorchThread` lays one `CreateSplat` per pass at the tracked
+    // end while the beam dwells (`defaultcollisionbeams.lua` C-290): a dragged
+    // end draws a continuous line, not one point per shot. Bridge from this
+    // shooter's last noted end to the current one with midpoint splats spaced
+    // one blast-less mark diameter apart (2.5 elmos, `kImpactMarkRadiusElmos`
+    // x2 — the same discs the projection draws, so the trail reads unbroken).
+    // Same-shooter only, matched on the firing handle's generation: a recycled
+    // slot's first strike notes but bridges nothing, and a stationary beam
+    // lays no filler. Presentation only, never hashed.
+    const auto prior = scene.beamLastEnd.find(event.unit.index);
+    const bool sameShooter = prior != scene.beamLastEnd.end()
+                             && prior->second.first == event.unit.generation;
+    const float prevX = sameShooter ? prior->second.second[0] : x;
+    const float prevZ = sameShooter ? prior->second.second[1] : z;
+    scene.beamLastEnd[event.unit.index] = {event.unit.generation, {x, z}};
+    if (sameShooter) {
+        const float dx = x - prevX;
+        const float dz = z - prevZ;
+        const float span = std::sqrt(dx * dx + dz * dz);
+        const float step = kImpactMarkRadiusElmos * 2.0f;  // elmos (one splat diameter)
+        const auto middles = static_cast<std::size_t>(span / step);
+        for (std::size_t i = 1; i <= middles; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(middles + 1);
+            noteImpactMark(scene, prevX + dx * t, prevZ + dz * t, 0.0f, tick);
+        }
+    }
     return true;
 }
 

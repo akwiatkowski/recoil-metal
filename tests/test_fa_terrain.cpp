@@ -427,6 +427,30 @@ TEST_CASE("C-290: only ScorchThread beam classes scorch", "[fa-terrain]") {
                                   "QuantumBeamGeneratorCollisionBeam");
     CHECK(dry.impactMarks.size() == 1);
 }
+TEST_CASE("C-290: a dwelling beam lays a trail along its tracked end", "[fa-terrain]") {
+    // Retail's `ScorchThread` (`defaultcollisionbeams.lua` C-290) lays one
+    // `CreateSplat` per pass at the beam's tracked end while it dwells — a
+    // moving strike point draws a continuous line, not one point per shot. A
+    // beam that fires twice from the same shooter with its end dragged across
+    // dry ground must therefore leave marks spanning the drag, not a doubled
+    // mark at one end.
+    rm::app::UnitScene scene = makeScene(false, 0.0f);
+    rm::sim::Event first{};
+    first.kind = rm::sim::EventKind::BeamFired;
+    first.unit = rm::sim::UnitId{0, 1};
+    first.at = rm::test::at(500, 40, 500);
+    (void)rm::app::noteBeamScorch(scene, first, 40.0f, 0.0f);
+    rm::sim::Event second{};
+    second.kind = rm::sim::EventKind::BeamFired;
+    second.unit = first.unit;
+    second.at = rm::test::at(560, 40, 500);
+    (void)rm::app::noteBeamScorch(scene, second, 40.0f, 0.0f);
+    REQUIRE(scene.impactMarks.size() >= 2);
+    const bool spansDrag = std::ranges::any_of(scene.impactMarks, [](const auto& mark) {
+        return mark.x > 505.0f && mark.x < 555.0f;
+    });
+    CHECK(spansDrag);
+}
 
 TEST_CASE("C-292: only a land-layer death scorches the ground", "[fa-terrain]") {
     // Retail's `Unit::OnKilled` gates `CreateScorchableDecal` on
