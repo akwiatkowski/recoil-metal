@@ -95,17 +95,19 @@ Uncommitted at this checkpoint: `src/app/FafOpponent.cpp`,
 Full serial gate: **2,261 registered cases, 0 failures** (610.53 s; same
 asset/performance skip kinds as the prior gate).
 
-## What remains from 100% (2026-10-16, measured against the dashboard)
+## What remains from 100% (2026-10-17, measured against the dashboard)
 
 Dashboard `Implemented` scores average 70.0% across the 20 gameplay rows
-(1,400 / 20); 4 rows read 100%, 16 below the goal's 97% bar. The new slices
-above do not move any row score yet — row updates stay with the subsystem
-owners' rescore pass. Per-row gaps, from the sections below:
+(1,400 / 20); 4 rows read 100%, 16 below the goal's 97% bar. No row score
+moved in this turn — row updates stay with the subsystem owners' rescore
+pass. Full serial ctest 2,261/2,261 green on the clean tree. Per-row gaps,
+from the sections below:
 
 - FA-CONTENT 50%: exact retail SCD mount/override precedence beyond the
   pinned lua/mohodata collision; remaining blueprint/bootstrap surface.
 - FA-LUA 25%: general gameplay-script scheduler/threading and mod surface
-  beyond the EnhanceTask adapter and hook/mod-table plumbing.
+  beyond the EnhanceTask adapter and hook/mod-table plumbing. The
+  weapon→beam-class mapping also lives here: `BeamType` is script-side only.
 - FA-CMD 75%: remaining guard-ladder branches and factory intake edge cases.
 - FA-ECON 75%: transfer-parity remainder (fuel/ammo/shield edge cases,
   concurrent captors, COMMAND targets).
@@ -116,13 +118,16 @@ owners' rescore pass. Per-row gaps, from the sections below:
 - FA-NAVY 75%: `OnEnterWater`/`OnExitWater` Lua hooks, `OnCollisionCheck`
   default-deny gate — both need a script surface the sim lacks.
 - FA-TRANSPORT 75%: pickup-beacon exact semantics (spawned unit vs order
-  anchor); transport-shield cargo coverage is implemented.
+  anchor, C-413 queue-head getter). The live-anchor slice is shelved in the
+  stash: it regresses the ferry route and arrived-cargo boarding needs the
+  waiter-assignment redesign, not another ring tweak.
 - FA-INTEL 50%: non-radar recon families beyond the pinned linger/expiry
   loop and slot-reuse reaping.
 - FA-PROGRESS 75%: enhancement/special-unit remainder past the implemented
   lifecycle, tray, toggle-cap, and veterancy slices.
-- FA-TERRAIN 75%: dwell-trail beam marks, weapon→beam-class mapping for the
-  opt-out drain; wreck/terrain-type behavior remainder.
+- FA-TERRAIN 75%: dwell-trail beam marks; wreck/terrain-type behavior
+  remainder. The beam-class gate is implemented at the helper; the drain
+  mapping is closed as script-side (FA-LUA).
 - FA-AI 50%: native retail brain/platoon architecture and naval combat
   parity beyond the FAF binding surface.
 - FA-UI 75%: remaining WP-40 surface (idle selectors, overlays, key
