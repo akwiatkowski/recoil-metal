@@ -66,9 +66,10 @@ inline constexpr Fx kFerryPickupRadius = Fx::fromInt(10);
 /// (`lua/formations.lua: GuardFormation`, `sizeMult = 3` elmos, first five
 /// slots per ring, naval rings at 8) — is the layout: staging spot `i`
 /// (zero-based among the carrier's current waiters) sits at radius `3 + 3 ×
-/// (i / 5)` elmos around the beacon, at bearing `i / current-ring-size` of a
-/// transportable same-army unit holding an order into the beacon's ring, in
-/// slot order — the same scan the Loading phase boards from.
+/// (i / 5)` elmos around the CARRIER, at bearing `i / current-ring-size`
+/// of a full turn. A waiter is a live, unattached, transportable same-army
+/// unit holding an order into the beacon's ring, in slot order — the same
+/// scan the Loading phase boards from.
 [[nodiscard]] std::array<Fx, 2> ferryStagingSpot(const UnitStore& store,
                                                  const UnitCatalog& catalog,
                                                  UnitId carrier,

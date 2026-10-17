@@ -860,7 +860,7 @@ TEST_CASE("C-199: waiting units stage onto the carrier-anchored ring",
     // `GuardFormationName` — retail's Guard ring (`lua/formations.lua:
     // `GuardFormation`, `sizeMult = 3` elmos, first five slots per ring).
     // `ferryStagingSpot` is the sim's ring: waiter `i` stages at radius
-    // `3 + 3 × (i / 5)` elmos around the beacon, at bearing `i / ring-size`
+    // `3 + 3 × (i / 5)` elmos around the carrier, at bearing `i / ring-size`
     // of a full turn, in slot order. Two waiters take opposite sides of the
     // ring; a unit with no beacon order is not a waiter and keeps the hull.
     const rm::HeightField field = flatField();
@@ -923,6 +923,38 @@ TEST_CASE("C-199: waiting units stage onto the carrier-anchored ring",
     CHECK(parkedSpot[0] == roster.transform(transport).x);
     CHECK(parkedSpot[1] == roster.transform(transport).z);
 }
+
+TEST_CASE("C-199: the staging ring anchors at the carrier, not the beacon",
+          "[fa-transport]") {
+    // `TransportGenerateWaitingFormationForUnits` (`0x005eca10`, C-199)
+    // builds the waiting formation anchored at the transport — the ring
+    // follows the carrier, not the beacon point. Carrier at (40, 30),
+    // beacon at (30, 30): first waiter stages 3 elmos off the HULL.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const UnitId transport = landedTransport(roster, transportType, 40.0f, 30.0f);
+    const UnitId waiter = roster.add(cargoType, 36.0f, 30.0f, 0, 500.0f);
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+    REQUIRE(rm::sim::applyCommand(moveIssue(waiter, 30.0f, 30.0f, 1), roster.store,
+                                  roster.catalog, players, armies, terrain, gridFor,
+                                  roster.rate)
+                .accepted.size()
+            == 1);
+    const std::array<rm::sim::Fx, 2> beacon{rm::sim::fxFromFloat(30.0f),
+                                           rm::sim::fxFromFloat(30.0f)};
+    const std::array<rm::sim::Fx, 2> spot = rm::sim::ferryStagingSpot(
+        roster.store, roster.catalog, transport, waiter.index, beacon);
+    CHECK(rm::sim::fxToFloat(spot[0]) == Approx(40.0f).margin(0.01f));
+    CHECK(rm::sim::fxToFloat(spot[1]) == Approx(33.0f).margin(0.01f));
+}
+
 
 TEST_CASE("C-199: a unit reordered off the beacon is not waited on",
           "[fa-transport]") {

@@ -216,7 +216,7 @@ std::array<Fx, 2> ferryStagingSpot(const UnitStore& store, const UnitCatalog& ca
     const Fx radius = Fx::fromInt(3 * (ring + 1));
     const auto bearing =
         static_cast<Brad>(std::int64_t{inRing} * kBradFullTurn / std::max(1, ringSize));
-    return {beacon[0] + fxSin(bearing) * radius, beacon[1] + fxCos(bearing) * radius};
+    return {at.x + fxSin(bearing) * radius, at.z + fxCos(bearing) * radius};
 }
 
 
