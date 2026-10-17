@@ -914,6 +914,26 @@ void restoreStandingOrders(MatchRunner& runner,
     }
 }
 
+std::vector<std::uint8_t> captureOpponentWaves(const MatchRunner& runner) {
+    std::vector<std::uint8_t> out;
+    out.reserve(runner.scripts.size());
+    for (const auto& script : runner.scripts) {
+        out.push_back(script && script->attackLaunched() ? std::uint8_t{1} : std::uint8_t{0});
+    }
+    return out;
+}
+
+void restoreOpponentWaves(MatchRunner& runner, std::span<const std::uint8_t> waves) {
+    for (std::size_t i = 0; i < runner.scripts.size() && i < waves.size(); ++i) {
+        if (waves[i] == 0) {
+            continue;
+        }
+        if (auto* scripted = dynamic_cast<rm::ai::ScriptedOpponent*>(runner.scripts[i].get())) {
+            scripted->setAttackLaunched();
+        }
+    }
+}
+
 std::size_t runAutoExpansion(MatchRunner& runner, rm::TickIndex tick) {
     UnitScene& scene = runner.scene;
     std::erase_if(runner.autoExpanders, [&](const AutoExpander& e) {
@@ -1134,7 +1154,7 @@ namespace rm::app {
 /// A free function rather than a loop at the call site because the human player's slot is
 /// filled too: `runOpponents` skips it by army index, and a hole in the vector would make
 /// every later index arithmetic instead of a lookup.
-[[nodiscard]] std::vector<std::unique_ptr<rm::ai::Opponent>> makeScriptedOpponents(
+std::vector<std::unique_ptr<rm::ai::Opponent>> makeScriptedOpponents(
     std::size_t armies) {
     std::vector<std::unique_ptr<rm::ai::Opponent>> scripts;
     scripts.reserve(armies);

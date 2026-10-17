@@ -398,6 +398,21 @@ bool toggleAutoExpand(MatchRunner& runner, std::span<const rm::sim::UnitId> buil
 void restoreStandingOrders(MatchRunner& runner,
                            const rm::sim::SaveState::StandingOrders& orders);
 
+/// Captures the scripted-opponent wave flags for the save envelope (v65):
+/// one byte per runner script holding `attackLaunched` — the `launchesAttack`
+/// once-only gate. Foreign implementations answer the same query through the
+/// port and need no downcast; only the restore re-seats scripted state.
+[[nodiscard]] std::vector<std::uint8_t> captureOpponentWaves(const MatchRunner& runner);
+
+/// Restores wave flags decoded from a save. Short vectors leave the tail
+/// unlaunched, long ones are truncated; only scripted opponents are re-seated.
+void restoreOpponentWaves(MatchRunner& runner, std::span<const std::uint8_t> waves);
+
+/// One `ScriptedOpponent` per army, each told which army it plays. Declared
+/// here so save/resume tests can re-seat opponents the harness silenced.
+[[nodiscard]] std::vector<std::unique_ptr<rm::ai::Opponent>> makeScriptedOpponents(
+    std::size_t armies);
+
 [[nodiscard]] const rm::scenario::Marker* nearestFreeDeposit(
     const UnitScene& scene, std::span<const rm::scenario::Marker> markers,
     const std::array<rm::sim::Fx, 3>& from);

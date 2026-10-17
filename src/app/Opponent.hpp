@@ -175,6 +175,10 @@ public:
     void advance(rm::TickIndex tick) override;
     [[nodiscard]] std::span<const Decision> drain() const override { return decisions_; }
     [[nodiscard]] bool attackLaunched() const override { return script_.attackLaunched; }
+    /// Test/resume seam: re-seat the v65 wave flag decoded from a save. The
+    /// `launchesAttack` gate is once-only, so a resumed match must start
+    /// launched when the saved match already fired — never re-fire.
+    void setAttackLaunched() noexcept { script_.attackLaunched = true; }
 
     /// Which army this plays. Set once at match setup.
     void playFor(int army) noexcept { army_ = army; }

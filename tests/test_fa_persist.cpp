@@ -823,3 +823,31 @@ TEST_CASE("v65: scripted wave flags survive a save round-trip", "[fa-persist]") 
     REQUIRE(legacy);
     CHECK_FALSE(legacy->opponentWaves.has_value());
 }
+
+// The app half of v65: capture lifts the one-shot wave flags off the live
+// runner (a resumed match must not re-fire an attack it already launched),
+// and restore re-seats them onto scripted opponents only — foreign
+// implementations keep their own state, dead detail below the port.
+TEST_CASE("v65: wave flags capture and restore onto the runner", "[fa-persist]") {
+    Scenario live;
+    auto runner = live.runner();
+    // The harness silences opponents for determinism; re-seat them so the
+    // wave flags have owners to capture from.
+    runner.scripts = rm::app::makeScriptedOpponents(live.scene.armies.size());
+    REQUIRE(runner.scripts.size() == 2);
+    auto* first = dynamic_cast<rm::ai::ScriptedOpponent*>(runner.scripts[0].get());
+    REQUIRE(first != nullptr);
+    first->setAttackLaunched();
+    const std::vector<std::uint8_t> captured = rm::app::captureOpponentWaves(runner);
+    REQUIRE(captured.size() == 2);
+    CHECK(captured[0] == 1);
+    CHECK(captured[1] == 0);
+
+    Scenario resumed;
+    auto continued = resumed.runner();
+    continued.scripts = rm::app::makeScriptedOpponents(resumed.scene.armies.size());
+    REQUIRE(continued.scripts.size() == 2);
+    rm::app::restoreOpponentWaves(continued, captured);
+    CHECK(continued.scripts[0]->attackLaunched());
+    CHECK_FALSE(continued.scripts[1]->attackLaunched());
+}
