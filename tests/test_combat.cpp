@@ -4455,21 +4455,3 @@ TEST_CASE("a worse-class challenger never dislodges the incumbent on row alone (
     // on class before its better row is ever compared.
     CHECK(pick(incumbent) == incumbent);
 }
-TEST_CASE("an authored DamageFriendly splash hurts the shooter's own side") {
-    // `weapon.lua:GetDamageTable` defaults `DamageFriendly` to true when the
-    // blueprint states nothing; `DamageArea` threads it into the sphere, where
-    // `C-428`'s bit skips the `IsAlly` reject. Ordinary projectile splash must
-    // carry the authored flag off the weapon's own blueprint the same way —
-    // the channel exists today only for the Cybran redirect's flipped shots.
-    // UAA0302's torpedo authors `DamageFriendly = true` with a 1-ogrid blast.
-    const std::vector<Army> armies = rm::sim::freeForAll(2);
-    Roster roster;
-    Weapon weapon = directFire(40.0f, 300.0f, 30.0f);
-    weapon.damageFriendly = true;  // UAA0302 torpedo shape
-    const rm::sim::TickRate rate{};
-    const Projectile shot = rm::sim::launch(
-        rm::test::at(0, 0, 0), rm::test::at(0, 0, 10), weapon, 0, rate,
-        rate.perTick(weapon.muzzleVelocityElmosPerSecond),
-        rm::unitdef::flatDamage(weapon.damage));
-    CHECK(shot.friendlyFire);
-}

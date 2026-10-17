@@ -3098,12 +3098,6 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     // projectile blueprint's own keys, resolved into `projectileTraits` at load.
     shot.stayUnderwater = weapon.projectileTraits.stayUnderwater;
     shot.destroyOnWater = weapon.projectileTraits.destroyOnWater;
-    // `weapon.lua:GetDamageTable` threads the weapon blueprint's `DamageFriendly`
-    // into the shot's damage table (`C-428`'s sphere bit); an interceptor keeps
-    // the channel the Cybran redirect flips on the return leg instead.
-    if (!interceptor) {
-        shot.friendlyFire = weapon.damageFriendly;
-    }
     // `C-095`/`C-169`/`C-172`: the cap, the assigned-target gate, and the
     // gravity flag — all authored on the projectile blueprint, carried on
     // the shot like `maxHealth` above.
