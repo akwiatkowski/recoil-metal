@@ -751,8 +751,11 @@ replacement"`, with a v62 save round-trip; `[capture]` 21 cases /
 `WindowedSession.mm` build failure on clean HEAD, untouched by this
 slice). The
 [minimum retail Capture specification](capture-implementation-spec.md) corrects
-earlier readings: the captor supplies the cost method, attached target children add
-costs, and `Unit+0x690` counts active capture tasks.
+ earlier readings: the captor supplies the cost method, attached target children add
+ costs, and `Unit+0x690` counts active capture tasks. **Implemented 2026-10-17
+ (fuel transfer pin):** the replacement keeps the victim's remaining `fuelRatio`
+ via the whole-motion snapshot
+ (`tests/test_capture.cpp:"a capture keeps the target's remaining fuel"`).
 Ordinary mobile construction now follows
 `C-248`: the active Build order routes the engineer toward the site and creates no construction
 until centre distance minus the builder's smaller footprint and target's larger skirt is within
@@ -1504,29 +1507,23 @@ offscreen capture, preserve the sim hash, and update WP-41 and FA-PRESENT.
 
 ### FA-PERSIST - Replay, Hashing, And Save/Resume
 
-**Current slice:** emitter placements now ride the envelope with their
-continued-hash proof (`C-552`, tested — `[fa-persist]`): a mid-order save with
-intel configured carries one stamp record per slot (square, alliance, disable
-mask, cheat, layer key plus the exact sense/hidden square lists the grids
-held), the restore re-adds the grids directly — no priming `update` is owed,
-and none may run, since an extra tick would bank brownout recovery and age
-retained contacts past the live match — and the resumed match hashes
-identically for 300 ticks. SaveState v59 retains all older readers; a pre-v59
-save decodes with empty stamp records and keeps the `C-426` re-stamp contract
-(pinned by a v58-encode legacy test). A saved FlowField still reduces to its
-expansion count — the deterministic Dijkstra replays it on restore.
+ **Current slice:** caller-owned standing orders ride the v64 envelope with
+ capture/restore helpers and their continued-hash proof (tested —
+ `[fa-persist]`): a mid-combat app save carries factory rally points by builder
+ slot and auto-expand flags with retry/refusal state, the restore re-seats them
+ onto the live scene/runner, and SaveState v64 retains all older readers — a
+ pre-v64 save decodes with no standing orders. Emitter placements ride with
+ their continued-hash proof (`C-552`); a saved FlowField reduces to its
+ expansion count and the deterministic Dijkstra replays it on restore.
 
 **Largest gap:** this is not yet a general mid-combat app save. External input
 and the opponent VM remain outside the envelope. Replay is a separate
 compatibility boundary.
 
-**Audit 2026-10-17:** the boundary is concrete, not abstract — app-side
-standing orders live outside the sim envelope with no save path at all:
-factory rally points (`UnitScene::rallyPoints`, `Scene.hpp`) and auto-expand
-flags (`MatchRunner::autoExpanders`, `Match.hpp`) are caller-owned, and no
-`SaveState` field, encoder, or test covers them. A mid-combat app save that
-resumes them is the smallest retail-evidenced next slice; external input,
-opponent VM, and replay transport stay out of scope.
+ **Audit 2026-10-17:** the v64 slice closed the standing-order boundary — rally
+ points and auto-expand flags now have a save path with tests. The remaining
+ envelope gap is external input, the opponent VM, and replay transport (goal
+ prompt below).
 
 ```text
 /goal Continue the pool-by-pool envelope: the remaining intel grids and

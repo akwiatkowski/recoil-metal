@@ -595,6 +595,21 @@ TEST_CASE("a capture keeps the target's enhancements and shield toggle", "[captu
           == "AdvancedEngineering");
     CHECK(f.roster.store.scriptBitDisabled(replacement, 0));
 }
+TEST_CASE("a capture keeps the target's remaining fuel", "[capture]") {
+     // Motion (with `fuelRatio`) snapshots whole onto the replacement, so a
+     // half-drained target must not refuel on transfer — the replacement
+     // keeps the victim's remaining fuel, like shield health and veterancy.
+     Fixture f;
+     const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+     const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+     f.roster.store.motion()[target.index].fuelRatio = rm::sim::fxFromFloat(0.5f);
+     REQUIRE(f.capture(captor, target));
+     f.tick(50);
+     CHECK_FALSE(f.roster.store.alive(target));
+     const UnitId replacement = f.roster.store.idAt(target.index);
+     REQUIRE(f.roster.store.alive(replacement));
+     CHECK(f.roster.store.motion()[replacement.index].fuelRatio == rm::sim::fxFromFloat(0.5f));
+ }
 TEST_CASE("a transfer refused by the captor's unit cap leaves the old unit and reports failure", "[capture]") {
     // Spec §"Failure" (`0x0074E421`): replacement-creation failure leaves
     // the ordinary unattached old target intact, cleans capture
