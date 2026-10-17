@@ -3238,6 +3238,7 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         Mag incoming;    ///< damage after this owner's armour multiplier
         Mag absorb;      ///< decided once from the whole blast, spent across every target
         bool covered;    ///< radius-zero compatibility: whether this dome covered the hit
+        bool ownerHit = false; ///< whether the owner's own hull took blast damage below
     };
     std::vector<BlastShield> shields;
     const bool areaBlast = radiusElmos > Fx{};
@@ -3508,6 +3509,14 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         const Mag applied = std::min(healths[slot].current, wanted);
         healths[slot].current -= applied;
         dealt += applied;
+        // A shield owner's own hull hit below already received its unshielded
+        // remainder through `damageOne` — the charge loop must not forward the
+        // same excess a second time (`PassOverkillDamage` below).
+        for (BlastShield& bubble : shields) {
+            if (bubble.slot == slot) {
+                bubble.ownerHit = true;
+            }
+        }
         if (healths[slot].current <= Mag{}) {
             // `C-146`/`Unit.lua:803-808`: the killing blow's excess is the
             // wreck's overkill ratio numerator — `wanted` is the pre-clipping
@@ -3568,8 +3577,15 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
         // corpus `UAL0303_unit.bp:78`): the excess over remaining shield
         // health reaches the owner's hull through `DoTakeDamage` — here the
         // same `DealDamage` armour+handicap value the shield itself absorbed.
-        const Mag overkill = shield.passOverkillDamage && bubble.absorb > absorbed
-                                 ? bubble.absorb - absorbed
+        // The forward fires only when the owner's hull was NOT hit in the
+        // target loop: a `damageOne` hit already delivered the unshielded
+        // remainder, and forwarding `incoming - oldShield` on top would
+        // charge the same excess twice. (The old `absorb > absorbed` arm
+        // could never fire — `absorbed` is `min(current, absorb)` by
+        // construction — so the live retail condition is collapse with no
+        // hull hit, computed as `incoming - oldShield` like `GetOverkill`.)
+        const Mag overkill = shield.passOverkillDamage && !bubble.ownerHit
+                                 ? bubble.incoming - absorbed
                                  : Mag{};
         owner.shield.current -= absorbed;
         owner.shield.regenDelayRemaining = shield.regenDelay;
@@ -3596,6 +3612,12 @@ Mag damageTargets(std::array<Fx, 3> centre, Fx radiusElmos,
                 owner.current -= hullTaken;
                 dealt += hullTaken;
                 owner.lastHitBy = by;
+                if (owner.current <= Mag{}) {
+                    // `C-146`/`Unit.lua:803-808` through the forward: the
+                    // wreck's overkill ratio numerator is the HULL excess —
+                    // what the forward could not fit — not the shield excess.
+                    owner.overkillExcess = overkill - hullTaken;
+                }
                 emit(events, Event{
                                  .kind = EventKind::UnitDamaged,
                                  .unit = store.idAt(bubble.slot),

@@ -106,6 +106,36 @@ TEST_CASE("an allied shield absorbs a death blast only when it damages friendlie
     CHECK(friendly.first == rm::sim::Mag::fromInt(60));
     CHECK(friendly.second == rm::sim::Mag::fromInt(100));
 }
+
+TEST_CASE("a pass-overkill forward that kills records the hull excess for the wreck") {
+    // Retail `Unit.lua:803-808` via `shield.lua` `PassOverkillDamage`
+    // (corpus `UAL0303_unit.bp:78`): the forward reaches the hull through
+    // `DoTakeDamage`, so a killing forward leaves the HULL excess for the
+    // wreck's `C-146` overkill ratio. The generator stands clear of the
+    // blast — its hull is hit ONLY through the forward — so 15 forwarded
+    // into a 10-point hull leaves an excess of 5.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef overkill = shieldDef();
+    overkill.name = "pass_overkill_forward_kill";
+    overkill.shield.passOverkillDamage = true;
+    const rm::UnitTypeIndex shieldType = roster.addType(overkill);
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 10.0f);
+    const rm::sim::UnitId sheltered = roster.add(targetType, 75.0f, 0.0f, 1, 100.0f);
+    roster.health(generator).shield.current = rm::sim::Mag::fromInt(25);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    (void)rm::sim::damageArea(
+        rm::test::at(100, 0, 0), rm::sim::Fx::fromInt(30),
+        rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40)), 0, roster.store, armies,
+        &roster.catalog);
+
+    REQUIRE(roster.health(generator).current == rm::sim::Mag{});
+    CHECK(roster.health(sheltered).current == rm::sim::Mag::fromInt(85));
+    REQUIRE(roster.health(generator).overkillExcess.has_value());
+    CHECK(rm::test::asFloat(*roster.health(generator).overkillExcess) == Catch::Approx(5.0f));
+}
+
 TEST_CASE("a NOSPLASHDAMAGE ally still rejects a friendly death blast") {
     // `C-428`: the DamageFriendly bit skips the IsAlly reject, but the
     // NOSPLASHDAMAGE category reject stands regardless — a splash-immune ally
@@ -554,6 +584,7 @@ TEST_CASE("each shield uses its owner's armour multiplier for absorption") {
     CHECK(roster.health(structure).shield.current == rm::sim::Mag{});
     CHECK(rm::test::asFloat(roster.health(target).current) == Approx(95.0f));
 }
+
 TEST_CASE("a handicapped owner's bubble absorbs divided damage") {
     // `C-396`: each shield's absorbed value already includes owner-armour AND
     // handicap — retail runs the shield itself through `DealDamage`
