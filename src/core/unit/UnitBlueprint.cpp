@@ -440,6 +440,8 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // "If true, terrain under building's skirt will be flattened." Absent reads as
     // false — the same `flagAt` rule every other optional bool follows.
     def.flattenSkirt = flagAt(*physics, "FlattenSkirt");
+    def.maxGroundVariationElmos =
+        numberOr(*physics, "MaxGroundVariation", 1.0f) * scmap::kElmosPerOgrid;
     def.skirtSquaresX = numberOr(*physics, "SkirtSizeX", 0.0f);
     def.skirtSquaresZ = numberOr(*physics, "SkirtSizeZ", 0.0f);
     // Positive offsets are discarded by retail's `ComputeDerivedQuantities`; negative ones

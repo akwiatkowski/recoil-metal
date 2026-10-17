@@ -706,6 +706,12 @@ struct UnitDef {
     /// rule the `flagAt` family applies to every other optional bool.
     bool flattenSkirt = false;
 
+    /// `C-218`: `Physics.MaxGroundVariation` (engine schema RUnitBlueprintPhysics+0x28c:
+    /// "Maximum elevation difference across skirt for build site"). Elmos like every
+    /// sibling length; retail constructs it as 1.0 ogrid, and UEB5101-style walls
+    /// author 50. Recorded for the placement gate that will read it, not yet consumed.
+    float maxGroundVariationElmos = 8.0f;
+
     /// Where the skirt rectangle's centre sits relative to the unit position, in ogrids.
     ///
     /// FA authors a lower-corner `SkirtOffset*`, not a centre. Its native rectangle is

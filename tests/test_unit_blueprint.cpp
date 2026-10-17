@@ -1773,3 +1773,31 @@ TEST_CASE("C-218: absent MaxSpeedReverse and BackUpDistance read as the -1 senti
     CHECK(stated->maxSpeedReverseOgridsPerSecond == Catch::Approx(0.0f));
     CHECK(stated->backUpDistanceOgrids == Catch::Approx(0.0f));
 }
+
+TEST_CASE("C-218: MaxGroundVariation reads the authored tolerance, defaulting to retail's 1.0 ogrid") {
+    // `C-218`'s closing constructor defaults (`fa-exe-analysis-plan.md`): retail
+    // constructs `Physics.MaxGroundVariation` as 1.0, and the engine's own schema
+    // description is "Maximum elevation difference across skirt for build site"
+    // (`blueprint_layout.tsv`, RUnitBlueprintPhysics+0x28c). Ogrids like every
+    // sibling length: UEB5101 (wall) authors 50, i.e. 400 elmos. Currently fails:
+    // the key is unread.
+    const Blueprint authored{"XXB0903_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_None', MaxGroundVariation = 50 },
+            SizeX = 1, SizeY = 0.5, SizeZ = 1,
+        }
+    )"};
+    const auto wall = rm::unitbp::loadFile(authored.path());
+    REQUIRE(wall.has_value());
+    CHECK(wall->maxGroundVariationElmos == Catch::Approx(400.0f));
+
+    const Blueprint bare{"XXB0904_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_None' },
+            SizeX = 1, SizeY = 0.5, SizeZ = 1,
+        }
+    )"};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->maxGroundVariationElmos == Catch::Approx(8.0f));
+}
