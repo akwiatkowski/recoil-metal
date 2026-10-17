@@ -100,7 +100,7 @@ asset/performance skip kinds as the prior gate).
 Dashboard `Implemented` scores average 70.0% across the 20 gameplay rows
 (1,400 / 20); 4 rows read 100%, 16 below the goal's 97% bar. No row score
 moved in this turn — row updates stay with the subsystem owners' rescore
- pass. Full serial ctest 2,286/2,286 green (this turn, clean tree). Intel
+ pass. Full serial ctest 2,289/2,289 green (this turn, clean tree). Intel
  radar-error targeting and persist recovery-ownership verified in focused
 suites (1,810 assertions, 54 cases). Per-row gaps, from the sections below:
 
