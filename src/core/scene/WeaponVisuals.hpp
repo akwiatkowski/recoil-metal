@@ -40,6 +40,13 @@ struct WeaponMaterial {
     std::array<EffectCurve, 3> direction, acceleration, position;
     bool gravity = false;
     bool flat = false;
+    /// `ParticleResistance` + `ResistanceCurve` (retail `EmitterBlueprint`):
+    /// velocity-proportional drag sampled over the emitter cycle. False on
+    // 1930 of 2724 shipped emitters; true with an authored curve on 256
+    // (e.g. `aeon_being_built_ambient_03_emit.bp` at 0.018), zero curve when
+    // the flag is set without one.
+    EffectCurve resistanceCurve;
+    bool resistance = false;
     /// A TrailBlueprint: drawn as a ribbon over the projectile's recorded path by
     /// ProjectileTrails, not as one straight strip. `length` is its TrailLength in elmos.
     bool ribbon = false;

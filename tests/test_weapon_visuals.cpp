@@ -316,6 +316,68 @@ TEST_CASE("retail distortion ring retains its refraction and world-plane geometr
     CHECK(particle.flags == 1);
     CHECK(particle.size == Catch::Approx(32));
 }
+TEST_CASE("emitter drag reads the authored resistance flag and curve", "[weapon-visuals]") {
+    // Retail shape, synthetic bytes: `ParticleResistance = true` with a
+    // `ResistanceCurve` of 0.018, as stated by
+    // `aeon_being_built_ambient_03_emit.bp` (retail `effects.scd`) — the
+    // ambient being-built smoke that drifts rather than coasts. The loader
+    // dropped both, so the material reported no drag.
+    const auto root = std::filesystem::temp_directory_path() / "rm_resistance_emit";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "effects/emitters");
+    std::filesystem::create_directories(root / "textures/particles");
+    {
+        std::ofstream emit(root / "effects/emitters/drag_emit.bp");
+        emit << "EmitterBlueprint {\n"
+                "    Texture = [[/textures/particles/drag.dds]],\n"
+                "    Blendmode = 3.00,\n"
+                "    ParticleResistance = true,\n"
+                "    ResistanceCurve = {\n"
+                "        XRange = 5.00,\n"
+                "        Keys = {\n"
+                "            { x=2.500,y=0.018,z=0.000 },\n"
+                "        },\n"
+                "    },\n"
+                "}\n";
+    }
+    {
+        std::ofstream tex(root / "textures/particles/drag.dds", std::ios::binary);
+        const char magic[4]{'D', 'D', 'S', ' '};
+        tex.write(magic, 4);
+        std::vector<std::byte> header(124, std::byte{0});
+        auto put = [&](std::size_t at, std::uint32_t v) {
+            header[at] = static_cast<std::byte>(v & 0xFFu);
+            header[at + 1] = static_cast<std::byte>((v >> 8) & 0xFFu);
+            header[at + 2] = static_cast<std::byte>((v >> 16) & 0xFFu);
+            header[at + 3] = static_cast<std::byte>((v >> 24) & 0xFFu);
+        };
+        put(0, 124);
+        put(8, 16);
+        put(12, 16);
+        put(24, 16);
+        put(72, 32);
+        put(76, 0x00000004u);
+        header[80] = std::byte{'D'};
+        header[81] = std::byte{'X'};
+        header[82] = std::byte{'T'};
+        header[83] = std::byte{'1'};
+        tex.write(reinterpret_cast<const char*>(header.data()),
+                  static_cast<std::streamsize>(header.size()));
+        const std::vector<char> payload(128, 0);
+        tex.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+    }
+    rm::WeaponVisuals visuals;
+    rm::vfs::Vfs content;
+    content.mountDirectory(root);
+    const std::array<std::string, 1> paths{"/effects/emitters/drag_emit.bp"};
+    rm::loadWeaponMaterials(visuals, content, "drag", paths);
+    std::filesystem::remove_all(root);
+    REQUIRE(visuals.materials.size() == 1);
+    const auto& material = visuals.materials.front();
+    CHECK(material.resistance);
+    CHECK(material.resistanceCurve.sample(0.5f) == Catch::Approx(0.018f));
+}
+
 
 TEST_CASE("a launched shot owns its Lua visual identity", "[weapon-visuals]") {
     rm::unitdef::Weapon weapon;
