@@ -200,8 +200,13 @@ constexpr ScriptEffectRow kScriptEffects[] = {
                     .rateOfFireLabels = kWeaponChronotron}},
     {"RateOfFireRemove", {.maxRadiusLabels = kWeaponChronotronOC,
                           .rateOfFireLabels = kWeaponChronotron}},
-    {"BlastAttack", {.damageModLabels = kWeaponChronotron}},
+    {"BlastAttack", {.damageRadiusLabels = kWeaponChronotron,
+                     .damageModLabels = kWeaponChronotron}},
     {"BlastAttackRemove", {.damageModLabels = kWeaponChronotron}},
+    // UEL0301's `HighExplosiveOrdnance` widens the heavy plasma cannon's blast
+    // (`ChangeDamageRadius`, an absolute write like `NewMaxRadius`); its Remove
+    // carries none, so the blast falls back to the authored radius.
+    {"HighExplosiveOrdnance", {.damageRadiusLabels = kWeaponRightHeavyPlasma}},
     {"FocusConvertor", {.damageModLabels = kWeaponRightDisintegrator}},
     {"FocusConvertorRemove", {.damageModLabels = kWeaponRightDisintegrator}},
     {"AdvancedCoolingUpgrade", {.rateOfFireLabels = kWeaponRightHeavyPlasma}},
@@ -706,6 +711,27 @@ Fx weaponMaxRangeFor(const UnitStore& store, const UnitCatalog& catalog,
         return result;
     }
     return weapon.maxRange;
+}
+
+Fx weaponDamageRadiusFor(const UnitStore& store, const UnitCatalog& catalog,
+                         UnitIndex slot, const unitdef::Weapon& weapon) noexcept {
+    if (statLabelled(store, slot, weapon.label,
+                     &EnhancementScriptEffects::damageRadiusLabels)) {
+        // Last installed writer wins, like the scripts' sequential writes.
+        Fx result = weapon.damageRadius;
+        for (const auto& [position, installed] : store.enhancements()[slot]) {
+            const EnhancementScriptEffects script =
+                enhancementScriptEffects(installed);
+            if (!capListHas(script.damageRadiusLabels, weapon.label)) continue;
+            if (const auto* effects =
+                    catalog.enhancementEffects(store.typeAt(slot), installed);
+                effects != nullptr && effects->damageRadiusElmos > Fx{}) {
+                result = effects->damageRadiusElmos;
+            }
+        }
+        return result;
+    }
+    return weapon.damageRadius;
 }
 
 Fx weaponRateOfFireFor(const UnitStore& store, const UnitCatalog& catalog,

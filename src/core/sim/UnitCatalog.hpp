@@ -146,6 +146,10 @@ public:
         /// these are the parameters the scripts read. Radius and rate are
         /// absolute writes; damage is additive.
         Fx maxRadiusElmos{};
+        /// `NewDamageRadius` (`UnitBlueprint.lua:862`) — the `ChangeDamageRadius`
+        /// value, an absolute write like `NewMaxRadius` (XSL0001 `BlastAttack`
+        /// 2, UEL0301 `HighExplosiveOrdnance` 2.5 ogrids).
+        Fx damageRadiusElmos{};
         float rateOfFire = 0.0f;
         Mag damageMod{};
         std::vector<std::string> buildableAdds;

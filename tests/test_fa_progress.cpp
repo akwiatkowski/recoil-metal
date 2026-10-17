@@ -839,3 +839,49 @@ TEST_CASE("C-255: an installed enhancement's NewSonarRadius overrides sonar",
     CHECK(rm::sim::intelRadiiFor(roster.store, roster.catalog, unit.index).sonar
           == rm::sim::Fx::fromInt(320));
 }
+
+TEST_CASE("C-255: an installed enhancement's NewDamageRadius widens the blast",
+          "[fa-progress][enhancement]") {
+    // `NewDamageRadius` is a declared retail enhancement field
+    // (`UnitBlueprint.lua:862`) authored on the shipped commanders
+    // (XSL0001 `BlastAttack` 2, UEL0301 `HighExplosiveOrdnance` 2.5) for
+    // `UnitWeapon:ChangeDamageRadius` (`UnitWeapon.lua:74`) — the sim must
+    // apply it the way it applies `NewMaxRadius`.
+    rm::test::Roster roster;
+    roster.rate = rm::sim::TickRate{10};
+    rm::unitdef::UnitDef def;
+    def.name = "test_commander";
+    def.health = rm::test::mag(100.0f);
+    rm::unitdef::Weapon chrono;
+    chrono.label = "ChronotronCannon";
+    chrono.role = rm::unitdef::WeaponRole::DirectFire;
+    chrono.maxRange = rm::sim::Fx::fromInt(30);
+    chrono.rateOfFire = 1.0f;
+    chrono.damage = rm::test::mag(10.0f);
+    chrono.damageRadius = rm::sim::Fx{};
+    def.weapons = {chrono};
+    const auto params = rm::lua::parseTable("{ NewDamageRadius=2 }");
+    REQUIRE(params);
+    def.enhancements.push_back({.name = "BlastAttack", .slot = "LCH",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .parameters = *params});
+    def.enhancements.push_back({.name = "BlastAttackRemove", .slot = "LCH",
+        .prerequisite = "BlastAttack",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f),
+        .removes = {"BlastAttack", "BlastAttackRemove"},
+        .parameters = *rm::lua::parseTable("{}")});
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    // Before install: the authored point hit.
+    CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, chrono)
+          == rm::sim::Fx{});
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "BlastAttack"));
+    // `NewDamageRadius` is authored in ogrids — 2 ogrids = 16 elmos.
+    CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, chrono)
+          == rm::sim::Fx::fromInt(16));
+    // The Remove carries no radius, so the blast falls back to the base.
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "BlastAttackRemove"));
+    CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, chrono)
+          == rm::sim::Fx{});
+}

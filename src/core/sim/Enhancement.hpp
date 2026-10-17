@@ -50,9 +50,11 @@ struct EnhancementScriptEffects {
     std::span<const std::string_view> weaponEnables;
     std::span<const std::string_view> weaponDisables;
     /// `C-255`: the weapon labels `ChangeMaxRadius`/`ChangeRateOfFire`/
-    /// `AddDamageMod` land on (`GetWeaponByLabel` in the scripts); the values
-    /// ride `EnhancementEffects::maxRadiusElmos`/`rateOfFire`/`damageMod`.
+    /// `ChangeDamageRadius`/`AddDamageMod` land on (`GetWeaponByLabel` in the
+    /// scripts); the values ride `EnhancementEffects::maxRadiusElmos`/
+    /// `damageRadiusElmos`/`rateOfFire`/`damageMod`.
     std::span<const std::string_view> maxRadiusLabels;
+    std::span<const std::string_view> damageRadiusLabels;
     std::span<const std::string_view> rateOfFireLabels;
     std::span<const std::string_view> damageModLabels;
     /// `EnableUnitIntel`/`DisableUnitIntel` — intel TYPE names as the scripts
@@ -174,9 +176,13 @@ struct EnhancementScriptEffects {
     const UnitStore& store, const UnitCatalog& catalog, UnitIndex slot) noexcept;
 
 /// `C-255`: the weapon stat overrides installed enhancements write —
-/// `ChangeMaxRadius`/`ChangeRateOfFire` are absolute, `AddDamageMod` adds.
-/// Each returns the base value when no installed branch names the label.
+/// `ChangeMaxRadius`/`ChangeRateOfFire`/`ChangeDamageRadius` are absolute,
+/// `AddDamageMod` adds. Each returns the base value when no installed branch
+/// names the label.
 [[nodiscard]] Fx weaponMaxRangeFor(
+    const UnitStore& store, const UnitCatalog& catalog, UnitIndex slot,
+    const unitdef::Weapon& weapon) noexcept;
+[[nodiscard]] Fx weaponDamageRadiusFor(
     const UnitStore& store, const UnitCatalog& catalog, UnitIndex slot,
     const unitdef::Weapon& weapon) noexcept;
 [[nodiscard]] Fx weaponRateOfFireFor(

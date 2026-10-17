@@ -183,6 +183,9 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
             if (const auto radius = ogrid("NewMaxRadius")) {
                 effects.maxRadiusElmos = *radius;
             }
+            if (const auto radius = ogrid("NewDamageRadius")) {
+                effects.damageRadiusElmos = *radius;
+            }
             if (const auto rof = num("NewRateOfFire")) {
                 effects.rateOfFire = static_cast<float>(*rof);
             }
