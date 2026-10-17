@@ -160,7 +160,8 @@ target_link_libraries(rm_render_data PUBLIC rm_content)
 
 add_library(rm_audio STATIC
     src/core/audio/Curve.cpp
-    src/core/audio/Mixer.cpp)
+    src/core/audio/Mixer.cpp
+    src/core/audio/MusicDirector.cpp)
 target_link_libraries(rm_audio PUBLIC rm_foundation)
 
 # --- FA data and simulation ------------------------------------------------

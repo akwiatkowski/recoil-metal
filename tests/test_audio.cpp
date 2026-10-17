@@ -11,6 +11,7 @@ using Catch::Approx;
 #include "core/audio/CueEvents.hpp"
 #include "core/audio/Cues.hpp"
 #include "core/audio/Mixer.hpp"
+#include "core/audio/MusicDirector.hpp"
 #include "core/audio/WeaponSounds.hpp"
 #include "core/audio/Xgs.hpp"
 #include "core/audio/Xsb.hpp"
@@ -607,4 +608,50 @@ TEST_CASE("setMusicLayer and setMusicIntensity select which layer plays") {
     mixer.setMusicLayer("tense", rm::audio::MusicLayer{.cue = nullptr, .intensity = 1});
     mixer.setMusicIntensity(1);
     CHECK(mixer.activeMusicLayer().empty());  // intensity 1 lost its match
+}
+
+TEST_CASE("the music director swaps base and battle on focus-army damage") {
+    // C-488: retail music is a UI-layer state machine — two one-entry cue lists
+    // (Battle/Base_Building), a 20-event/3s-window battle detector fed solely by
+    // focus-army damage, a 20s inactivity fall-back with a 3s fade gap,
+    // round-robin indices, and pause passthrough. No sim state, no hash.
+    const rm::audio::Cue& cue = rm::audio::chimeCue();
+    rm::audio::Mixer mixer;
+    mixer.setListener(0.0f, 0.0f, 600.0f);
+    mixer.setMusicLayer("Base_Building", rm::audio::MusicLayer{.cue = &cue, .intensity = 0});
+    mixer.setMusicLayer("Battle", rm::audio::MusicLayer{.cue = &cue, .intensity = 1});
+    rm::audio::MusicDirector director(mixer);
+    constexpr std::uint32_t hz = 10;
+    const auto damaged = [](int army) {
+        return rm::sim::Event{.kind = rm::sim::EventKind::UnitDamaged, .army = army};
+    };
+
+    // Quiet start: base, and the mixer sits on the base layer.
+    director.update({}, 0, 0, hz, false);
+    CHECK(director.state() == rm::audio::MusicState::Base);
+    CHECK(mixer.activeMusicLayer() == "Base_Building");
+
+    // Another army's war is not ours: twenty foreign hits keep the base layer.
+    director.update(std::vector<rm::sim::Event>(20, damaged(1)), 0, 5, hz, false);
+    CHECK(director.state() == rm::audio::MusicState::Base);
+
+    // Nineteen focus-army hits inside the window are not yet a battle.
+    director.update(std::vector<rm::sim::Event>(19, damaged(0)), 0, 5, hz, false);
+    CHECK(director.state() == rm::audio::MusicState::Base);
+
+    // The twentieth within the 3s window swaps to battle and plays it.
+    director.update(std::vector<rm::sim::Event>{damaged(0)}, 0, 5, hz, false);
+    CHECK(director.state() == rm::audio::MusicState::Battle);
+    CHECK(mixer.activeMusicLayer() == "Battle");
+    CHECK(director.battlePlays() == 1);
+
+    // A pause freezes the state machine: far-future ticks change nothing.
+    director.update({}, 0, 5000, hz, true);
+    CHECK(director.state() == rm::audio::MusicState::Battle);
+
+    // 20s of quiet plus the 3s fade gap falls back to base and plays it.
+    director.update({}, 0, 5 + 230, hz, false);
+    CHECK(director.state() == rm::audio::MusicState::Base);
+    CHECK(mixer.activeMusicLayer() == "Base_Building");
+    CHECK(director.basePlays() == 1);
 }
