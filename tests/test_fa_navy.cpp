@@ -1114,3 +1114,48 @@ TEST_CASE("C-169: a HitAssignedTarget interceptor passes a nearer missile for it
     CHECK(rm::sim::magToFloat(afterMark.health) == Approx(1.0f));
     CHECK(rm::sim::magToFloat(afterDecoy.health) == Approx(2.0f));
 }
+
+TEST_CASE("C-204: a torpedo running at depth still strikes a surface hull", "[fa-navy]") {
+    // A torpedo is an ordinary projectile pinned 0.08 elmos under the waterline
+    // (`TANAnglerTorpedo01_proj.bp`: `StayUnderwater = true`; retail `0x006a2f31`
+    // `pos.y = min(pos.y, waterY - 0.01)`). That running depth sits BELOW a
+    // surfaced hull's feet — so a depth-vs-box test that starts the box at the
+    // waterline lets every torpedo sail clean under its target. Retail's
+    // `UES0203` torpedo (`FireTargetLayerCapsTable` Sub/Water rows) kills ships,
+    // which is only possible if the surface hull's collision volume reaches
+    // below the waterline to meet the shot.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);  // waterline at 80
+    rm::test::Roster roster;
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    UnitDef ship = shipDef();
+    ship.collisionRadiusElmos = 2.0f;  // a hull with no radius opts out of collision entirely
+    const rm::UnitTypeIndex shipType = roster.addType(ship);
+    const UnitId hull = spawnDef(roster, shipType, ship, 300.0f, 300.0f, 1);
+    rm::sim::placeOnMotionLayer(roster.transform(hull), roster.motion(hull), terrain);
+    roster.reindex();
+    REQUIRE(rm::sim::fxToFloat(roster.transform(hull).y) == Approx(80.0f));
+
+    // A torpedo launched from depth, like a real sub shot: it rises until the
+    // `StayUnderwater` clamp catches it (`pos.y = min(pos.y, waterY - 0.01)`)
+    // and then rides 0.08 elmos under the waterline into the hull — the only
+    // line a retail torpedo ever travels.
+    rm::sim::Projectile torpedo;
+    torpedo.stayUnderwater = true;
+    torpedo.position = {Fx::fromInt(200), Fx::fromInt(70), Fx::fromInt(300)};
+    torpedo.velocity = {Fx::fromInt(20), Fx::fromInt(20), Fx{}};
+    torpedo.ticksRemaining = 100;
+    torpedo.damage = rm::unitdef::flatDamage(rm::sim::Mag::fromInt(50));
+    torpedo.damageRadiusElmos = Fx{};
+    torpedo.firedByArmy = 0;
+    std::vector<rm::sim::Projectile> shots{torpedo};
+    rm::sim::EventQueue events;
+    const auto hpBefore = roster.store.health()[hull.index].current;
+    for (int i = 0; i < 10 && !shots.empty() && roster.store.alive(hull); ++i) {
+        rm::sim::advanceProjectiles(shots, roster.store, armies, terrain, roster.rate,
+                                    &events, &roster.catalog);
+    }
+    // The torpedo met the hull: hit points dropped (a 50-damage hit on a
+    // 1000-HP hull wounds, not kills — the strike is the assertion).
+    CHECK(roster.store.health()[hull.index].current < hpBefore);
+}

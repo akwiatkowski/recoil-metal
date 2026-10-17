@@ -14,6 +14,13 @@
 namespace rm::sim {
 namespace {
 
+/// How far under the waterline `StayUnderwater` pins a shot, in elmos.
+///
+/// Retail's constant is `waterY − 0.01` OGRIDS (`0x00E4D9B4`, read by the
+/// clamp at `0x006a2f6a`); 0.01 ogrids is 0.08 elmos at the corpus's 8:1
+/// conversion. Written as a ratio so no float ever enters the sim.
+inline constexpr Fx kStayUnderwaterClampElmos = Fx::fromRatio(2, 25);
+
 
 /// The army that owns the unit in a slot, or kNoArmy when the slot is past the end.
 [[nodiscard]] int armyAt(const UnitStore& store, UnitIndex slot) noexcept {
@@ -772,7 +779,17 @@ struct ProjectileTickStart {
         if (height <= Fx{}) {
             height = radius * Fx::fromInt(2);
         }
-        const std::array<Fx, 3> minimum{feet[0] - radius, feet[1], feet[2] - radius};
+        // `C-204`: a torpedo is an ordinary projectile pinned 0.08 elmos under
+        // the waterline (`TANAnglerTorpedo01_proj.bp` `StayUnderwater`, retail
+        // `0x006a2f31` `pos.y = min(pos.y, waterY - 0.01)`). That running depth
+        // sits below a surfaced hull's feet, so a box starting at the feet lets
+        // the torpedo sail under. A floating hull's volume reaches below the
+        // waterline to meet the shot — the box drops one clamp depth deeper for
+        // surface-water units only; subs and land hulls are untouched.
+        const Fx footY = motion[slot].surfaceWater && shot.stayUnderwater
+                             ? feet[1] - kStayUnderwaterClampElmos - Fx::fromRaw(1)
+                             : feet[1];
+        const std::array<Fx, 3> minimum{feet[0] - radius, footY, feet[2] - radius};
         const std::array<Fx, 3> maximum{feet[0] + radius, feet[1] + height, feet[2] + radius};
         std::optional<SweepFraction> hit;
         if (proximityFallback) {
@@ -3684,12 +3701,6 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos,
 /// ADR-036/D15 asks of the parallel phase. `redirectMissile` is deliberately
 /// NOT in here — it writes the shared `redirects` cooldowns, so it runs in the
 /// serial apply walk where ordering is defined.
-/// How far under the waterline `StayUnderwater` pins a shot, in elmos.
-///
-/// Retail's constant is `waterY − 0.01` OGRIDS (`0x00E4D9B4`, read by the
-/// clamp at `0x006a2f6a`); 0.01 ogrids is 0.08 elmos at the corpus's 8:1
-/// conversion. Written as a ratio so no float ever enters the sim.
-inline constexpr Fx kStayUnderwaterClampElmos = Fx::fromRatio(2, 25);
 
 [[nodiscard]] std::array<Fx, 3> advanceFlight(
     Projectile& shot, Fx gravityPerTickSquared, const UnitStore& store,
