@@ -502,6 +502,26 @@ TEST_CASE("a guard copies its guardee's reclaim target before considering repair
     CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 70.0f);
     CHECK(rm::test::asFloat(f.roster.health(damaged).current) == 50.0f);
 }
+TEST_CASE("a guard copies its guardee's live-unit reclaim target") {
+    // C-183 reclaim rung, unit half: the guardee un-builds an enemy while the guard
+    // assists it. The guard lends its own rate to the same victim instead of idling
+    // on the leash — two rate-10 builders drain 20 work a tick, so five ticks take a
+    // 200-work victim to half health. The guardee alone would manage only a quarter.
+    Fixture f;
+    const UnitId guardee = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId guard = f.roster.add(f.guardType, 205.0f, 200.0f, 0, 100.0f);
+    const UnitId victim = f.roster.add(f.tankType, 208.0f, 200.0f, 1, 100.0f);
+
+    REQUIRE(f.reclaimUnit(guardee, victim));
+    REQUIRE(f.assist(guard, guardee));
+    f.tick(5);
+
+    CHECK(f.roster.store.alive(victim));
+    CHECK(rm::test::asFloat(f.roster.health(victim).current) == 50.0f);
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 50.0f);
+    CHECK(rm::test::asFloat(f.economies[0].stored.energy) == 100.0f);
+}
+
 
 TEST_CASE("a Mantis Guard cannot borrow a reclaim capability from its guardee", "[guard][guard-work-regression]") {
     const char* home = std::getenv("HOME");

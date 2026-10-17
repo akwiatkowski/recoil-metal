@@ -1256,9 +1256,43 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                 }
                 continue;
             }
+            // The unit half of the same rung: the guardee un-builds a living unit, so the
+            // guard lends its rate to the same victim. `applyGuardReclaim` drains it; the
+            // economy, wreckless-destroy and no-kill-credit rules are the manual path's.
+            if (guarded != nullptr && guarded->kind() == CommandKind::ReclaimUnit
+                && store.alive(guarded->target())
+                && store.health()[guarded->target().index].alive()
+                && guarded->target() != store.idAt(slot)) {
+                const unitdef::UnitDef* victimDef =
+                    catalog.def(store.typeAt(guarded->target().index));
+                if (victimDef != nullptr
+                    && std::max(victimDef->buildCostMass, victimDef->buildCostEnergy)
+                           > Mag{}) {
+                    if (guardWork != nullptr) {
+                        guardWork->push_back(GuardWork{.builder = slot,
+                                                       .kind = GuardWorkKind::Reclaim,
+                                                       .target = guarded->target()});
+                    }
+                    MoveState& move = store.motion()[slot];
+                    const Fx reach = repairReach(catalog, store.typeAt(slot), move,
+                                                 store.motion()[guarded->target().index]);
+                    const Transform& victimAt = store.transforms()[guarded->target().index];
+                    if (groundDistanceElmos(positionOf(store.transforms()[slot]),
+                                            positionOf(victimAt))
+                        <= reach) {
+                        move.moving = false;
+                        move.path.clear();
+                        move.pathIndex = 0;
+                    } else if (const PassabilityGrid* chaseGrid = gridFor(*current)) {
+                        (void)routeUnit(slot, victimAt.x, victimAt.z, store, terrain,
+                                        *chaseGrid);
+                    }
+                    continue;
+                }
+            }
         }
 
-        // REPAIR is the final useful rung: scan around the guardee, but rank by distance to
+         // REPAIR is the final useful rung: scan around the guardee, but rank by distance to
         // the guard. Strict improvement preserves slot/grid order on an exact tie.
         if (isGuardCommand(current->kind()) && guardCanWork(slot, store, catalog, "RULEUCC_Repair")
             && !guardBuildAssist

@@ -400,6 +400,66 @@ std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
             || store.productionPaused(store.idAt(item.builder))) {
             continue;
         }
+        // A live-unit target is the ReclaimUnit half of the guard copy: `FeatureId` is a
+        // `UnitId` alias, so a victim handle resolves here too. The drain is the manual
+        // path's per-tick step — build-rate pace, proportional grants, wreckless destroy —
+        // shared rather than duplicated. A stale or valueless target is skipped, exactly
+        // as the wreck lookup above skips a gone wreck.
+        if (store.alive(item.target) && store.health()[item.target.index].alive()
+            && item.target != store.idAt(item.builder)) {
+            const unitdef::UnitDef* victimDef = catalog.def(store.typeAt(item.target.index));
+            if (victimDef != nullptr
+                && std::max(victimDef->buildCostMass, victimDef->buildCostEnergy) > Mag{}) {
+                const Mag total =
+                    std::max(victimDef->buildCostMass, victimDef->buildCostEnergy);
+                const Fx gap = groundDistanceElmos(
+                    positionOf(store.transforms()[item.builder]),
+                    positionOf(store.transforms()[item.target.index]));
+                if (gap <= repairReach(catalog, store.typeAt(item.builder),
+                                       store.motion()[item.builder],
+                                       store.motion()[item.target.index])) {
+                    Mag pace = effectiveBuildPerTick(store, catalog, item.builder);
+                    pace *= Fx::fromInt(10);
+                    Health& health = store.health()[item.target.index];
+                    const Mag remaining =
+                        proportionalWork(total, health.current, health.maximum);
+                    const Mag applied = std::min(pace, remaining);
+                    if (applied > Mag{}) {
+                        const bool finalSlice = applied >= remaining;
+                        const Mag massGrant =
+                            finalSlice ? proportionalWork(victimDef->buildCostMass,
+                                                          health.current, health.maximum)
+                                       : proportionalWork(victimDef->buildCostMass, applied,
+                                                          total);
+                        const Mag energyGrant =
+                            finalSlice ? proportionalWork(victimDef->buildCostEnergy,
+                                                          health.current, health.maximum)
+                                       : proportionalWork(victimDef->buildCostEnergy, applied,
+                                                          total);
+                        const int owner = store.motion()[item.builder].armyIndex;
+                        if (owner >= 0
+                            && static_cast<std::size_t>(owner) < economies.size()) {
+                            economies[static_cast<std::size_t>(owner)].stored.mass +=
+                                massGrant;
+                            economies[static_cast<std::size_t>(owner)].stored.energy +=
+                                energyGrant;
+                        }
+                        if (finalSlice) {
+                            health.current = Mag{};
+                            store.motion()[item.target.index].moving = false;
+                            store.motion()[item.target.index].speedPerTick = Fx{};
+                            store.motion()[item.target.index].radiusElmos = Fx{};
+                            store.kill(item.target);
+                        } else {
+                            health.current -=
+                                proportionalWork(health.maximum, applied, total);
+                        }
+                        ++serviced;
+                    }
+                }
+                continue;
+            }
+        }
         Feature* wreck = features.findMutable(item.target);
         if (wreck == nullptr) continue;
         const MoveState& motion = store.motion()[item.builder];
