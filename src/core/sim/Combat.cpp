@@ -3107,7 +3107,6 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     // The authored damage pool rides the shot out of the muzzle (`C-087`): a shot whose
     // shooter dies mid-flight keeps the pool it was launched with.
     shot.maxHealth = weapon.projectileTraits.maxHealth;
-    shot.health = weapon.projectileTraits.maxHealth;
     // So does the shot's own category set (`C-088`): restriction checks evaluate the
     // target's categories, and a shot with no resolved blueprint carries none.
     shot.categories = weapon.projectileTraits.categories;
@@ -3115,6 +3114,12 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     // projectile blueprint's own keys, resolved into `projectileTraits` at load.
     shot.stayUnderwater = weapon.projectileTraits.stayUnderwater;
     shot.destroyOnWater = weapon.projectileTraits.destroyOnWater;
+    // `weapon.lua:GetDamageTable` threads the weapon blueprint's `DamageFriendly`
+    // into the shot's damage table (`C-428`'s sphere bit). This is SPLASH-only:
+    // the point-hit sweep keeps its hostile-only gate (`CollideFriendly` stays
+    // redirect-only) — an authored splash admits the shooter's SIDE, never the
+    // shooter itself, and never steers a direct hit onto an ally.
+    shot.splashFriendly = weapon.damageFriendly;
     // `C-095`/`C-169`/`C-172`: the cap, the assigned-target gate, and the
     // gravity flag — all authored on the projectile blueprint, carried on
     // the shot like `maxHealth` above.
@@ -3998,21 +4003,22 @@ void resolvePendingImpact(Projectile& shot, UnitStore& store,
             (void)damageTargets(shot.position, shot.innerRingRadiusElmos,
                                  shot.innerRing, shot.firedByArmy, store, armies,
                                  catalog, shot.firedBy, events, shot.targetLayers,
-                                 shot.friendlyFire, std::nullopt, impactTarget,
+                                 shot.friendlyFire || shot.splashFriendly, std::nullopt, impactTarget,
                                  features, shot.friendlyFire, Fx{}, shieldPenetrating);
         }
         if (shot.outerRing.harmful() && shot.outerRingRadiusElmos > Fx{}) {
             (void)damageTargets(shot.position, shot.outerRingRadiusElmos,
                                  shot.outerRing, shot.firedByArmy, store, armies,
                                  catalog, shot.firedBy, events, shot.targetLayers,
-                                 shot.friendlyFire, std::nullopt, impactTarget,
+                                 shot.friendlyFire || shot.splashFriendly, std::nullopt, impactTarget,
                                  features, shot.friendlyFire, Fx{}, shieldPenetrating);
         }
         (void)damageTargets(shot.position, shot.damageRadiusElmos, shot.damage,
-                             shot.firedByArmy, store, armies, catalog, shot.firedBy,
-                             events, shot.targetLayers, shot.friendlyFire, std::nullopt,
-                             impactTarget, features, shot.friendlyFire, Fx{},
-                             shieldPenetrating);
+                            shot.firedByArmy, store, armies, catalog, shot.firedBy,
+                            events, shot.targetLayers,
+                            shot.friendlyFire || shot.splashFriendly, std::nullopt,
+                            impactTarget, features, shot.friendlyFire, Fx{},
+                            shieldPenetrating);
     }
 
     // Recoil Metal has no Lua projectile lifecycle yet, so retain its established

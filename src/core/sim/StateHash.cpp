@@ -955,10 +955,10 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, static_cast<int>(shot.pendingImpact));
             feed(h, static_cast<std::size_t>(shot.impactTarget.index));
             feed(h, static_cast<std::size_t>(shot.impactTarget.generation));
-            // `C-171`'s weave and `C-088`'s friendly-fire flag, conditional like
+            // `C-171`'s weave and the friendly-fire pair, conditional like
             // the water pair: a shot carrying either diverges from one that
             // does not, and an ordinary shot keeps its byte stream.
-            if (shot.zigZagAmplitudeElmos > Fx{} || shot.friendlyFire) {
+            if (shot.zigZagAmplitudeElmos > Fx{} || shot.friendlyFire || shot.splashFriendly) {
                 feed(h, true);
                 feed(h, shot.zigZagAmplitudeElmos);
                 feed(h, shot.zigZagPeriodTicks);
@@ -969,6 +969,7 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 feed(h, shot.zigZagApplied);
                 feed(h, shot.aimPoint);
                 feed(h, shot.friendlyFire);
+                feed(h, shot.splashFriendly);
             }
             // `C-095`/`C-169`/`C-172`/`C-262`: the cap, the assigned-target
             // gate, the gravity flag, the launch serial and engagement pair,

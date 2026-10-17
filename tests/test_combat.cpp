@@ -4455,3 +4455,37 @@ TEST_CASE("a worse-class challenger never dislodges the incumbent on row alone (
     // on class before its better row is ever compared.
     CHECK(pick(incumbent) == incumbent);
 }
+TEST_CASE("an authored DamageFriendly splash admits the shooter's own side") {
+    // `weapon.lua:GetDamageTable` threads the weapon blueprint's `DamageFriendly`
+    // into the shot's damage table (defaulting to true when the blueprint states
+    // nothing); the sphere skips its `IsAlly` reject when that bit is set
+    // (`C-428`). A shot whose blueprint authors `DamageFriendly = true` must
+    // therefore admit its own SIDE to the area blast — UAA0302's torpedo shape —
+    // while the point-hit sweep keeps its hostile-only gate (`CollideFriendly`
+    // stays redirect-only) and the shooter itself stays excluded (`DamageSelf`
+    // stays redirect-only).
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const UnitId shooter = roster.add(roster.addType(targetDef()), 0.0f, 0.0f, 0, 100.0f);
+    const UnitId ally = roster.add(roster.addType(targetDef()), 0.0f, 10.0f, 0, 100.0f);
+    const UnitId foe = roster.add(roster.addType(targetDef()), 0.0f, 20.0f, 1, 100.0f);
+    roster.reindex();
+    Weapon weapon = directFire(40.0f, 300.0f, 30.0f);
+    weapon.damageFriendly = true;
+    const rm::sim::TickRate rate{};
+    std::vector<Projectile> shots{rm::sim::launch(
+        rm::test::at(0, 0, 0), rm::test::at(0, 0, 10), weapon, 0, rate,
+        rate.perTick(weapon.muzzleVelocityElmosPerSecond),
+        rm::unitdef::flatDamage(weapon.damage), shooter)};
+    REQUIRE(shots.size() == 1);
+    CHECK(shots.front().splashFriendly);
+    CHECK_FALSE(shots.front().friendlyFire);
+    for (int tick = 0; tick < 10 && !shots.empty(); ++tick) {
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{flatField()}, roster.rate, nullptr,
+                                    &roster.catalog);
+    }
+    CHECK(roster.health(ally).current < rm::test::mag(100.0f));
+    CHECK(roster.health(foe).current < rm::test::mag(100.0f));
+    CHECK(roster.health(shooter).current == rm::test::mag(100.0f));
+}

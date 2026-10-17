@@ -1115,8 +1115,12 @@ void writeProjectiles(PayloadWriter& w,
             w.u8(shot.stayUnderwater ? 1 : 0);
             w.u8(shot.destroyOnWater ? 1 : 0);
         }
-        // V39 trails the record: `C-171`'s weave schedule and `C-088`'s
-        // friendly-fire flag.
+        // V39 trails the record: `C-171`'s weave schedule and the friendly-fire
+        // pair. The two bits share one byte — the redirect's `friendlyFire`
+        // (`CollideFriendly`+`DamageSelf`) in bit 0, the authored `splashFriendly`
+        // (`DamageFriendly` splash-only) in bit 1 — so a saved mid-flight shot
+        // keeps whichever channel it flies with, with no version bump: old
+        // saves decode with bit 1 clear, which is the pre-slice behavior.
         if (weaveFlags) {
             w.i32(shot.zigZagAmplitudeElmos.raw());
             w.i32(shot.zigZagPeriodTicks);
@@ -1126,7 +1130,7 @@ void writeProjectiles(PayloadWriter& w,
             w.i32(shot.zigZagOffsetZ.raw());
             for (const Fx v : shot.zigZagApplied) w.i32(v.raw());
             for (const Fx v : shot.aimPoint) w.i32(v.raw());
-            w.u8(shot.friendlyFire ? 1 : 0);
+            w.u8(static_cast<std::uint8_t>((shot.friendlyFire ? 1 : 0) | (shot.splashFriendly ? 2 : 0)));
         }
         // V53 trails the record: `C-095`'s cap and engagement pair, `C-172`'s
         // gravity flag, `C-169`'s assigned-target gate, and `C-262`'s ring bands.
@@ -1249,8 +1253,9 @@ bool readProjectiles(PayloadReader& r,
                 if (!r.i32(raw)) return false;
                 v = Fx::fromRaw(raw);
             }
-            if (!r.u8(friendly) || friendly > 1) return false;
-            shot.friendlyFire = friendly != 0;
+            if (!r.u8(friendly) || friendly > 3) return false;
+            shot.friendlyFire = (friendly & 1) != 0;
+            shot.splashFriendly = (friendly & 2) != 0;
         }
         // V53's trailing cap/serial/ring fields plus the assigned-target gate;
         // older saves leave the shot uncapped, unminted, ungated, and ring-free.

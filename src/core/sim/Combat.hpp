@@ -129,6 +129,14 @@ struct Projectile {
     /// side. Flares never set it: they divert without damaging.
     bool friendlyFire = false;
 
+    /// The weapon blueprint's authored `DamageFriendly` (`weapon.lua`
+    /// `GetDamageTable`, defaulting to true when the blueprint states nothing).
+    /// SPLASH-only: the area blast admits the shooter's side, while the
+    /// point-hit sweep keeps its hostile-only gate. The redirect's
+    /// `friendlyFire` flip covers `CollideFriendly` AND `DamageSelf` too —
+    /// this bit never steers a direct hit onto an ally nor kills the shooter.
+    bool splashFriendly = false;
+
     /// Where the shot was aimed at launch — the taper's `dist` for a shot
     /// with no live `guidanceTarget` (C-171: `min(1, dist/maxZigZag)`).
     std::array<Fx, 3> aimPoint{};
