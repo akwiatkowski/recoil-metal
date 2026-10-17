@@ -688,3 +688,106 @@ TEST_CASE("C-552/v60: the playable rect rides the economy save", "[fa-persist]")
     REQUIRE(legacy->economyArmies.has_value());
     CHECK_FALSE(legacy->economyArmies->playableRect.has_value());
 }
+
+// v64: caller-owned standing orders ride the save — factory rally points by
+// builder slot, auto-expand flags with retry/refusal state. A pre-v64 save
+// carries none, and the restore leaves the caller's setup untouched.
+TEST_CASE("v64: standing orders survive a save round-trip", "[fa-persist]") {
+    Scenario live;
+    auto runner = live.runner();
+    rm::sim::SaveState::StandingOrders orders;
+    orders.rally.push_back({.slot = 3, .x = rm::sim::fxFromFloat(400.0f),
+                            .z = rm::sim::fxFromFloat(200.0f)});
+    rm::sim::SaveState::AutoExpandOrder expand;
+    expand.unit = rm::sim::UnitId{.index = 1, .generation = 2};
+    expand.retryAt = 42;
+    expand.refused.push_back({.x = rm::sim::fxFromFloat(100.0f),
+                              .y = rm::sim::fxFromFloat(0.0f),
+                              .z = rm::sim::fxFromFloat(200.0f),
+                              .until = 99});
+    expand.hasLastSite = true;
+    expand.lastSite = {rm::sim::fxFromFloat(300.0f), rm::sim::fxFromFloat(0.0f),
+                       rm::sim::fxFromFloat(400.0f)};
+    orders.expand.push_back(expand);
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+        .tick = 1,
+        .random = runner.match.random.snapshot(),
+        .pathServiceBeats = runner.pathService.serviceBeats(),
+        .units = live.scene.store.snapshot(),
+        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+        .pathService = runner.pathService.snapshot(),
+        .standingOrders = orders}));
+    REQUIRE(saved);
+    REQUIRE(saved->standingOrders.has_value());
+    REQUIRE(saved->standingOrders->rally.size() == 1);
+    CHECK(saved->standingOrders->rally[0].slot == 3);
+    CHECK(saved->standingOrders->rally[0].x == rm::sim::fxFromFloat(400.0f));
+    CHECK(saved->standingOrders->rally[0].z == rm::sim::fxFromFloat(200.0f));
+    REQUIRE(saved->standingOrders->expand.size() == 1);
+    const auto& back = saved->standingOrders->expand[0];
+    CHECK(back.unit.index == 1);
+    CHECK(back.unit.generation == 2);
+    CHECK(back.retryAt == 42);
+    REQUIRE(back.refused.size() == 1);
+    CHECK(back.refused[0].x == rm::sim::fxFromFloat(100.0f));
+    CHECK(back.refused[0].until == 99);
+    CHECK(back.hasLastSite);
+    CHECK(back.lastSite[0] == rm::sim::fxFromFloat(300.0f));
+
+    const auto legacy = rm::sim::SaveState::decode(rm::sim::SaveState::encodeAtVersion(
+        {.tick = 1,
+         .random = runner.match.random.snapshot(),
+         .pathServiceBeats = runner.pathService.serviceBeats(),
+         .units = live.scene.store.snapshot(),
+         .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+         .pathService = runner.pathService.snapshot()},
+        63));
+    REQUIRE(legacy);
+    CHECK_FALSE(legacy->standingOrders.has_value());
+}
+
+// The app half of v64: capture lifts rally points and auto-expand flags off
+// the live scene/runner, and restore drops entries naming dead slots while
+// keeping the live ones — a mid-combat app save resumes standing orders.
+TEST_CASE("v64: standing orders capture and restore onto the scene", "[fa-persist]") {
+    Scenario live;
+    rm::unitdef::UnitDef factory;
+    factory.name = "test_factory";
+    factory.categories = {"FACTORY", "STRUCTURE"};
+    const rm::sim::UnitId builder = live.spawn(factory, 300, 300, 0);
+    rm::unitdef::UnitDef engineer;
+    engineer.name = "test_engineer";
+    engineer.categories = {"ENGINEER", "MOBILE", "LAND"};
+    engineer.motion = rm::unitdef::MotionType::Land;
+    engineer.speedElmosPerSecond = 10.0f;
+    const rm::sim::UnitId worker = live.spawn(engineer, 400, 400, 0);
+    auto runner = live.runner();
+    live.scene.rallyPoints.emplace(builder.index, std::array<float, 2>{500.0f, 500.0f});
+    runner.autoExpanders.push_back(rm::app::AutoExpander{.unit = worker, .retryAt = 7});
+
+    const rm::sim::SaveState::StandingOrders captured =
+        rm::app::captureStandingOrders(runner);
+    REQUIRE(captured.rally.size() == 1);
+    REQUIRE(captured.expand.size() == 1);
+
+    Scenario resumed;
+    (void)resumed.registerType(factory);
+    (void)resumed.registerType(engineer);
+    const rm::sim::UnitId keptFactory = resumed.spawn(factory, 300, 300, 0);
+    const rm::sim::UnitId keptWorker = resumed.spawn(engineer, 400, 400, 0);
+    auto continued = resumed.runner();
+    rm::app::restoreStandingOrders(continued, captured);
+    CHECK(continued.scene.rallyPoints.size() == 1);
+    CHECK(continued.scene.rallyPoints.at(keptFactory.index)[0] == 500.0f);
+    REQUIRE(continued.autoExpanders.size() == 1);
+    CHECK(continued.autoExpanders[0].unit == keptWorker);
+    CHECK(continued.autoExpanders[0].retryAt == 7);
+
+    // Kill both units: the restore drops their entries instead of
+    // resurrecting standing orders for the dead.
+    resumed.scene.store.kill(keptFactory);
+    resumed.scene.store.kill(keptWorker);
+    rm::app::restoreStandingOrders(continued, captured);
+    CHECK(continued.scene.rallyPoints.empty());
+    CHECK(continued.autoExpanders.empty());
+}

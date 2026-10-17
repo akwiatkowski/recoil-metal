@@ -100,8 +100,8 @@ asset/performance skip kinds as the prior gate).
 Dashboard `Implemented` scores average 70.0% across the 20 gameplay rows
 (1,400 / 20); 4 rows read 100%, 16 below the goal's 97% bar. No row score
 moved in this turn — row updates stay with the subsystem owners' rescore
-pass. Full serial ctest 2,261/2,261 green (this turn, clean tree). Intel
-radar-error targeting and persist recovery-ownership verified in focused
+ pass. Full serial ctest 2,263/2,263 green (this turn). Intel
+ radar-error targeting and persist recovery-ownership verified in focused
 suites (1,810 assertions, 54 cases). Per-row gaps, from the sections below:
 
 - FA-CONTENT 50%: exact retail SCD mount/override precedence beyond the
@@ -135,10 +135,10 @@ suites (1,810 assertions, 54 cases). Per-row gaps, from the sections below:
   contexts, split views).
 - FA-PRESENT 75%: reload/charge animation, Seraphim factory effects, native
   emitter flags, some audio filters/curves, dynamic music.
-- FA-PERSIST 50%: mid-combat app saves for caller-owned standing orders
-  (rally points, auto-expand flags — no save path; smallest next slice),
-  plus external input, opponent VM, and retail replay transport. Recovery
-  ownership now hashes.
+- FA-PERSIST 50%: mid-combat app saves now carry caller-owned standing orders
+  (rally points, auto-expand flags — v64 save path with capture/restore;
+  smallest next slice: external input, opponent VM, retail replay transport).
+  Recovery ownership now hashes.
 - FA-MATCH/WEAPONS/MISSILES/DAMAGE 100%: hold their bars; remaining work is
   validation depth, not declared scope.
 

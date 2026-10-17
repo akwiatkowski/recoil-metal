@@ -221,6 +221,10 @@ constexpr std::uint32_t kVersion62 = 62;
 // source resumes as Sonar, not radar. Pre-v63 saves decode with every
 // retained contact as radar — the only sense retention knew.
 constexpr std::uint32_t kVersion63 = 63;
+// v64 adds the caller-owned standing orders (factory rally points and
+// auto-expand flags with retry/refusal state). Pre-v64 saves decode with no
+// standing orders — the match resumes without them, as before.
+constexpr std::uint32_t kVersion64 = 64;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1825,6 +1829,93 @@ void writeCustomNames(PayloadWriter& w, const UnitStore::Snapshot& s) {
     }
     return true;
 }
+// v64 trails the payload after the custom names: the caller-owned standing
+// orders, nullable like `features` — a match with no rally points and no
+// auto-expand flags saves the absent byte, and a pre-v64 reader keeps none.
+// Rally coordinates ride as Fx raw words (exact round-trip, never hashed),
+// like refused sites and the last-site triple.
+void writeStandingOrders(PayloadWriter& w, const std::optional<SaveState::StandingOrders>& state) {
+    w.u8(state.has_value());
+    if (!state) {
+        return;
+    }
+    w.count(state->rally.size());
+    for (const SaveState::RallyPoint& point : state->rally) {
+        w.u32(point.slot);
+        w.i32(point.x.raw());
+        w.i32(point.z.raw());
+    }
+    w.count(state->expand.size());
+    for (const SaveState::AutoExpandOrder& order : state->expand) {
+        writeId(w, order.unit);
+        w.u64(order.retryAt);
+        w.count(order.refused.size());
+        for (const SaveState::RefusedOrderSite& site : order.refused) {
+            w.i32(site.x.raw());
+            w.i32(site.y.raw());
+            w.i32(site.z.raw());
+            w.u64(site.until);
+        }
+        w.u8(order.hasLastSite);
+        if (order.hasLastSite) {
+            w.i32(order.lastSite[0].raw());
+            w.i32(order.lastSite[1].raw());
+            w.i32(order.lastSite[2].raw());
+        }
+    }
+}
+
+[[nodiscard]] bool readStandingOrders(PayloadReader& r,
+                                      std::optional<SaveState::StandingOrders>& state) {
+    std::uint8_t present{};
+    if (!r.u8(present) || present > 1) return false;
+    if (!present) {
+        state.reset();
+        return true;
+    }
+    SaveState::StandingOrders out;
+    std::size_t rallyCount{};
+    if (!r.count(rallyCount, 0)) return false;
+    out.rally.reserve(rallyCount);
+    for (std::size_t i = 0; i < rallyCount; ++i) {
+        SaveState::RallyPoint point;
+        std::int32_t x{}, z{};
+        if (!r.u32(point.slot) || !r.i32(x) || !r.i32(z)) return false;
+        point.x = Fx::fromRaw(x);
+        point.z = Fx::fromRaw(z);
+        out.rally.push_back(point);
+    }
+    std::size_t expandCount{};
+    if (!r.count(expandCount, 0)) return false;
+    out.expand.reserve(expandCount);
+    for (std::size_t i = 0; i < expandCount; ++i) {
+        SaveState::AutoExpandOrder order;
+        std::uint8_t hasLast{};
+        if (!readId(r, order.unit) || !r.u64(order.retryAt)) return false;
+        std::size_t refusedCount{};
+        if (!r.count(refusedCount, 0)) return false;
+        order.refused.reserve(refusedCount);
+        for (std::size_t j = 0; j < refusedCount; ++j) {
+            SaveState::RefusedOrderSite site;
+            std::int32_t x{}, y{}, z{};
+            if (!r.i32(x) || !r.i32(y) || !r.i32(z) || !r.u64(site.until)) return false;
+            site.x = Fx::fromRaw(x);
+            site.y = Fx::fromRaw(y);
+            site.z = Fx::fromRaw(z);
+            order.refused.push_back(site);
+        }
+        if (!r.u8(hasLast) || hasLast > 1) return false;
+        order.hasLastSite = hasLast != 0;
+        if (order.hasLastSite) {
+            std::int32_t x{}, y{}, z{};
+            if (!r.i32(x) || !r.i32(y) || !r.i32(z)) return false;
+            order.lastSite = {Fx::fromRaw(x), Fx::fromRaw(y), Fx::fromRaw(z)};
+        }
+        out.expand.push_back(std::move(order));
+    }
+    state = std::move(out);
+    return true;
+}
 // V45 trails the payload after the unit pose: the emitter pool, nullable like
 // `features` — a match with no effect manager saves the absent byte, and an
 // older reader keeps no effects.
@@ -2671,6 +2762,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion48) writeTerrainStamps(payloadWriter, state.terrainStamps);
     if (version >= kVersion51) writeFeatureFlags(payloadWriter, state.features);
     if (version >= kVersion62) writeCustomNames(payloadWriter, state.units);
+    if (version >= kVersion64) writeStandingOrders(payloadWriter, state.standingOrders);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -2724,7 +2816,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion54 && version != kVersion55
                && version != kVersion56 && version != kVersion57
                && version != kVersion58 && version != kVersion59 && version != kVersion60
-               && version != kVersion61 && version != kVersion62 && version != kVersion63)
+               && version != kVersion61 && version != kVersion62 && version != kVersion63
+               && version != kVersion64)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2829,6 +2922,10 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion62 && !readCustomNames(reader, units)) {
         return std::nullopt;
     }
+    std::optional<SaveState::StandingOrders> standingOrders;
+    if (version >= kVersion64 && !readStandingOrders(reader, standingOrders)) {
+        return std::nullopt;
+    }
     // Pre-v51 saves predate the flag: every feature they hold is a wreck, and
     // every wreck then marked the ground — restore that, or a loaded match
     // loses its scorch.
@@ -2852,7 +2949,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        .intel = std::move(intel),
                        .productionOverrides = std::move(productionOverrides),
                        .effects = std::move(effects),
-                       .terrainStamps = std::move(terrainStamps)};
+                       .terrainStamps = std::move(terrainStamps),
+                       .standingOrders = std::move(standingOrders)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -2880,7 +2978,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion63);
+    return rm::sim::encode(state, kVersion64);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

@@ -94,6 +94,35 @@ struct SaveState {
     /// type grid, like `features`. Restored by replaying the entries into the
     /// scene's `TerrainTypeGrid`, which re-derives the effective cells.
     std::optional<std::vector<TerrainStamp>> terrainStamps;
+    /// Caller-owned standing orders (v64): factory rally points by builder
+    /// slot and auto-expand flags with their retry/refusal state. The sim
+    /// never reads these — the app restores them onto the scene/runner —
+    /// but they ride the envelope so a mid-combat app save resumes the
+    /// player's standing orders instead of dropping them. Empty when the
+    /// match holds none; absent (nullopt) on pre-v64 decodes.
+    struct RallyPoint {
+        std::uint32_t slot = 0;
+        Fx x{};
+        Fx z{};
+    };
+    struct RefusedOrderSite {
+        Fx x{};
+        Fx y{};
+        Fx z{};
+        std::uint64_t until = 0;
+    };
+    struct AutoExpandOrder {
+        UnitId unit{};
+        std::uint64_t retryAt = 0;
+        std::vector<RefusedOrderSite> refused;
+        bool hasLastSite = false;
+        std::array<Fx, 3> lastSite{};
+    };
+    struct StandingOrders {
+        std::vector<RallyPoint> rally;
+        std::vector<AutoExpandOrder> expand;
+    };
+    std::optional<StandingOrders> standingOrders;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);

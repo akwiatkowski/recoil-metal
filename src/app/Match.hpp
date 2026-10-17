@@ -26,6 +26,7 @@
 #include "core/sim/Events.hpp"
 #include "core/sim/PathService.hpp"
 #include "core/sim/Skirmish.hpp"
+#include "core/sim/SaveState.hpp"
 
 #include <array>
 #include <memory>
@@ -385,7 +386,17 @@ bool toggleAutoExpand(MatchRunner& runner, std::span<const rm::sim::UnitId> buil
 /// order. A manual order simply takes precedence — the engineer resumes when idle again. A
 /// refused site is remembered and not asked for again; an engineer with nothing to do is
 /// looked at once a second. Returns how many orders were issued.
-std::size_t runAutoExpansion(MatchRunner& runner, rm::TickIndex tick);
+
+/// Captures the caller-owned standing orders for the save envelope (v64):
+/// factory rally points by builder slot and auto-expand flags with their
+/// retry/refusal state. The sim never reads these; the app restores them.
+[[nodiscard]] rm::sim::SaveState::StandingOrders captureStandingOrders(
+    const MatchRunner& runner);
+
+/// Restores standing orders decoded from a save. Entries naming dead slots
+/// or out-of-range slots are dropped — the units they belonged to are gone.
+void restoreStandingOrders(MatchRunner& runner,
+                           const rm::sim::SaveState::StandingOrders& orders);
 
 [[nodiscard]] const rm::scenario::Marker* nearestFreeDeposit(
     const UnitScene& scene, std::span<const rm::scenario::Marker> markers,

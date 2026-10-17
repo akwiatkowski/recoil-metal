@@ -853,6 +853,67 @@ bool autoExpanding(const MatchRunner& runner, rm::sim::UnitId unit) noexcept {
                                [&](const AutoExpander& e) { return e.unit == unit; });
 }
 
+rm::sim::SaveState::StandingOrders captureStandingOrders(const MatchRunner& runner) {
+    rm::sim::SaveState::StandingOrders out;
+    out.rally.reserve(runner.scene.rallyPoints.size());
+    for (const auto& [slot, point] : runner.scene.rallyPoints) {
+        out.rally.push_back({.slot = slot, .x = rm::sim::fxFromFloat(point[0]),
+                             .z = rm::sim::fxFromFloat(point[1])});
+    }
+    std::ranges::sort(out.rally, {}, &rm::sim::SaveState::RallyPoint::slot);
+    out.expand.reserve(runner.autoExpanders.size());
+    for (const AutoExpander& expander : runner.autoExpanders) {
+        rm::sim::SaveState::AutoExpandOrder order;
+        order.unit = expander.unit;
+        order.retryAt = expander.retryAt;
+        order.refused.reserve(expander.refused.size());
+        for (const RefusedSite& site : expander.refused) {
+            order.refused.push_back(
+                {.x = site.site[0], .y = site.site[1], .z = site.site[2], .until = site.until});
+        }
+        order.hasLastSite = expander.lastSite.has_value();
+        if (expander.lastSite) {
+            order.lastSite = *expander.lastSite;
+        }
+        out.expand.push_back(std::move(order));
+    }
+    return out;
+}
+
+void restoreStandingOrders(MatchRunner& runner,
+                           const rm::sim::SaveState::StandingOrders& orders) {
+    runner.scene.rallyPoints.clear();
+    for (const rm::sim::SaveState::RallyPoint& point : orders.rally) {
+        if (point.slot >= runner.scene.store.slotCount()) {
+            continue;
+        }
+        const rm::sim::UnitId current = runner.scene.store.idAt(point.slot);
+        if (!runner.scene.store.alive(current)) {
+            continue;  // the factory is gone; drop its rally, don't resurrect it
+        }
+        runner.scene.rallyPoints.emplace(point.slot,
+                                         std::array<float, 2>{rm::sim::fxToFloat(point.x),
+                                                              rm::sim::fxToFloat(point.z)});
+    }
+    runner.autoExpanders.clear();
+    for (const rm::sim::SaveState::AutoExpandOrder& saved : orders.expand) {
+        if (saved.unit.index >= runner.scene.store.slotCount()
+            || !runner.scene.store.alive(saved.unit)) {
+            continue;  // the engineer died; drop the flag, don't resurrect it
+        }
+        AutoExpander expander{.unit = saved.unit, .retryAt = saved.retryAt};
+        expander.refused.reserve(saved.refused.size());
+        for (const rm::sim::SaveState::RefusedOrderSite& site : saved.refused) {
+            expander.refused.push_back(
+                {.site = {site.x, site.y, site.z}, .until = site.until});
+        }
+        if (saved.hasLastSite) {
+            expander.lastSite = saved.lastSite;
+        }
+        runner.autoExpanders.push_back(std::move(expander));
+    }
+}
+
 std::size_t runAutoExpansion(MatchRunner& runner, rm::TickIndex tick) {
     UnitScene& scene = runner.scene;
     std::erase_if(runner.autoExpanders, [&](const AutoExpander& e) {
