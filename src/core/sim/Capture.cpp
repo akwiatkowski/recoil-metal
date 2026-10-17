@@ -51,6 +51,12 @@ bool capturableTarget(UnitIndex captor, UnitId target, const UnitStore& store,
     if (victim->hasCategory("COMMAND")) {
         return false;
     }
+    // `C-250`: the per-tick preamble reads the target's `vt[0x40]` `+0x69`
+    // byte (`Unit::SetCapturable`, `0x006D00B0`) — a target the script marked
+    // uncapturable (transport beacons, stored cargo) refuses the task.
+    if (!store.capturableAt(target.index)) {
+        return false;
+    }
     const MoveState& targetMotion = store.motion()[target.index];
     // `C-239` (`SimUtils.lua:58-62`): only TOP-LEVEL units take a task — an
     // attached child is never admitted on its own. An attached PARENT is:
@@ -442,6 +448,8 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
     // custom name (`Unit+0x2CC`) through the `+0x6C`/`+0x68` getter/setter
     // pair — snapshot before `kill`, restore on the replacement below.
     const std::string keptCustomName = store.customName(unit);
+    // The capturable flag rides the transfer like the shield toggle.
+    const bool keptCapturable = store.capturableAt(victim);
     motion.armyIndex = armyIndex;
     motion.moving = false;
     motion.path.clear();
@@ -491,6 +499,9 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
     }
     if (!keptCustomName.empty()) {
         (void)store.setCustomName(replacement, keptCustomName);
+    }
+    if (!keptCapturable) {
+        (void)store.setCapturable(replacement, false);
     }
     // `C-240`/`C-404` aliasing, second half: the kept manipulator list and
     // bone mask land on the replacement. The spawn wiped both (newcomers

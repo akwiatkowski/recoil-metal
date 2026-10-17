@@ -621,6 +621,12 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, std::uint8_t{13});
             feedText(h, name);
         }
+        // `C-250`'s capturable flag gates capture admission, so an
+        // uncapturable beacon and a capturable extractor diverge next tick.
+        // Capturable stays silent, keeping the pre-flag stream.
+        if (!store.capturableAt(slot) && store.slotAlive(slot)) {
+            feed(h, std::uint8_t{14});
+        }
         // WHETHER THE SLOT IS OCCUPIED, which the generation cannot say on its own. Death is
         // a tombstone: `kill` leaves every array untouched and deliberately does NOT advance
         // the generation mirror, because a stale mirror is what makes a dead unit's handle

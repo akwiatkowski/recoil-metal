@@ -755,3 +755,19 @@ TEST_CASE("a captured silo keeps its queued missile builds on the replacement", 
     REQUIRE(siloQueue.size() == 1);
     CHECK(siloQueue.front().owner == replacement);
 }
+
+TEST_CASE("a unit marked uncapturable refuses capture", "[capture]") {
+    // `C-250`'s per-tick preamble reads the `vt[0x40]` object `+0x69` byte
+    // written by `Unit::SetCapturable` (`0x006D00B0`) — retail's transport
+    // beacons (`defaultunits.lua:1165`) and stored cargo (`Unit.lua:3469`)
+    // clear it. Intake and the working task must both honor the flag.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.roster.store.setCapturable(target, false));
+    CHECK_FALSE(f.roster.store.capturable(target));
+    CHECK_FALSE(f.capture(captor, target));
+    // Re-enabling restores admission.
+    REQUIRE(f.roster.store.setCapturable(target, true));
+    CHECK(f.capture(captor, target));
+}

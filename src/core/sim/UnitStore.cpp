@@ -40,6 +40,7 @@ UnitStore::UnitStore(const Snapshot& snapshot)
        manipulators_(snapshot.manipulators),
        boneHidden_(snapshot.boneHidden),
        customNames_(snapshot.customNames),
+       capturable_(snapshot.capturable),
        nextCommandSerial_(snapshot.nextCommandSerial),
         nextCommandCounters_(snapshot.nextCommandCounters) {
     std::vector<std::shared_ptr<SharedCommand>> mutableCommands;
@@ -102,6 +103,9 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     // Older snapshots (and `Snapshot{}` defaults) carry no names: unnamed is
     // the default — a restored unit without a rename keeps its blueprint name.
     customNames_.resize(transforms_.size());
+    // Older snapshots carry no capturable array: capturable is the pre-flag
+    // default — `SetCapturable(false)` units did not exist yet.
+    capturable_.resize(transforms_.size(), true);
     for (std::size_t child = 0; child < transforms_.size(); ++child) {
         if (parents_[child]) {
             if (deriveAttachmentHeights) {
@@ -161,6 +165,7 @@ UnitStore::Snapshot UnitStore::snapshot() const {
     saved.boneHidden = boneHidden_;
     saved.enhancements = enhancements_;
     saved.customNames = customNames_;
+    saved.capturable = capturable_;
     return saved;
 }
 
@@ -196,6 +201,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         manipulators_.emplace_back();
         boneHidden_.emplace_back();
         customNames_.emplace_back();
+        capturable_.emplace_back(true);
         attachmentParentBones_.emplace_back(kNoBone);
         attachmentSelfBones_.emplace_back(kNoBone);
         attachmentParentRest_.emplace_back();
@@ -242,6 +248,11 @@ UnitId UnitStore::spawn(const Spawn& request) {
     // its tombstone's rename.
     if (slot < customNames_.size()) {
         customNames_[slot].clear();
+    }
+    // `C-250`: the capturable flag is live-unit state — a recycled slot never
+    // inherits its tombstone's refusal.
+    if (slot < capturable_.size()) {
+        capturable_[slot] = true;
     }
     attachmentParentRest_[slot] = {};
     attachmentParentRestHeights_[slot] = {};
@@ -843,6 +854,24 @@ std::string UnitStore::customName(UnitId unit) const noexcept {
         return {};
     }
     return customNames_[unit.index];
+}
+
+bool UnitStore::setCapturable(UnitId unit, bool capturable) noexcept {
+    if (!alive(unit)) {
+        return false;
+    }
+    if (unit.index >= capturable_.size()) {
+        capturable_.resize(static_cast<std::size_t>(unit.index) + 1, true);
+    }
+    capturable_[unit.index] = capturable;
+    return true;
+}
+
+bool UnitStore::capturable(UnitId unit) const noexcept {
+    if (!alive(unit) || unit.index >= capturable_.size()) {
+        return true;
+    }
+    return capturable_[unit.index];
 }
 
 } // namespace rm::sim

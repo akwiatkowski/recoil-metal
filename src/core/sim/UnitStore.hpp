@@ -209,6 +209,8 @@ public:
         std::vector<std::map<std::string, std::string>> enhancements;
         /// `C-240`'s per-slot custom names (`Unit+0x2CC`) — see `customName`.
         std::vector<std::string> customNames;
+        /// `C-250`'s per-slot capturable flags (see `setCapturable`).
+        std::vector<bool> capturable;
     };
 
     UnitStore() = default;
@@ -552,6 +554,19 @@ public:
     /// The custom name, empty when the unit was never renamed. A dead handle
     /// reads empty — the name left with the unit, not the slot.
     [[nodiscard]] std::string customName(UnitId unit) const noexcept;
+    /// `C-250`'s per-unit capturable flag — retail's `vt[0x40]` object `+0x69`
+    /// byte written by `Unit::SetCapturable` (`0x006D00B0`) and read in the
+    /// capture task's per-tick preamble. Units spawn capturable; transport
+    /// beacons (`defaultunits.lua:1165`) and stored cargo (`Unit.lua:3469`)
+    /// clear it.
+    [[nodiscard]] bool setCapturable(UnitId unit, bool capturable) noexcept;
+    /// True unless cleared. A dead handle reads true — the flag left with the
+    /// unit, and only admission of a live target consults it.
+    [[nodiscard]] bool capturable(UnitId unit) const noexcept;
+    /// Slot-indexed read for the capture passes, which walk slots.
+    [[nodiscard]] bool capturableAt(UnitIndex slot) const noexcept {
+        return slot < capturable_.size() ? capturable_[slot] : true;
+    }
 
     /// Shared repeat/count operations. Exhaustion removes this exact object from every member
     /// queue, matching retail's cross-queue `DecreaseCommandCount` path.
@@ -655,6 +670,8 @@ private:
     std::vector<std::vector<std::uint64_t>> boneHidden_;
     /// `C-240`'s per-slot custom names — see `setCustomName`.
     std::vector<std::string> customNames_;
+    /// `C-250`'s per-unit capturable flag — see `setCapturable`.
+    std::vector<bool> capturable_;
 
     CommandSerial nextCommandSerial_ = 0;
     std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters_{};

@@ -229,6 +229,10 @@ constexpr std::uint32_t kVersion64 = 64;
 // `rm::sim::Opponent::attackLaunched`). Pre-v65 saves decode with no wave
 // state — the match resumes with the wave unlaunched, as before.
 constexpr std::uint32_t kVersion65 = 65;
+// v66 adds the per-slot capturable flags (`C-250`'s `SetCapturable` byte),
+// sparse like the custom names — a match where every unit is capturable
+// writes nothing, so older saves decode with every unit capturable.
+constexpr std::uint32_t kVersion66 = 66;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1836,11 +1840,39 @@ void writeCustomNames(PayloadWriter& w, const UnitStore::Snapshot& s) {
     }
     return true;
 }
+// v66 trails the payload after the opponent waves: only uncapturable slots
+// are listed, so an all-capturable match writes an empty section. A listed
+// capturable slot is the absent case, like the pose's all-zero mask.
+void writeCapturable(PayloadWriter& w, const UnitStore::Snapshot& s) {
+    std::size_t count = 0;
+    for (std::size_t slot = 0; slot < s.capturable.size(); ++slot) {
+        if (slot < s.transforms.size() && !s.capturable[slot]) {
+            ++count;
+        }
+    }
+    w.count(count);
+    for (std::size_t slot = 0; slot < s.capturable.size(); ++slot) {
+        if (slot < s.transforms.size() && !s.capturable[slot]) {
+            w.u32(static_cast<std::uint32_t>(slot));
+        }
+    }
+}
+
+[[nodiscard]] bool readCapturable(PayloadReader& r, UnitStore::Snapshot& s) {
+    std::size_t count{};
+    if (!r.count(count, 8) || count > s.transforms.size()) return false;
+    s.capturable.assign(s.transforms.size(), true);
+    for (std::size_t entry = 0; entry < count; ++entry) {
+        std::uint32_t slot{};
+        if (!r.u32(slot) || slot >= s.capturable.size() || s.capturable[slot]) return false;
+        s.capturable[slot] = false;
+    }
+    return true;
+}
 // v64 trails the payload after the custom names: the caller-owned standing
 // orders, nullable like `features` — a match with no rally points and no
 // auto-expand flags saves the absent byte, and a pre-v64 reader keeps none.
 // Rally coordinates ride as Fx raw words (exact round-trip, never hashed),
-// like refused sites and the last-site triple.
 void writeStandingOrders(PayloadWriter& w, const std::optional<SaveState::StandingOrders>& state) {
     w.u8(state.has_value());
     if (!state) {
@@ -2807,6 +2839,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion62) writeCustomNames(payloadWriter, state.units);
     if (version >= kVersion64) writeStandingOrders(payloadWriter, state.standingOrders);
     if (version >= kVersion65) writeOpponentWaves(payloadWriter, state.opponentWaves);
+    if (version >= kVersion66) writeCapturable(payloadWriter, state.units);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -2861,7 +2894,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion56 && version != kVersion57
                && version != kVersion58 && version != kVersion59 && version != kVersion60
                && version != kVersion61 && version != kVersion62 && version != kVersion63
-               && version != kVersion64 && version != kVersion65)
+               && version != kVersion64 && version != kVersion65 && version != kVersion66)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -2974,6 +3007,9 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion65 && !readOpponentWaves(reader, opponentWaves)) {
         return std::nullopt;
     }
+    if (version >= kVersion66 && !readCapturable(reader, units)) {
+        return std::nullopt;
+    }
     // Pre-v51 saves predate the flag: every feature they hold is a wreck, and
     // every wreck then marked the ground — restore that, or a loaded match
     // loses its scorch.
@@ -3027,7 +3063,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion65);
+    return rm::sim::encode(state, kVersion66);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {
