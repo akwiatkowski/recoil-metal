@@ -1246,9 +1246,13 @@ the FX-only `TractorClaw` — return false; the 8 thread-forking classes plus
 scorch"` — 16-class table plus unknown-scorches plus scorch-less-marks-nothing/
 scorching-marks end to end; focused `[fa-terrain]` 75 assertions/8 cases green,
 serial ctest 2236/2237 with the sole failure pre-existing `CPlatoon combat
-verbs`). Remaining: dwell-trail marks along the tracked end (needs per-tick
-beam-end positions) and wiring the gate into the `Match.cpp` drain (needs the
-weapon→beam-class mapping — currently the helper default of unmapped=scorches).
+verbs`). **Audit 2026-10-17:** the weapon→beam-class mapping is script-side
+only — unit script imports a weapon class carrying `BeamType`
+(`URB2301_Script.lua` → `CDFParticleCannonWeapon` →
+`ParticleCannonCollisionBeam`), invisible to blueprints — so the drain cannot
+map weapons to classes without hosting unit scripts (FA-LUA). The gate stays
+wired at the helper with unmapped=scorches. Remaining: dwell-trail marks
+along the tracked end (needs per-tick beam-end positions).
 Retail wrecks never
 
 ```text
