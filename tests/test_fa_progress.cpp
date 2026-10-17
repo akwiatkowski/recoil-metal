@@ -816,3 +816,26 @@ TEST_CASE("C-450/OnBuildProgress: enhancement milestones carry the retail call s
     CHECK(calls[2].first == Catch::Approx(0.625f));
     CHECK(calls[2].second == Catch::Approx(0.75f));
 }
+
+TEST_CASE("C-255: an installed enhancement's NewSonarRadius overrides sonar",
+          "[fa-progress][enhancement]") {
+    // `NewSonarRadius` is a declared retail enhancement field
+    // (`UnitBlueprint.lua:869`) in the `SetIntelRadius` family alongside
+    // vision/omni/jammer — the sim must apply it the same way.
+    rm::test::Roster roster;
+    roster.rate = rm::sim::TickRate{10};
+    rm::unitdef::UnitDef def;
+    def.name = "test_commander";
+    def.health = rm::test::mag(100.0f);
+    def.sonarRadiusElmos = 100.0f;
+    const auto params = rm::lua::parseTable("{ NewSonarRadius=40 }");
+    REQUIRE(params);
+    def.enhancements.push_back({.name = "NaniteTorpedoTube", .slot = "Back",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .parameters = *params});
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "NaniteTorpedoTube"));
+    CHECK(rm::sim::intelRadiiFor(roster.store, roster.catalog, unit.index).sonar
+          == rm::sim::Fx::fromInt(320));
+}

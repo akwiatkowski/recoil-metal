@@ -179,6 +179,7 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
             effects.visionRadiusElmos = ogrid("NewVisionRadius");
             effects.omniRadiusElmos = ogrid("NewOmniRadius");
             effects.jammerRadiusElmos = ogrid("NewJammerRadius");
+            effects.sonarRadiusElmos = ogrid("NewSonarRadius");
             if (const auto radius = ogrid("NewMaxRadius")) {
                 effects.maxRadiusElmos = *radius;
             }

@@ -676,6 +676,7 @@ UnitCatalog::IntelRadii intelRadiiFor(const UnitStore& store,
                 catalog.enhancementEffects(store.typeAt(slot), installed)) {
             if (effects->visionRadiusElmos) radii.vision = *effects->visionRadiusElmos;
             if (effects->omniRadiusElmos) radii.omni = *effects->omniRadiusElmos;
+            if (effects->sonarRadiusElmos) radii.sonar = *effects->sonarRadiusElmos;
             if (effects->jammerRadiusElmos) {
                 // `SetIntelRadius('Jammer', r)` sets the jammer's outer radius;
                 // the blip range keeps its authored minimum.

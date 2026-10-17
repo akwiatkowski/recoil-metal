@@ -138,6 +138,9 @@ public:
         std::optional<Fx> visionRadiusElmos;
         std::optional<Fx> omniRadiusElmos;
         std::optional<Fx> jammerRadiusElmos;
+        /// `NewSonarRadius` (`UnitBlueprint.lua:869`) — same ogrids-authored
+        /// `SetIntelRadius` family as vision/omni/jammer.
+        std::optional<Fx> sonarRadiusElmos;
         /// `C-255`: `ChangeMaxRadius`/`ChangeRateOfFire`/`AddDamageMod` values —
         /// the LABELS they land on are script-side (`EnhancementScriptEffects`),
         /// these are the parameters the scripts read. Radius and rate are
