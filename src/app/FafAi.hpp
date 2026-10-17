@@ -149,6 +149,10 @@ public:
     /// counted silently — the corpus explains itself well when allowed to speak.
     void setLogPassthrough(bool enabled);
 
+    /// Publishes the client-local viewpoint (`C-341`): the 0-based army the observer
+    /// watches, or a negative index for nobody focused. The sandbox starts at -1.
+    void setFocusArmy(int army);
+
     /// Resets the instruction budget. `eval`, `import` and `pump` refuel themselves; a
     /// caller driving the VM through `state()` directly (the opponent bridge) must refuel
     /// per entry, or the watchdog bills its passes cumulatively and kills a legitimate one.

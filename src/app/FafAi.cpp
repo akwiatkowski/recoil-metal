@@ -84,6 +84,11 @@ struct Sandbox {
     std::deque<Thread> threads;
     std::vector<std::string> threadErrors;
     long long tick = 0;              ///< the pump's clock, in sim ticks
+    /// The client-local viewpoint (`C-341`): the 0-based army the observer watches,
+    /// or -1 with nobody focused. Headless starts unfocused — every debug-gated
+    /// `GetFocusArmy() == brain:GetArmyIndex()` call site stays off — and a match
+    /// that watches an army publishes it via `FafAi::setFocusArmy`.
+    long long focusArmy = -1;
     std::size_t currentThread = SIZE_MAX;  ///< index being resumed, for CurrentThread
 
     /// The call profile: which of the CORPUS'S OWN functions ran, and how often — the other
@@ -249,6 +254,20 @@ int gameTimeSeconds(lua_State* lua) {
     }
     const long long tick = sandbox != nullptr ? sandbox->tick : 0;
     lua_pushnumber(lua, static_cast<lua_Number>(tick) / static_cast<lua_Number>(kTicksPerSecond));
+    return 1;
+}
+/// `GetFocusArmy()` (`C-341`) — the client-local viewpoint as a 1-based army
+/// index, `-1` with nobody focused. Real rather than stubbed because the corpus
+/// compares it numerically on ten call sites (`== brain:GetArmyIndex()`), and a
+/// nil there turns every comparison into an error.
+int focusArmy(lua_State* lua) {
+    Sandbox* sandbox = sandboxOf(lua);
+    const auto slot = static_cast<std::size_t>(lua_tointeger(lua, lua_upvalueindex(1)));
+    if (sandbox != nullptr && slot < sandbox->slots.size()) {
+        ++sandbox->slots[slot].calls;
+    }
+    const long long focused = sandbox != nullptr ? sandbox->focusArmy : -1;
+    lua_pushinteger(lua, focused < 0 ? -1 : static_cast<lua_Integer>(focused + 1));
     return 1;
 }
 
@@ -1546,6 +1565,9 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
         if (name == "KillThread") {
             return killThread;
         }
+        if (name == "GetFocusArmy") {
+            return focusArmy;
+        }
         if (name == "GetGameTick") {
             return gameTick;
         }
@@ -1573,7 +1595,7 @@ FafAi::FafAi(std::filesystem::path root, bool verbose)
         if (name == "ForkThread" || name == "KillThread") {
             return Fidelity::Known;
         }
-        if (name == "GetGameTick" || name == "GetGameTimeSeconds") {
+        if (name == "GetGameTick" || name == "GetGameTimeSeconds" || name == "GetFocusArmy") {
             return Fidelity::Known;
         }
         if (name == "lazyimport") {
@@ -1993,6 +2015,13 @@ void FafAi::setLogPassthrough(bool enabled) {
     Sandbox* sandbox = state_ != nullptr ? sandboxOf(state_) : nullptr;
     if (sandbox != nullptr) {
         sandbox->logPassthrough = enabled;
+    }
+}
+
+void FafAi::setFocusArmy(int army) {
+    Sandbox* sandbox = state_ != nullptr ? sandboxOf(state_) : nullptr;
+    if (sandbox != nullptr) {
+        sandbox->focusArmy = army;
     }
 }
 
