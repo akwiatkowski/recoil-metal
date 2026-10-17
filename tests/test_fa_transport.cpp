@@ -1100,6 +1100,41 @@ TEST_CASE("C-225: a carrier stores aircraft in its pool and launches them airbor
     CHECK(roster.transform(first).y == roster.transform(carrierId).y);
     (void)third;
 }
+TEST_CASE("C-225: a staging pad parks each aircraft on its own TransportClass bone",
+          "[fa-transport]") {
+    // Retail keys pad docking on `bp.Transport.TransportClass` (`CUnitRefuel::TaskTick`
+    // 0x00627f60 via IAiTransport +0x54/+0x5c): a class-2 aircraft parks on a
+    // class-2 hook even when a class-1 hook is nearer, and vice versa. The
+    // `_Med`/`_Lrg`/`_Spr` lists are the pads' machinery, not the transports'.
+    rm::test::Roster roster;
+    UnitDef padDef;
+    padDef.name = "test_pad";
+    padDef.categories = {"AIRSTAGINGPLATFORM", "STRUCTURE"};  // sorted for hasCategory
+    padDef.transport.dockingSlots = 4;
+    const rm::UnitTypeIndex padType = roster.addType(padDef);
+    // One class-1 hook near the origin, one class-2 hook twenty elmos out.
+    const std::array<rm::sim::UnitCatalog::AttachBoneSpec, 2> bones{{
+        {.bone = 19, .cargoClass = 1, .rest = {2.0f, 6.0f, 0.0f}},
+        {.bone = 30, .cargoClass = 2, .rest = {20.0f, 6.0f, 0.0f}},
+    }};
+    roster.catalog.setAttachBones(padType, bones);
+    const rm::UnitTypeIndex heavyType = roster.addType(cargoDef(2));
+    const rm::UnitTypeIndex lightType = roster.addType(cargoDef(1));
+
+    // A class-2 aircraft parked beside the class-1 hook still takes the
+    // class-2 hook across the deck.
+    const UnitId pad = roster.add(padType, 100.0f, 100.0f, 0, 500.0f);
+    const UnitId heavy = roster.add(heavyType, 103.0f, 100.0f, 0, 500.0f);
+    REQUIRE(rm::sim::dockOnStagingBone(roster.store, roster.catalog, pad, heavy));
+    CHECK(roster.store.attachmentBonesOf(heavy).parent == 30);
+
+    // And a class-1 aircraft parked beside the class-2 hook takes the
+    // class-1 hook across the deck.
+    const UnitId pad2 = roster.add(padType, 300.0f, 300.0f, 0, 500.0f);
+    const UnitId light = roster.add(lightType, 319.0f, 300.0f, 0, 500.0f);
+    REQUIRE(rm::sim::dockOnStagingBone(roster.store, roster.catalog, pad2, light));
+    CHECK(roster.store.attachmentBonesOf(light).parent == 19);
+}
 
 TEST_CASE("C-264: a displaced mobile factory keeps its build attached to the pad",
           "[fa-transport]") {

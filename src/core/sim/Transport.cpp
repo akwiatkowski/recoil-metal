@@ -320,12 +320,13 @@ bool hasRoomFor(const UnitStore& store, const UnitCatalog& catalog, UnitId carri
 
 bool dockOnStagingBone(UnitStore& store, const UnitCatalog& catalog, UnitId pad,
                        UnitId aircraft) noexcept {
-    // `C-456`: `CUnitRefuel::TaskTick` (0x00627f60) parks the aircraft on the
+    // `C-225`: `CUnitRefuel::TaskTick` (0x00627f60) parks the aircraft on the
     // pad bone's rest offset — X/Z the deck spot, the bone's Y the landing-site
     // height written straight into `mover+0x64` — keyed by TransportClass.
-    // Nearest free bone wins (deterministic: lowest rest distance, then bone
-    // index) so two bingo guards do not stack on one hook. No resolved bones
-    // means false, and the caller keeps its berth-grid fallback.
+    // The `_Med`/`_Lrg`/`_Spr` lists are the pads' machinery: a class-N
+    // aircraft takes the nearest free class-N hook, never a nearer hook of
+    // another class. No free hook of its class means false, and the caller
+    // keeps its berth-grid fallback.
     if (!store.alive(pad) || !store.alive(aircraft) || store.parentOf(aircraft)) {
         return false;
     }
@@ -334,11 +335,16 @@ bool dockOnStagingBone(UnitStore& store, const UnitCatalog& catalog, UnitId pad,
     if (bones.empty()) {
         return false;
     }
+    const unitdef::UnitDef* jetDef = catalog.def(store.typeAt(aircraft.index));
+    const int jetClass = jetDef != nullptr ? jetDef->transportCargoClass() : 1;
     const Transform& padAt = store.transforms()[pad.index];
     const Transform& jet = store.transforms()[aircraft.index];
     const UnitCatalog::AttachBone* best = nullptr;
     Fx bestDist{};
     for (const UnitCatalog::AttachBone& bone : bones) {
+        if (bone.cargoClass != jetClass) {
+            continue;
+        }
         if (boneHasChild(store, pad, bone)) {
             continue;
         }
