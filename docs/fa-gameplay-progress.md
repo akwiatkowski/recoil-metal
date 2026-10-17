@@ -1097,6 +1097,13 @@ one-charge rules, run make test and make verify.
 live generation reuses its slot, and is suppressed from projection immediately; time-based expiry
 and other recon families remain incomplete.
 
+**Audit 2026-10-17:** the old goal prompt below is done — deterministic
+radar-position error already feeds automatic targeting without touching
+identity, ordering, or identification (`automaticTrackPosition`,
+`automaticProjectileAimPosition`, `Combat.cpp`; C-276/C-158 cover).
+Remaining recon work is non-radar families (sonar memory depth, omni edge
+cases, cloak/jammer interactions, water-vision granularity, Lua bindings).
+
 ```text
 /goal Advance FA-INTEL by applying existing deterministic radar-position error to automatic
 targeting without changing retained-contact identity, ordering, or visual identification. Preserve
@@ -1106,7 +1113,6 @@ FA-INTEL.
 ```
 
 ### FA-PROGRESS - Enhancements, Veterancy, And Special Units
-
 **Largest gap:** veterancy is implemented, and the enhancement lifecycle now covers
 install, funded work, cancellation without refund, removal with health fallback,
 save/load (`[enhancement][script-task]`), the `C-436` quarter-progress
@@ -1511,12 +1517,13 @@ expansion count — the deterministic Dijkstra replays it on restore.
 and the opponent VM remain outside the envelope. Replay is a separate
 compatibility boundary.
 
-**Audit correction (2026-10-16):** the envelope is substantial, not absent:
-`SaveState` versions through at least v62 are exercised for commands,
-enhancements, intel, economy, projectiles, flow fields and AI state, with
-legacy readers retained. The stated gap is only its boundary: general
-mid-combat app saves including external input and the opponent VM, plus retail
-replay transport compatibility.
+**Audit 2026-10-17:** the boundary is concrete, not abstract — app-side
+standing orders live outside the sim envelope with no save path at all:
+factory rally points (`UnitScene::rallyPoints`, `Scene.hpp`) and auto-expand
+flags (`MatchRunner::autoExpanders`, `Match.hpp`) are caller-owned, and no
+`SaveState` field, encoder, or test covers them. A mid-combat app save that
+resumes them is the smallest retail-evidenced next slice; external input,
+opponent VM, and replay transport stay out of scope.
 
 ```text
 /goal Continue the pool-by-pool envelope: the remaining intel grids and
