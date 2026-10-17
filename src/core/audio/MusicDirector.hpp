@@ -30,15 +30,16 @@ enum class MusicState : std::uint8_t { Base = 0, Battle = 1 };
 
 class MusicDirector {
 public:
+
     /// Twenty damage events inside the 3s window trip the battle layer
-    /// (`UserMusic.lua` battle detector). Ticks at the match rate (10 Hz).
+    /// (`UserMusic.lua` battle detector). Authored in seconds; tick counts
+    /// derive from the match rate at the call site.
     static constexpr std::size_t kBattleEvents = 20;
-    static constexpr std::uint32_t kBattleWindowTicks = 30;
+    static constexpr float kBattleWindowSeconds = 3.0f;
     /// Twenty quiet seconds fall back to base, plus a 3s fade gap before the
     /// swap is audible.
-    static constexpr std::uint32_t kIdleFallbackTicks = 200;
-    static constexpr std::uint32_t kFadeGapTicks = 30;
-
+    static constexpr float kIdleFallbackSeconds = 20.0f;
+    static constexpr float kFadeGapSeconds = 3.0f;
     explicit MusicDirector(Mixer& mixer);
 
     /// One tick of the music clock. `focusArmy` is the viewed army; only its

@@ -22,10 +22,10 @@ void MusicDirector::update(std::span<const sim::Event> events, int focusArmy,
     }
     // The window and gaps scale with the match rate: 3s of battle window, 20s of
     // quiet, 3s of fade — the authored seconds, not a 10 Hz literal.
-    const auto window = static_cast<std::uint64_t>(kBattleWindowTicks * ticksPerSecond / 10u);
-    const auto idleFor = static_cast<std::uint64_t>(kIdleFallbackTicks * ticksPerSecond / 10u);
-    const auto fadeFor = static_cast<std::uint64_t>(kFadeGapTicks * ticksPerSecond / 10u);
 
+    const auto window = static_cast<std::uint64_t>(kBattleWindowSeconds * static_cast<float>(ticksPerSecond));
+    const auto idleFor = static_cast<std::uint64_t>(kIdleFallbackSeconds * static_cast<float>(ticksPerSecond));
+    const auto fadeFor = static_cast<std::uint64_t>(kFadeGapSeconds * static_cast<float>(ticksPerSecond));
     for (const sim::Event& event : events) {
         if (event.kind != sim::EventKind::UnitDamaged || event.army != focusArmy) {
             continue;
