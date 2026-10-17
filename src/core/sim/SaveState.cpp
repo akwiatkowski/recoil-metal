@@ -1121,13 +1121,14 @@ void writeProjectiles(PayloadWriter& w,
             w.u8(shot.friendlyFire ? 1 : 0);
         }
         // V53 trails the record: `C-095`'s cap and engagement pair, `C-172`'s
-        // gravity flag, and `C-262`'s ring bands.
+        // gravity flag, `C-169`'s assigned-target gate, and `C-262`'s ring bands.
         if (capFlags) {
             w.u64(shot.serial);
             w.u64(static_cast<std::uint64_t>(shot.interceptTargetIndex));
             w.u64(shot.interceptTargetSerial);
             w.i32(shot.desiredShooterCap);
             w.u8(shot.useGravity ? 1 : 0);
+            w.u8(shot.hitAssignedTarget ? 1 : 0);
             w.i64(shot.innerRing.base.raw());
             w.i64(shot.outerRing.base.raw());
             w.i32(shot.innerRingRadiusElmos.raw());
@@ -1243,22 +1244,24 @@ bool readProjectiles(PayloadReader& r,
             if (!r.u8(friendly) || friendly > 1) return false;
             shot.friendlyFire = friendly != 0;
         }
-        // V53's trailing cap/serial/ring fields; older saves leave the shot
-        // uncapped, unminted, and ring-free — what a pre-C-095 shot was anyway.
+        // V53's trailing cap/serial/ring fields plus the assigned-target gate;
+        // older saves leave the shot uncapped, unminted, ungated, and ring-free.
         if (capFlags) {
             std::int32_t cap{}, innerR{}, outerR{};
             std::int64_t innerD{}, outerD{};
-            std::uint8_t gravity{};
+            std::uint8_t gravity{}, assigned{};
             std::uint64_t targetIndex{};
             if (!r.u64(shot.serial) || !r.u64(targetIndex)
                 || !r.u64(shot.interceptTargetSerial) || !r.i32(cap)
-                || !r.u8(gravity) || gravity > 1 || !r.i64(innerD)
+                || !r.u8(gravity) || gravity > 1 || !r.u8(assigned) || assigned > 1
+                || !r.i64(innerD)
                 || !r.i64(outerD) || !r.i32(innerR) || !r.i32(outerR)) {
                 return false;
             }
             shot.interceptTargetIndex = static_cast<std::size_t>(targetIndex);
             shot.desiredShooterCap = cap;
             shot.useGravity = gravity != 0;
+            shot.hitAssignedTarget = assigned != 0;
             shot.innerRing.base = Mag::fromRaw(innerD);
             shot.outerRing.base = Mag::fromRaw(outerD);
             shot.innerRingRadiusElmos = Fx::fromRaw(innerR);

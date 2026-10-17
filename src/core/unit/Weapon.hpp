@@ -172,6 +172,11 @@ struct Weapon {
         /// `Physics.ZigZagFrequency` (C-171): seconds between re-rolls of the
         /// weave direction — three uniforms from the sim RNG each period.
         float zigZagPeriodSeconds = 0.0f;
+        /// `Physics.HitAssignedTarget` (C-169, `Projectile.lua:101-105`): the
+        /// shot collides only with its own tracking target. Four shipped
+        /// interceptor blueprints author it (e.g.
+        /// `TIMMissileIntercerptor01_proj.bp`).
+        bool hitAssignedTarget = false;
         /// `Physics.DesiredShooterCap` (C-095): how many shooters may engage
         /// this projectile at once — the anti-overkill gate on point-defence
         /// acquisition. Nuke missiles carry 1-2; zero means uncapped.

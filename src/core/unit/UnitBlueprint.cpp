@@ -1132,6 +1132,7 @@ loadProjectileTraits(std::string_view source) {
         // point-defence shooters may engage this projectile at once (nuke
         // missiles carry 1-2; zero means uncapped). `C-172`'s `UseGravity`
         // gives the shot the ballistic acceleration even with no arc.
+        .hitAssignedTarget = physics && flagAt(*physics, "HitAssignedTarget"),
         .desiredShooterCap = physics ? static_cast<int>(numberOr(*physics, "DesiredShooterCap", 0.0f)) : 0,
         .useGravity = physics && flagAt(*physics, "UseGravity"),
     };

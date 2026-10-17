@@ -186,6 +186,13 @@ struct Projectile {
     /// engaged by that many in-flight interceptors.
     int desiredShooterCap = 0;
 
+    /// `C-169` (`Projectile.lua:101-105`, `OnCollisionCheck`): a shot whose
+    /// projectile blueprint sets `Physics.HitAssignedTarget` collides only
+    /// with its own tracking target — any other projectile on the segment is
+    /// not struck. Four shipped interceptor blueprints author it (e.g.
+    /// `TIMMissileIntercerptor01_proj.bp`).
+    bool hitAssignedTarget = false;
+
     /// `C-172`: `Physics.UseGravity` — the shot takes the ballistic
     /// acceleration even with no arc, and only while it is not tracking.
     bool useGravity = false;

@@ -782,6 +782,8 @@ TEST_CASE("a current save round-trips the projectile pool", "[save-state]") {
         .health = rm::sim::Mag::fromInt(11),
         .categories = {"MISSILE", "TACTICAL"},
         .impactTarget = rm::sim::UnitId{.index = 9, .generation = 1},
+        .desiredShooterCap = 2,
+        .hitAssignedTarget = true,
     }};
     const auto bytes = SaveState::encode(state);
     const auto restored = SaveState::decode(bytes);
@@ -801,6 +803,8 @@ TEST_CASE("a current save round-trips the projectile pool", "[save-state]") {
     CHECK(shot.health == rm::sim::Mag::fromInt(11));
     CHECK(shot.categories == std::vector<std::string>{"MISSILE", "TACTICAL"});
     CHECK(shot.impactTarget == rm::sim::UnitId{.index = 9, .generation = 1});
+    CHECK(shot.desiredShooterCap == 2);
+    CHECK(shot.hitAssignedTarget);
     CHECK(SaveState::encode(*restored) == bytes);
 }
 

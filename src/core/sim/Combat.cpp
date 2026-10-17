@@ -500,6 +500,15 @@ struct ProjectileTickStart {
             || !projectileHostile(interceptor.firedByArmy, candidate, armies)) {
             continue;
         }
+        // `C-169`'s `HitAssignedTarget` half of the Lua gate: the interceptor
+        // collides only with its own tracking target — the index+serial pair
+        // `fireWeapons` recorded at launch — so a nearer missile on the
+        // segment is not struck.
+        if (interceptor.hitAssignedTarget
+            && (index != interceptor.interceptTargetIndex
+                || candidate.serial != interceptor.interceptTargetSerial)) {
+            continue;
+        }
         // Projectiles have no authored collision radius in this slice. Their positions are
         // therefore the contact primitive, tested against the interceptor's swept segment.
         const std::optional<SweepFraction> entry =
@@ -3089,10 +3098,11 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     // projectile blueprint's own keys, resolved into `projectileTraits` at load.
     shot.stayUnderwater = weapon.projectileTraits.stayUnderwater;
     shot.destroyOnWater = weapon.projectileTraits.destroyOnWater;
-    // `C-095`/`C-169`: the cap the shot's targeters respect and the gravity
-    // flag its flight reads — both authored on the projectile blueprint,
-    // carried on the shot like `maxHealth` above.
+    // `C-095`/`C-169`/`C-172`: the cap, the assigned-target gate, and the
+    // gravity flag — all authored on the projectile blueprint, carried on
+    // the shot like `maxHealth` above.
     shot.desiredShooterCap = weapon.projectileTraits.desiredShooterCap;
+    shot.hitAssignedTarget = weapon.projectileTraits.hitAssignedTarget;
     shot.useGravity = weapon.projectileTraits.useGravity;
     shot.arc = weapon.arc;
     shot.ticksRemaining = static_cast<int>(rate.ticks(kProjectileLifetime));

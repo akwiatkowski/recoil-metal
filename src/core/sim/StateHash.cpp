@@ -964,13 +964,15 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 feed(h, shot.aimPoint);
                 feed(h, shot.friendlyFire);
             }
-            // `C-095`/`C-172`/`C-262`: the cap, the gravity flag, the launch
-            // serial and engagement pair, and the ring bands — all conditional
-            // so an ordinary shot keeps its byte stream.
-            if (shot.desiredShooterCap > 0 || shot.useGravity || shot.serial != 0
+            // `C-095`/`C-169`/`C-172`/`C-262`: the cap, the assigned-target
+            // gate, the gravity flag, the launch serial and engagement pair,
+            // and the ring bands — all conditional so an ordinary shot keeps
+            // its byte stream.
+            if (shot.desiredShooterCap > 0 || shot.hitAssignedTarget || shot.useGravity || shot.serial != 0
                 || shot.innerRing.harmful() || shot.outerRing.harmful()) {
                 feed(h, true);
                 feed(h, static_cast<std::size_t>(shot.desiredShooterCap));
+                feed(h, shot.hitAssignedTarget);
                 feed(h, shot.useGravity);
                 feed(h, static_cast<std::size_t>(shot.serial));
                 feed(h, shot.interceptTargetIndex);

@@ -1068,3 +1068,49 @@ TEST_CASE("C-328: a dive completion announces Bottom, a surfacing Top", "[fa-nav
     CHECK(divingVert == std::vector<int>{1});  // Bottom on committing to Sub
     (void)settled;
 }
+
+TEST_CASE("C-169: a HitAssignedTarget interceptor passes a nearer missile for its mark", "[fa-navy]") {
+    // Retail `Projectile.lua:101-105` (`OnCollisionCheck`): a shot whose
+    // blueprint sets `Physics.HitAssignedTarget` collides only with its own
+    // tracking target — any other missile on the segment is not struck. Four
+    // shipped interceptor blueprints author it (e.g.
+    // `TIMMissileIntercerptor01_proj.bp`), so a TMD/SMD interceptor fired at
+    // one missile flies through a nearer one to reach its mark.
+    const rm::HeightField field = flatField();
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    rm::test::Roster roster;
+
+    rm::sim::Projectile mark{.position = rm::test::at(0, 4, 18),
+                             .firedByArmy = 1,
+                             .ticksRemaining = 10,
+                             .maxHealth = rm::test::mag(2.0f),
+                             .health = rm::test::mag(2.0f),
+                             .serial = 7};
+    rm::sim::Projectile decoy{.position = rm::test::at(0, 4, 10),
+                              .firedByArmy = 1,
+                              .ticksRemaining = 10,
+                              .maxHealth = rm::test::mag(2.0f),
+                              .health = rm::test::mag(2.0f),
+                              .serial = 9};
+    rm::sim::Projectile interceptor{.position = rm::test::at(0, 4, 0),
+                                    .velocity = rm::test::at(0, 0, 20),
+                                    .damage = rm::unitdef::flatDamage(rm::test::mag(1.0f)),
+                                    .firedByArmy = 0,
+                                    .interceptor = true,
+                                    .ticksRemaining = 10,
+                                    .hitAssignedTarget = true,
+                                    .interceptTargetIndex = 0,
+                                    .interceptTargetSerial = 7};
+    std::vector<rm::sim::Projectile> shots{mark, decoy, interceptor};
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{field}, roster.rate);
+
+    // The interceptor is consumed on its mark; the nearer decoy is untouched.
+    REQUIRE(shots.size() == 2);
+    const rm::sim::Projectile& afterMark =
+        shots.front().serial == 7 ? shots.front() : shots.back();
+    const rm::sim::Projectile& afterDecoy =
+        shots.front().serial == 9 ? shots.front() : shots.back();
+    CHECK(rm::sim::magToFloat(afterMark.health) == Approx(1.0f));
+    CHECK(rm::sim::magToFloat(afterDecoy.health) == Approx(2.0f));
+}
