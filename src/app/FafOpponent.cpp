@@ -77,7 +77,7 @@ local factionNames = { 'UEF', 'Aeon', 'Cybran', 'Seraphim' }
 
 -- One category set per blueprint id, built from the tag list C++ sends once per type.
 -- In Moho every unit id is itself a category, so the id joins its own set.
-function __rm_faf_type(bp, tags, threat, toggleCaps)
+function __rm_faf_type(bp, tags, threat, toggleCaps, commandCaps)
     if __rm_faf.cats[bp] then return end
     local set = {}
     for _, tag in ipairs(tags) do set[string.upper(tag)] = true end
@@ -92,6 +92,12 @@ function __rm_faf_type(bp, tags, threat, toggleCaps)
     -- cloak enable on it (platoon.lua:1293 `RULEUTC_CloakToggle`).
     __rm_faf.toggleCaps = __rm_faf.toggleCaps or {}
     __rm_faf.toggleCaps[bp] = toggleCaps or {}
+    -- Retail `Unit:TestCommandCaps` answers from the blueprint's authored
+    -- `General.CommandCaps` table (the authored source `UnitDef.hpp:808-815`
+    -- documents: `GetUnitCommandData` feeds `orders.lua:SetAvailableOrders`).
+    -- Same declared/absent pattern as the toggle caps above.
+    __rm_faf.commandCaps = __rm_faf.commandCaps or {}
+    __rm_faf.commandCaps[bp] = commandCaps or {}
 end
 
 -- One unit's threat in one of Moho's domains, from the blueprint's own estimates. The
@@ -205,6 +211,12 @@ __rm_faf.unitMeta = {
         -- match-side `teachType` teaches it from the loaded blueprint below.
         TestToggleCaps = function(u, cap)
             local caps = __rm_faf.toggleCaps and __rm_faf.toggleCaps[u.bp]
+            return caps ~= nil and caps[cap] == true
+        end,
+        -- Retail `Unit:TestCommandCaps` answers from the blueprint's authored
+        -- `General.CommandCaps` table (see `__rm_faf_type` above).
+        TestCommandCaps = function(u, cap)
+            local caps = __rm_faf.commandCaps and __rm_faf.commandCaps[u.bp]
             return caps ~= nil and caps[cap] == true
         end,
         -- Retail's `Entity:IsPaused`/`SetPaused`, read by `Platoon:PlatoonDisband`
@@ -2993,7 +3005,12 @@ void FafOpponent::teachType(lua_State* lua, const rm::unitdef::UnitDef& def) {
         lua_pushboolean(lua, 1);
         lua_setfield(lua, -2, cap.c_str());
     }
-    if (lua_pcall(lua, 4, 0, 0) != 0) {
+    lua_newtable(lua);  // the authored `General.CommandCaps` set, for TestCommandCaps
+    for (const std::string& cap : def.commandCaps) {
+        lua_pushboolean(lua, 1);
+        lua_setfield(lua, -2, cap.c_str());
+    }
+    if (lua_pcall(lua, 5, 0, 0) != 0) {
         lua_pop(lua, 1);
     }
 }

@@ -4070,6 +4070,35 @@ TEST_CASE("FAF snapshot units answer TestToggleCaps from authored ToggleCaps",
     INFO(ai.lastError());
     REQUIRE(ok);
 }
+TEST_CASE("FAF snapshot units answer TestCommandCaps from authored CommandCaps",
+          "[faf][ai][command-caps]") {
+    // Retail `Unit:TestCommandCaps` answers from the blueprint's authored
+    // `General.CommandCaps` table (the authored source `UnitDef.hpp:808-815`
+    // documents: `GetUnitCommandData` feeds `orders.lua:SetAvailableOrders`).
+    // The test's `__rm_faf_type` fifth argument carries the authored set;
+    // match-side `teachType` teaches it from the loaded blueprint below.
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    const bool ok = ai.eval(R"(
+        __rm_faf_boot(0, { faction = 1, startX = 0, startZ = 0,
+            sizeX = 4096, sizeZ = 4096, armies = 2, base = 'NormalMain', markers = {} })
+        __rm_faf_type('GUNSHIP', {'AIR', 'ATTACK'}, nil, nil, {RULEUCC_Attack = true})
+        __rm_faf_type('SCOUT', {'AIR', 'SCOUT'})
+        local gunship = setmetatable({h=1, bp='GUNSHIP', x=0, z=0,
+            __cats=__rm_faf.cats.GUNSHIP}, __rm_faf.unitMeta)
+        local scout = setmetatable({h=2, bp='SCOUT', x=0, z=0,
+            __cats=__rm_faf.cats.SCOUT}, __rm_faf.unitMeta)
+        assert(gunship:TestCommandCaps('RULEUCC_Attack') == true,
+            'authored CommandCaps answer true')
+        assert(scout:TestCommandCaps('RULEUCC_Attack') == false,
+            'absent CommandCaps answer false')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
 TEST_CASE("C-418: the Artillery slot needs ARTILLERY and STRATEGIC together",
           "[faf][ai][threat-query]") {
     // C-418 (`0x0071cf00` prologue): the f[9] Artillery slot's category bit-id
