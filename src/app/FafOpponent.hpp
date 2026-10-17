@@ -108,8 +108,16 @@ private:
     /// `__rm_faf_set_intel`/`__rm_faf_is_intel_enabled`: `C-283`'s
     /// `EnableIntel`/`DisableIntel`/`IsIntelEnabled` — the write queues a
     /// `SetIntel` decision, the read answers the live enabled byte.
-    static int setIntelBinding(lua_State* lua);
     static int isIntelEnabledBinding(lua_State* lua);
+    static int setIntelBinding(lua_State* lua);
+    /// `__rm_faf_get_blip`/`__rm_faf_is_known_fake`/`__rm_faf_is_maybe_dead`:
+    /// retail's blip object behind `unit:GetBlip(armyIndex)` (`C-282`,
+    /// `0x005C7540`) — the target plus the viewing army, flags answered live
+    /// per contact (`Contact::knownFake`/`maybeDead`).
+    static int getBlipBinding(lua_State* lua);
+    static int isKnownFakeBinding(lua_State* lua);
+    static int isMaybeDeadBinding(lua_State* lua);
+    static bool blipFlag(lua_State* lua, bool knownFake);
 
     /// This army's influence map — retail's `CInfluenceMap` at `CArmyImpl+0x218`
     /// (C-353). Fed from the observed snapshot every pass; its cell aggregates are

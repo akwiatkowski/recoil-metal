@@ -3557,6 +3557,87 @@ TEST_CASE("FAF unit intel toggles queue SetIntel decisions the port applies",
     CHECK(scene->store.intelEnabled(unit, rm::sim::IntelType::Radar));
 }
 
+// C-282 (Lua surface): `unit:GetBlip(armyIndex)` and the blip's
+// `IsKnownFake`/`IsMaybeDead` — platoon.lua's hunt and capture loops poll
+// them every pass (`vendor/ai/faf/lua/platoon.lua:462,1628,1656`). The sim
+// already tracks both flags per contact (`Contact::knownFake`/`maybeDead`);
+// the adapter exposed neither, so any AI target acquisition hit a nil method.
+TEST_CASE("C-282: a unit's blip reports its live fake and dead flags",
+          "[faf][ai][intel]") {
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    static const rm::unitdef::UnitDef kDish = [] {
+        rm::unitdef::UnitDef def;
+        def.visionRadiusElmos = 0.0f;
+        def.radarRadiusElmos = 400.0f;
+        return def;
+    }();
+    static const rm::unitdef::UnitDef kTank;
+    auto scene = std::make_unique<rm::app::UnitScene>();
+    scene->armies = {{.index = 0, .alliance = 0}, {.index = 1, .alliance = 1}};
+    scene->economies.resize(scene->armies.size());
+    const auto dishType = scene->catalog.add(&kDish, rm::sim::TickRate{});
+    const auto tankType = scene->catalog.add(&kTank, rm::sim::TickRate{});
+    (void)scene->store.spawn({
+        .type = dishType,
+        .transform = {.x = rm::sim::fxFromFloat(200.0f), .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = {.armyIndex = 0},
+        .health = {.current = rm::sim::magFromFloat(100.0f),
+                   .maximum = rm::sim::magFromFloat(100.0f)},
+    });
+    const rm::sim::UnitId enemy = scene->store.spawn({
+        .type = tankType,
+        .transform = {.x = rm::sim::fxFromFloat(500.0f), .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = {.armyIndex = 1},
+        .health = {.current = rm::sim::magFromFloat(100.0f),
+                   .maximum = rm::sim::magFromFloat(100.0f)},
+    });
+    // Nobody sees with vision (both radii are zero); the 300-elmo separation
+    // sits inside the 400-elmo radar, so the enemy is a radar blip, not a
+    // sighting.
+    scene->intel.configure(2, rm::sim::fxFromFloat(1024.0f), rm::sim::fxFromFloat(1024.0f),
+                           rm::sim::VisionStyle::ForgedAlliance);
+    scene->intel.update(scene->store, scene->catalog, scene->armies, nullptr);
+    rm::HeightField field{.squaresX = 64, .squaresZ = 64};
+    field.raw.resize(field.sampleCount());
+    const std::array<rm::mapinfo::StartPosition, 2> starts{{
+        {.x = 0, .z = 100}, {.x = 50, .z = 100},
+    }};
+    rm::vfs::Vfs content;
+    const rm::ai::World world{.scene = *scene, .content = content, .field = field,
+                              .starts = starts, .markers = {}};
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    rm::ai::FafOpponent opponent(ai, 0);
+    opponent.observe(world, {});
+    opponent.advance(0);
+    const std::int64_t handle =
+        (static_cast<std::int64_t>(enemy.generation) << 32) | enemy.index;
+    bool ok = ai.eval("local brain = __rm_faf.brains[0]; local u = __rm_faf_unit_for(brain, "
+        + std::to_string(handle) + ", 'TANK', 500, 200);"
+          " local blip = u:GetBlip(1);"
+          " assert(blip ~= nil, 'a radar contact has a blip');"
+          " assert(blip:IsMaybeDead(1) == false, 'a live contact is not maybe-dead');"
+          " assert(blip:IsKnownFake(1) == false, 'a real return is not a known fake');"
+          " __rm_faf.heldBlip = blip");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+    // Killing the source turns the retained return maybe-dead; the held blip
+    // re-queries instead of reporting its birth flags.
+    scene->store.kill(enemy);
+    scene->intel.update(scene->store, scene->catalog, scene->armies, nullptr);
+    opponent.observe(world, {});
+    opponent.advance(1);
+    ok = ai.eval(R"(
+        local blip = __rm_faf.heldBlip
+        assert(blip:IsMaybeDead(1) == true, 'the retained return turns maybe-dead')
+        assert(blip:BeenDestroyed() == true, 'the source handle reads destroyed')
+    )");
+    INFO(ai.lastError());
+    REQUIRE(ok);
+}
+
 TEST_CASE("C-361: sim events dispatch to the brain and unit callbacks",
           "[faf][ai][intel]") {
     // `C-361` (`0x614a56`, `0x5d6029`): the native->Lua callback surface.

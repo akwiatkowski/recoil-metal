@@ -248,6 +248,14 @@ __rm_faf.unitMeta = {
         -- resolves to the unit it reports. Our blip IS the unit table, so the
         -- source is itself.
         GetSource = function(u) return u end,
+        -- `C-282` (Lua surface): `unit:GetBlip(armyIndex)` — the handle
+        -- platoon.lua's hunt/capture loops poll (lines 462,1628,1656). The
+        -- native binding below fills in the target; the blip table answers
+        -- `BeenDestroyed`/`IsKnownFake`/`IsMaybeDead` live per contact.
+        GetBlip = function(u, armyIndex)
+            if __rm_faf_get_blip then return __rm_faf_get_blip(u.h, armyIndex) end
+            return nil
+        end,
         -- `C-257`/`C-380` (`Unit.lua:2806-2821`): the scenario callback
         -- registry `DoUnitCallbacks` walks. `AddUnitCallback(fn, type)`
         -- appends to `EventCallbacks[type]` (retail errors on a nil fn);
@@ -314,6 +322,31 @@ __rm_faf.decalMeta = {
 }
 function __rm_faf.decal()
     return setmetatable({ __texture = nil }, __rm_faf.decalMeta)
+end
+
+-- `C-282` (Lua surface): retail's blip object behind `unit:GetBlip` — the
+-- contact's target handle plus the viewing army, answered live by the
+-- native flag readers so a held blip re-queries instead of caching. Nil for
+-- an unknown army, like `platoon.lua:1629`'s `if blip then` guard.
+__rm_faf.blipMeta = {
+    __index = {
+        BeenDestroyed = function(b)
+            if __rm_faf_beenDestroyed then return __rm_faf_beenDestroyed(b.h) end
+            return false
+        end,
+        GetSource = function(b) return b.__source end,
+        IsKnownFake = function(b, army)
+            if __rm_faf_is_known_fake then return __rm_faf_is_known_fake(b.h, army or b.army) end
+            return false
+        end,
+        IsMaybeDead = function(b, army)
+            if __rm_faf_is_maybe_dead then return __rm_faf_is_maybe_dead(b.h, army or b.army) end
+            return false
+        end,
+    },
+}
+function __rm_faf.blip(h, army, source)
+    return setmetatable({ h = h, army = army, __source = source }, __rm_faf.blipMeta)
 end
 
 -- `C-361`: resolve a packed unit handle to the table the callback surface
@@ -3012,6 +3045,102 @@ int FafOpponent::isIntelEnabledBinding(lua_State* lua) {
     return 1;
 }
 
+/// `__rm_faf_get_blip(h, army)` + `__rm_faf_is_known_fake(h, army)` +
+/// `__rm_faf_is_maybe_dead(h, army)`: retail's blip object behind
+/// `unit:GetBlip(armyIndex)` (`0x005C7540`, `C-282`). The corpus polls the
+/// blip every pass (`platoon.lua:462,1628,1656`); the flags answer live per
+/// contact (`Contact::knownFake`/`maybeDead`), so a held blip re-queries
+/// instead of caching. Nil when the army sees no contact — the corpus's own
+/// `if blip then` guard — or the army index is unknown.
+int FafOpponent::getBlipBinding(lua_State* lua) {
+    auto* self = static_cast<FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    const auto id = unpackHandle(lua_tointeger(lua, 1));
+    const int army = static_cast<int>(lua_tointeger(lua, 2)) - 1;
+    if (self == nullptr || !self->world_) {
+        lua_pushnil(lua);
+        return 1;
+    }
+    const rm::app::UnitScene& scene = self->world_->scene;
+    if (army < 0 || static_cast<std::size_t>(army) >= scene.armies.size()) {
+        lua_pushnil(lua);
+        return 1;
+    }
+    const int alliance = scene.armies[static_cast<std::size_t>(army)].alliance;
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(alliance, scene.store, scene.catalog, scene.armies,
+                         scene.intel, 0, contacts);
+    const auto found = std::ranges::find_if(contacts, [&](const rm::sim::Contact& contact) {
+        return contact.unit == id;
+    });
+    if (found == contacts.end()) {
+        lua_pushnil(lua);
+        return 1;
+    }
+    lua_getglobal(lua, "__rm_faf");
+    lua_getfield(lua, -1, "blip");
+    lua_remove(lua, -2);
+    lua_pushinteger(lua, packHandle(id));
+    lua_pushinteger(lua, static_cast<lua_Integer>(army + 1));
+    lua_getglobal(lua, "__rm_faf_unit_for");
+    lua_getglobal(lua, "__rm_faf");
+    lua_getfield(lua, -1, "brains");
+    lua_rawgeti(lua, -1, self->army_);
+    lua_remove(lua, -3);
+    lua_remove(lua, -2);
+    lua_pushinteger(lua, packHandle(id));
+    lua_pushnil(lua);
+    lua_pushnil(lua);
+    lua_pushnil(lua);
+    lua_pushinteger(lua, static_cast<lua_Integer>(
+        id.index < scene.store.slotCount()
+        ? scene.store.motion()[id.index].armyIndex : -1));
+    if (lua_pcall(lua, 6, 1, 0) != LUA_OK) {
+        lua_pop(lua, 1);
+        lua_pushnil(lua);
+        return 1;
+    }
+    if (lua_pcall(lua, 3, 1, 0) != LUA_OK) {
+        lua_pop(lua, 1);
+        lua_pushnil(lua);
+        return 1;
+    }
+    return 1;
+}
+
+/// Reads one blip flag live for `IsKnownFake`/`IsMaybeDead`: the contact's
+/// current `knownFake`/`maybeDead`, false when there is no contact.
+bool FafOpponent::blipFlag(lua_State* lua, bool knownFake) {
+    auto* self = static_cast<FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    const auto id = unpackHandle(lua_tointeger(lua, 1));
+    const int army = static_cast<int>(lua_tointeger(lua, 2)) - 1;
+    if (self == nullptr || !self->world_ || army < 0
+        || static_cast<std::size_t>(army) >= self->world_->scene.armies.size()) {
+        return false;
+    }
+    const rm::app::UnitScene& scene = self->world_->scene;
+    const int alliance = scene.armies[static_cast<std::size_t>(army)].alliance;
+    std::vector<rm::sim::Contact> contacts;
+    rm::sim::contactsFor(alliance, scene.store, scene.catalog, scene.armies,
+                         scene.intel, 0, contacts);
+    const auto found = std::ranges::find_if(contacts, [&](const rm::sim::Contact& contact) {
+        return contact.unit == id;
+    });
+    if (found == contacts.end()) {
+        return false;
+    }
+    return knownFake ? found->knownFake : found->maybeDead;
+}
+
+int FafOpponent::isKnownFakeBinding(lua_State* lua) {
+    lua_pushboolean(lua, blipFlag(lua, true) ? 1 : 0);
+    return 1;
+}
+
+int FafOpponent::isMaybeDeadBinding(lua_State* lua) {
+    lua_pushboolean(lua, blipFlag(lua, false) ? 1 : 0);
+    return 1;
+}
+
 int FafOpponent::enhancementSequenceBinding(lua_State* lua) {
     const auto* self = static_cast<const FafOpponent*>(lua_touserdata(lua, lua_upvalueindex(1)));
     const auto id = unpackHandle(luaL_checkinteger(lua, 1));
@@ -3930,6 +4059,15 @@ void FafOpponent::advance(rm::TickIndex tick) {
     lua_pushlightuserdata(lua, this);
     lua_pushcclosure(lua, isIntelEnabledBinding, 1);
     lua_setglobal(lua, "__rm_faf_is_intel_enabled");
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, getBlipBinding, 1);
+    lua_setglobal(lua, "__rm_faf_get_blip");
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, isKnownFakeBinding, 1);
+    lua_setglobal(lua, "__rm_faf_is_known_fake");
+    lua_pushlightuserdata(lua, this);
+    lua_pushcclosure(lua, isMaybeDeadBinding, 1);
+    lua_setglobal(lua, "__rm_faf_is_maybe_dead");
 
 
     // --- The snapshot -------------------------------------------------------------------
