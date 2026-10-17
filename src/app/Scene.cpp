@@ -236,8 +236,9 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
 /// what its corpus script states — the sonance crater pair's wider 12-elmo
 /// albedo (the 10-elmo normals ride the same mark), proton `scorch_011` at
 /// 10, napalm `scorch_001` at 3.75-5 (midpoint 4.375), EMP `nuke_scorch_001`
-/// at 28. The blast radius still sizes the base scorch when a scripted shot
-/// ALSO scorches through its base class (all four call their parent after).
+/// at 28, frag `scorch_004` at 2.25-3.75 (midpoint 3.0), zhanasee
+/// `Scorch_012` at 40. The blast radius still sizes the base scorch when a
+/// scripted shot ALSO scorches through its base class (all call their parent after).
 [[nodiscard]] float impactMarkScriptedRadius(UnitScene::ImpactMarkScript script,
                                              float blastRadiusElmos) noexcept {
     using Script = UnitScene::ImpactMarkScript;
@@ -246,6 +247,8 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::ProtonScorch: return 10.0f;  // elmos (`CIFArtilleryProton01:15`)
         case Script::NapalmScorch: return 4.375f;  // elmos (3.75-5 midpoint, `:13`)
         case Script::EmpScorch: return 28.0f;  // elmos (`CIFEMPFluxWarhead02:116`)
+        case Script::FragScorch: return 3.0f;  // elmos (2.25-3.75 midpoint, `:20`)
+        case Script::ZhanaseeScorch: return 40.0f;  // elmos (`SBOZhanaseeBomb01:29`)
         case Script::BaseScorch: break;
     }
     return impactMarkRadius(blastRadiusElmos);
@@ -260,6 +263,8 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::ProtonScorch: return 11;  // `scorch_011_albedo`
         case Script::NapalmScorch: return 12;  // `scorch_001_albedo` scripted draw
         case Script::EmpScorch: return 13;  // `nuke_scorch_001_albedo`
+        case Script::FragScorch: return 14;  // `scorch_004_albedo` scripted draw
+        case Script::ZhanaseeScorch: return 15;  // `Scorch_012_albedo` scripted draw
         case Script::BaseScorch: break;
     }
     return base;
@@ -333,13 +338,18 @@ void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
 UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId) noexcept {
     using Script = UnitScene::ImpactMarkScript;
     // The filename stem names the script family (`.../NAME/NAME_proj.bp`):
-    // match the four corpus `OnImpact` decal writers (C-484), everything
-    // else rides the base splat/decal split.
+    // match the live corpus `OnImpact` decal writers (C-484) — commented-out
+    // draws (`AIFQuantumWarhead02`) and trail-thread splats
+    // (`ShellTankTerran01`) lay nothing on impact, so both ride base scorch.
     const auto stem = projectileId.substr(projectileId.find_last_of('/') + 1);
     if (stem.starts_with("AIFSonanceShell02")) return Script::SonanceCrater;
+    if (stem.starts_with("SIFSuthanusArtilleryShell02")) return Script::SonanceCrater;
     if (stem.starts_with("CIFArtilleryProton01")) return Script::ProtonScorch;
     if (stem.starts_with("TIFNapalmCarpetBomb01")) return Script::NapalmScorch;
+    if (stem.starts_with("TIFNapalmCarpetBomb02")) return Script::NapalmScorch;
     if (stem.starts_with("CIFEMPFluxWarhead02")) return Script::EmpScorch;
+    if (stem.starts_with("AIFFragmentationSensorShell03")) return Script::FragScorch;
+    if (stem.starts_with("SBOZhanaseeBomb01")) return Script::ZhanaseeScorch;
     return Script::BaseScorch;
 }
 /// Whether a collision-beam class forks `ScorchThread` (C-290): the 8 classes

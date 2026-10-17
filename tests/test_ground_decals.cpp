@@ -741,8 +741,17 @@ TEST_CASE("impact marks tag a weapon's own decal from the shot's projectile id",
               "/projectiles/TIFNapalmCarpetBomb01/TIFNapalmCarpetBomb01_proj.bp")
           == Script::NapalmScorch);
     CHECK(rm::app::scriptTagForProjectile(
-              "/projectiles/CIFEMPFluxWarhead02/CIFEMPFluxWarhead02_proj.bp")
-          == Script::EmpScorch);
+              "/projectiles/SIFSuthanusArtilleryShell02/SIFSuthanusArtilleryShell02_proj.bp")
+          == Script::SonanceCrater);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/TIFNapalmCarpetBomb02/TIFNapalmCarpetBomb02_proj.bp")
+          == Script::NapalmScorch);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/AIFFragmentationSensorShell03/AIFFragmentationSensorShell03_proj.bp")
+          == Script::FragScorch);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/SBOZhanaseeBomb01/SBOZhanaseeBomb01_proj.bp")
+          == Script::ZhanaseeScorch);
     CHECK(rm::app::scriptTagForProjectile(
               "/projectiles/TDFGauss01/TDFGauss01_proj.bp")
           == Script::BaseScorch);
