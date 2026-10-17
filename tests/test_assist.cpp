@@ -1273,3 +1273,24 @@ TEST_CASE("an assist retires when its guardee dies", "[guard][guard-work-regress
     f.tick(1);
     CHECK(f.roster.store.orders()[helper.index].active() == nullptr);
 }
+
+TEST_CASE("an assist retires on a dead guardee once its mirror build is done",
+          "[guard][guard-work-regression]") {
+    // C-183/C-211: the factory-mirror exemption keeps Assist while its shared
+    // child is still rising, but a FINISHED row means the child is done — the
+    // reservation test's own rationale says Assist ends then.
+    Fixture f;
+    const UnitId founder = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId helper = f.roster.add(f.engineerType, 100.0f, 200.0f, 0, 100.0f);
+    REQUIRE(f.assist(helper, founder));
+    f.tick(1);
+    REQUIRE(f.roster.store.orders()[helper.index].active() != nullptr);
+    rm::sim::Construction done;
+    done.builder = helper;
+    done.totalBuildTime = rm::sim::magFromFloat(100.0f);
+    REQUIRE(done.finished());
+    f.building.push_back(done);
+    f.roster.store.kill(founder);
+    f.tick(1);
+    CHECK(f.roster.store.orders()[helper.index].active() == nullptr);
+}

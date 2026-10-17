@@ -688,7 +688,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         const bool assistWithMirror =
             current->kind() == CommandKind::Assist && building != nullptr
             && std::ranges::any_of(*building, [&](const Construction& c) {
-                   return c.builder == store.idAt(slot);
+                   return !c.finished() && c.builder == store.idAt(slot);
                });
         if ((current->kind() == CommandKind::Guard || current->kind() == CommandKind::Assist)
             && !assistWithMirror
