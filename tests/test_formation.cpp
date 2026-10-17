@@ -747,3 +747,45 @@ TEST_CASE("a naval attack-move ranks frigates ahead of destroyers", "[formation]
           == Catch::Approx(888.0f).margin(0.01f));
 }
 
+TEST_CASE("a naval group move ranks frigates ahead of destroyers", "[formation]") {
+    // Retail `ThreeNavalGrowthFormation` (ART-S007 lua/formations.lua:450-459):
+    // row one is all `FrigatesFirst`, so a destroyer that is canonical-first
+    // still trails behind three frigates on a plain Move — the same rank walk
+    // the attack blocks already replay, over the Growth block rows.
+    Fixture fix;
+    rm::unitdef::UnitDef frigateDef;
+    frigateDef.name = "test_frigate_growth_rank";
+    frigateDef.categories = {"FRIGATE", "MOBILE", "NAVAL"};
+    frigateDef.motion = rm::unitdef::MotionType::Water;
+    const rm::UnitTypeIndex frigate = fix.roster.addType(frigateDef);
+    rm::unitdef::UnitDef destroyerDef;
+    destroyerDef.name = "test_destroyer_growth";
+    destroyerDef.categories = {"DESTROYER", "MOBILE", "NAVAL"};
+    destroyerDef.motion = rm::unitdef::MotionType::Water;
+    const rm::UnitTypeIndex destroyer = fix.roster.addType(destroyerDef);
+    std::vector<UnitId> group;
+    group.push_back(fix.roster.add(destroyer, 200.0f, 200.0f, 0, 500.0f));
+    for (int i = 0; i < 3; ++i) {
+        group.push_back(fix.roster.add(frigate, 200.0f, 200.0f, 0, 500.0f));
+    }
+    const rm::sim::ApplyCommandResult result =
+        fix.issueMove(group, 900.0f, 200.0f, CommandKind::Move);
+    REQUIRE(result.accepted == group);
+
+    std::size_t front = 0;
+    for (const UnitId member : group) {
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        CHECK(entries.front().kind() == CommandKind::Move);
+        if (rm::test::asFloat(entries.front().targetX())
+            == Catch::Approx(900.0f).margin(0.01f)) {
+            ++front;
+        }
+    }
+    CHECK(front == 3);
+    const auto& destroyerEntries = fix.roster.store.orders()[group.front().index].entries();
+    REQUIRE(destroyerEntries.size() == 1);
+    CHECK(rm::test::asFloat(destroyerEntries.front().targetX())
+          == Catch::Approx(888.0f).margin(0.01f));
+}
+

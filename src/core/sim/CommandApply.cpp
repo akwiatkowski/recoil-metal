@@ -432,6 +432,72 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
 /// each list to its first-pick family. IDs are formationSeaClass's
 /// frigate/destroyer/battleship/cruiser/carrier/sonar/nukesub/remaining families.
 /// Sub blocks are uniform `Subs` (formations.lua:562-584) and need no ranking.
+/// ART-S007 naval Growth slot ranks (formations.lua:450-487), projected to
+/// first-pick families like the attack helper below. Row 0 is all
+/// `FrigatesFirst` in every block; deeper rows name their own rhythms.
+/// Columns past the authored row read frigate.
+[[nodiscard]] int growthNavalSlotRank(std::size_t row, std::size_t column, std::size_t width) noexcept {
+    constexpr int kFrigate = 0;
+    constexpr int kDestroyer = 1;
+    constexpr int kBattleship = 2;
+    constexpr int kCruiser = 3;
+    constexpr int kCarrier = 4;
+    constexpr int kSonar = 5;
+    constexpr int kThreeRow1[] = {kDestroyer, kSonar, kDestroyer};
+    constexpr int kThreeRow2[] = {kDestroyer, kCruiser, kDestroyer};
+    constexpr int kFiveRow1[] = {kFrigate, kSonar, kDestroyer, kSonar, kFrigate};
+    constexpr int kFiveRow2[] = {kDestroyer, kSonar, kBattleship, kSonar, kDestroyer};
+    constexpr int kFiveRow3[] = {kDestroyer, kSonar, kCarrier, kSonar, kDestroyer};
+    constexpr int kSevenRow1[] = {kFrigate, kFrigate, kSonar, kDestroyer, kSonar, kFrigate, kFrigate};
+    constexpr int kSevenRow2[] = {kDestroyer, kDestroyer, kSonar, kBattleship, kSonar, kDestroyer, kDestroyer};
+    constexpr int kSevenRow3[] = {kDestroyer, kBattleship, kSonar, kCarrier, kSonar, kBattleship, kDestroyer};
+    constexpr int kSevenRow4[] = {kDestroyer, kCruiser, kSonar, kBattleship, kSonar, kCruiser, kDestroyer};
+    constexpr int kSevenRow5[] = {kDestroyer, kCruiser, kSonar, kCarrier, kSonar, kCruiser, kDestroyer};
+    if (column < 1) {
+        return kFrigate;
+    }
+    const std::size_t col = column - 1;
+    if (row == 0) {
+        return kFrigate;
+    }
+    if (width == 3) {
+        if (row == 1) {
+            return col < std::size(kThreeRow1) ? kThreeRow1[col] : kFrigate;
+        }
+        return col < std::size(kThreeRow2) ? kThreeRow2[col] : kFrigate;
+    }
+    if (width == 5) {
+        if (row == 1) {
+            return col < std::size(kFiveRow1) ? kFiveRow1[col] : kFrigate;
+        }
+        if (row == 2) {
+            return col < std::size(kFiveRow2) ? kFiveRow2[col] : kFrigate;
+        }
+        return col < std::size(kFiveRow3) ? kFiveRow3[col] : kFrigate;
+    }
+    if (width == 7) {
+        if (row == 1) {
+            return col < std::size(kSevenRow1) ? kSevenRow1[col] : kFrigate;
+        }
+        if (row == 2) {
+            return col < std::size(kSevenRow2) ? kSevenRow2[col] : kFrigate;
+        }
+        if (row == 3) {
+            return col < std::size(kSevenRow3) ? kSevenRow3[col] : kFrigate;
+        }
+        if (row == 4) {
+            return col < std::size(kSevenRow4) ? kSevenRow4[col] : kFrigate;
+        }
+        return col < std::size(kSevenRow5) ? kSevenRow5[col] : kFrigate;
+    }
+    return kFrigate;
+}
+
+/// ART-S007 naval attack slot ranks (formations.lua:499-528). Each slot names a
+/// `*First` fallback list (formations.lua:439-445); the helpers below project
+/// each list to its first-pick family. IDs are formationSeaClass's
+/// frigate/destroyer/battleship/cruiser/carrier/sonar/nukesub/remaining families.
+/// Sub blocks are uniform `Subs` (formations.lua:562-584) and need no ranking.
 [[nodiscard]] int attackNavalSlotRank(std::size_t row, std::size_t column, std::size_t width) noexcept {
     constexpr int kFrigate = 0;
     constexpr int kDestroyer = 1;
@@ -480,8 +546,6 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     }
     return kFrigate;
 }
-
-/// Family-level projection of the naval `*First` lists (formations.lua:439-445).
 [[nodiscard]] std::size_t attackNavalFamilyPriority(int slotType, int family) noexcept {
     constexpr int kFrigatesFirst[] = {0, 1, 2, 3, 4, 6, 5, 7};
     constexpr int kDestroyersFirst[] = {1, 0, 2, 3, 4, 6, 5, 7};
@@ -1180,15 +1244,25 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         }
         landMembers = std::move(ranked);
     }
-    // Retail naval `AttackFormation` blocks rank hulls per slot too
-    // (formations.lua:499-528): every row of the 5/7/9-wide blocks names its
-    // own `*First` list, with row one all frigates. Sub blocks are uniform
-    // `Subs` (formations.lua:562-584), so only surface hulls rank here.
+    // Retail naval blocks rank hulls per slot on both scripts: the Growth
+    // `Three`/`Five`/`SevenNavalGrowthFormation` blocks (formations.lua:450-487)
+    // read all-`FrigatesFirst` first rows with `DestroyersFirst`/`SonarFirst`
+    // rhythms behind, and the `AttackFormation` 5/7/9-wide blocks
+    // (formations.lua:499-528) every row of their own `*First` lists. Sub
+    // blocks are uniform `Subs` (formations.lua:562-584), so only surface
+    // hulls rank here on either script.
     const std::size_t seaCounterForRanks = seaCounter(seaMembers.size(), subMembers.size());
     const std::size_t seaWidthForRanks =
-        isAttackOrder ? navalFormationWidth(seaCounterForRanks, true) : 0;
-    if (isAttackOrder && !seaMembers.empty()
-        && (seaWidthForRanks == 5 || seaWidthForRanks == 7 || seaWidthForRanks == 9)) {
+        isAttackOrder ? navalFormationWidth(seaCounterForRanks, true)
+                      : navalFormationWidth(seaCounterForRanks, false);
+    const bool rankSea = !seaMembers.empty()
+                         && ((isAttackOrder
+                              && (seaWidthForRanks == 5 || seaWidthForRanks == 7
+                                  || seaWidthForRanks == 9))
+                             || (!isAttackOrder
+                                 && (seaWidthForRanks == 3 || seaWidthForRanks == 5
+                                     || seaWidthForRanks == 7)));
+    if (rankSea) {
         const std::size_t width = seaWidthForRanks;
         std::vector<std::size_t> walk;
         walk.reserve(width);
@@ -1204,7 +1278,8 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         for (std::size_t slot = 0; slot < seaMembers.size(); ++slot) {
             const std::size_t row = slot / width;
             const std::size_t column = walk[slot % width];
-            const int want = attackNavalSlotRank(row, column, width);
+            const int want = isAttackOrder ? attackNavalSlotRank(row, column, width)
+                                          : growthNavalSlotRank(row, column, width);
             const auto pick = std::ranges::min_element(pool, {}, [&](UnitId member) {
                 return attackNavalFamilyPriority(want, formationSeaClass(member));
             });
