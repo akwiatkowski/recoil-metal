@@ -1184,7 +1184,8 @@ TEST_CASE("C-388: ScriptHost resolves TaskName by sprintf path with ScriptTask.l
     }
     std::filesystem::remove(scratch / "lua/sim/tasks/C388Named.lua");
     {
-        std::ofstream fallback(scratch / "lua/sim/tasks/ScriptTask.lua");
+        // `C-388` fallback is the sim base `/lua/sim/ScriptTask.lua`.
+        std::ofstream fallback(scratch / "lua/sim/ScriptTask.lua");
         fallback << "TypeClass = Class({}) {\n"
                     "  TaskTick = function(self, result) return -1 end,\n"
                     "}\n";
@@ -1195,6 +1196,53 @@ TEST_CASE("C-388: ScriptHost resolves TaskName by sprintf path with ScriptTask.l
         CHECK(runTask(content, "C388Missing"));
     }
     std::filesystem::remove_all(scratch);
+}
+
+TEST_CASE("C-388: the ScriptTask.lua fallback resolves at /lua/sim/ScriptTask.lua") {
+    // `C-388` (`0x00629530`, `.rdata 0x00e705a0`): the miss branch loads
+    // `/lua/sim/ScriptTask.lua` — the sim base, the same path the corpus
+    // carries (`mohodata/lua/sim/ScriptTask.lua`) and the same path
+    // `/lua/sim/tasks/EnhanceTask.lua` imports. The host's fallback must
+    // resolve there, not under `/lua/sim/tasks/`.
+    const std::filesystem::path scratch = std::filesystem::temp_directory_path()
+        / "rm-script-host-c388-base-path";
+    std::filesystem::remove_all(scratch);
+    std::filesystem::create_directories(scratch / "lua/sim");
+    {
+        std::ofstream fallback(scratch / "lua/sim/ScriptTask.lua");
+        fallback << "TypeClass = Class({}) {\n"
+                    "  TaskTick = function(self, result) return -1 end,\n"
+                    "}\n";
+    }
+    rm::vfs::Vfs content;
+    content.mountDirectory(scratch);
+    rm::app::ScriptHost host{content};
+    const auto field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const auto grid = rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c388_base_path";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    auto armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Player> players{{.index = 0, .army = 0}};
+    REQUIRE(rm::sim::applyCommand(
+        rm::sim::CommandIssue{.source = 0,
+                              .id = roster.store.allocateCommandId(0).value(),
+                              .player = 0,
+                              .kind = rm::sim::CommandKind::Script,
+                              .units = {unit},
+                              .scriptTask = "C388NoSuchTask"},
+        roster.store, roster.catalog, players, armies, terrain,
+        [](rm::sim::UnitId) { return nullptr; }, roster.rate, nullptr, nullptr, nullptr,
+        nullptr, &host));
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    REQUIRE(rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                   nullptr, nullptr, nullptr, nullptr, nullptr, armies, nullptr,
+                                   nullptr, &host) == 1);
+    CHECK(roster.store.orders()[unit.index].empty());
+    CHECK(host.errors().empty());
 }
 TEST_CASE("C-228: ScriptHost binds GetUnit/SetAIResult so the shipped EnhanceTask runs") {
     // `C-228` (`/lua/sim/tasks/EnhanceTask.lua:11-80`): the shipped task's first

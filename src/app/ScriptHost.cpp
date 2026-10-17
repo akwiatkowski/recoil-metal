@@ -636,7 +636,9 @@ ScriptHost::Instance ScriptHost::ensureInstance(rm::sim::UnitId unit,
         // matching the pre-existing pops after `pcall` (which drop `tasks`).
         lua_getfield(lua, -2, "tasks");
         if (!content_.read(fallbackPath)) {
-            fallbackPath = "/lua/sim/tasks/ScriptTask.lua";
+            // `C-388` (`.rdata 0x00e705a0`): the miss branch loads the sim
+            // base `/lua/sim/ScriptTask.lua`, not a tasks-dir sibling.
+            fallbackPath = "/lua/sim/ScriptTask.lua";
         }
         const auto bytes = content_.read(fallbackPath);
         if (!bytes) {
