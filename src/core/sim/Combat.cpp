@@ -785,12 +785,23 @@ struct ProjectileTickStart {
         // sits below a surfaced hull's feet, so a box starting at the feet lets
         // the torpedo sail under. A floating hull's volume reaches below the
         // waterline to meet the shot — the box drops one clamp depth deeper for
-        // surface-water units only; subs and land hulls are untouched.
+        // surface-water units only — and a SUBMERGED hull's volume reaches up
+        // to the rail it rides under: the box top runs to the shot's running
+        // depth (`waterY - clamp`) for `stayUnderwater` shots, so the anti-sub
+        // weapon meets its primary target. Land hulls are untouched.
         const Fx footY = motion[slot].surfaceWater && shot.stayUnderwater
                              ? feet[1] - kStayUnderwaterClampElmos - Fx::fromRaw(1)
                              : feet[1];
+        const bool submergedTarget = motion[slot].submersible && motion[slot].submerged;
+        // A `stayUnderwater` rider never flies above `waterY - clamp`; a
+        // level rider's endpoint IS the rail and a climber's is clamped to
+        // it before the sweep, so the endpoint tops the box at the rail
+        // without reaching into dry flight.
+        const Fx boxTop = submergedTarget && shot.stayUnderwater
+                              ? std::max(feet[1] + height, shot.position[1])
+                              : feet[1] + height;
         const std::array<Fx, 3> minimum{feet[0] - radius, footY, feet[2] - radius};
-        const std::array<Fx, 3> maximum{feet[0] + radius, feet[1] + height, feet[2] + radius};
+        const std::array<Fx, 3> maximum{feet[0] + radius, boxTop, feet[2] + radius};
         std::optional<SweepFraction> hit;
         if (proximityFallback) {
             if (sphereBoxOverlap(from, minimum, maximum, kFxOne, false)) {
