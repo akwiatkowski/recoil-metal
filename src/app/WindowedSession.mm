@@ -14,6 +14,7 @@
 #include "core/sim/StateHash.hpp"
 #include "core/ui/CommandMode.hpp"
 #include "core/ui/CommandPanel.hpp"
+#include "core/ui/OverlayMode.hpp"
 #include "core/ui/PanelPages.hpp"
 
 #include <algorithm>
@@ -300,11 +301,12 @@ int runWindowed(const Session& session) {
         std::optional<std::size_t> econFocus;
         std::size_t econPage = 0;
         rm::ui::EconomyWindowView econView;
+        rm::ui::OverlayState overlays;
         bool econSliderHeld = false;
         window.onKey([&window, &selected, &controlGroups, &groupTap, &units, &armedCommand, restPitch,
                       restYaw, &runnerForKeys, &armedOption, &arrayDragging,
                       &cancelledLeftGesture, &arrayDragAnchor, &alertCursor,
-                      &tracking, &map, &econOpen, &econFocus, &econView,
+                      &tracking, &map, &econOpen, &econFocus, &econView, &overlays,
                       &econSliderHeld](rm::KeyEvent event) {
             if (event.phase == rm::KeyPhase::Release) {
                 if (event.key == rm::Key::Space) {
@@ -316,7 +318,14 @@ int runWindowed(const Session& session) {
                 return;
             }
 
-            if (event.key == rm::Key::Escape) {
+            if (const auto overlay = rm::ui::overlayForKey(event.key, event.modifiers.control);
+                overlay && !event.repeat) {
+                // Retail's overlay hotkeys (`defaultKeyMap.lua` Ctrl-W/E/R): checked
+                // before every plain-key branch so Ctrl-E reaches the team-color
+                // toggle instead of the economy window. Presentation-only.
+                rm::ui::toggleOverlay(overlays, *overlay);
+                std::fflush(stdout);
+            } else if (event.key == rm::Key::Escape) {
                 cancelledLeftGesture = window.leftMouseHeld();
                 tracking.clear();
                 armedOption.reset();
