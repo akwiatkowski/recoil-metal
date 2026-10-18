@@ -218,6 +218,26 @@ std::array<Fx, 2> ferryStagingSpot(const UnitStore& store, const UnitCatalog& ca
         static_cast<Brad>(std::int64_t{inRing} * kBradFullTurn / std::max(1, ringSize));
     return {at.x + fxSin(bearing) * radius, at.z + fxCos(bearing) * radius};
 }
+std::optional<UnitId> ferryBeaconFor(const UnitStore& store, const UnitCatalog& catalog,
+                                     UnitId unit) noexcept {
+    if (!store.alive(unit)) {
+        return std::nullopt;
+    }
+    const QueuedCommand* head = store.orders()[unit.index].current();
+    if (head == nullptr
+        || (head->kind() != CommandKind::Guard && head->kind() != CommandKind::Assist)) {
+        return std::nullopt;
+    }
+    const UnitId beacon = head->target();
+    if (!store.alive(beacon)) {
+        return std::nullopt;
+    }
+    const unitdef::UnitDef* beaconDef = catalog.def(store.typeAt(beacon.index));
+    if (beaconDef == nullptr || !beaconDef->isFerryBeacon()) {
+        return std::nullopt;
+    }
+    return beacon;
+}
 
 
 bool canEverCarry(const unitdef::UnitDef& carrier, const unitdef::UnitDef& cargo) noexcept {

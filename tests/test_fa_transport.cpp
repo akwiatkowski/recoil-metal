@@ -1694,3 +1694,63 @@ TEST_CASE("C-458: an empty UnloadTransport holds for an inbound loader", "[fa-tr
     const Fx toCargoZ = roster.transform(cargo).z - beforeZ;
     CHECK(sailedX * toCargoX + sailedZ * toCargoZ > Fx{});
 }
+TEST_CASE("C-413: the ferry beacon reads from the queue head", "[fa-transport]") {
+    // `Unit:GetTransportFerryBeacon` (`0x006d4160`) reads ONLY the first
+    // queue entry — no Unit field consulted. The query answers the guard's
+    // beacon target and nothing otherwise: an empty queue, a Move head, or
+    // a guard at an ordinary unit names no beacon.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const rm::UnitTypeIndex beaconType = roster.addType(beaconDef());
+    const UnitId transport = roster.add(transportType, 30.0f, 30.0f, 0, 500.0f);
+    const UnitId beacon = roster.add(beaconType, 30.0f, 30.0f, 0, 10.0f);
+    const UnitId plain = roster.add(cargoType, 40.0f, 40.0f, 0, 500.0f);
+    CHECK_FALSE(rm::sim::ferryBeaconFor(roster.store, roster.catalog, transport).has_value());
+    {
+        CommandIssue guard{.source = 0,
+                           .id = rm::commandId(0, 1),
+                           .player = 0,
+                           .kind = CommandKind::Guard,
+                           .units = {transport},
+                           .target = plain};
+        const rm::HeightField field = flatField();
+        const rm::sim::Terrain terrain{field};
+        const rm::sim::PassabilityGrid grid =
+            rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+        const std::vector<Player> players{Player{.index = 0, .army = 0}};
+        std::vector<Army> armies = rm::sim::freeForAll(1);
+        std::vector<rm::sim::Economy> economies(1);
+        std::vector<int> commandersEver(1, 0);
+        const auto gridFor = [&grid](UnitId) { return &grid; };
+        REQUIRE(rm::sim::applyCommand(guard, roster.store, roster.catalog, players, armies,
+                                      terrain, gridFor, roster.rate)
+                    .accepted.size()
+                == 1);
+        CHECK_FALSE(rm::sim::ferryBeaconFor(roster.store, roster.catalog, transport).has_value());
+    }
+    {
+        CommandIssue guard{.source = 0,
+                           .id = rm::commandId(0, 2),
+                           .player = 0,
+                           .kind = CommandKind::Guard,
+                           .units = {transport},
+                           .target = beacon};
+        const rm::HeightField field = flatField();
+        const rm::sim::Terrain terrain{field};
+        const rm::sim::PassabilityGrid grid =
+            rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+        const std::vector<Player> players{Player{.index = 0, .army = 0}};
+        std::vector<Army> armies = rm::sim::freeForAll(1);
+        std::vector<rm::sim::Economy> economies(1);
+        std::vector<int> commandersEver(1, 0);
+        const auto gridFor = [&grid](UnitId) { return &grid; };
+        REQUIRE(rm::sim::applyCommand(guard, roster.store, roster.catalog, players, armies,
+                                      terrain, gridFor, roster.rate)
+                    .accepted.size()
+                == 1);
+        const auto answered = rm::sim::ferryBeaconFor(roster.store, roster.catalog, transport);
+        REQUIRE(answered.has_value());
+        CHECK(*answered == beacon);
+    }
+}

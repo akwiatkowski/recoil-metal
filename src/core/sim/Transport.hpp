@@ -3,7 +3,7 @@
 #include "core/Types.hpp"
 #include "core/sim/Command.hpp"
 
-#include <span>
+#include <optional>
 
 namespace rm {
 class Terrain;
@@ -76,6 +76,13 @@ inline constexpr Fx kFerryPickupRadius = Fx::fromInt(10);
                                                  UnitIndex waiter,
                                                  std::array<Fx, 2> beacon) noexcept;
 
+/// `Unit:GetTransportFerryBeacon` (`0x006d4160`, `C-413`): the beacon is
+/// re-derived from the head of the command queue, not stored — no Unit field
+/// consulted. Answers the guard target when the queue head is a live Guard
+/// (or Assist) at a `FERRYBEACON` unit, and nothing otherwise.
+[[nodiscard]] std::optional<UnitId> ferryBeaconFor(const UnitStore& store,
+                                                   const UnitCatalog& catalog,
+                                                   UnitId unit) noexcept;
 /// Whether `carrier` could ever take `cargo`: the class fits the capacity and
 /// the attach table at all — regardless of what is already aboard.
 [[nodiscard]] bool canEverCarry(const unitdef::UnitDef& carrier,
