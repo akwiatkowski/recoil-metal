@@ -1900,3 +1900,35 @@ TEST_CASE("C-452: ScriptHost TaskTick error aborts the thread, retires Fail") {
     CHECK(result == static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Abort));
     CHECK_FALSE(host.errors().empty());
 }
+TEST_CASE("C-228: ScriptHost Navigator AbortMove records the abort on the unit") {
+    // `C-228` (`EnhanceTask.lua` `Stopping` beat): a mobile unit still under
+    // way is halted first via `unit:GetNavigator():AbortMove()`. The host's
+    // `GetNavigator` hands back a one-method table whose `AbortMove` is a
+    // silent no-op, so the shipped halt leaves no trace the test can observe.
+    // This case aborts mid-tick and requires the owning unit table to carry
+    // the abort afterwards.
+    rm::vfs::Vfs content;
+    rm::app::ScriptHost host{content};
+    host.registerTask("C228Abort", rm::app::ScriptTaskRegistration{
+        .source =
+            "TypeClass = Class({}) {\n"
+            "  TaskTick = function(self)\n"
+            "    local unit = self:GetUnit()\n"
+            "    unit:GetNavigator():AbortMove()\n"
+            "    G_c228aborted = (unit.MoveAborted == true) and 1 or 0\n"
+            "    return -1\n"
+            "  end,\n"
+            "}\n",
+    });
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c228_abort";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    rm::sim::ScriptTaskState state;
+    host.onCreate(unit, "C228Abort", {}, state);
+    REQUIRE(host.errors().empty());
+    CHECK(host.taskTick(unit, "C228Abort", {}, state)
+          == static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Done));
+    CHECK(host.taskGlobalNumber("G_c228aborted") == 1.0);
+}

@@ -274,10 +274,28 @@ struct TaskNative {
     lua_pushnumber(lua, 0.1);
     return 1;
 }
+[[nodiscard]] int taskAbortRecordFn(lua_State* lua) {
+    // `EnhanceTask.lua` `Stopping` beat: `unit:GetNavigator():AbortMove()`
+    // halts the unit. Records the halt as `MoveAborted` on the owning unit
+    // table so the sim (which owns motion) can observe it.
+    TaskNative* native = taskNative(lua);
+    if (native != nullptr) {
+        lua_getfield(lua, LUA_REGISTRYINDEX, kTaskNativesKey);
+        const std::string key = std::to_string(native->unit.generation) + ":"
+                                + std::to_string(native->unit.index);
+        lua_getfield(lua, -1, key.c_str());
+        if (lua_istable(lua, -1)) {
+            lua_pushboolean(lua, 1);
+            lua_setfield(lua, -2, "MoveAborted");
+        }
+        lua_pop(lua, 2);
+    }
+    return 0;
+}
 [[nodiscard]] int taskAbortMoveFn(lua_State* lua) {
     // `GetNavigator()` returns a one-method table; `AbortMove` records the abort.
     lua_newtable(lua);
-    lua_pushcfunction(lua, &taskNoopFn);
+    lua_pushcfunction(lua, &taskAbortRecordFn);
     lua_setfield(lua, -2, "AbortMove");
     return 1;
 }
