@@ -1310,7 +1310,7 @@ void contactsFor(int alliance, const UnitStore& store, const UnitCatalog& catalo
         // ones use, seeded by the blip's ordinal, so the cluster reads as contacts rather
         // than as a ring of satellites.
         if (hiding.jammerBlips > 0 && hiding.jamRadius > kFxZero
-            && !store.intelDisabledAt(slot, IntelType::Jammer)
+            && intel.intelActive(store, slot, IntelType::Jammer)
             && intel.sees(alliance, IntelKind::Radar, at.x, at.z)) {
             const UnitId carrier = store.idAt(slot);
             // Retail draws each fake's offset once: a random direction and a uniform

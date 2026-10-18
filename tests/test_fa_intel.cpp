@@ -1334,3 +1334,58 @@ TEST_CASE("C-276/C-279: water vision over a sonar grave reaps the blip at once",
         return contact.unit == diver;
     }));
 }
+
+TEST_CASE("C-284: a browned-out jammer stops lying", "[fa-intel]") {
+    // `IntelWatchThread` disables the whole unit on brownout: a jammer whose
+    // upkeep goes unfunded keeps its radar-visible hull but its fakes die
+    // with its power — `intelActive(Jammer)` is already false in that state,
+    // the contact projection must read it.
+    rm::unitdef::UnitDef watching = seer(0.0f, 800.0f);
+    rm::unitdef::UnitDef deceiver;
+    deceiver.jamRadiusElmos = 208.0f;  // the retail 26 ogrids
+    deceiver.jammerBlips = 10;
+    deceiver.upkeepEnergyPerSecond = 10.0f;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex jammer = catalog.add(&deceiver);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(4096), Fx::fromInt(4096),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 500.0f, 500.0f);
+    const rm::sim::UnitId carrier = place(store, jammer, 1, 700.0f, 500.0f);
+    const std::vector<Army> armies = twoArmies(false);
+
+    std::vector<rm::sim::Economy> economies(2);
+    economies[0].singleResourceFunded = rm::sim::kFxOne;
+    economies[0].multiResourceFunded = rm::sim::kFxOne;
+    economies[1].singleResourceFunded = rm::sim::kFxOne;
+    economies[1].multiResourceFunded = rm::sim::kFxOne;
+    const rm::sim::TickRate rate{};
+    intel.update(store, catalog, armies, nullptr, rate, economies);
+    REQUIRE(intel.intelActive(store, carrier.index, rm::sim::IntelType::Jammer));
+    std::size_t funded = 0;
+    for (const rm::sim::Contact& contact : seenBy(0, store, catalog, armies, intel)) {
+        if (contact.unit == carrier) {
+            ++funded;
+        }
+    }
+    REQUIRE(funded == 11);  // the real blip plus `jammerBlips` lies
+
+    // The carrier's own army browns out: the hull stays on the scope but the
+    // lies stop — a deception needs a powered deceiver.
+    economies[1].singleResourceFunded = rm::sim::kFxZero;
+    economies[1].multiResourceFunded = rm::sim::kFxZero;
+    intel.update(store, catalog, armies, nullptr, rate, economies);
+    REQUIRE_FALSE(intel.intelActive(store, carrier.index, rm::sim::IntelType::Jammer));
+    std::size_t browned = 0;
+    for (const rm::sim::Contact& contact : seenBy(0, store, catalog, armies, intel)) {
+        if (contact.unit == carrier) {
+            ++browned;
+        }
+    }
+    CHECK(browned == 1);  // the hull alone; every fake died with the power
+}
