@@ -381,6 +381,14 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
                 std::max(0.0f, numberOr(*flare, "Radius", 0.0f)) * scmap::kElmosPerOgrid);
             weapon.flare = std::move(parsed);
         }
+        // `DepthCharge = {Radius}` on the smart-charge anti-torpedo weapons
+        // (UES0201 `Radius = 9` ogrids). The charge diverts TORPEDO shots only —
+        // the Lua hard-codes `categories.TORPEDO` — so no category is parsed.
+        if (const lua::Value* depthCharge = entry.find("DepthCharge")) {
+            weapon.depthChargeRadiusElmos = sim::fxFromFloat(
+                std::max(0.0f, numberOr(*depthCharge, "Radius", 0.0f)) * scmap::kElmosPerOgrid);
+        }
+
 
         weapon.firingToleranceBrads = firingToleranceBradsFromDegrees(
             numberOr(entry, "FiringTolerance", kDefaultFiringToleranceDegrees));

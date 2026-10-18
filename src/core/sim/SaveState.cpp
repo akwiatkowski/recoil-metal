@@ -1145,6 +1145,9 @@ void writeProjectiles(PayloadWriter& w,
             w.i64(shot.outerRing.base.raw());
             w.i32(shot.innerRingRadiusElmos.raw());
             w.i32(shot.outerRingRadiusElmos.raw());
+            // The depth-charge divert radius: zero for every ordinary shot, so
+            // pre-slice saves (which read no word here) decode identically.
+            w.i32(shot.depthChargeRadiusElmos.raw());
         }
     }
 }
@@ -1279,6 +1282,13 @@ bool readProjectiles(PayloadReader& r,
             shot.outerRing.base = Mag::fromRaw(outerD);
             shot.innerRingRadiusElmos = Fx::fromRaw(innerR);
             shot.outerRingRadiusElmos = Fx::fromRaw(outerR);
+            // The depth-charge radius trails the cap block; pre-slice saves
+            // stop above and decode with no divert, the ordinary case.
+            std::int32_t depthCharge{};
+            if (!r.i32(depthCharge)) {
+                return false;
+            }
+            shot.depthChargeRadiusElmos = Fx::fromRaw(depthCharge);
         }
     }
     return true;

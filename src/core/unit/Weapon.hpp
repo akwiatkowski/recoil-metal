@@ -201,6 +201,14 @@ struct Weapon {
         sim::Fx radiusElmos{};
     };
     std::optional<Flare> flare;
+    /// A smart-charge depth charge (`defaultantiprojectile.lua:DepthCharge`):
+    /// `Weapon.DepthCharge = {Radius}` on eight shipped naval weapons
+    /// (UES0201 `Radius = 9`, corpus range 5-13 ogrids). The in-flight shot
+    /// carries a TORPEDO-only divert: a hostile torpedo inside the radius is
+    /// retargeted onto the charge itself (`other:SetNewTarget(self.Owner)`),
+    /// never damaged — the underwater mirror of the Aeon flare above.
+    /// Elmos, converted from the authored ogrids like every other range.
+    sim::Fx depthChargeRadiusElmos{};
 
     /// Unrestricted when content states no caps, preserving synthetic and Recoil weapons.
     TargetLayerMask targetLayers = TargetLayerMask::Both;

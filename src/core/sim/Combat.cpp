@@ -227,6 +227,51 @@ void divertToFlareOwner(Projectile& shot, const UnitStore& store, const UnitCata
         }
     }
 }
+/// A smart-charge depth charge (`defaultantiprojectile.lua:DepthCharge`,
+/// `C-204`): an in-flight shot carrying a `DepthCharge` radius retargets a
+/// hostile TORPEDO inside the radius onto itself
+/// (`other:SetNewTarget(self.Owner)`), never damaging it — the underwater
+/// mirror of the Aeon flare above. The Lua hard-codes `categories.TORPEDO`;
+/// the radius rides the OWNER shot (see `launch`), and the divert runs in
+/// the same pre-impact slot as the flare so a turned torpedo cannot resolve
+/// a unit hit on its pre-diversion course this tick. First matching charge
+/// in list order wins.
+void divertToDepthChargeOwner(Projectile& shot, std::vector<Projectile>& projectiles,
+                              std::span<const Army> armies) noexcept {
+    if (shot.ticksRemaining <= 0 || shot.pendingImpact != ImpactType::Invalid) {
+        return;
+    }
+    if (!std::binary_search(shot.categories.begin(), shot.categories.end(),
+                            std::string{"TORPEDO"})) {
+        return;
+    }
+    const Army* shotArmy = armyFor(shot.firedByArmy, armies);
+    if (shotArmy == nullptr) {
+        return;
+    }
+    for (Projectile& charge : projectiles) {
+        if (&charge == &shot || charge.ticksRemaining <= 0
+            || charge.pendingImpact != ImpactType::Invalid
+            || charge.depthChargeRadiusElmos <= Fx{}) {
+            continue;
+        }
+        const Army* chargeArmy = armyFor(charge.firedByArmy, armies);
+        if (chargeArmy == nullptr || !hostile(*chargeArmy, *shotArmy)) {
+            continue;
+        }
+        const Fx dx = charge.position[0] - shot.position[0];
+        const Fx dy = charge.position[1] - shot.position[1];
+        const Fx dz = charge.position[2] - shot.position[2];
+        const Fx leg = fxHypot(fxHypot(dx, dz), dy);
+        if (leg <= Fx{} || leg > charge.depthChargeRadiusElmos) {
+            continue;
+        }
+        const Fx speed = fxHypot(fxHypot(shot.velocity[0], shot.velocity[2]),
+                                 shot.velocity[1]);
+        shot.velocity = {dx / leg * speed, dy / leg * speed, dz / leg * speed};
+        return;
+    }
+}
 
 /// The nearest hostile in-flight projectile inside this weapon's authored 2-D reach.
 /// Ties retain vector order, which is deterministic projectile insertion order.
@@ -3125,6 +3170,9 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     // projectile blueprint's own keys, resolved into `projectileTraits` at load.
     shot.stayUnderwater = weapon.projectileTraits.stayUnderwater;
     shot.destroyOnWater = weapon.projectileTraits.destroyOnWater;
+    // The smart-charge divert radius rides the shot like the water pair above:
+    // authored on the WEAPON (`DepthCharge = {Radius}`), carried on the shot.
+    shot.depthChargeRadiusElmos = weapon.depthChargeRadiusElmos;
     // `weapon.lua:GetDamageTable` threads the weapon blueprint's `DamageFriendly`
     // into the shot's damage table (`C-428`'s sphere bit). This is SPLASH-only:
     // the point-hit sweep keeps its hostile-only gate (`CollideFriendly` stays
@@ -3845,6 +3893,7 @@ struct StagedFlight {
     int ticksRemaining = 0;
     ImpactType pendingImpact = ImpactType::Invalid;
     bool inWater = false;
+    Fx depthChargeRadiusElmos{};
     std::array<Fx, 3> zigZagApplied{};
     bool computed = false;
 };
@@ -4128,6 +4177,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                     .ticksRemaining = flying.ticksRemaining,
                     .pendingImpact = flying.pendingImpact,
                     .inWater = flying.inWater,
+                    .depthChargeRadiusElmos = flying.depthChargeRadiusElmos,
                     .zigZagApplied = flying.zigZagApplied,
                     .computed = true,
                 };
@@ -4185,12 +4235,17 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
             shot.guidanceTarget = flight.guidanceTarget;
             shot.ticksRemaining = flight.ticksRemaining;
             shot.inWater = flight.inWater;
+            shot.depthChargeRadiusElmos = flight.depthChargeRadiusElmos;
             shot.zigZagApplied = flight.zigZagApplied;
 
             // Redirect AFTER flight, BEFORE the outcome — the serial pass's
             // order. Its decision reads the staged position and lifetime just
             // applied, matching what the serial sweep order showed it.
             redirectMissile(shot, store, armies, redirects);
+            // The depth-charge divert answers in the same slot: a TORPEDO the
+            // flare ignored (flares match MISSILE, never TORPEDO) is turned
+            // onto the in-flight charge whose radius it entered.
+            divertToDepthChargeOwner(shot, projectiles, armies);
             if (flight.pendingImpact != ImpactType::Invalid) {
                 // A hit is geometric — a redirect that killed the shot this
                 // tick cannot unmake the contact the serial sweep still saw.

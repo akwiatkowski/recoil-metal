@@ -1203,3 +1203,54 @@ TEST_CASE("C-204: a torpedo running at depth strikes a submerged hull", "[fa-nav
     // 1000-HP hull wounds, not kills — the strike is the assertion).
     CHECK(roster.store.health()[boat.index].current < hpBefore);
 }
+TEST_CASE("C-204: a depth-charge hull diverts a hostile torpedo onto its own shot", "[fa-navy]") {
+    // Retail's anti-torpedo answer (`defaultantiprojectile.lua:DepthCharge`,
+    // created by `AddDepthCharge` on the in-flight smart-charge shot):
+    // the charge retargets a hostile TORPEDO inside its radius onto the
+    // charge itself (`other:SetNewTarget(self.Owner)`), never damaging it.
+    // UES0201 authors `DepthCharge = {Radius = 9}` (8 ogrids-corpus range 5-13).
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain = waterTerrain(field);
+    rm::test::Roster roster;
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    UnitDef frigate = shipDef();
+    frigate.name = "test_frigate";
+    Weapon smartCharge;
+    smartCharge.label = "SmartCharge";
+    smartCharge.role = rm::unitdef::WeaponRole::DirectFire;
+    smartCharge.depthChargeRadiusElmos = Fx::fromInt(72);  // 9 ogrids at 8 elmos
+    frigate.weapons.push_back(smartCharge);
+    const rm::UnitTypeIndex frigateType = roster.addType(frigate);
+    const UnitId hull = spawnDef(roster, frigateType, frigate, 300.0f, 300.0f, 0);
+    rm::sim::placeOnMotionLayer(roster.transform(hull), roster.motion(hull), terrain);
+    roster.reindex();
+
+    // A hostile torpedo riding the clamp rail past the frigate, aimed away.
+    rm::sim::Projectile torpedo;
+    torpedo.stayUnderwater = true;
+    torpedo.position = {rm::sim::fxFromFloat(240.0f), rm::sim::fxFromFloat(80.0f - 0.08f),
+                        rm::sim::fxFromFloat(300.0f)};
+    torpedo.velocity = {Fx::fromInt(-20), Fx{}, Fx{}};
+    torpedo.ticksRemaining = 100;
+    torpedo.damage = rm::unitdef::flatDamage(rm::sim::Mag::fromInt(50));
+    torpedo.firedByArmy = 1;
+    torpedo.categories = {"PROJECTILE", "TORPEDO"};
+    // The frigate's own smart-charge shot, in flight beside the hull.
+    rm::sim::Projectile charge;
+    charge.position = {rm::sim::fxFromFloat(280.0f), rm::sim::fxFromFloat(80.0f - 0.08f),
+                       rm::sim::fxFromFloat(300.0f)};
+    charge.velocity = {Fx::fromInt(20), Fx{}, Fx{}};
+    charge.ticksRemaining = 100;
+    charge.firedByArmy = 0;
+    charge.firedBy = hull;
+    charge.depthChargeRadiusElmos = Fx::fromInt(72);  // the weapon's radius, copied at launch
+    std::vector<rm::sim::Projectile> shots{torpedo, charge};
+    rm::sim::EventQueue events;
+    rm::sim::advanceProjectiles(shots, roster.store, armies, terrain, roster.rate,
+                                &events, &roster.catalog);
+    REQUIRE(shots.size() == 2);
+    // The torpedo turned onto the charge: positive x now, chasing the shot
+    // it was meant to miss — while the charge itself flies on untouched.
+    CHECK(shots.front().velocity[0] > Fx{});
+    CHECK(shots.back().velocity[0] > Fx{});
+}

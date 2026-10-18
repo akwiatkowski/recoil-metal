@@ -106,6 +106,12 @@ struct Projectile {
     /// position (`0x6a26d9`). Both water keys read it, so a shot crossing the
     /// surface this tick answers next tick, not this one.
     bool inWater = false;
+    /// A smart-charge depth charge (`defaultantiprojectile.lua:DepthCharge`,
+    /// `C-204`): the in-flight shot's TORPEDO divert radius, copied from the
+    /// firing weapon's authored `DepthCharge.Radius` at launch. Zero means the
+    /// weapon states none — the ordinary case — so most shots keep the byte
+    /// stream they were blessed with (see StateHash/SaveState handling).
+    Fx depthChargeRadiusElmos{};
 
     /// `C-171`'s weave, copied from the projectile blueprint at launch:
     /// `zigZagAmplitudeElmos` is `MaxZigZag` — how far the shot weaves off its

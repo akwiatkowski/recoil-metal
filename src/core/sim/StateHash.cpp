@@ -925,6 +925,13 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 feed(h, shot.stayUnderwater);
                 feed(h, shot.destroyOnWater);
             }
+            // The depth-charge divert radius, conditional like the water pair:
+            // a smart-charge shot diverges from an ordinary one, and every
+            // other shot keeps its byte stream.
+            if (shot.depthChargeRadiusElmos > Fx{}) {
+                feed(h, true);
+                feed(h, shot.depthChargeRadiusElmos);
+            }
             // The damage pool, only when the blueprint authored one — otherwise the
             // golden duel's shots keep the byte stream they were blessed with (`C-087`).
             if (shot.maxHealth > Mag{}) {
