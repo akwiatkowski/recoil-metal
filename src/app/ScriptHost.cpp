@@ -938,9 +938,11 @@ std::int32_t ScriptHost::taskTick(rm::sim::UnitId unit, std::string_view task,
     {
         NativeGuard guard{lua, unit, &state};
         if (lua_pcall(lua, 1, 1, 0) != LUA_OK) {
+            // `C-452` (`0x00409253`-`0x0040927e`): TaskTick errors are
+            // WARN-and-Abort-thread (return -3), not quiet Done.
             impl_->errors.emplace_back("TaskTick error: " + toString(lua, -1));
             lua_pop(lua, 1);  // exactly the error object; the arg was consumed
-            return static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Done);
+            return static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Abort);
         }
     }
     // `lua_pcall(nargs=1, nresults=1)` leaves exactly `[result]`: the callee

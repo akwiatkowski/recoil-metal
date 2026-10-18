@@ -1875,3 +1875,28 @@ TEST_CASE("C-318: ScriptHost onDestroy calls the current state's OnDestroy") {
     // The live state's OnDestroy must win over the creation-time hook.
     REQUIRE(host.errors().empty());
 }
+TEST_CASE("C-452: ScriptHost TaskTick error aborts the thread, retires Fail") {
+    // `C-452` (`0x00409253`-`0x0040927e`): the TaskTick error path is
+    // WARN-and-Abort-thread (return -3), not a quiet Done (-1). The direct
+    // `taskTick` return is the observable edge: the dispatcher maps -3 to
+    // the abort arm (`AIRESULT.Fail`) and -1 to the finish arm (`Success`).
+    rm::vfs::Vfs content;
+    rm::app::ScriptHost host{content};
+    host.registerTask("C452Boom", rm::app::ScriptTaskRegistration{
+        .source =
+            "TypeClass = Class({}) {\n"
+            "  TaskTick = function(self) error('boom') end,\n"
+            "}\n",
+    });
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c452_boom";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    rm::sim::ScriptTaskState state;
+    host.onCreate(unit, "C452Boom", {}, state);
+    REQUIRE(host.errors().empty());
+    const std::int32_t result = host.taskTick(unit, "C452Boom", {}, state);
+    CHECK(result == static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Abort));
+    CHECK_FALSE(host.errors().empty());
+}
