@@ -1335,6 +1335,29 @@ TEST_CASE("version two command logs remain readable after factory cancellation")
     CHECK(commands->all().front().cancelCommandId == rm::kInvalidCommandId);
     std::filesystem::remove(path);
 }
+TEST_CASE("version five and six command logs remain readable") {
+    // The reader promises versions 2-6 stay readable (CommandLog.cpp's version
+    // comment): a v5 dive-era log and a v6 priority-era log must both parse.
+    for (const char* version : {"5", "6"}) {
+        const std::string name =
+            std::string{"rm-v"} + version + "-command-log.txt";
+        const auto path = std::filesystem::temp_directory_path() / name;
+        {
+            std::ofstream file{path};
+            file << "recoil-metal semantic command log\nversion " << version << "\nissue-count 1\n"
+                    "0 pre-tick 0 0 0 dive 0 1 0 0 0 0 0 1 0 1 \"\" \"\" \"\" 4294967295";
+            if (std::string{version} == "6") {
+                file << " 0";
+            }
+            file << "\n";
+        }
+        const auto commands = rm::sim::readCommandLog(path.string());
+        REQUIRE(commands);
+        REQUIRE(commands->size() == 1);
+        CHECK(commands->all().front().kind == CommandKind::Dive);
+        std::filesystem::remove(path);
+    }
+}
 
 TEST_CASE("a queued route survives file round-trip and replay") {
     CommandLog original;

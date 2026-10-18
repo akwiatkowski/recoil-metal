@@ -236,8 +236,7 @@ std::optional<CommandLog> readCommandLog(const std::string& path,
         std::string label;
         std::string extra;
         if (!(fields >> label >> version) || label != "version"
-            || (version != 2 && version != 3 && version != 4 && version != kCommandLogVersion)
-            || fields >> extra) {
+            || version < 2 || version > kCommandLogVersion || fields >> extra) {
             return std::nullopt;
         }
     }
