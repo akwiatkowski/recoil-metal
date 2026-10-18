@@ -191,6 +191,35 @@ TEST_CASE("C-266/C-267: ascending mount order makes lua.scd shadow mohodata.scd"
     CHECK(asText(*vfs.read("/units/x/x_unit.bp")) == "unit data");
 }
 
+TEST_CASE("C-266/C-267: loose install files lose to archives whatever the flag order",
+          "[fa-content]") {
+    // Retail's mount list (`C-266`) puts `gamedata/*.scd` before the install
+    // root, and lookup is first-mount-wins (`C-267`) — so a loose file never
+    // shadows an archive, even when `--data-dir` precedes `--gamedata`.
+    const Scratch guard;
+
+    writeArchive(scratch() / "gamedata/foo.scd", {{"lua/shared.txt", "archive"}});
+    const std::filesystem::path loose = scratch() / "loose";
+    std::filesystem::create_directories(loose / "lua");
+    {
+        std::ofstream out{loose / "lua/shared.txt", std::ios::binary};
+        REQUIRE(out);
+        out << "loose";
+    }
+
+    const std::vector<std::string> words{"--data-dir", loose.string(), "--gamedata",
+                                         (scratch() / "gamedata").string()};
+    std::vector<const char*> argv{"recoil-metal"};
+    for (const std::string& word : words) {
+        argv.push_back(word.c_str());
+    }
+    const rm::vfs::Vfs content =
+        rm::app::parseContent(static_cast<int>(argv.size()), argv.data());
+
+    REQUIRE(content.contains("/lua/shared.txt"));
+    CHECK(asText(*content.read("/lua/shared.txt")) == "archive");
+}
+
 TEST_CASE("C-273: the _save.lua unit tree yields pre-placed units per army",
           "[fa-content]") {
     // Retail's `ArmyInitializePrebuiltUnits` walks Scenario.Armies.<army>.Units

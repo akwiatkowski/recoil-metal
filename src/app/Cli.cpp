@@ -290,22 +290,19 @@ orderArchivesForMount(std::vector<std::filesystem::path> archives) {
     return archives;
 }
 
-
 /// Mounts the game's content: `--gamedata <dir>` for a whole install, `--archive
 /// <scd>` for one archive, `--data-dir <dir>` for a loose directory.
 ///
-/// MOUNT ORDER IS PRIORITY, first wins (`C-267`, core/vfs/Vfs.hpp), and the
-/// command line's order is honoured verbatim: `--gamedata` mounts every `.scd`
-/// it finds in ascending-name order (`orderArchivesForMount`, `C-266`), so
-/// `lua.scd` shadows `mohodata.scd` exactly as retail's sorted list does.
-///
-/// This replaced extracting archives to a temporary directory. That worked, and it
-/// is not what a game does: it duplicated 2.4 GiB for the two big archives, went
-/// stale whenever the install was patched, and could not express a mod at all, since
-/// a mod IS a layer rather than a set of files to merge.
+/// Retail's mount list (`C-266`): `gamedata/*.scd` mount at `/` BEFORE the
+/// loose install root, and lookup is first-mount-wins (`C-267`), so archives
+/// always beat loose files. The flags are therefore collected first and
+/// mounted in kind order — archives, then directories — rather than raw argv
+/// order, where a `--data-dir` before `--gamedata` would let a loose file
+/// shadow an archive retail would resolve the other way.
 [[nodiscard]] rm::vfs::Vfs parseContent(int argc, const char* argv[]) {
     rm::vfs::Vfs content;
     std::size_t archives = 0;
+    std::vector<std::filesystem::path> dataDirs;
 
     for (int i = 1; i + 1 < argc; ++i) {
         const std::string arg = argv[i];
@@ -334,10 +331,12 @@ orderArchivesForMount(std::vector<std::filesystem::path> archives) {
                                 "failed to mount archive %s", argv[i + 1]);
             }
         } else if (arg == "--data-dir") {
-            content.mountDirectory(argv[i + 1]);
+            dataDirs.emplace_back(argv[i + 1]);
         }
     }
-
+    for (const std::filesystem::path& dir : dataDirs) {
+        content.mountDirectory(dir);
+    }
     if (!content.empty()) {
         std::printf("content: %zu archives, %zu files\n", archives, content.fileCount());
     }
