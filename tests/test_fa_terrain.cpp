@@ -451,6 +451,29 @@ TEST_CASE("C-290: a dwelling beam lays a trail along its tracked end", "[fa-terr
     });
     CHECK(spansDrag);
 }
+TEST_CASE("C-290: beam scorch retires at retail's fixed thread lifetime", "[fa-terrain]") {
+    // Retail's `ScorchThread` (`defaultcollisionbeams.lua` C-290) lays its own
+    // `CreateSplat` at the tracked end — NOT through `CreateScorchMarkSplat` —
+    // so its args are fixed per class, not the explosion spread: seven thread
+    // bodies pass LOD 100 with lifetime 100, the quantum thread passes 250/250,
+    // and the orbital death laser passes 250/15. An explosion mark must still
+    // survive the 100 s floor; a beam mark must be gone by it.
+    const rm::HeightField field = flatField(128, 0.0f);
+    const rm::sim::TickRate rate{};
+    const rm::TickIndex floor = rate.ticks(rm::sim::seconds(100.0f));  // ticks, s (C-290)
+    rm::app::UnitScene scene = makeScene(false, 0.0f);
+    rm::sim::Event beam{};
+    beam.kind = rm::sim::EventKind::BeamFired;
+    beam.unit = rm::sim::UnitId{0, 1};
+    beam.at = rm::test::at(500, 40, 500);
+    (void)rm::app::noteBeamScorch(scene, beam, 40.0f, 0.0f, 0);
+    rm::app::noteImpactMark(scene, 600.0f, 600.0f, 0.0f, 0);
+    REQUIRE(scene.impactMarks.size() == 2);
+    rm::app::refreshWreckDecals(scene, field, floor);
+    CHECK(scene.impactMarks.size() == 1);
+    CHECK(scene.impactMarks[0].x == Catch::Approx(600.0f));
+}
+
 
 TEST_CASE("C-292: only a land-layer death scorches the ground", "[fa-terrain]") {
     // Retail's `Unit::OnKilled` gates `CreateScorchableDecal` on

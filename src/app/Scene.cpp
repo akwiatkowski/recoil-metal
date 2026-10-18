@@ -275,6 +275,14 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
 /// replay-identical, off the sim RNG (C-297). Presentation only, never hashed.
 inline constexpr float kImpactMarkLifetimeSecondsMin = 300.0f;  // s (C-290 floor)
 inline constexpr float kImpactMarkLifetimeSecondsWidth = 300.0f;  // s (C-290 600-300 spread)
+/// Retail's `ScorchThread` fixed lifetime (`defaultcollisionbeams.lua` C-290):
+/// the thread lays `CreateSplat` directly, so the lifetime arg is the class's
+/// own — 100 s for the seven 100-life thread bodies (microwave, phason,
+/// experimental, unstable, ultra, hiro; the orbital's life is 15 with LOD 250
+/// and the quantum's LOD/life are 250/250 but only its LOD differs in kind).
+/// This engine projects all beam marks at the common 100 s floor: the smallest
+/// TRUE thread lifetime, so no beam scorch outlives retail.
+inline constexpr float kBeamMarkLifetimeSeconds = 100.0f;  // s (C-290 thread floor)
 /// Retail rotates every scorch by 0..2pi (`defaultexplosions.lua` C-290). The
 /// engine has no texture to orient — the fan is rotationally symmetric — so the
 /// angle buys per-mark variety, not fidelity. Derived from the mark's own bits
@@ -295,17 +303,21 @@ inline constexpr float kImpactMarkLifetimeSecondsWidth = 300.0f;  // s (C-290 60
     return static_cast<float>(static_cast<double>(bits) / 4294967296.0
                               * 6.283185307179586);  // rad, 0..2pi (C-290)
 }
-/// Each mark's own retirement point inside retail's 300-600 s scorch spread
-/// (`defaultexplosions.lua` C-290): floor plus a 0..300 s offset from the
-/// mark's own position bits — the same splitmix32 stream as the rotation
-/// angle, replay-identical and off the sim RNG (C-297). Ticks, via the tick
-/// rate rather than a tick literal. Presentation only, never hashed.
-[[nodiscard]] rm::TickIndex impactMarkLifetime(float x, float z) noexcept {
+/// Each mark's own retirement point (`defaultexplosions.lua` C-290 for blast
+/// marks: floor plus a 0..300 s offset from the mark's own position bits —
+/// the same splitmix32 stream as the rotation angle, replay-identical and off
+/// the sim RNG (C-297); beam-thread marks retire at the thread's own fixed
+/// 100 s lifetime instead). Ticks, via the tick rate rather than a tick
+/// literal. Presentation only, never hashed.
+[[nodiscard]] rm::TickIndex impactMarkLifetime(const UnitScene::ImpactMark& mark) noexcept {
+    if (mark.beamThread) {
+        return gAppTickRate.ticks(rm::sim::seconds(kBeamMarkLifetimeSeconds));  // ticks (C-290)
+    }
     std::uint32_t bits = static_cast<std::uint32_t>(std::llround(
-                             static_cast<double>(x) * 4096.0))  // 1/4096 elmo
+                             static_cast<double>(mark.x) * 4096.0))  // 1/4096 elmo
                          * 0x9E3779B1u
                        ^ static_cast<std::uint32_t>(std::llround(
-                             static_cast<double>(z) * 4096.0))  // 1/4096 elmo
+                             static_cast<double>(mark.z) * 4096.0))  // 1/4096 elmo
                              * 0x85EBCA6Bu;
     bits ^= bits >> 16;  // splitmix32 finaliser
     bits *= 0x7FEB352Du;
@@ -320,7 +332,7 @@ inline constexpr float kImpactMarkLifetimeSecondsWidth = 300.0f;  // s (C-290 60
 } // namespace
 
 void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
-                    rm::TickIndex tick, UnitScene::ImpactMarkScript script) {
+                    rm::TickIndex tick, UnitScene::ImpactMarkScript script, bool beamThread) {
     if (scene.impactMarks.size() >= UnitScene::kMaxImpactMarks) {
         scene.impactMarks.erase(scene.impactMarks.begin(),
                                 scene.impactMarks.begin() + 64);
@@ -332,7 +344,8 @@ void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
         .blastRadiusElmos = blastRadiusElmos,
         .textureIndex = impactMarkScriptedTexture(script, impactMarkTexture(x, z, blastRadiusElmos)),
         .lod = impactMarkLod(x, z),
-        .script = script});
+        .script = script,
+        .beamThread = beamThread});
     ++scene.impactMarksRevision;
 }
 UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId) noexcept {
@@ -389,7 +402,7 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     }
     const float x = rm::sim::fxToFloat(event.at[0]);
     const float z = rm::sim::fxToFloat(event.at[2]);
-    noteImpactMark(scene, x, z, 0.0f, tick);
+    noteImpactMark(scene, x, z, 0.0f, tick, UnitScene::ImpactMarkScript::BaseScorch, true);
     // Retail's `ScorchThread` lays one `CreateSplat` per pass at the tracked
     // end while the beam dwells (`defaultcollisionbeams.lua` C-290): a dragged
     // end draws a continuous line, not one point per shot. Bridge from this
@@ -413,7 +426,7 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
         const auto middles = static_cast<std::size_t>(span / step);
         for (std::size_t i = 1; i <= middles; ++i) {
             const float t = static_cast<float>(i) / static_cast<float>(middles + 1);
-            noteImpactMark(scene, prevX + dx * t, prevZ + dz * t, 0.0f, tick);
+            noteImpactMark(scene, prevX + dx * t, prevZ + dz * t, 0.0f, tick, UnitScene::ImpactMarkScript::BaseScorch, true);
         }
     }
     return true;
@@ -430,7 +443,7 @@ void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field,
     scene.impactMarks.erase(
         std::remove_if(scene.impactMarks.begin(), scene.impactMarks.end(),
                        [now](const UnitScene::ImpactMark& mark) {
-                           return now >= mark.tick + impactMarkLifetime(mark.x, mark.z);
+                           return now >= mark.tick + impactMarkLifetime(mark);
                        }),
         scene.impactMarks.end());
     if (scene.impactMarks.size() != before) {

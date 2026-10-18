@@ -832,6 +832,11 @@ struct UnitScene {
         /// the blast-derived splat/decal split, any other value draws the
         /// weapon's own authored texture at its authored size in elmos.
         ImpactMarkScript script = ImpactMarkScript::BaseScorch;
+        /// True when laid by a dwelling collision beam's `ScorchThread`
+        /// (`defaultcollisionbeams.lua` C-290): the thread's `CreateSplat`
+        /// carries its own fixed lifetime (LOD arg, 100 s for the 100-life
+        /// classes), not the 300-600 s explosion spread. Presentation only.
+        bool beamThread = false;
     };
     static constexpr std::size_t kMaxImpactMarks = 512;
     std::vector<ImpactMark> impactMarks;
@@ -1699,7 +1704,8 @@ void refreshWreckDecals(UnitScene& scene, const HeightField& field, TickIndex no
 /// decal (C-484) — drawn at its authored size, not the blast split.
 void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos = 0.0f,
                     TickIndex tick = 0,
-                    UnitScene::ImpactMarkScript script = UnitScene::ImpactMarkScript::BaseScorch);
+                    UnitScene::ImpactMarkScript script = UnitScene::ImpactMarkScript::BaseScorch,
+                    bool beamThread = false);
 /// Whether a collision-beam class lays scorch (C-290): retail forks
 /// `ScorchThread` on `impactType == 'Terrain'` in 8 of the 16 classes in
 /// `defaultcollisionbeams.lua` (`QuantumBeamGenerator`, both `MicrowaveLaser`,
