@@ -792,6 +792,9 @@ std::array<float, 2> Window::dragOrigin() const { return [impl_->view leftDownAt
 bool Window::shiftHeldNow() const {
     return ([NSEvent modifierFlags] & NSEventModifierFlagShift) != 0;
 }
+bool Window::controlHeldNow() const {
+    return ([NSEvent modifierFlags] & NSEventModifierFlagControl) != 0;
+}
 
 void Window::setGhost(std::size_t batch, const UnitInstance& instance,
                       std::array<float, 4> tint) {

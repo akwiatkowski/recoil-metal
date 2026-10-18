@@ -57,6 +57,18 @@ TEST_CASE("control-group digits keep their numeric identity") {
     CHECK_FALSE(rm::digitForKey(rm::Key::A).has_value());
 }
 
+TEST_CASE("control-modified keys are key contexts, not camera pan") {
+    // Retail's overlay hotkeys ride Ctrl (`defaultKeyMap.lua`: Ctrl-W
+    // `tog_military`, Ctrl-E `tog_defense`, Ctrl-R `tog_econ`); holding Ctrl+W
+    // must toggle the overlay without pushing the camera forward. The pan poll
+    // reads held keys rather than events, so the modifier gate is a pure
+    // predicate over the poll-time modifiers.
+    CHECK(rm::panAllowed({}));
+    CHECK(rm::panAllowed({.shift = true}));
+    CHECK_FALSE(rm::panAllowed({.control = true}));
+    CHECK_FALSE(rm::panAllowed({.shift = true, .control = true}));
+}
+
 TEST_CASE("an issued armed command disarms unless shift queues it") {
     // `C-339`: retail's `commandmode.lua` keeps the armed command while Shift
     // is held (`issuedOneCommand` + `IsKeyDown('Shift')`) and drops it

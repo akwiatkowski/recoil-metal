@@ -54,6 +54,14 @@ struct KeyModifiers {
     bool command = false;
     bool control = false;
 };
+/// Whether the per-frame WASD pan poll may steer the camera under these
+/// modifiers. Retail's key contexts ride Ctrl (`defaultKeyMap.lua` Ctrl-W/E/R
+/// overlay toggles, Ctrl+K self-destruct); a control-held W is a command, not
+/// forward motion. Shift stays a pan modifier (retail shift-queues orders, it
+/// does not gate movement).
+[[nodiscard]] constexpr bool panAllowed(KeyModifiers modifiers) noexcept {
+    return !modifiers.control;
+}
 
 /// One complete keyboard fact from the platform boundary.
 struct KeyEvent {

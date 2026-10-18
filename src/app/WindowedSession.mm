@@ -2202,10 +2202,12 @@ int runWindowed(const Session& session) {
 
                 float right = 0.0f;
                 float forward = 0.0f;
-                if (window.keyHeld(rm::Key::A)) { right -= step; }
-                if (window.keyHeld(rm::Key::D)) { right += step; }
-                if (window.keyHeld(rm::Key::W)) { forward += step; }
-                if (window.keyHeld(rm::Key::S)) { forward -= step; }
+                if (rm::panAllowed({.control = window.controlHeldNow()})) {
+                    if (window.keyHeld(rm::Key::A)) { right -= step; }
+                    if (window.keyHeld(rm::Key::D)) { right += step; }
+                    if (window.keyHeld(rm::Key::W)) { forward += step; }
+                    if (window.keyHeld(rm::Key::S)) { forward -= step; }
+                }
                 if (right != 0.0f || forward != 0.0f) {
                     // Tracking holds the camera only until the player steers it.
                     tracking.clear();

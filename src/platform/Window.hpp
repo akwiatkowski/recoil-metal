@@ -173,6 +173,11 @@ public:
     /// by a key event. Keyboard bindings consume `KeyEvent::modifiers` instead.
     [[nodiscard]] bool shiftHeldNow() const;
 
+    /// Control's live state for the per-frame WASD pan poll: Ctrl-modified keys
+    /// are key contexts (overlay toggles, self-destruct), not camera motion,
+    /// so the poll must see the modifier its `keyHeld` answers cannot carry.
+    [[nodiscard]] bool controlHeldNow() const;
+
     /// Whether a key is down right now. The form a per-frame update wants — asking is
     /// cheaper than tracking the same set again in the caller, and there is exactly one
     /// truth about what is held.
