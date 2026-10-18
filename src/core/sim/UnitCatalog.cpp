@@ -193,6 +193,22 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
                 effects.damageRadiusModElmos =
                     fxFromFloat(static_cast<float>(*mod) * scmap::kElmosPerOgrid);
             }
+            // `C-255`: the Restoration Field aura (`XSL0001_script.lua`
+            // `RegenBuffThread`) — `Radius`/`RegenPerSecond`/`RegenFloor`/
+            // `RegenCeiling` off the enhancement table, the same family as the
+            // sense radii above (radius in ogrids, regen a per-second factor).
+            if (const auto radius = ogrid("Radius")) {
+                effects.auraRadiusElmos = *radius;
+            }
+            if (const auto regen = num("RegenPerSecond")) {
+                effects.auraRegenPerSecond = static_cast<float>(*regen);
+            }
+            if (const auto floor = num("RegenFloor")) {
+                effects.auraRegenFloor = magFromFloat(static_cast<float>(*floor));
+            }
+            if (const auto ceiling = num("RegenCeiling")) {
+                effects.auraRegenCeiling = magFromFloat(static_cast<float>(*ceiling));
+            }
             if (const auto rof = num("NewRateOfFire")) {
                 effects.rateOfFire = static_cast<float>(*rof);
             }

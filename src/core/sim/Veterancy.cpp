@@ -202,11 +202,67 @@ void tickRegeneration(UnitStore& store, const UnitCatalog& catalog, TickRate rat
                       + enhancementRegenPerTick(store, catalog, slot);
             break;
         }
-        if (perTick <= Mag{}) {
-            continue;
-        }
         health.current = std::min(health.maximum, health.current + perTick);
     }
+    // `C-255`: the Restoration Field aura (`XSL0001_script.lua`
+    // `RegenBuffThread`) — each installed carrier re-applies `RegenPercent`
+    // (recipient max × per-second factor, floor/ceiling-clamped) to
+    // same-army mobiles in the authored radius, itself included. A separate
+    // pass after self-regen so the aura lands even on a carrier whose own
+    // bar is full, and on allies that already self-healed this tick.
+    for (UnitIndex carrier = 0; carrier < healths.size(); ++carrier) {
+        if (!store.slotAlive(carrier)) {
+            continue;
+        }
+        Fx auraRadius{};
+        float auraFactor = 0.0f;
+        Mag auraFloor{};
+        Mag auraCeiling{};
+        for (const auto& [position, installed] : store.enhancements()[carrier]) {
+            if (const auto* effects = catalog.enhancementEffects(store.typeAt(carrier), installed);
+                effects != nullptr && effects->auraRadiusElmos > Fx{}) {
+                auraRadius = effects->auraRadiusElmos;
+                auraFactor = effects->auraRegenPerSecond;
+                auraFloor = effects->auraRegenFloor;
+                auraCeiling = effects->auraRegenCeiling;
+            }
+        }
+        if (auraRadius <= Fx{} || auraFactor <= 0.0f) {
+            continue;
+        }
+        const Transform& at = store.transforms()[carrier];
+        const int army = store.motion()[carrier].armyIndex;
+        const UnitIndex end = static_cast<UnitIndex>(store.health().size());
+        for (UnitIndex slot = 0; slot < end; ++slot) {
+            if (!store.slotAlive(slot) || !healths[slot].alive()) {
+                continue;
+            }
+            if (store.motion()[slot].armyIndex != army) {
+                continue;
+            }
+            const unitdef::UnitDef* allyDef = catalog.def(store.typeAt(slot));
+            if (allyDef == nullptr || !allyDef->isMobile()) {
+                continue;
+            }
+            if (healths[slot].current >= healths[slot].maximum) {
+                continue;
+            }
+            const Transform& allyAt = store.transforms()[slot];
+            const Fx dx = allyAt.x - at.x;
+            const Fx dz = allyAt.z - at.z;
+            if (dx * dx + dz * dz > auraRadius * auraRadius) {
+                continue;
+            }
+            const float perSecond = magToFloat(healths[slot].maximum) * auraFactor;
+            const float floored = std::max(perSecond, magToFloat(auraFloor));
+            const float capped = auraCeiling > Mag{} ? std::min(floored, magToFloat(auraCeiling)) : floored;
+            const Mag auraPerTick = rate.magPerTick(capped);
+            if (auraPerTick <= Mag{}) {
+                continue;
+            }
+            healths[slot].current = std::min(healths[slot].maximum, healths[slot].current + auraPerTick);
+        }
+     }
 }
 
 } // namespace rm::sim

@@ -1032,3 +1032,40 @@ TEST_CASE("C-255: a fired shot carries its enhancement's widened blast",
     REQUIRE(shots.size() == 1);
     CHECK(shots.front().damageRadiusElmos == rm::sim::Fx::fromInt(16));
 }
+TEST_CASE("C-255: an installed RegenAura lends its RegenPerSecond to nearby allies",
+          "[fa-progress][enhancement]") {
+    // Retail `XSL0001_script.lua` `RegenBuffThread`: while installed, the aura
+    // re-applies `SeraphimACURegenAura` every 5 s to friendly mobiles in the
+    // authored `Radius` — `RegenPercent` is `Mult * maxHealth` clamped to
+    // `RegenFloor`/`RegenCeiling` (XSL0001 bp: `RegenAura` radius 15 ogrids,
+    // rate 1/180, floor 0, ceiling 75).
+    rm::test::Roster roster;
+    roster.rate = rm::sim::TickRate{10};
+    rm::unitdef::UnitDef sera;
+    sera.name = "test_sera_acu";
+    sera.health = rm::test::mag(1000.0f);
+    sera.categories = {"COMMAND", "MOBILE"};
+    sera.speedElmosPerSecond = 20.0f;
+    const auto auraParams = rm::lua::parseTable(
+        "{ Radius=15, RegenPerSecond=0.0055555555, RegenFloor=0, RegenCeiling=75 }");
+    REQUIRE(auraParams);
+    sera.enhancements.push_back({.name = "RegenAura", .slot = "RCH",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .parameters = *auraParams});
+    rm::unitdef::UnitDef ally;
+    ally.name = "test_ally_tank";
+    ally.health = rm::test::mag(100.0f);
+    ally.categories = {"MOBILE"};
+    ally.speedElmosPerSecond = 20.0f;
+    const auto seraType = roster.addType(sera);
+    const auto allyType = roster.addType(ally);
+    const auto seraUnit = roster.add(seraType, 0.0f, 0.0f, 0, 1000.0f);
+    const auto allyUnit = roster.add(allyType, 10.0f, 0.0f, 0, 100.0f);
+    roster.store.health()[allyUnit.index].current = rm::test::mag(50.0f);
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, seraUnit, "RegenAura"));
+    // 100 max health * 1/180 per second = 5/9 per second, 1/18 a tick at 10 Hz.
+    const rm::sim::Mag before = roster.store.health()[allyUnit.index].current;
+    rm::sim::tickRegeneration(roster.store, roster.catalog, roster.rate);
+    CHECK(rm::test::near(
+        roster.store.health()[allyUnit.index].current - before) == 1.0f / 18.0f);
+}

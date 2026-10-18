@@ -150,11 +150,18 @@ public:
         /// value, an absolute write like `NewMaxRadius` (XSL0001 `BlastAttack`
         /// 2, UEL0301 `HighExplosiveOrdnance` 2.5 ogrids).
         Fx damageRadiusElmos{};
-        /// `NewDamageRadiusMod` (UAL0301 `StabilitySuppressant` 4, Remove -4) —
-        /// the `AddDamageRadiusMod` value, additive on top of the blueprint
-        /// radius (`weapon.lua:287`: `DamageRadius + DamageRadiusMod`), unlike
-        /// the absolute `NewDamageRadius` write.
         Fx damageRadiusModElmos{};
+        /// `C-255`: the Seraphim Restoration Field family (`XSL0001`
+        /// `RegenAura`/`AdvancedRegenAura`) — a `COMMANDERAURA` regen lent to
+        /// nearby allies, not to the carrier. `Radius` is ogrids-authored like
+        /// the sense radii; `RegenPerSecond` multiplies the RECIPIENT's maximum
+        /// (`Buff.lua` `RegenPercent`: `(max + adds) * mult`), clamped to
+        /// `RegenFloor`/`RegenCeiling`. `MaxHealthFactor` on the advanced tier
+        /// is presentation-only here (no max-health aura path exists).
+        Fx auraRadiusElmos{};
+        float auraRegenPerSecond = 0.0f;
+        Mag auraRegenFloor{};
+        Mag auraRegenCeiling{};
         float rateOfFire = 0.0f;
         Mag damageMod{};
         std::vector<std::string> buildableAdds;
