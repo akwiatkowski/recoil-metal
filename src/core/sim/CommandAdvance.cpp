@@ -2129,11 +2129,22 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
     MoveState& motion = store.motion()[command.unit.index];
 
     switch (command.kind) {
-    case CommandKind::Stop:
+    case CommandKind::Stop: {
         // In place, and the route cleared: without that the unit resumes its old orders the
         // moment something else sets `moving`.
+        // `C-222`: `Stop()` puts `targetLayer` back to `LAYER_Air`, so stopping a
+        // landing flyer aborts the commit — it loiters where it is and the
+        // auto-land timer re-commits the descent.
+        if (motion.canFly && motion.airState == MoveState::AirState::Down) {
+            const Transform& at = store.transforms()[command.unit.index];
+            motion.airState = MoveState::AirState::Top;
+            motion.idleTicks = 0;
+            motion.destinationX = at.x;
+            motion.destinationZ = at.z;
+        }
         teardownMovement(motion);
         return true;
+    }
 
     case CommandKind::Overcharge: {
         // The pursuit below is the attack's; what is checked here is what makes this order

@@ -2526,6 +2526,52 @@ TEST_CASE("an aircraft flies directly across a map no ground unit can route") {
     CHECK(rm::sim::fxToFloat(roster.store.transforms()[flyer.index].z) > 350.0f);
     CHECK(roster.store.transforms()[flyer.index].y == rm::sim::kAirClearanceElmos);
 }
+TEST_CASE("a stop aborts a landing flyer back to loiter", "[air][stop]") {
+    // `C-222`: `Stop()` puts `targetLayer` back to `LAYER_Air`, so stopping an
+    // aircraft aborts the landing commit — it loiters where it is and the
+    // auto-land timer re-commits the descent, instead of flying on to the
+    // retired order's site.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef aircraft = walkerDef();
+    aircraft.motion = rm::unitdef::MotionType::Air;
+    const rm::UnitTypeIndex type = roster.addType(aircraft);
+    const UnitId flyer = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    rm::sim::MoveState& flight = roster.motion(flyer);
+    flight.canFly = true;
+    flight.airborne = true;
+    flight.airState = rm::sim::MoveState::AirState::Down;
+    flight.moving = false;
+    flight.altitudeRef = rm::sim::Fx::fromInt(80);
+    flight.idleLandThreshold = 10;
+    flight.destinationX = rm::sim::fxFromFloat(700.0f);
+    flight.destinationZ = rm::sim::fxFromFloat(700.0f);
+    roster.transform(flyer).y = rm::sim::Fx::fromInt(40);
+
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Construction> building;
+    const Command stop{.kind = CommandKind::Stop, .unit = flyer};
+    REQUIRE(rm::sim::startCommand(stop, roster.store, roster.catalog, terrain, grid,
+                                  roster.rate, &building, nullptr, nullptr, armies));
+
+    CHECK(flight.airState == rm::sim::MoveState::AirState::Top);
+    CHECK(flight.idleTicks == 0);
+    const rm::sim::Transform& at = roster.transform(flyer);
+    CHECK(flight.destinationX == at.x);
+    CHECK(flight.destinationZ == at.z);
+
+    // Still aloft on the next beat: the auto-land timer re-commits the descent,
+    // it does not resume it immediately.
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid};
+    rm::sim::Match match{.armies = armies, .economies = {}, .passability = grids,
+                         .commandersEver = {}};
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, roster.rate);
+    CHECK(roster.motion(flyer).airState == rm::sim::MoveState::AirState::Top);
+}
 
 TEST_CASE("a winged entity attack enters head-on then tail-chase inside the 30 degree cone") {
     const rm::HeightField field = flatField();
