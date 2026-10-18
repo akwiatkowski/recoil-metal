@@ -1618,3 +1618,79 @@ TEST_CASE("C-413: replacing the guard queue head selects a new ferry beacon",
     }
     CHECK(boarded);
 }
+TEST_CASE("C-458: an empty UnloadTransport holds for an inbound loader", "[fa-transport]") {
+    // Retail's `CUnitUnloadUnits::TaskTick` (`0x0062ce60`) opens in state 0 by
+    // repositioning the air transport before any detach — an `UnloadTransport`
+    // with an empty hold and a live `LoadTransport` inbound is the pickup
+    // half of the auto-embark pair, not a no-op to retire. The carrier flies
+    // to meet the cargo and holds instead of dropping an order that still has
+    // work to do.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    // Airborne at cruise: the pickup hold must keep the deck away from the
+    // drop rather than flying the leg. Cargo west of the carrier, drop east —
+    // opposite bearings, so closing on one side is leaving the other.
+    const UnitId transport = roster.add(transportType, 100.0f, 100.0f, 0, 500.0f);
+    giveFlight(roster.motion(transport));
+    roster.motion(transport).airState = rm::sim::MoveState::AirState::Top;
+    const UnitId cargo = roster.add(cargoType, 20.0f, 100.0f, 0, 500.0f);
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+
+    REQUIRE(rm::sim::applyCommand(
+                CommandIssue{.source = 0,
+                             .id = rm::commandId(0, 1),
+                             .player = 0,
+                             .kind = CommandKind::LoadTransport,
+                             .units = {cargo},
+                             .target = transport},
+                roster.store, roster.catalog, players, armies, terrain, gridFor,
+                roster.rate)
+                .accepted.size()
+            == 1);
+    REQUIRE(rm::sim::applyCommand(
+                CommandIssue{.source = 0,
+                             .id = rm::commandId(0, 2),
+                             .player = 0,
+                             .kind = CommandKind::UnloadTransport,
+                             .units = {transport},
+                             .targetX = rm::sim::fxFromFloat(400.0f),
+                             .targetZ = rm::sim::fxFromFloat(100.0f)},
+                roster.store, roster.catalog, players, armies, terrain, gridFor,
+                roster.rate)
+                .accepted.size()
+            == 1);
+
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    for (int i = 0; i < 30; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    }
+    // The pickup is still pending: the unload stays queued at the head.
+    REQUIRE_FALSE(roster.store.orders()[transport.index].empty());
+    CHECK(roster.store.orders()[transport.index].current()->kind()
+          == CommandKind::UnloadTransport);
+    // State-0 repositioning: the empty carrier closes on its loader instead
+    // of sailing to the drop — the tick-to-tick displacement points at the
+    // cargo, not the click.
+    const Fx beforeX = roster.transform(transport).x;
+    const Fx beforeZ = roster.transform(transport).z;
+    for (int i = 0; i < 200 && !roster.motion(cargo).attached; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    }
+    const Fx sailedX = roster.transform(transport).x - beforeX;
+    const Fx sailedZ = roster.transform(transport).z - beforeZ;
+    const Fx toCargoX = roster.transform(cargo).x - beforeX;
+    const Fx toCargoZ = roster.transform(cargo).z - beforeZ;
+    CHECK(sailedX * toCargoX + sailedZ * toCargoZ > Fx{});
+}
