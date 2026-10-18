@@ -151,6 +151,10 @@ struct MoveState {
     /// every movement tick from `y < waterLevel`; the only consumer is the
     /// `AboveWaterTargetsOnly`/`BelowWaterTargetsOnly` weapon gate.
     bool seabed = false;
+    /// `Physics.LayerChangeOffsetHeight` (`C-205`, `0x006ca040`): the per-unit
+    /// threshold shift the layer evaluator adds to the waterline. Spawn-copied
+    /// from the blueprint; zero for unauthored units and test fixtures.
+    Fx layerChangeOffset{};
     /// `AutoSurfaceMode` (`C-203`): the Dive toggle's second state — a
     /// submerged unit with an attack task surfaces to engage. Off by default
     /// (retail's `Unit+0x291` constructor default; `AutoSurfaceToAttack` is

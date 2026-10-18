@@ -1310,3 +1310,39 @@ TEST_CASE("C-204: a depth-charge divert releases the torpedo's prior track", "[f
     CHECK(shots.front().velocity[0] > Fx{});
     CHECK_FALSE(roster.store.alive(shots.front().guidanceTarget));
 }
+
+TEST_CASE("C-205: LayerChangeOffsetHeight lifts the seabed threshold for a wader", "[fa-navy]") {
+    // `UpdateCurrentLayer` (`0x006ca040`) compares terrain against
+    // `waterY + LayerChangeOffsetHeight`, not the bare waterline. The offset
+    // is negative on every authored unit (XRL0305's -0.9 ogrids is -7.2
+    // elmos), so a walker on ground just under the surface still reads Land:
+    // dry ground is anything above `waterY + offset`. The sim has no
+    // equivalent — its seabed flag is a bare `y < waterLevel` test.
+    rm::HeightField field = flatField();
+    field.baseHeight = 78.0f;  // ground 2 elmos under the 80-elmo waterline
+    const rm::sim::Terrain terrain = waterTerrain(field);
+
+    rm::test::Roster roster;
+    UnitDef plain;
+    plain.name = "test_wader";
+    plain.categories = {"LAND", "MOBILE"};
+    plain.motion = rm::unitdef::MotionType::Land;
+    plain.speedElmosPerSecond = 6.0f;
+    plain.health = rm::sim::Mag::fromInt(1000);
+    UnitDef offset = plain;
+    offset.name = "test_offset_wader";
+    offset.layerChangeOffsetElmos = -7.2f;  // XRL0305_unit.bp, ogrids x8
+    const rm::UnitTypeIndex plainType = roster.addType(plain);
+    const rm::UnitTypeIndex offsetType = roster.addType(offset);
+    const UnitId bare = spawnDef(roster, plainType, plain, 300.0f, 300.0f, 0);
+    const UnitId band = spawnDef(roster, offsetType, offset, 400.0f, 300.0f, 0);
+    roster.transform(bare).y = Fx::fromInt(78);
+    roster.transform(band).y = Fx::fromInt(78);
+    roster.reindex();
+
+    rm::sim::tick(roster.store.transforms(), roster.store.motion(), terrain);
+    // 78 < 80: the bare hull reads Seabed. 78 > 80 - 7.2: the offset hull
+    // stands on retail-dry ground and reads Land.
+    CHECK(roster.motion(bare).seabed);
+    CHECK_FALSE(roster.motion(band).seabed);
+}

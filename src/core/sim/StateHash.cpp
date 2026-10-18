@@ -129,6 +129,9 @@ void feedMotion(StateHash& h, const MoveState& motion) noexcept {
     if (motion.surfaceWater) {
         feed(h, motion.surfaceWater);
     }
+    if (motion.layerChangeOffset != Fx{}) {
+        feed(h, motion.layerChangeOffset);
+    }
     if (motion.submersible) {
         feed(h, motion.submersible);
         feed(h, motion.submerged);

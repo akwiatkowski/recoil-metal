@@ -525,6 +525,8 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // root-level key no shipped unit states; retail's reader was never found,
     // so the constructor default (off) stands either way.
     def.autoSurfaceToAttack = flagAt(*parsed, "AutoSurfaceToAttack");
+    def.layerChangeOffsetElmos =
+        numberOr(*physics, "LayerChangeOffsetHeight", 0.0f) * scmap::kElmosPerOgrid;
     def.diveSurfaceSpeedElmosPerSecond =
         numberOr(*physics, "DiveSurfaceSpeed", 1.0f) * scmap::kElmosPerOgrid;
     if (const lua::Value* airBlock = parsed->path("Air")) {

@@ -742,9 +742,15 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
         // Sub, not Seabed, which is why the target-side water gates do nothing
         // against it. Recomputed every tick from the freshest Y, so a unit
         // walking out of the water stops being a seabed target the same tick.
+        // `C-205` (`0x006ca040`): the threshold is `waterY + offset`, not the
+        // bare waterline — XRL0305's -7.2 elmos keeps a wader on near-shore
+        // ground reading Land. The `Land`-cap gate the address applies the
+        // offset under is future work; the threshold shift is what the sim
+        // can observe today.
         motion[i].seabed = !motion[i].airborne && !motion[i].surfaceWater
             && !motion[i].submersible && !motion[i].hovering
-            && terrain.hasWater() && transforms[i].y < terrain.waterLevel();
+            && terrain.hasWater()
+            && transforms[i].y < terrain.waterLevel() + motion[i].layerChangeOffset;
         // `belowWater` is the layer-agnostic waterline test (`C-327`): the
         // `FlyInWater` fire gate asks whether an AIRCRAFT is submerged, which
         // `seabed` (ground only) and `submerged` (submersibles only) cannot say.
