@@ -1230,8 +1230,12 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         if (def->hasCategory("EXPERIMENTAL")) {
             return std::pair{0, tech};
         }
+        // Retail `DirectFire` (formations.lua:37) subtracts both `CONSTRUCTION`
+        // and `COMMAND`: an armed commander is construction, not a front-rank
+        // gun — `Construction` (formations.lua:38) claims it instead.
         if ((def->hasCategory("DIRECTFIRE") || def->hasCategory("INDIRECTFIRE"))
-            && !def->hasCategory("CONSTRUCTION") && !def->hasCategory("ENGINEER")) {
+            && !def->hasCategory("CONSTRUCTION") && !def->hasCategory("ENGINEER")
+            && !def->hasCategory("COMMAND")) {
             return std::pair{1, tech};
         }
         if (def->hasCategory("ARTILLERY") || def->hasCategory("INDIRECTFIRE")) {

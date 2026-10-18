@@ -121,6 +121,46 @@ TEST_CASE("a group move rotates the formation to face the click", "[formation]")
     CHECK(flank[3] == Catch::Approx(215.0f + 12.0f).margin(0.01f));
 }
 
+TEST_CASE("a growth move treats the commander as construction, not a gun", "[formation]") {
+    // Retail `Construction` (formations.lua:38) includes `COMMAND`, while
+    // `DirectFire` (formations.lua:37) subtracts it: a commander
+    // (DIRECTFIRE + COMMAND) is construction, not a front-rank gun — with
+    // four tanks and one commander, the walk must spend all four front slots
+    // on tanks before the commander reaches row two.
+    // (TDD: fails — the gate treats the commander as direct fire.)
+    Fixture fix;
+    rm::unitdef::UnitDef acuDef;
+    acuDef.name = "test_commander";
+    acuDef.categories = {"DIRECTFIRE", "COMMAND", "LAND", "TECH1"};
+    const rm::UnitTypeIndex acu = fix.roster.addType(acuDef);
+    std::vector<UnitId> group;
+    for (int i = 0; i < 4; ++i) {
+        group.push_back(fix.roster.add(fix.tank, 200.0f, 200.0f, 0, 500.0f));
+    }
+    group.push_back(fix.roster.add(acu, 200.0f, 200.0f, 0, 500.0f));
+    const rm::sim::ApplyCommandResult result =
+        fix.issueMove(group, 900.0f, 200.0f, CommandKind::Move);
+    REQUIRE(result.accepted == group);
+
+    std::size_t front = 0;
+    for (const UnitId member : group) {
+        if (member == group.back()) {
+            continue;
+        }
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        if (rm::test::asFloat(entries.front().targetX())
+            == Catch::Approx(900.0f).margin(0.01f)) {
+            ++front;
+        }
+    }
+    CHECK(front == 4);
+    const auto& acuEntries = fix.roster.store.orders()[group.back().index].entries();
+    REQUIRE(acuEntries.size() == 1);
+    CHECK(rm::test::asFloat(acuEntries.front().targetX())
+          == Catch::Approx(892.0f).margin(0.01f));
+}
+
 TEST_CASE("a group move trails later rows behind the rotated anchor",
           "[formation]") {
     // Eight tanks, same eastward click: FourWide's second row is one collision
