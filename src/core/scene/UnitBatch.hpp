@@ -146,6 +146,12 @@ struct UnitBatch {
     const sca::Animation* unpackAnimation = nullptr;
     bool unpackOneshot = false;
 
+    /// A rack-salvo reload clip (`AnimationReload`, `defaultweapons.lua:202-210`
+    /// `PlayFxRackSalvoReloadSequence`): only 2 shipped weapons name one
+    /// (`XSL0111`, `XEL0306`). Null on every other batch — a rack without
+    /// authored reload simply fires without one.
+    const sca::Animation* reloadAnimation = nullptr;
+
     // Whether the phase in each instance is the WHOLE answer, or an offset
     // added to a clock the renderer advances.
     //

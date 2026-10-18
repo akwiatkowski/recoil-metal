@@ -341,6 +341,25 @@ TEST_CASE("a fired rack plays its authored reload clip", "[recoil]") {
     const rm::unitdef::UnitDef plain{};
     CHECK(rm::app::loadReloadAnimation(scene, content, plain) == nullptr);
 }
+TEST_CASE("registering the Laanse wires its reload clip into the batch", "[recoil]") {
+    // `loadReloadAnimation` exists and loads (the case above), but no spawn
+    // path ever calls it — unpack and walk ride every batch, the reload clip
+    // rides none. `ensureDrawableType` must wire it the way it wires unpack.
+    const char* home = std::getenv("HOME");
+    const std::filesystem::path root =
+        home ? std::filesystem::path{home} / "projects/llm/input/faf" : std::filesystem::path{};
+    if (!std::filesystem::is_directory(root / "units/XSL0111")) SKIP("retail corpus unavailable");
+    rm::vfs::Vfs content;
+    content.mountDirectory(root);
+    rm::app::UnitScene scene;
+    const auto type = rm::app::ensureDrawableType(scene, content, "/units/XSL0111/XSL0111_unit.bp");
+    REQUIRE(type.has_value());
+    const std::size_t batch = scene.batchOf(*type);
+    REQUIRE(batch != rm::app::UnitScene::kNoBatch);
+    // The Laanse names `AnimationReload` on its cannon; the batch must carry it.
+    REQUIRE(scene.batches[batch].reloadAnimation != nullptr);
+    CHECK(scene.batches[batch].reloadAnimation->duration > 0.0f);
+}
 
 
 

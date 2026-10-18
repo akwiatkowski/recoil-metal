@@ -971,6 +971,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                 .telescopeReturnPerTick = turretRig.telescopeReturnPerTick,
                 .unpackAnimation = unpack,
                 .unpackOneshot = unpack != nullptr,
+                .reloadAnimation = loadReloadAnimation(scene, content, unit->def),
                 .animationDrivenByInstance = walk != nullptr,
             });
             fillUnitLuts(scene.batches.back(), scene, content, *unit);
@@ -1138,6 +1139,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
         const rm::data::MoveDef move = rm::data::moveDefFor(unit->def);
         const TurretRig turretRig = resolveTurretRig(scene.models.back(), &unit->def);
         const rm::sca::Animation* unpack = loadUnpackAnimation(scene, content, unit->def);
+        const rm::sca::Animation* reload = loadReloadAnimation(scene, content, unit->def);
         // The walk cycle the blueprint declares, else the one beside the mesh.
         // Only mobile types look: a structure's directory holds no walk clip,
         // and the list call that proves it costs a scan per type.
@@ -1168,6 +1170,7 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
             .telescopeReturnPerTick = turretRig.telescopeReturnPerTick,
             .unpackAnimation = unpack,
             .unpackOneshot = unpack != nullptr,
+            .reloadAnimation = reload,
             .animationDrivenByInstance = walk != nullptr,
         });
         fillUnitLuts(scene.batches.back(), scene, content, *unit);
