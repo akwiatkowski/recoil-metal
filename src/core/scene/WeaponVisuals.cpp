@@ -145,8 +145,8 @@ void loadWeaponMaterials(WeaponVisuals& result, const vfs::Vfs& content,
         material.localVelocity = flag("LocalVelocity");
         material.localAcceleration = flag("LocalAcceleration");
         material.resistance = flag("ParticleResistance");
+        material.alignRotation = flag("AlignRotation");
         material.resistanceCurve = readCurve(*table, "ResistanceCurve");
-        // Emitter cycle/lifetime fields use the original ten-Hz content clock.
         material.emitterLifetime = static_cast<float>(table->numberAt("Lifetime").value_or(-1)) * 0.1f;
         material.repeatTime = std::max(0.1f, static_cast<float>(table->numberAt("Repeattime").value_or(10))*0.1f);
         material.frames = static_cast<std::uint32_t>(std::max(1.0, table->numberAt("TextureFramecount").value_or(1)));
@@ -251,6 +251,13 @@ Particle makeWeaponParticle(const WeaponMaterial& material, std::uint32_t id,
     constexpr float radiansPerDegree = 0.017453292519943295f;
     particle.rotation = sample(material.initialRotation) * radiansPerDegree;
     particle.rotationRate = sample(material.rotationRate) * radiansPerDegree;
+    if (material.alignRotation) {
+        // The sprite's plane axes read (x, y): heading `atan2(vx, vz)` faces
+        // the long axis along the birth velocity. Zero velocity keeps the
+        // authored roll — there is no heading to face.
+        const float planar = std::hypot(particle.velocity[0], particle.velocity[2]);
+        if (planar > 0.0f) particle.rotation = std::atan2(particle.velocity[0], particle.velocity[2]);
+    }
     particle.animation = {sample(material.frameRate), sample(material.textureSelection),
         sample(material.rampSelection)};
     // Retail `particle.fx` `DragEnabled` (docs/shader-metal-port.md §3.2):

@@ -8,7 +8,7 @@
 #include <catch2/catch_approx.hpp>
 #include <filesystem>
 #include <fstream>
-#include <cstdio>
+#include <cmath>
 #include <algorithm>
 
 TEST_CASE("authored muzzle flashes live in ticks, not seconds", "[corpus][weapon-visuals]") {
@@ -396,6 +396,33 @@ TEST_CASE("drag-flagged particles decay their birth velocity", "[weapon-visuals]
     const auto plain = rm::makeWeaponParticle(rm::WeaponMaterial{}, 0, 0.5f, {}, seed);
     CHECK(plain.drag == Catch::Approx(0.0f));
 }
+TEST_CASE("aligned emitters face their travel direction", "[weapon-visuals]") {
+    // Retail `EmitterBlueprint.AlignRotation` (documented in FAF's
+    // `engine/Core/Blueprints/EmitterBlueprint.lua`: "Align the rotation of
+    // the particle with direction?"): true on 332 of 2923 shipped emitters
+    // (e.g. `watersplash_m.bp`, the `OnlyEmitOnWater` splash whose streaks
+    // must run along their flight). The loader drops the key, so an aligned
+    // particle keeps whatever `InitialRotationCurve` rolled instead of its
+    // heading.
+    rm::WeaponMaterial material;
+    material.alignRotation = true;
+    material.particleLifetime.keys = {{0.0f, 1.0f, 0.0f}};
+    material.startSize.keys = {{0.0f, 1.0f, 0.0f}};
+    material.endSize.keys = {{0.0f, 1.0f, 0.0f}};
+    material.initialRotation.keys = {{0.0f, 0.0f, 0.0f}};
+    material.rotationRate.keys = {{0.0f, 0.0f, 0.0f}};
+    material.velocity.keys = {{0.0f, 1.0f, 0.0f}};
+    material.direction[0].keys = {{0.0f, 1.0f, 0.0f}};
+    material.direction[1].keys = {{0.0f, 0.0f, 0.0f}};
+    material.direction[2].keys = {{0.0f, 0.0f, 0.0f}};
+    std::uint32_t seed = 7;
+    const auto particle = rm::makeWeaponParticle(material, 0, 0.5f, {}, seed);
+    // Birth velocity runs +X, so the streak faces east: heading `atan2(x, z)`.
+    CHECK(particle.rotation == Catch::Approx(1.5707963f).margin(1e-4f));
+    const auto plain = rm::makeWeaponParticle(rm::WeaponMaterial{}, 0, 0.5f, {}, seed);
+    CHECK(plain.rotation == Catch::Approx(0.0f));
+}
+
 
 
 TEST_CASE("a launched shot owns its Lua visual identity", "[weapon-visuals]") {

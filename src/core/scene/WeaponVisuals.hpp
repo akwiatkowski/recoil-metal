@@ -47,6 +47,12 @@ struct WeaponMaterial {
     // the flag is set without one.
     EffectCurve resistanceCurve;
     bool resistance = false;
+    /// `AlignRotation` (retail `EmitterBlueprint`, documented in FAF's
+    /// `engine/Core/Blueprints/EmitterBlueprint.lua` as "Align the rotation
+    /// of the particle with direction?"): the birth sprite's long axis
+    /// faces its birth velocity. True on 332 of 2923 shipped emitters
+    /// (e.g. `watersplash_m.bp`).
+    bool alignRotation = false;
     /// A TrailBlueprint: drawn as a ribbon over the projectile's recorded path by
     /// ProjectileTrails, not as one straight strip. `length` is its TrailLength in elmos.
     bool ribbon = false;
