@@ -1330,7 +1330,11 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
         state.fundedFraction = rm::sim::fxToFloat(mine.fundedFraction);
     }
 
-    if (!scene.armies.empty() && state.armiesLeft <= 1) {
+    // One ALLIANCE left is a decided match even with several surviving armies
+    // (`winningAlliance`, `victory.lua`'s `potentialWinners`): a won 2v2 whose
+    // banner waited for `armiesLeft <= 1` would read as still running.
+    if (!scene.armies.empty()
+        && (state.armiesLeft <= 1 || rm::sim::winningAlliance(scene.armies).has_value())) {
         const std::optional<int> winner = rm::sim::winningAlliance(scene.armies);
         state.outcome = winner ? rm::ui::MatchState::Outcome::Win
                                : rm::ui::MatchState::Outcome::Draw;

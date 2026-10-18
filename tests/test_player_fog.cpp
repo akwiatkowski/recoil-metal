@@ -118,6 +118,21 @@ TEST_CASE("the player HUD counts own units, not hidden enemy production") {
     CHECK(rm::app::hudStateFrom(fixture.scene, 0.0f, rm::ui::GameProfile::Fa).unitsAlive == 2);
 }
 
+TEST_CASE("the player HUD declares a team win with two allied survivors") {
+    // `victory.lua` ends the match when one ALLIANCE survives, even when two
+    // allied armies stand (`winningAlliance`): the HUD banner must agree, or a
+    // won 2v2 reads as still running.
+    FogFixture fixture{/*targetCloaked=*/false, /*targetFreeIntel=*/false};
+    fixture.scene.armies[1].alliance = 0;
+    fixture.scene.armies[0].requestingAlliedVictory = true;
+    fixture.scene.armies[1].requestingAlliedVictory = true;
+    const rm::ui::MatchState hud =
+        rm::app::hudStateFrom(fixture.scene, 0.0f, rm::ui::GameProfile::Fa);
+    CHECK(hud.armiesLeft == 2);
+    CHECK(hud.outcome == rm::ui::MatchState::Outcome::Win);
+    CHECK(hud.winningTeam == 0);
+}
+
 TEST_CASE("slot reuse cannot make a stale unit generation visible") {
     FogFixture fixture{/*targetCloaked=*/false, /*targetFreeIntel=*/false};
     fixture.scene.refreshViewerContacts();
