@@ -209,3 +209,50 @@ TEST_CASE("C-262: a commander's death blast is annihilating up close and dangero
     // Past 320 elmos the blast does not reach at all.
     CHECK(roster.health(farTarget).current == rm::sim::Mag::fromInt(100000));
 }
+
+TEST_CASE("C-397: a strategic missile's splash bypasses the bubble it penetrated",
+          "[fa-damage]") {
+    // `shield.lua` `Shield.OnCollisionCheck` (`C-397`): the STRATEGIC+MISSILE
+    // gate refuses the collision, and the impact path threads that refusal
+    // into the blast — the point hit and its splash land on the hull beneath
+    // while the bubble pays nothing. The point-hit half is pinned in
+    // test_shield.cpp; this pins the splash half, including a sheltered
+    // bystander under the same dome that a normal blast would spare.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+    const rm::UnitTypeIndex targetType = roster.addType(mobileDef());
+    const UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const UnitId sheltered = roster.add(targetType, 20.0f, 0.0f, 1, 100.0f);
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    rm::sim::Projectile shot;
+    shot.position = rm::test::at(0, 1, -100);
+    shot.velocity = rm::test::at(0, 0, 120);
+    shot.damage = rm::unitdef::flatDamage(rm::test::mag(40.0f));
+    shot.damageRadiusElmos = rm::test::fx(30.0f);
+    shot.targetLayers = rm::unitdef::TargetLayerMask::Surface;
+    shot.firedByArmy = 0;
+    shot.ticksRemaining = 2;
+    shot.categories = {"MISSILE", "STRATEGIC"};
+    std::vector<rm::sim::Projectile> shots{shot};
+
+    const rm::HeightField field = flatField();
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, nullptr, &roster.catalog);
+    REQUIRE(shots.size() == 1);
+    CHECK(shots.front().pendingImpact == rm::sim::ImpactType::Unit);
+    CHECK(shots.front().impactTarget == generator);
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies, rm::sim::Terrain{field},
+                                roster.rate, nullptr, &roster.catalog);
+
+    CHECK(shots.empty());
+    // The dome paid nothing: no point-hit charge, no splash admission.
+    CHECK(roster.health(generator).shield.current == rm::sim::Mag::fromInt(100));
+    // The 40-point blast lands once on each hull under it — hull 60 each —
+    // and the dome pays nothing: no splash admission for a shot whose
+    // shield refused the collision.
+    CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(60.0f));
+    CHECK(rm::test::asFloat(roster.health(sheltered).current) == Approx(60.0f));
+}
