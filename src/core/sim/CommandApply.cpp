@@ -1567,7 +1567,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                 continue;
             }
             const UnitId replacement = transferUnitArmy(
-                store, unit, recipient, events,
+                store, catalog, unit, recipient, events,
                 siloAmmo != nullptr ? std::span<SiloAmmo>{*siloAmmo} : std::span<SiloAmmo>{},
                 enhancements != nullptr ? std::span<EnhancementWork>{*enhancements}
                                         : std::span<EnhancementWork>{},

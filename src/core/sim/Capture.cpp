@@ -412,7 +412,7 @@ std::size_t applyCaptureWork(UnitStore& store, const UnitCatalog& catalog,
                                .at = {at.x, at.y, at.z}});
         }
         const UnitId replacement =
-            transferUnitArmy(store, work.target, work.armyIndex, events, siloAmmo,
+            transferUnitArmy(store, catalog, work.target, work.armyIndex, events, siloAmmo,
                              enhancements, siloQueue);
         (void)replacement;
         captures.erase(captures.begin() + static_cast<std::ptrdiff_t>(i));
@@ -420,7 +420,7 @@ std::size_t applyCaptureWork(UnitStore& store, const UnitCatalog& catalog,
     return capturing;
 }
 
-UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
+UnitId transferUnitArmy(UnitStore& store, const UnitCatalog& catalog, UnitId unit, int armyIndex,
                         EventQueue* events, std::span<SiloAmmo> siloAmmo,
                         std::span<EnhancementWork> enhancements, std::span<SiloBuild> siloQueue) {
     if (!store.alive(unit)) {
@@ -462,7 +462,17 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
     const std::vector<UnitId> cargo = store.childrenOf(unit);
     std::vector<std::pair<UnitId, UnitStore::AttachBones>> cargoBones;
     cargoBones.reserve(cargo.size());
+    // `C-385` (`Unit.lua:555-619`): a captured TRANSPORTATION unit kills each
+    // non-capturable cargo item before the transfer — dead riders never reach
+    // the rebuild loop below, so only capturable cargo rides the replacement.
+    const unitdef::UnitDef* carrierDef = catalog.def(type);
+    const bool carrierIsTransport =
+        carrierDef != nullptr && carrierDef->hasCategory("TRANSPORTATION");
     for (const UnitId child : cargo) {
+        if (carrierIsTransport && store.alive(child) && !store.capturable(child)) {
+            store.kill(child);
+            continue;
+        }
         cargoBones.emplace_back(child, store.attachmentBonesOf(child));
         (void)store.detach(child);
     }
@@ -480,8 +490,7 @@ UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
         if (!store.alive(child)) {
             continue;
         }
-        (void)bones;
-        (void)transferUnitArmy(store, child, armyIndex, events, siloAmmo, enhancements,
+        (void)transferUnitArmy(store, catalog, child, armyIndex, events, siloAmmo, enhancements,
                                siloQueue);
     }
     const UnitId replacement = store.spawn(UnitStore::Spawn{

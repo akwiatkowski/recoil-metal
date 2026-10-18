@@ -119,8 +119,8 @@ std::size_t applyCaptureWork(UnitStore& store, const UnitCatalog& catalog,
 /// its queued builds (`SiloBuild`, `CAiSiloBuildImpl+0x20`) and in-flight
 /// enhancement work. Returns the replacement's handle, or an invalid
 /// `UnitId` when the source is dead.
-[[nodiscard]] UnitId transferUnitArmy(UnitStore& store, UnitId unit, int armyIndex,
-                                      EventQueue* events,
+[[nodiscard]] UnitId transferUnitArmy(UnitStore& store, const UnitCatalog& catalog, UnitId unit,
+                                      int armyIndex, EventQueue* events,
                                       std::span<SiloAmmo> siloAmmo = {},
                                       std::span<EnhancementWork> enhancements = {},
                                       std::span<SiloBuild> siloQueue = {});

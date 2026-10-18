@@ -755,6 +755,32 @@ TEST_CASE("a captured silo keeps its queued missile builds on the replacement", 
     REQUIRE(siloQueue.size() == 1);
     CHECK(siloQueue.front().owner == replacement);
 }
+TEST_CASE("a captured transport kills its non-capturable cargo", "[capture]") {
+    // `C-385` (`Unit.lua:555-619`): a captured TRANSPORTATION unit kills each
+    // non-capturable cargo item before the transfer — the uncapturable rider
+    // dies, the capturable one rides the replacement.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    rm::unitdef::UnitDef carrierDef = *f.roster.catalog.def(f.structureType);
+    carrierDef.name = "test_transport";
+    carrierDef.categories = {"TRANSPORTATION"};
+    const auto carrierType = f.roster.addType(carrierDef);
+    const UnitId carrier = f.roster.add(carrierType, 206.0f, 200.0f, 1, 100.0f);
+    const UnitId doomed = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    const UnitId kept = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.roster.store.attach(carrier, doomed));
+    REQUIRE(f.roster.store.attach(carrier, kept));
+    REQUIRE(f.roster.store.setCapturable(doomed, false));
+    REQUIRE(f.capture(captor, carrier));
+    f.tick(300);
+    REQUIRE_FALSE(f.roster.store.alive(carrier));
+    // The doomed rider is dead — no live replacement stands in its slot —
+    // while the capturable rider transferred onto the replacement's army.
+    CHECK_FALSE(f.roster.store.alive(f.roster.store.idAt(doomed.index)));
+    const UnitId newKept = f.roster.store.idAt(kept.index);
+    REQUIRE(f.roster.store.alive(newKept));
+    CHECK(f.roster.store.motion()[newKept.index].armyIndex == 0);
+}
 
 TEST_CASE("a unit marked uncapturable refuses capture", "[capture]") {
     // `C-250`'s per-tick preamble reads the `vt[0x40]` object `+0x69` byte
