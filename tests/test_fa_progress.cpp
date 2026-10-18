@@ -903,3 +903,45 @@ TEST_CASE("C-378: a dead owner's in-flight enhancement work retires with it",
     (void)rm::sim::retireDeadEnhancementWork(roster.store, work);
     CHECK(work.empty());
 }
+TEST_CASE("C-255: NaniteTorpedoTube and MicrowaveLaserGenerator arm their guns",
+          "[fa-progress][enhancement]") {
+    // Retail `URL0001_script.lua:459-467`: `NaniteTorpedoTube` runs
+    // `SetWeaponEnabledByLabel('Torpedo', true)` beside its sonar enable,
+    // and `MicrowaveLaserGenerator` enables the `MLG` label — the sim's
+    // script-effect table must gate both labels the same way.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "test_commander";
+    def.health = rm::test::mag(100.0f);
+    rm::unitdef::Weapon torpedo;
+    torpedo.label = "Torpedo";
+    torpedo.role = rm::unitdef::WeaponRole::DirectFire;
+    torpedo.maxRange = rm::sim::Fx::fromInt(50);
+    torpedo.rateOfFire = 1.0f;
+    torpedo.damage = rm::test::mag(10.0f);
+    rm::unitdef::Weapon mlg = torpedo;
+    mlg.label = "MLG";
+    def.weapons = {torpedo, mlg};
+    def.enhancements.push_back({.name = "NaniteTorpedoTube", .slot = "Back",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .parameters = *rm::lua::parseTable("{}")});
+    def.enhancements.push_back({.name = "MicrowaveLaserGenerator", .slot = "RCH",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .parameters = *rm::lua::parseTable("{}")});
+    def.enhancements.push_back({.name = "NaniteTorpedoTubeRemove", .slot = "Back",
+        .prerequisite = "NaniteTorpedoTube",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .removes = {"NaniteTorpedoTube"},
+        .parameters = *rm::lua::parseTable("{}")});
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    CHECK_FALSE(rm::sim::weaponEnabledForUnit(roster.store, roster.catalog, unit.index, def.weapons[0]));
+    CHECK_FALSE(rm::sim::weaponEnabledForUnit(roster.store, roster.catalog, unit.index, def.weapons[1]));
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "NaniteTorpedoTube"));
+    CHECK(rm::sim::weaponEnabledForUnit(roster.store, roster.catalog, unit.index, def.weapons[0]));
+    CHECK_FALSE(rm::sim::weaponEnabledForUnit(roster.store, roster.catalog, unit.index, def.weapons[1]));
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "MicrowaveLaserGenerator"));
+    CHECK(rm::sim::weaponEnabledForUnit(roster.store, roster.catalog, unit.index, def.weapons[1]));
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "NaniteTorpedoTubeRemove"));
+    CHECK_FALSE(rm::sim::weaponEnabledForUnit(roster.store, roster.catalog, unit.index, def.weapons[0]));
+}

@@ -111,6 +111,8 @@ constexpr std::string_view kIntelJammer[]{"Jammer"};
 constexpr std::string_view kIntelStealth[]{"RadarStealth", "SonarStealth"};
 constexpr std::string_view kIntelCloak[]{"Cloak"};
 constexpr std::string_view kIntelSonar[]{"Sonar"};
+constexpr std::string_view kWeaponTorpedo[]{"Torpedo"};
+constexpr std::string_view kWeaponMLG[]{"MLG"};
 constexpr std::string_view kWeaponMissile[]{"Missile"};
 constexpr std::string_view kWeaponNMissile[]{"NMissile"};
 constexpr std::string_view kWeaponTacMissile[]{"TacMissile"};
@@ -184,8 +186,12 @@ constexpr ScriptEffectRow kScriptEffects[] = {
     {"CloakingGenerator", {.intelEnables = kIntelCloak}},
     {"CloakingGeneratorRemove", {.toggleCapRemoves = kToggleCloak,
                                  .intelDisables = kIntelCloak}},
-    {"NaniteTorpedoTube", {.intelEnables = kIntelSonar}},
-    {"NaniteTorpedoTubeRemove", {.intelDisables = kIntelSonar}},
+    // URL0001's NaniteTorpedoTube pairs the sonar enable with the Torpedo
+    // label; MicrowaveLaserGenerator is the MLG label alone.
+    {"NaniteTorpedoTube", {.weaponEnables = kWeaponTorpedo, .intelEnables = kIntelSonar}},
+    {"NaniteTorpedoTubeRemove", {.weaponDisables = kWeaponTorpedo, .intelDisables = kIntelSonar}},
+    {"MicrowaveLaserGenerator", {.weaponEnables = kWeaponMLG}},
+    {"MicrowaveLaserGeneratorRemove", {.weaponDisables = kWeaponMLG}},
     // Weapon stat mods: labels are the script's `GetWeaponByLabel` targets;
     // the values are the enhancement's own parameters.
     {"CrysalisBeam", {.maxRadiusLabels = kWeaponRightDisruptorOC}},
