@@ -1114,6 +1114,9 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
     return order->target();
 }
 
+[[nodiscard]] bool passesTargetRestrictions(const unitdef::Weapon& weapon,
+                                            const unitdef::UnitDef& candidate);
+
 /// Whether an explicit Attack's target passes the same fire gates as an acquired target,
 /// including a Seen contact when fog of war is active.
 [[nodiscard]] bool canShootExplicitTarget(UnitId target, std::array<Fx, 3> from, int fromArmy,
@@ -1132,10 +1135,13 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
             motion[target.index].submersible && motion[target.index].submerged, sourceSubmerged)) {
         return false;
     }
+    const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target.index));
+    if (targetDef != nullptr && !passesTargetRestrictions(weapon, *targetDef)) {
+        return false;
+    }
     // C-322: the target-side water gate applies to Seabed-layer candidates
     // only — a submerged sub is the Sub layer and passes untouched.
-    if (!passesWaterTargetGate(weapon, catalog.def(store.typeAt(target.index)),
-                               motion[target.index].seabed,
+    if (!passesWaterTargetGate(weapon, targetDef, motion[target.index].seabed,
                                store.transforms()[target.index].y)) {
         return false;
     }

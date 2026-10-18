@@ -3849,6 +3849,31 @@ TEST_CASE("an explicit Attack may fire outside the playable rectangle") {
     CHECK(roster.health(target).current == rm::test::mag(90.0f));
 }
 
+TEST_CASE("an explicit Attack obeys the weapon's category target restrictions") {
+    // UAA0102 authors `TargetRestrictOnlyAllow = 'AIR'` with
+    // `TargetRestrictDisallow = 'UNTARGETABLE,LAND,STRUCTURE,NAVAL'` — an explicit click
+    // on a land hull must hold fire the same way automatic acquisition does.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.beam = true;
+    weapon.targetRestrictOnlyAllow = std::vector<std::string>{"AIR"};
+    weapon.targetRestrictOnlyDisallow = std::vector<std::string>{"LAND"};
+    Roster roster;
+    const UnitId gunner =
+        roster.add(roster.addType(gunnerDef(weapon)), 0.0f, 0.0f, 0, 100.0f);
+    const UnitId target = roster.add(roster.addType(targetDef()), 0.0f, 50.0f, 1, 100.0f);
+    const rm::sim::Command attack{.kind = rm::sim::CommandKind::Attack,
+                                   .unit = gunner,
+                                   .target = target};
+    (void)roster.store.orders()[gunner.index].give(attack, false);
+    roster.store.orders()[gunner.index].markCurrentActive();
+
+    std::vector<Projectile> shots;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 0);
+    CHECK(roster.health(target).current == rm::test::mag(100.0f));
+}
+
+
 TEST_CASE("a target beyond the weapon's height reach is not a target at all") {
     // Retail folds "too far" and "cannot elevate" into one class, so a weapon that cannot look
     // up treats a target above it as unreachable rather than merely distant (`C-167`).
