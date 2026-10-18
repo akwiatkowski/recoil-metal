@@ -2707,12 +2707,16 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                                      static_cast<std::int32_t>(rate.ticksPerSecond())),
                                  .visualDirection = {to[0]-from[0], to[1]-from[1], to[2]-from[2]},
                              });
-                if (weapon.damageRadius <= Fx{}) {
+                // `C-255`: the enhancement-widened blast, resolved like damage at
+                // launch — the reader is the same `weaponDamageRadiusFor` the
+                // install tests pin.
+                const Fx blastRadius = weaponDamageRadiusFor(store, catalog, slot, weapon);
+                if (blastRadius <= Fx{}) {
                     (void)damageTarget(target->index, rates.damage, army, store, armies,
                                        &catalog, store.idAt(slot), events,
                                        weapon.targetLayers);
                 } else {
-                    damageArea(to, weapon.damageRadius, rates.damage, army, store, armies,
+                    damageArea(to, blastRadius, rates.damage, army, store, armies,
                                &catalog, store.idAt(slot), events, weapon.targetLayers, features);
                 }
             } else {
@@ -2750,6 +2754,10 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                    : std::nullopt));
                     Projectile& launched = projectiles.back();
                     launched.serial = projectileSerial(tick, pushIndex);
+                    // `C-255`: the enhancement-widened blast rides the shot like
+                    // `damage` above, so impact needs no catalog reach-back.
+                    launched.damageRadiusElmos =
+                        weaponDamageRadiusFor(store, catalog, slot, weapon);
                     // `C-262`: a ringed warhead carries its bands with it —
                     // resolved at launch like `damage`, so the impact path
                     // does not reach back into the catalog.
@@ -2922,6 +2930,8 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                                                             motions[slot], false)}
                            : std::nullopt));
             projectiles.back().serial = projectileSerial(tick, pushIndex);
+            projectiles.back().damageRadiusElmos =
+                weaponDamageRadiusFor(store, catalog, slot, weapon);
             const Fx effectiveRate = weaponRateOfFireFor(store, catalog, slot, weapon);
             healths[slot].reloadRemaining[w] =
                 static_cast<int>(rate.ticksForRate(effectiveRate));
@@ -3054,6 +3064,8 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
                            : std::nullopt));
             Projectile& missile = projectiles.back();
             missile.serial = projectileSerial(tick, pushIndex);
+            missile.damageRadiusElmos =
+                weaponDamageRadiusFor(store, catalog, slot, weapon);
             // `C-262`: a ringed warhead carries its bands — the Yolona Oss's
             // `NukeInner/OuterRing*` — resolved at launch like `damage`.
             missile.innerRing = rates.innerRing;

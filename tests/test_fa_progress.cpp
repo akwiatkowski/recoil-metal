@@ -990,3 +990,45 @@ TEST_CASE("C-255: StabilitySuppressant adds its damage radius mod on top of the 
     CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, cannon)
           == rm::sim::Fx::fromInt(10));
 }
+TEST_CASE("C-255: a fired shot carries its enhancement's widened blast",
+          "[fa-progress][enhancement]") {
+    // The reader half (`weaponDamageRadiusFor`) is pinned above; this is the
+    // firing half retail `UnitWeapon:ChangeDamageRadius` implies — a shot
+    // launched by an enhanced unit must carry the widened radius to impact,
+    // not the authored one (`XSL0001_script.lua:547-552` `BlastAttack` on
+    // `ChronotronCannon`, `NewDamageRadius` 2 ogrids = 16 elmos).
+    rm::test::Roster roster;
+    roster.rate = rm::sim::TickRate{10};
+    rm::unitdef::UnitDef gunner;
+    gunner.name = "test_enhanced_gunner";
+    gunner.health = rm::test::mag(100.0f);
+    gunner.categories = {"LAND"};
+    rm::unitdef::Weapon chrono;
+    chrono.label = "ChronotronCannon";
+    chrono.role = rm::unitdef::WeaponRole::DirectFire;
+    chrono.targetPriorities = {{"LAND"}};
+    chrono.maxRange = rm::sim::Fx::fromInt(100);
+    chrono.rateOfFire = 1.0f;
+    chrono.damage = rm::test::mag(10.0f);
+    chrono.damageRadius = rm::sim::Fx{};
+    chrono.muzzleVelocityElmosPerSecond = 100.0f;
+    gunner.weapons = {chrono};
+    const auto blastParams = rm::lua::parseTable("{ NewDamageRadius=2 }");
+    REQUIRE(blastParams);
+    gunner.enhancements.push_back({.name = "BlastAttack", .slot = "LCH",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .parameters = *blastParams});
+    rm::unitdef::UnitDef target;
+    target.name = "test_blast_target";
+    target.health = rm::test::mag(100.0f);
+    target.categories = {"LAND"};
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    const auto shooter = roster.add(roster.addType(gunner), 0.0f, 0.0f, 0, 100.0f);
+    const auto victim = roster.add(roster.addType(target), 0.0f, 40.0f, 1, 100.0f);
+    (void)victim;
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, shooter, "BlastAttack"));
+    std::vector<rm::sim::Projectile> shots;
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 1);
+    REQUIRE(shots.size() == 1);
+    CHECK(shots.front().damageRadiusElmos == rm::sim::Fx::fromInt(16));
+}
