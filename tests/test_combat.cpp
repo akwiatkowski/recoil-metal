@@ -599,6 +599,23 @@ TEST_CASE("an interceptor damages a projectile's health rather than force-destro
     }
 }
 
+TEST_CASE("a launched shot leaves the tube at full health, not zero") {
+    // C-087's pool has to ride the shot out of the muzzle as max AND current:
+    // the corpus authors `Defense = {Health = 1, MaxHealth = 1}` side by side
+    // (`CIFMissileTactical02_proj.bp`, `SIMAntiMissile01_proj.bp`), so a nuke
+    // leaves the tube at 25/25. At 25/0 the first 1-damage graze would kill it
+    // despite the pool the test above pins.
+    Weapon weapon = directFire(30.0f, 300.0f);
+    weapon.projectileTraits.maxHealth = rm::test::mag(25.0f);
+    const rm::sim::TickRate rate{};
+    const Projectile shot = rm::sim::launch(
+        rm::test::at(0, 0, 0), rm::test::at(0, 0, 100), weapon, 0, rate,
+        rate.perTick(weapon.muzzleVelocityElmosPerSecond),
+        rm::unitdef::flatDamage(weapon.damage));
+    CHECK(shot.maxHealth == rm::test::mag(25.0f));
+    CHECK(shot.health == rm::test::mag(25.0f));
+}
+
 TEST_CASE("point defence applies target restrictions to projectile acquisition") {
     // C-088's TMD/SMD split: the TMD (UEB4201) carries
     // `TargetRestrictOnlyAllow = 'TACTICAL MISSILE'` and no ammo, the SMD (UEB4302)

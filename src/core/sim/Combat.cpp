@@ -3207,8 +3207,11 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     shot.firedByArmy = byArmy;
     shot.interceptor = interceptor;
     // The authored damage pool rides the shot out of the muzzle (`C-087`): a shot whose
-    // shooter dies mid-flight keeps the pool it was launched with.
+    // shooter dies mid-flight keeps the pool it was launched with. The corpus authors
+    // `Defense = {Health, MaxHealth}` side by side (`CIFMissileTactical02_proj.bp`,
+    // `SIMAntiMissile01_proj.bp`), so the tube leaves full — max AND current.
     shot.maxHealth = weapon.projectileTraits.maxHealth;
+    shot.health = weapon.projectileTraits.maxHealth;
     // So does the shot's own category set (`C-088`): restriction checks evaluate the
     // target's categories, and a shot with no resolved blueprint carries none.
     shot.categories = weapon.projectileTraits.categories;
