@@ -17,8 +17,8 @@
 
 #include "core/data/MoveDef.hpp"
 #include "core/map/HeightField.hpp"
+#include "core/sim/Combat.hpp"
 #include "core/sim/Command.hpp"
-#include "core/sim/Economy.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/Transport.hpp"
@@ -1753,4 +1753,52 @@ TEST_CASE("C-413: the ferry beacon reads from the queue head", "[fa-transport]")
         REQUIRE(answered.has_value());
         CHECK(*answered == beacon);
     }
+}
+
+TEST_CASE("attached cargo fires only when its Transport.CanFireFromTransport allows it",
+          "[fa-transport]") {
+    // `weapon.lua: SetOnTransport` disables every cargo weapon unless the
+    // CARGO's `Transport.CanFireFromTransport` is set (shipped: UEL0106's
+    // `Transport` block sets it true; the ACU's weapon-level key does not
+    // count). The sim's attached skip is that gate: ordinary cargo stays
+    // silent on the rack, flagged cargo keeps shooting.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const UnitId transport = landedTransport(roster, transportType, 100.0f, 100.0f, 0);
+
+    UnitDef gun = cargoDef();
+    gun.name = "test_gun_cargo";
+    rm::unitdef::Weapon weapon;
+    weapon.label = "test gun";
+    weapon.role = rm::unitdef::WeaponRole::DirectFire;
+    weapon.targetPriorities = {{"LAND"}};
+    weapon.damage = rm::sim::Mag::fromInt(10);
+    weapon.maxRange = Fx::fromInt(300);
+    weapon.rateOfFire = 1.0f;
+    weapon.muzzleVelocityElmosPerSecond = 200.0f;
+    weapon.turreted = true;
+    gun.weapons.push_back(weapon);
+    const rm::UnitTypeIndex gunType = roster.addType(gun);
+    const UnitId cargo = roster.add(gunType, 103.0f, 100.0f, 0, 500.0f);
+    REQUIRE(roster.store.attach(transport, cargo));
+
+    UnitDef flagged = gun;
+    flagged.name = "test_flagged_cargo";
+    flagged.transport.canFireFromTransport = true;
+    const rm::UnitTypeIndex flaggedType = roster.addType(flagged);
+    const UnitId shooter = roster.add(flaggedType, 103.0f, 100.0f, 0, 500.0f);
+    REQUIRE(roster.store.attach(transport, shooter));
+
+    const rm::UnitTypeIndex targetType = roster.addType(cargoDef());
+    const UnitId target = roster.add(targetType, 100.0f, 150.0f, 1, 500.0f);
+    (void)target;
+    roster.reindex();
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Projectile> shots;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                               roster.rate)
+          == 1);
+    REQUIRE(shots.size() == 1);
+    CHECK(shots.front().firedBy == shooter);
 }

@@ -966,6 +966,18 @@ struct ProjectileTickStart {
     }
     return std::nullopt;
 }
+/// `weapon.lua: SetOnTransport` disables a cargo weapon unless the CARGO's
+/// own `Transport.CanFireFromTransport` is set (UEL0106's Transport block).
+/// Tractor-claw victims keep the old silence: the sentinel bone is script
+/// cargo, not a transport lift.
+[[nodiscard]] bool cargoMayFireFromRack(const UnitStore& store, const UnitCatalog& catalog,
+                                        UnitIndex slot) noexcept {
+    if (store.attachmentBonesOf(store.idAt(slot)).parent == UnitStore::kTractorAttachBone) {
+        return false;
+    }
+    const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
+    return def != nullptr && def->transport.canFireFromTransport;
+}
 
 } // namespace
 
@@ -2175,8 +2187,9 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             if (slot >= healths.size() || !healths[slot].alive()) {
                 continue;
             }
-            if (slot < motions.size() && motions[slot].attached) {
-                continue;
+            if (slot < motions.size() && motions[slot].attached
+                && !cargoMayFireFromRack(store, catalog, slot)) {
+                continue;  // cargo rides silent unless its own Transport block allows it
             }
             const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
             if (def == nullptr || def->weapons.empty()) {
@@ -2255,8 +2268,9 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
         if (slot >= healths.size() || !healths[slot].alive()) {
             continue;  // the dead do not shoot
         }
-        if (slot < motions.size() && motions[slot].attached) {
-            continue;  // cargo does not fight from the rack
+        if (slot < motions.size() && motions[slot].attached
+            && !cargoMayFireFromRack(store, catalog, slot)) {
+            continue;  // cargo rides silent unless its own Transport block allows it
         }
 
         // `C-381`: the tractor claw's pull runs here, in the same pass that
