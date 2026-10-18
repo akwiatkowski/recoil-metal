@@ -3889,6 +3889,30 @@ TEST_CASE("an explicit Attack obeys the weapon's category target restrictions") 
     CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 0);
     CHECK(roster.health(target).current == rm::test::mag(100.0f));
 }
+TEST_CASE("an explicit Attack holds fire on a BENIGN hull") {
+    // C-156's reject order: the `BENIGN` hard reject sits ahead of the
+    // per-weapon restrict, so a clicked civilian is not shot either.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.beam = true;
+    Roster roster;
+    const UnitId gunner =
+        roster.add(roster.addType(gunnerDef(weapon)), 0.0f, 0.0f, 0, 100.0f);
+    UnitDef civilian = targetDef();
+    civilian.name = "benign_civilian";
+    civilian.categories = {"BENIGN"};
+    const UnitId target = roster.add(roster.addType(civilian), 0.0f, 50.0f, 1, 100.0f);
+    const rm::sim::Command attack{.kind = rm::sim::CommandKind::Attack,
+                                   .unit = gunner,
+                                   .target = target};
+    (void)roster.store.orders()[gunner.index].give(attack, false);
+    roster.store.orders()[gunner.index].markCurrentActive();
+
+    std::vector<Projectile> shots;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 0);
+    CHECK(roster.health(target).current == rm::test::mag(100.0f));
+}
+
 
 
 TEST_CASE("a target beyond the weapon's height reach is not a target at all") {

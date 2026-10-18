@@ -1160,6 +1160,9 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
         return false;
     }
     const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target.index));
+    if (targetDef != nullptr && targetDef->hasCategory("BENIGN")) {
+        return false;
+    }
     if (targetDef != nullptr && !passesTargetRestrictions(weapon, *targetDef)) {
         return false;
     }
