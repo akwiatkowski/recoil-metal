@@ -1273,3 +1273,64 @@ TEST_CASE("C-278: vision over a fake's position flags it knownFake",
     CHECK(fakes == 4);
     CHECK(knownFakes == 4);
 }
+
+// --- C-276/C-279: sonar-depth confirmed-dead reaping ---------------------------
+//
+// The confirmed-dead edge's underwater half: a submerged hull heard on sonar
+// alone leaves a sonar blip, and water vision is the grid that identifies
+// submerged targets (C-279's `+0x48` substitution for vision). When a
+// submerged observer brings water-vision coverage over the sonar grave, the
+// alliance knows the contact is gone — the blip reaps at once instead of
+// lingering out the ten seconds.
+
+TEST_CASE("C-276/C-279: water vision over a sonar grave reaps the blip at once",
+          "[fa-intel]") {
+    rm::unitdef::UnitDef listening = seer(0.0f, 0.0f, 400.0f);
+    rm::unitdef::UnitDef diving;
+    diving.waterVisionRadiusElmos = 200.0f;
+    rm::unitdef::UnitDef hull;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex ear = catalog.add(&listening);
+    const rm::UnitTypeIndex eyes = catalog.add(&diving);
+    const rm::UnitTypeIndex boat = catalog.add(&hull);
+
+    Intel intel;
+    intel.configure(2, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, ear, 0, 200.0f, 200.0f);
+    // The observer starts well outside water-vision range of the grave and
+    // stamps nothing but the water-vision grid once submerged: no vision
+    // radius, so the vision-only reaping path cannot fire for it.
+    const rm::sim::UnitId observer = place(store, eyes, 0, 200.0f, 700.0f);
+    store.motion()[observer.index].submersible = true;
+    store.motion()[observer.index].submerged = true;
+    const rm::sim::UnitId diver = place(store, boat, 1, 300.0f, 200.0f);
+    store.motion()[diver.index].submersible = true;
+    store.motion()[diver.index].submerged = true;
+
+    const std::vector<Army> armies = twoArmies(false);
+    intel.update(store, catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, diver.index, store, catalog, armies, intel)
+            == rm::sim::ContactKind::Sonar);
+
+    store.kill(diver);
+    intel.update(store, catalog, armies, nullptr);
+    REQUIRE(std::ranges::any_of(seenBy(0, store, catalog, armies, intel),
+                                [diver](const rm::sim::Contact& contact) {
+                                    return contact.unit == diver && contact.maybeDead;
+                                }));
+
+    // Eyes over the grave, underwater: water vision now covers the blip's
+    // last-known position and identifies nothing there, so the sonar blip
+    // reaps on the next update.
+    store.transforms()[observer.index].x = rm::sim::fxFromFloat(300.0f);
+    store.transforms()[observer.index].z = rm::sim::fxFromFloat(200.0f);
+    intel.update(store, catalog, armies, nullptr);
+    const auto cleared = seenBy(0, store, catalog, armies, intel);
+    CHECK(std::ranges::none_of(cleared, [diver](const rm::sim::Contact& contact) {
+        return contact.unit == diver;
+    }));
+}

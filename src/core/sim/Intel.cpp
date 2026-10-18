@@ -949,10 +949,15 @@ void Intel::update(const UnitStore& store, const UnitCatalog& catalog,
         // `C-276`'s confirmed-dead reaping (`0x005C83C0`/`ReconCanDetect`):
         // this alliance's vision covers the blip's last-known position and
         // sees nothing there — the grave is confirmed empty, so the blip
-        // reaps at once instead of lingering out the ten seconds.
+        // reaps at once instead of lingering out the ten seconds. A sonar
+        // grave reaps under water vision (`C-279`'s `+0x48` substitution):
+        // the sense that would have identified a live submerged target is
+        // the sense whose empty coverage confirms it is gone.
         std::erase_if(contacts, [this, alliance](const RetainedRadarContact& contact) {
+            const IntelKind graveSense =
+                contact.sonar ? IntelKind::WaterVision : IntelKind::Vision;
             return contact.maybeDead
-                   && sees(static_cast<int>(alliance), IntelKind::Vision, contact.x,
+                   && sees(static_cast<int>(alliance), graveSense, contact.x,
                            contact.z);
         });
         std::erase_if(contacts, [&rate](const RetainedRadarContact& contact) {
