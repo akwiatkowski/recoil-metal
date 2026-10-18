@@ -446,6 +446,35 @@ TEST_CASE("C-243: a lone captor still banks one per funded beat", "[fa-econ]") {
     REQUIRE(f.captures.size() == 1);
     CHECK(f.captures[0].progress == 10);
 }
+TEST_CASE("C-243: an out-of-reach second captor adds nothing to the count", "[fa-econ]") {
+    // Retail's `Unit+0x690` counts ACTIVE tasks — the count bumps at the
+    // in-reach activation edge (`0x0060B93B`), not at order intake. A second
+    // captor still walking in holds a task but banks nothing and adds nothing
+    // to the near captor's beat: three funded beats land +1 each, not +2.
+    CaptureFixture f;
+    const UnitId near = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId far = f.roster.add(f.captorType, 600.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 203.0f, 1, 100.0f);
+    REQUIRE(f.capture(near, target));
+    REQUIRE(f.capture(far, target));
+
+    f.tick(3);
+    REQUIRE(f.captures.size() == 2);
+    int nearProgress = -1;
+    int farProgress = -1;
+    for (const auto& work : f.captures) {
+        if (work.captor == near.index) {
+            nearProgress = work.progress;
+            CHECK(work.inReach);
+        } else if (work.captor == far.index) {
+            farProgress = work.progress;
+            CHECK_FALSE(work.inReach);
+        }
+    }
+    // One active captor: the near task stands at 3 of 50, the far task at 0.
+    CHECK(nearProgress == 3);
+    CHECK(farProgress == 0);
+}
 
 TEST_CASE("C-240: a captured unit's silo stockpile and shield ride the replacement",
           "[fa-econ]") {

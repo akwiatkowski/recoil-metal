@@ -493,6 +493,70 @@ TEST_CASE("C-276: an allied owner's word reaps a dead blip at once", "[fa-intel]
         return contact.unit == victim;
     }));
 }
+// C-276's per-alliance boundary: a retained blip is knowledge owned by its
+// VIEWER, not refcounted off the observed unit. Two alliances that both
+// heard the same victim hold independent copies — one alliance's
+// confirmed-dead reaping must not reap the other's lingering blip.
+TEST_CASE("C-276: one alliance's reaping leaves the other's blip lingering", "[fa-intel]") {
+    rm::unitdef::UnitDef watching = seer(0.0f, 400.0f);
+    rm::unitdef::UnitDef scouting = seer(400.0f, 0.0f);
+    rm::unitdef::UnitDef hull;
+
+    UnitCatalog catalog;
+    const rm::UnitTypeIndex watcher = catalog.add(&watching);
+    const rm::UnitTypeIndex scout = catalog.add(&scouting);
+    const rm::UnitTypeIndex target = catalog.add(&hull);
+
+    Intel intel;
+    intel.configure(3, Fx::fromInt(1024), Fx::fromInt(1024),
+                    rm::sim::VisionStyle::ForgedAlliance);
+
+    UnitStore store;
+    (void)place(store, watcher, 0, 200.0f, 200.0f);
+    (void)place(store, watcher, 1, 200.0f, 200.0f);
+    const rm::sim::UnitId eyes = place(store, scout, 0, 200.0f, 700.0f);
+    const rm::sim::UnitId victim = place(store, target, 2, 300.0f, 200.0f);
+
+    std::vector<Army> armies(3);
+    armies[0].index = 0;
+    armies[0].alliance = 0;
+    armies[1].index = 1;
+    armies[1].alliance = 1;
+    armies[2].index = 2;
+    armies[2].alliance = 2;
+
+    intel.update(store, catalog, armies, nullptr);
+    REQUIRE(rm::sim::contactKindForUnit(0, victim.index, store, catalog, armies, intel)
+            == rm::sim::ContactKind::Radar);
+    REQUIRE(rm::sim::contactKindForUnit(1, victim.index, store, catalog, armies, intel)
+            == rm::sim::ContactKind::Radar);
+
+    store.kill(victim);
+    intel.update(store, catalog, armies, nullptr);
+    REQUIRE(std::ranges::any_of(seenBy(0, store, catalog, armies, intel),
+                                [victim](const rm::sim::Contact& contact) {
+                                    return contact.unit == victim && contact.maybeDead;
+                                }));
+    REQUIRE(std::ranges::any_of(seenBy(1, store, catalog, armies, intel),
+                                [victim](const rm::sim::Contact& contact) {
+                                    return contact.unit == victim && contact.maybeDead;
+                                }));
+
+    // Eyes over the grave for alliance 0 only: its vision covers the
+    // last-known position and sees nothing there, so its copy reaps at
+    // once — while alliance 1, with no eyes on the grave, keeps lingering.
+    store.transforms()[eyes.index].x = rm::sim::fxFromFloat(300.0f);
+    store.transforms()[eyes.index].z = rm::sim::fxFromFloat(200.0f);
+    intel.update(store, catalog, armies, nullptr);
+    CHECK(std::ranges::none_of(seenBy(0, store, catalog, armies, intel),
+                               [victim](const rm::sim::Contact& contact) {
+                                   return contact.unit == victim;
+                               }));
+    CHECK(std::ranges::any_of(seenBy(1, store, catalog, armies, intel),
+                              [victim](const rm::sim::Contact& contact) {
+                                  return contact.unit == victim && contact.maybeDead;
+                              }));
+}
 
 
 
