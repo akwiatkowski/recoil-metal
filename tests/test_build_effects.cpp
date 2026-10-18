@@ -121,3 +121,22 @@ TEST_CASE("Seraphim/Aeon factory build-base scale follows authored mesh "
     CHECK(fallback.sz == Approx(4.0f));
     CHECK(rm::factoryBaseWarpYOffset == Approx(-0.05f));
 }
+
+TEST_CASE("factory build-base pool resolves placement from the product def") {
+    // `CreateSeraphimFactoryBuildingEffects` (`EffectUtilities.lua:613-628`)
+    // and its Aeon twin (:537-552) warp the base projectile to
+    // `(x, y - 0.05, z)` with `SetScale(sx, 1, sz)` where `sx/sz` come
+    // from mesh extents with footprint fallback (`mul = 1`). The render
+    // path must resolve the same placement from the product def: a unit
+    // with no authored mesh extents and a 2x2-ogrid footprint covers
+    // 16x16 elmos (`scmap::kElmosPerOgrid` = 8) at the builder pad
+    // minus 0.05.
+    const rm::FactoryBasePlacement pool = rm::factoryBasePool(
+        0.0f, 0.0f, 0.0f, 2.0f, 2.0f, 100.0f, 12.0f, 200.0f);
+    CHECK(pool.scaleX == Approx(16.0f));
+    CHECK(pool.scaleZ == Approx(16.0f));
+    CHECK(pool.scaleY == Approx(1.0f));
+    CHECK(pool.position[0] == Approx(100.0f));
+    CHECK(pool.position[1] == Approx(12.0f - 0.05f));
+    CHECK(pool.position[2] == Approx(200.0f));
+}

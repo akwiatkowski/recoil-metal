@@ -63,7 +63,17 @@ struct FactoryBaseScale {
 [[nodiscard]] FactoryBaseScale factoryBaseScale(float meshXElmos, float meshYElmos,
                                                 float meshZElmos, float footprintX,
                                                 float footprintZ) noexcept;
-
-
-
+/// The factory build-base pool placement: `SetScale(sx, 1, sz)` warped to
+/// `(x, y + factoryBaseWarpYOffset, z)`. Footprint inputs are ogrids
+/// (converted at `scmap::kElmosPerOgrid`); mesh inputs are already elmos.
+struct FactoryBasePlacement {
+    float scaleX{};
+    float scaleY = 1.0f;
+    float scaleZ{};
+    std::array<float, 3> position{};
+};
+[[nodiscard]] FactoryBasePlacement factoryBasePool(float meshXElmos, float meshYElmos,
+                                                   float meshZElmos, float footprintXOgrids,
+                                                   float footprintZOgrids, float padX,
+                                                   float padY, float padZ) noexcept;
 }  // namespace rm

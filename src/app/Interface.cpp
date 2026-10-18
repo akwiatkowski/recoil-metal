@@ -1181,12 +1181,37 @@ void appendConstructionEffects(std::vector<rm::DecalVertex>& decals,
                 }
             }
         }
-
+        // The factory build-base pool (`CreateSeraphimFactoryBuildingEffects`
+        // / `CreateAeonFactoryBuildingEffects`, retail
+        // `lua/EffectUtilities.lua:537-552,613-628`): the base projectile
+        // takes `SetScale(sx, 1, sz)` and warps to `(x, y - 0.05, z)`
+        // where `sx/sz` are the PRODUCT's mesh extents with footprint
+        // fallback (`mul = 1`), at the BUILDER's pad. Drawn as the faction
+        // pool ring while the factory's mobile product is under
+        // construction; sim hash untouched.
+        const bool isFactoryProduct =
+            builderDef != nullptr && builderDef->hasCategory("FACTORY") && def != nullptr
+            && def->isMobile()
+            && (faction == rm::sim::Faction::Seraphim || faction == rm::sim::Faction::Aeon);
+        if (isFactoryProduct) {
+            // `footprintSquares` are heightmap squares (8 elmos each); the
+            // pool takes ogrids, so one square is one ogrid.
+            const rm::FactoryBasePlacement pool = rm::factoryBasePool(
+                def->meshExtentsXElmos, def->meshHeightElmos, def->meshExtentsZElmos,
+                static_cast<float>(def->footprintSquaresX),
+                static_cast<float>(def->footprintSquaresZ), fx,
+                field.heightAtWorld(fx, fz), fz);
+            const float poolRadius = 0.5f * std::max(pool.scaleX, pool.scaleZ);
+            if (poolRadius > 0.0f) {
+                rm::appendSelectionRing(
+                    decals, field, {{pool.position[0], 0.0f, pool.position[2]}},
+                    poolRadius, {{energy[0], energy[1], energy[2], 0.55f}}, 2.5f);
+            }
+        }
         if (!emittedUefPair && !emittedCybran && !emittedAeon && !emittedSeraphim) {
-             appendBuildBeam(particles, {{fx, fy + 4.0f, fz}}, {{x, toY, z}}, energy);
-         }
+            appendBuildBeam(particles, {{fx, fy + 4.0f, fz}}, {{x, toY, z}}, energy);
+        }
     }
-
     // THE HELPING HANDS. Every unit the assist scan counted this tick streams to the work
     // it lent its rate to — the visible difference between "guarding the factory" and
     // "building it faster". These come from the sim's own helper list rather than a second

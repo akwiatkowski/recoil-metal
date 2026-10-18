@@ -100,4 +100,21 @@ FactoryBaseScale factoryBaseScale(float meshXElmos, float meshYElmos, float mesh
     return {.sx = sx, .sy = sy, .sz = sz};
 }
 
+FactoryBasePlacement factoryBasePool(float meshXElmos, float meshYElmos, float meshZElmos,
+                                     float footprintXOgrids, float footprintZOgrids,
+                                     float padX, float padY, float padZ) noexcept {
+    // `SetScale(sx, 1, sz)` + `Warp(BuildBaseEffect, Vector(x, y - 0.05, z))`:
+    // `sx/sz` are mesh extents (elmos) with footprint fallback in ogrids
+    // converted at 8 elmos per ogrid (`scmap::kElmosPerOgrid`); the pool is
+    // flat (y scale 1) and sits 0.05 below the builder pad.
+    constexpr float kElmosPerOgrid = 8.0f;
+    const FactoryBaseScale base = factoryBaseScale(meshXElmos, meshYElmos, meshZElmos,
+                                                   footprintXOgrids * kElmosPerOgrid,
+                                                   footprintZOgrids * kElmosPerOgrid);
+    return {.scaleX = base.sx,
+            .scaleY = 1.0f,
+            .scaleZ = base.sz,
+            .position = {{padX, padY + factoryBaseWarpYOffset, padZ}}};
+}
+
 }  // namespace rm
