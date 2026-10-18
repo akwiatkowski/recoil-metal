@@ -596,7 +596,8 @@ std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
     std::size_t serviced = 0;
 
     for (UnitIndex builder = 0; builder < store.orders().size(); ++builder) {
-        if (!store.slotAlive(builder) || !store.health()[builder].alive()) {
+        if (!store.slotAlive(builder) || !store.health()[builder].alive()
+            || store.productionPaused(store.idAt(builder))) {
             continue;
         }
         const QueuedCommand* order = store.orders()[builder].active();

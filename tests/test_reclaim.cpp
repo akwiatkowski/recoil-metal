@@ -1007,6 +1007,27 @@ TEST_CASE("a dead patrolling builder cannot repair or reclaim before its slot re
     CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 90.0f);
 }
 
+TEST_CASE("a production-paused patrolling engineer neither repairs nor reclaims") {
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ally = f.roster.add(f.tankType, 210.0f, 200.0f, 0, 100.0f);
+    f.roster.health(ally).current = rm::sim::magFromFloat(50.0f);
+    const FeatureId wreck = f.wreckAt(205.0f, 200.0f);
+    Command patrol{.kind = CommandKind::Patrol,
+                   .unit = engineer,
+                   .targetX = rm::sim::fxFromFloat(500.0f),
+                   .targetZ = rm::sim::fxFromFloat(200.0f)};
+    REQUIRE(rm::sim::applyCommand(patrol, f.roster.store, f.roster.catalog, f.players,
+                                  f.armies, f.terrain, f.grid, f.roster.rate));
+    REQUIRE(f.roster.store.setProductionPaused(engineer, true));
+    CHECK(rm::sim::servicePatrolBuilders(f.roster.store, f.roster.catalog, f.armies,
+                                         &f.features, f.economies)
+          == 0);
+    CHECK(rm::test::asFloat(f.roster.health(ally).current) == 50.0f);
+    REQUIRE(f.features.find(wreck) != nullptr);
+    CHECK(rm::test::asFloat(f.features.find(wreck)->massRemaining) == 90.0f);
+}
+
 TEST_CASE("patrol reclaim preserves a wreck when storage is full") {
     Fixture f;
     const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
