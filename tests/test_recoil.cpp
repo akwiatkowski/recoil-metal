@@ -15,6 +15,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "support/FxMatchers.hpp"
+#include "app/SceneBuild.hpp"
+#include "core/unit/UnitBlueprint.hpp"
+#include "core/vfs/Vfs.hpp"
+
+#include <cstdlib>
+#include <filesystem>
 
 using Catch::Approx;
 #include <cstdint>
@@ -308,6 +314,36 @@ TEST_CASE("a fired gun draws its barrel back, then runs it home", "[recoil]") {
     CHECK(kicked);
     CHECK(teleKicked);
 }
+TEST_CASE("a fired rack plays its authored reload clip", "[recoil]") {
+    // `defaultweapons.lua:202-210` (`PlayFxRackSalvoReloadSequence`): a weapon
+    // whose blueprint names `AnimationReload` plays that clip on the unit's
+    // animator when the rack salvo reloads. The corpus proves the shape — 2
+    // shipped weapons name one (`XSL0111`, `XEL0306`) — and the parse already
+    // lands in `Weapon::animationReload`; the draw path must load it the way
+    // it loads the walk and unpack clips.
+    const char* home = std::getenv("HOME");
+    const std::filesystem::path root =
+        home ? std::filesystem::path{home} / "projects/llm/input/faf" : std::filesystem::path{};
+    if (!std::filesystem::is_directory(root / "units/XSL0111")) SKIP("retail corpus unavailable");
+    rm::vfs::Vfs content;
+    content.mountDirectory(root);
+    rm::app::UnitScene scene;
+    const auto launcher = rm::unitbp::loadFile(root / "units/XSL0111/XSL0111_unit.bp");
+    REQUIRE(launcher.has_value());
+    REQUIRE(!launcher->weapons.empty());
+    const rm::sca::Animation* resolved =
+        rm::app::loadReloadAnimation(scene, content, *launcher);
+    REQUIRE(resolved != nullptr);
+    // The Laanse rack's reload is a real clip: nonzero duration, nonzero bones.
+    CHECK(resolved->duration > 0.0f);
+    CHECK(!resolved->boneNames.empty());
+    // A gun with no authored reload draws with none.
+    const rm::unitdef::UnitDef plain{};
+    CHECK(rm::app::loadReloadAnimation(scene, content, plain) == nullptr);
+}
+
+
+
 
 TEST_CASE("a built unit plays its unfold once from completion", "[recoil]") {
     // The deploy path end to end with a hand-made fold: two frames over two

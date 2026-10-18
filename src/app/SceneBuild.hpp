@@ -137,6 +137,12 @@ void stageTrial(UnitScene& scene, const rm::HeightField& field,
                 std::span<const rm::mapinfo::StartPosition> starts,
                 const rm::vfs::Vfs& content, std::string_view unitId, std::size_t count,
                 std::size_t foes, float gapElmos);
+/// A type's rack-salvo reload clip — the first weapon's `AnimationReload`
+/// (`defaultweapons.lua:202-210` `PlayFxRackSalvoReloadSequence`) — or null.
+/// Only 2 shipped weapons name one (`XSL0111`, `XEL0306`).
+[[nodiscard]] const rm::sca::Animation* loadReloadAnimation(
+    UnitScene& scene, const rm::vfs::Vfs& content,
+    const rm::unitdef::UnitDef& def);
 /// A type's walk cycle — the blueprint's `Display.AnimationWalk` when stated,
 /// else the first `*walk*.sca` beside its mesh — or null. See the definition.
 [[nodiscard]] const rm::sca::Animation* loadWalkAnimation(

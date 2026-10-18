@@ -159,6 +159,37 @@ loadUnpackAnimation(UnitScene& scene, const rm::vfs::Vfs& content,
     }
     return nullptr;
 }
+/// A type's rack-salvo reload clip: the first weapon's AnimationReload, loaded
+/// into the scene's store. Only 2 shipped weapons name one (`XSL0111`,
+/// `XEL0306`), so the scan is free and the VFS read happens only then. Null
+/// when nothing names one or the file is missing — a rack without authored
+/// reload simply fires without one.
+[[nodiscard]] const rm::sca::Animation*
+loadReloadAnimation(UnitScene& scene, const rm::vfs::Vfs& content,
+                    const rm::unitdef::UnitDef& def) {
+    for (const rm::unitdef::Weapon& weapon : def.weapons) {
+        if (weapon.animationReload.empty()) {
+            continue;
+        }
+        const auto bytes = content.read(weapon.animationReload);
+        if (!bytes) {
+            rm::log::writef(rm::log::Level::Warn, "animation", "no reload animation (%s)",
+                            weapon.animationReload.c_str());
+            return nullptr;
+        }
+        auto loaded = rm::sca::load(std::span<const std::byte>{bytes->data(), bytes->size()});
+        if (!loaded) {
+            rm::log::writef(rm::log::Level::Warn, "animation", "bad reload animation (%s): %s",
+                            weapon.animationReload.c_str(),
+                            loaded.error().message.c_str());
+            return nullptr;
+        }
+        scene.animations.push_back(std::move(*loaded));
+        return &scene.animations.back();
+    }
+    return nullptr;
+}
+
 
 /// The sim's copy of the resolved ring, for the type whose batch was just
 /// pushed: pivots and muzzle for slew, gating and the fire origin, converted
