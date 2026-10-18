@@ -1479,8 +1479,11 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                 // storage, the effect beat authors the records.
                 .effects = &scene.effects,
                 /// The terrain-type grid's runtime writes (`C-289`): the scene
-                /// owns the grid, the tick sweeps dead owners' tarmac stamps.
                 .terrainTypes = &scene.terrainTypeGrid,
+                // `aibrain.lua:786`'s `OnDefeat` flush (`SimPing.OnArmyDefeat`):
+                // the sim tick erases the fallen army's markers through this
+                // pointer, so it must be the scene's own marker store.
+                .simCallbacks = &scene.simCallbacks,
             },
     };
 

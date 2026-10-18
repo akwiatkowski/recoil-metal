@@ -1261,3 +1261,54 @@ TEST_CASE("a commander that built a factory still assists its upgrade") {
     CHECK(upgrade->builder == factoryId);
     CHECK(rm::sim::magToFloat(upgrade->assistPerTick) > 0.0f);
 }
+
+TEST_CASE("the app runner flushes a defeated army's map markers") {
+    // C-210's `OnDefeat` flush (`aibrain.lua:786` -> `SimPing.OnArmyDefeat`):
+    // the sim tick erases the fallen army's `PingMarkers` entries, but only
+    // through `Match::simCallbacks` — which `makeMatchRunner` must wire to
+    // the scene's own `SimCallbackState`, or the app path keeps dead markers.
+    const rm::HeightField field = flatField();
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(2);
+    scene.players = rm::sim::onePlayerPerArmy(2, 0);
+    scene.economies.assign(2, rm::sim::Economy{});
+    scene.commandersEver.assign(2, 1);
+
+    rm::unitdef::UnitDef commander;
+    commander.name = "UEL0001";
+    scene.definitions.push_back(commander);
+    const rm::UnitTypeIndex commanderType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(commanderType, rm::data::moveDefFor(commander), 1.0f);
+
+    const auto spawn = [&](int army, float x) {
+        const rm::sim::UnitId id = scene.store.spawn(rm::sim::UnitStore::Spawn{
+            .type = commanderType,
+            .transform = {.x = rm::sim::fxFromFloat(x), .z = rm::sim::fxFromFloat(200.0f)},
+            .motion = rm::app::motionFor(commander, army),
+            .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(12000)),
+        });
+        return id;
+    };
+    (void)spawn(0, 200.0f);
+    const rm::sim::UnitId doomed = spawn(1, 600.0f);
+
+    scene.simCallbacks.markers[{1, 7}] = rm::sim::SimMarker{.owner = 1, .id = 7};
+    scene.simCallbacks.markers[{0, 7}] = rm::sim::SimMarker{.owner = 0, .id = 7};
+
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+
+    scene.store.health()[doomed.index].current = rm::sim::Mag{};
+    const rm::TickCount pollTicks =
+        rm::app::gAppTickRate.ticks(rm::sim::seconds(3.0f));
+    for (int tick = 0; static_cast<rm::TickCount>(tick) < pollTicks + 2; ++tick) {
+        (void)rm::app::advanceMatch(runner, tick, 0.0f);
+    }
+    REQUIRE(scene.armies[1].defeated);
+    CHECK(scene.simCallbacks.markers.find({1, 7}) == scene.simCallbacks.markers.end());
+    CHECK(scene.simCallbacks.markers.contains({0, 7}));
+}
