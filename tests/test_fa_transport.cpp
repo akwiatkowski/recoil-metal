@@ -1829,3 +1829,36 @@ TEST_CASE("C-197: destroying a loaded transport detaches its cargo alive",
     CHECK_FALSE(roster.store.parentOf(second).has_value());
     CHECK(roster.store.childrenOf(transport).empty());
 }
+TEST_CASE("C-199: naval waiters stage onto the wide Guard ring", "[fa-transport]") {
+    // `lua/formations.lua: GuardFormation` (ART-S007) widens when any waiter
+    // is `NAVAL * MOBILE`: `sizeMult` starts at 8 elmos, not 3, and grows 8
+    // per five. First naval waiter stages 8 elmos off the hull.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const UnitId transport = landedTransport(roster, transportType, 30.0f, 30.0f);
+    UnitDef boat = cargoDef();
+    boat.name = "test_naval_cargo";
+    boat.categories = {"MOBILE", "NAVAL"};  // sorted for hasCategory
+    const rm::UnitTypeIndex boatType = roster.addType(boat);
+    const UnitId sailor = roster.add(boatType, 36.0f, 30.0f, 0, 500.0f);
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+    REQUIRE(rm::sim::applyCommand(moveIssue(sailor, 30.0f, 30.0f, 1), roster.store,
+                                  roster.catalog, players, armies, terrain, gridFor,
+                                  roster.rate)
+                .accepted.size()
+            == 1);
+    const std::array<rm::sim::Fx, 2> beacon{rm::sim::fxFromFloat(30.0f),
+                                           rm::sim::fxFromFloat(30.0f)};
+    const std::array<rm::sim::Fx, 2> spot =
+        rm::sim::ferryStagingSpot(roster.store, roster.catalog, transport, sailor.index, beacon);
+    CHECK(rm::sim::fxToFloat(spot[0]) == Approx(30.0f).margin(0.01f));
+    CHECK(rm::sim::fxToFloat(spot[1]) == Approx(38.0f).margin(0.01f));
+}

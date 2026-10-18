@@ -205,15 +205,36 @@ std::array<Fx, 2> ferryStagingSpot(const UnitStore& store, const UnitCatalog& ca
         return {at.x, at.z};
     }
     // Retail's Guard ring (`lua/formations.lua: GuardFormation`): the first
-    // five slots share radius 3 elmos, the next five radius 6, and so on —
-    // `sizeMult` starts at 3 and grows 3 per five. A fixed-point circle needs
+    // five slots share one radius and it grows per five — 3 elmos a ring on
+    // land, 8 when any waiter is `NAVAL * MOBILE`. A fixed-point circle needs
     // no trig: bearing `index / ringSize` of a full turn is the regular
     // polygon, and `fxSin`/`fxCos` already speak Brad.
+    const MoveState& carrierMotion = store.motion()[carrier.index];
+    int step = 3;
+    for (UnitIndex other = 0; other < store.slotCount(); ++other) {
+        if (other == carrier.index || !store.slotAlive(other)
+            || store.motion()[other].attached
+            || store.motion()[other].armyIndex != carrierMotion.armyIndex) {
+            continue;
+        }
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(other));
+        if (def == nullptr || !def->transportable()) {
+            continue;
+        }
+        if (!waitingAtBeacon(store, other, beacon)
+            && !inboundToBeacon(store, catalog, other, beacon, carrier)) {
+            continue;
+        }
+        if (def->hasCategory("NAVAL") && def->hasCategory("MOBILE")) {
+            step = 8;
+            break;
+        }
+    }
     const int ring = index / 5;
     const int inRing = index % 5;
     const int ringStart = ring * 5;
     const int ringSize = std::min(5, waiterCount(store, catalog, carrier, beacon) - ringStart);
-    const Fx radius = Fx::fromInt(3 * (ring + 1));
+    const Fx radius = Fx::fromInt(step * (ring + 1));
     const auto bearing =
         static_cast<Brad>(std::int64_t{inRing} * kBradFullTurn / std::max(1, ringSize));
     return {at.x + fxSin(bearing) * radius, at.z + fxCos(bearing) * radius};
