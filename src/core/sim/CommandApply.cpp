@@ -1674,6 +1674,19 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                 || !allied(*ownerArmy, *recipientArmy)) {
                 continue;
             }
+            // The recipient side is a creation (`C-383`): retail's gate at
+            // `0x0074fda0` refuses `costTotal + CapCost > unitCap` at the moment
+            // the entity would exist. A rising build already reserves its cost
+            // there, so the gate's own reserved row is the right denominator.
+            const unitdef::UnitDef* giftDef = catalog.def(store.typeAt(unit.index));
+            if (giftDef != nullptr
+                && unitCapBlocks(armies, recipient, catalog,
+                                 building != nullptr
+                                     ? std::span<const Construction>{*building}
+                                     : std::span<const Construction>{},
+                                 *giftDef)) {
+                continue;
+            }
             const UnitId replacement = transferUnitArmy(
                 store, catalog, unit, recipient, events,
                 siloAmmo != nullptr ? std::span<SiloAmmo>{*siloAmmo} : std::span<SiloAmmo>{},

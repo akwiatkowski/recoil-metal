@@ -844,3 +844,43 @@ TEST_CASE("C-210: a defeated army's map markers are flushed", "[fa-match]") {
     CHECK(simCallbacks.markers.find({1, 1}) == simCallbacks.markers.end());
     CHECK(simCallbacks.markers.contains({0, 1}));
 }
+
+TEST_CASE("C-383: a gift to an army at its cap is refused", "[fa-match]") {
+    // Retail's creation gate (`0x0074fda0`) refuses `costTotal + CapCost >
+    // unitCap` at the moment the entity would exist — and a gift IS a new
+    // entity on the recipient's side, even though nothing is built. Gifting
+    // into a full army must leave the unit where it stands rather than
+    // conjuring a replacement over the ceiling.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    const rm::sim::TickRate rate{};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex tank = roster.addType(tankDef());
+    const UnitId unit = roster.add(tank, 0.0f, 0.0f, 0, 500.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    armies[0].alliance = armies[1].alliance;  // allies, or the gift is refused anyway
+    armies[1].unitCap = rm::sim::Fx::fromInt(0);  // no room for even a CapCost-1 unit
+    const std::vector<rm::sim::Player> players = rm::sim::onePlayerPerArmy(2, 0);
+
+    // The single-unit `Command` wrapper carries no recipient field; the issue
+    // form's `scriptBit` names the recipient army (`C-238`).
+    const rm::sim::CommandIssue gift{
+        .tick = 0,
+        .source = 0,
+        .id = rm::commandId(0, 0),
+        .player = 0,
+        .kind = rm::sim::CommandKind::Gift,
+        .units = {unit},
+        .scriptBit = 1,
+    };
+    const rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
+        gift, roster.store, roster.catalog, players, armies, terrain,
+        [&](UnitId) { return &grid; }, rate, nullptr, nullptr, nullptr, nullptr, {},
+        nullptr, nullptr, nullptr, nullptr);
+    CHECK_FALSE(result.acceptedUnit(unit));
+    CHECK(roster.store.alive(unit));
+    CHECK(roster.store.motion()[unit.index].armyIndex == 0);
+}
