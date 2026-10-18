@@ -839,6 +839,15 @@ struct UnitScene {
         /// orbital death laser. Read only when `beamThread` is set.
         /// Presentation only, never hashed.
         float beamLifetimeSeconds = 100.0f;
+        /// Retail's `ScorchThread` `CreateSplat` draw size for this mark, in
+        /// elmos (`defaultcollisionbeams.lua` C-290): the `size` local per
+        /// pass — 3.5+Random*3.5 opening on the quantum/orbital bodies,
+        /// 4+Random*1 on the experimental phason, 1.5+Random*1.5 on the
+        /// photon-chromatic bodies, 0.75+Random*0.75 on the hiro/ultra pair.
+        /// Derived from the mark's own position bits like the rotation angle
+        /// — replay-identical, off the sim RNG (C-297). Read only when
+        /// `beamThread` is set. Presentation only, never hashed.
+        float beamSizeElmos = 0.0f;
         /// True when laid by a dwelling collision beam's `ScorchThread`
         /// (`defaultcollisionbeams.lua` C-290): the thread's `CreateSplat`
         /// carries its own fixed lifetime (the 7th arg, per-class), not the

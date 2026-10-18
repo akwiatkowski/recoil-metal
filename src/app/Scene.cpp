@@ -410,6 +410,44 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     }
     return 100;  // (the seven 100-LOD thread bodies)
 }
+/// A collision-beam class's `ScorchThread` opening `CreateSplat` size, in
+/// elmos (`defaultcollisionbeams.lua` C-290, the 4th/5th args): the `size`
+/// local's first-pass band — quantum/orbital 3.5+Random*3.5, experimental
+/// phason 4+Random*1, photon-chromatic bodies 1.5+Random*1.5, hiro/ultra
+/// 0.75+Random*0.75. The pick is the mark's own position bits through one
+/// more splitmix32 round — replay-identical, off the sim RNG (C-297),
+/// presentation only, never hashed.
+[[nodiscard]] float beamClassSize(float x, float z, std::string_view beamClass) noexcept {
+    float base = 1.5f;  // elmos (the photon-chromatic common case)
+    float width = 1.5f;  // elmos (1.5+Random*1.5, `:181`)
+    if (beamClass == "QuantumBeamGeneratorCollisionBeam"
+        || beamClass == "OrbitalDeathLaserCollisionBeam") {
+        base = 3.5f;  // elmos (3.5+Random*3.5, `:114`)
+        width = 3.5f;  // elmos (`:114`)
+    } else if (beamClass == "ExperimentalPhasonLaserCollisionBeam") {
+        base = 4.0f;  // elmos (4+Random*1, `:303`)
+        width = 1.0f;  // elmos (`:303`)
+    } else if (beamClass == "TDFHiroCollisionBeam"
+               || beamClass == "UltraChromaticBeamGeneratorCollisionBeam"
+               || beamClass == "UltraChromaticBeamGeneratorCollisionBeam02") {
+        base = 0.75f;  // elmos (0.75+Random*0.75, `:419`)
+        width = 0.75f;  // elmos (`:419`)
+    }
+    std::uint32_t bits = static_cast<std::uint32_t>(std::llround(
+                             static_cast<double>(x) * 4096.0))  // 1/4096 elmo
+                         * 0x85EBCA6Bu
+                       ^ static_cast<std::uint32_t>(std::llround(
+                             static_cast<double>(z) * 4096.0))  // 1/4096 elmo
+                             * 0x9E3779B1u;
+    bits ^= bits >> 16;  // splitmix32 finaliser
+    bits *= 0x7FEB352Du;
+    bits ^= bits >> 15;
+    bits ^= bits >> 9;  // one more round past the LOD stream
+    bits *= 0x1B873593u;
+    bits ^= bits >> 15;
+    const float unit = static_cast<float>(static_cast<double>(bits) / 4294967296.0);  // 0..1
+    return base + unit * width;  // elmos (C-290 `size` band)
+}
 /// One beam strike's scorch (C-290 `ScorchThread` half). Retail forks the
 /// thread when the beam's `OnImpact` sees `impactType == 'Terrain'`
 /// (`defaultcollisionbeams.lua` — 8 of 16 classes; the rest scorch nothing),
@@ -435,6 +473,7 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     const int lod = beamClassLod(beamClass);  // (C-290 6th arg)
     noteImpactMark(scene, x, z, 0.0f, tick, UnitScene::ImpactMarkScript::BaseScorch, true, lifeSeconds);
     scene.impactMarks.back().lod = lod;
+    scene.impactMarks.back().beamSizeElmos = beamClassSize(x, z, beamClass);  // elmos (C-290 `size`)
     // Retail's `ScorchThread` lays one `CreateSplat` per pass at the tracked
     // end while the beam dwells (`defaultcollisionbeams.lua` C-290): a dragged
     // end draws a continuous line, not one point per shot. Bridge from this
@@ -458,8 +497,11 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
         const auto middles = static_cast<std::size_t>(span / step);
         for (std::size_t i = 1; i <= middles; ++i) {
             const float t = static_cast<float>(i) / static_cast<float>(middles + 1);
-            noteImpactMark(scene, prevX + dx * t, prevZ + dz * t, 0.0f, tick, UnitScene::ImpactMarkScript::BaseScorch, true, lifeSeconds);
+            const float fillX = prevX + dx * t;
+            const float fillZ = prevZ + dz * t;
+            noteImpactMark(scene, fillX, fillZ, 0.0f, tick, UnitScene::ImpactMarkScript::BaseScorch, true, lifeSeconds);
             scene.impactMarks.back().lod = lod;
+            scene.impactMarks.back().beamSizeElmos = beamClassSize(fillX, fillZ, beamClass);  // elmos (C-290 `size`)
         }
     }
     return true;
@@ -520,8 +562,9 @@ void refreshWreckDecals(UnitScene& scene, const rm::HeightField& field,
     // record, and reclaim removes it. Twelve segments, not thirty-two — a
     // bombardment leaves hundreds and nobody inspects one up close.
     for (const UnitScene::ImpactMark& mark : scene.impactMarks) {
-        rm::appendWreckMark(scene.wreckDecals, field, {mark.x, 0.0f, mark.z},
-                            impactMarkScriptedRadius(mark.script, mark.blastRadiusElmos),
+        const float radius = mark.beamThread ? mark.beamSizeElmos
+                                             : impactMarkScriptedRadius(mark.script, mark.blastRadiusElmos);
+        rm::appendWreckMark(scene.wreckDecals, field, {mark.x, 0.0f, mark.z}, radius,
                             kImpactMarkSegments, impactMarkRotation(mark.x, mark.z));
     }
     scene.wreckDecalsFrom = scene.features.revision();

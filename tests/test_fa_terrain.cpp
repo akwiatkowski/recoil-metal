@@ -539,6 +539,41 @@ TEST_CASE("C-290: beam scorch LOD follows the thread's own CreateSplat args", "[
     REQUIRE(scene.impactMarks.size() == 3);
     CHECK(scene.impactMarks[2].lod == 250);
 }
+TEST_CASE("C-290: beam scorch sizes follow the thread's own size bands", "[fa-terrain]") {
+    // `defaultcollisionbeams.lua` C-290: each `ScorchThread` body draws its
+    // own `CreateSplat` size band — the quantum thread opens at 3.5+Random*3.5
+    // (first-pass 3.5..7), the photon-chromatic bodies at 1.5+Random*1.5
+    // (1.5..3), the experimental phason at 4+Random*1 (4..5), the hiro/ultra
+    // bodies at 0.75+Random*0.75 (0.75..1.5), and every body redraws at
+    // 1.2+Random*1.5 (quantum/orbital 3.2+Random*3.5) on later passes. A
+    // quantum strike must draw bigger than a microwave one, and replay must
+    // draw it identically.
+    rm::app::UnitScene quantum = makeScene(false, 0.0f);
+    rm::app::UnitScene micro = makeScene(false, 0.0f);
+    rm::sim::Event beam{};
+    beam.kind = rm::sim::EventKind::BeamFired;
+    beam.unit = rm::sim::UnitId{0, 1};
+    beam.at = rm::test::at(500, 40, 500);
+    (void)rm::app::noteBeamScorch(quantum, beam, 40.0f, 0.0f, 0,
+                                  "QuantumBeamGeneratorCollisionBeam");
+    (void)rm::app::noteBeamScorch(micro, beam, 40.0f, 0.0f, 0,
+                                  "MicrowaveLaserCollisionBeam01");
+    REQUIRE(quantum.impactMarks.size() == 1);
+    REQUIRE(micro.impactMarks.size() == 1);
+    const float quantumSize = quantum.impactMarks[0].beamSizeElmos;
+    const float microSize = micro.impactMarks[0].beamSizeElmos;
+    CHECK(quantumSize >= 3.5f);
+    CHECK(quantumSize <= 7.0f);
+    CHECK(microSize >= 1.5f);
+    CHECK(microSize <= 3.0f);
+    CHECK(quantumSize > microSize);
+    rm::app::UnitScene replay = makeScene(false, 0.0f);
+    (void)rm::app::noteBeamScorch(replay, beam, 40.0f, 0.0f, 0,
+                                  "QuantumBeamGeneratorCollisionBeam");
+    REQUIRE(replay.impactMarks.size() == 1);
+    CHECK(replay.impactMarks[0].beamSizeElmos == quantumSize);
+}
+
 
 
 TEST_CASE("C-292: only a land-layer death scorches the ground", "[fa-terrain]") {
