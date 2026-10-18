@@ -5,8 +5,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "core/sim/Assist.hpp"
-#include "core/sim/Command.hpp"
+#include "core/sim/CommandInternal.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/UnitStore.hpp"
 
@@ -1258,6 +1257,41 @@ TEST_CASE("C-183: guard arbitration chases a target outside every envelope",
     CHECK(f.roster.motion(guard).moving);
     CHECK(f.roster.motion(guard).destinationX > rm::sim::Fx::fromInt(220));
 }
+TEST_CASE("C-350: guard prey follows the longest-range weapon that can hit",
+          "[guard][guard-work-regression]") {
+    // `CAiAttackerImpl` prefers the longest-range weapon that can hit (`C-350`,
+    // `0x61a440`) — not the nearest prey. The long gun's dead zone rejects the
+    // near prey while the short gun owns it; the long gun owns the far prey.
+    // Nearest-first keeps the near one; retail takes the far one.
+    Fixture f;
+    auto armed = *f.roster.catalog.def(f.engineerType);
+    armed.name = "longest_gun_guard";
+    armed.speedElmosPerSecond = 20.0f;
+    armed.guardScanRadiusElmos = rm::sim::Fx::fromInt(200);
+    rm::unitdef::Weapon longGun;
+    longGun.label = "long";
+    longGun.role = rm::unitdef::WeaponRole::DirectFire;
+    longGun.targetPriorities = {{"ALLUNITS"}};
+    longGun.damage = rm::sim::Mag::fromInt(10);
+    longGun.minRange = rm::sim::Fx::fromInt(60);
+    longGun.maxRange = rm::sim::Fx::fromInt(120);
+    longGun.rateOfFire = 1.0f;
+    rm::unitdef::Weapon shortGun = longGun;
+    shortGun.label = "short";
+    shortGun.minRange = rm::sim::Fx{};
+    shortGun.maxRange = rm::sim::Fx::fromInt(30);
+    armed.weapons = {longGun, shortGun};
+    const auto armedType = f.roster.addType(armed);
+    (void)f.roster.add(f.engineerType, 200, 200, 0, 100);
+    const auto guard = f.roster.add(armedType, 220, 200, 0, 100);
+    (void)f.roster.add(f.tankType, 245, 200, 1, 100);
+    const auto far = f.roster.add(f.tankType, 320, 200, 1, 100);
+    const std::optional<UnitId> prey = rm::sim::guardAttackTarget(
+        guard.index, f.roster.store, f.roster.catalog, f.armies, nullptr, nullptr);
+    REQUIRE(prey.has_value());
+    CHECK(*prey == far);
+}
+
 
 TEST_CASE("an assist retires when its guardee dies", "[guard][guard-work-regression]") {
     // C-183's end rung: Guard retires on a dead guardee at the dispatch head

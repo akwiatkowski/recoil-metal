@@ -461,6 +461,7 @@ namespace {
         || guard->guardScanRadiusElmos <= Fx{}) return {};
     const auto& at = store.transforms()[slot];
     std::optional<UnitId> prey;
+    Fx preyRange{};
     Fx preyDistance{};
     for (std::size_t w = 0; w < guard->weapons.size(); ++w) {
         const auto& weapon = guard->weapons[w];
@@ -495,9 +496,18 @@ namespace {
             return positionOf(store.transforms()[found->index]);
         }();
         const Fx distance = groundDistanceElmos(positionOf(at), aimAt);
-        if (!prey || distance < preyDistance
-            || (distance == preyDistance && found->index < prey->index)) {
+        // `C-350` (`0x61a440`): `CAiAttackerImpl` prefers the longest-range
+        // weapon that can hit — the per-weapon acquisition already ran over a
+        // scan-radius copy, so the authored maxRange is the rank. A prey inside
+        // the long gun's dead zone loses to one the long gun owns; ties hold
+        // the earlier slot, and distance breaks what range cannot.
+        const Fx range = weapon.maxRange;
+        if (!prey || range > preyRange
+            || (range == preyRange
+                && (distance < preyDistance
+                    || (distance == preyDistance && found->index < prey->index)))) {
             prey = found;
+            preyRange = range;
             preyDistance = distance;
         }
     }
