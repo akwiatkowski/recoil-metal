@@ -427,10 +427,11 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
         std::ranges::find(priorities, family) - std::begin(priorities));
 }
 
-/// ART-S007 `GrowthFormation`'s land half fills per-slot category ranks from the same small
-/// travel blocks it selects by count (formations.lua:103-177): row 0 is all direct fire;
-/// row 1 names Shield/Util rhythms, row 2 AA/Art rhythms, deeper rows their own mixes.
-/// Family IDs match formationClass, as for the attack helper above.
+/// ART-S007 `GrowthFormation`'s land half reuses the small attack blocks as
+/// travel blocks by count (formations.lua:681-695): row 0 is all direct fire;
+/// deeper rows name their own Shield/Util/AA/Art rhythms per width below.
+/// Family IDs match formationClass, as for the attack helper above. T1Art slots
+/// project to the artillery family, matching the attack tables' projection.
 [[nodiscard]] int growthLandSlotRank(std::size_t row, std::size_t column, std::size_t width) noexcept {
     // The 3-wide block is one all-direct row; ranks begin at width 4.
     constexpr int kDirect = 1;
@@ -443,6 +444,25 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     constexpr int kFiveRow1[] = {kDirect, kShield, kDirect, kShield, kDirect};
     constexpr int kFiveRow2[] = {kUtility, kShield, kDirect, kShield, kUtility};
     constexpr int kFiveRow3[] = {kAntiAir, kDirect, kArtillery, kDirect, kAntiAir};
+    // Six-wide travel block (formations.lua:131-142): row 1 DF/Shield rhythm,
+    // row 2 Util/AA flanks, row 3 AA/Shield/Art, row 4 DF/AA/Art.
+    constexpr int kSixRow1[] = {kDirect, kShield, kDirect, kDirect, kShield, kDirect};
+    constexpr int kSixRow2[] = {kUtility, kAntiAir, kDirect, kDirect, kAntiAir, kUtility};
+    constexpr int kSixRow3[] = {kAntiAir, kShield, kArtillery, kArtillery, kShield, kAntiAir};
+    constexpr int kSixRow4[] = {kDirect, kAntiAir, kArtillery, kArtillery, kAntiAir, kDirect};
+    // Seven-wide travel block (formations.lua:145-158).
+    constexpr int kSevenRow1[] = {kDirect, kShield, kDirect, kDirect, kDirect, kShield, kDirect};
+    constexpr int kSevenRow2[] = {kUtility, kAntiAir, kDirect, kDirect, kAntiAir, kDirect, kUtility};
+    constexpr int kSevenRow3[] = {kAntiAir, kShield, kAntiAir, kArtillery, kShield, kAntiAir, kDirect};
+    constexpr int kSevenRow4[] = {kDirect, kAntiAir, kArtillery, kArtillery, kAntiAir, kArtillery, kDirect};
+    constexpr int kSevenRow5[] = {kUtility, kArtillery, kArtillery, kAntiAir, kArtillery, kArtillery, kUtility};
+    // Eight-wide travel block (formations.lua:161-176).
+    constexpr int kEightRow1[] = {kDirect, kDirect, kShield, kDirect, kDirect, kShield, kDirect, kDirect};
+    constexpr int kEightRow2[] = {kUtility, kDirect, kAntiAir, kDirect, kDirect, kAntiAir, kDirect, kUtility};
+    constexpr int kEightRow3[] = {kDirect, kAntiAir, kShield, kDirect, kDirect, kShield, kAntiAir, kDirect};
+    constexpr int kEightRow4[] = {kDirect, kArtillery, kAntiAir, kArtillery, kArtillery, kAntiAir, kArtillery, kDirect};
+    constexpr int kEightRow5[] = {kUtility, kAntiAir, kShield, kArtillery, kArtillery, kShield, kAntiAir, kUtility};
+    constexpr int kEightRow6[] = {kDirect, kArtillery, kAntiAir, kArtillery, kArtillery, kAntiAir, kArtillery, kDirect};
     if (column < 1) {
         return kDirect;
     }
@@ -450,8 +470,6 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     if (row == 0) {
         return kDirect;
     }
-    // Only the <=12 (4-wide) and <=20 (5-wide) travel blocks are transcribed: larger
-    // groups stay in family order, as they did before this slice.
     if (width == 4) {
         if (row == 1) {
             return col < std::size(kFourRow1) ? kFourRow1[col] : kDirect;
@@ -466,6 +484,51 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
             return col < std::size(kFiveRow2) ? kFiveRow2[col] : kDirect;
         }
         return col < std::size(kFiveRow3) ? kFiveRow3[col] : kDirect;
+    }
+    if (width == 6) {
+        if (row == 1) {
+            return col < std::size(kSixRow1) ? kSixRow1[col] : kDirect;
+        }
+        if (row == 2) {
+            return col < std::size(kSixRow2) ? kSixRow2[col] : kDirect;
+        }
+        if (row == 3) {
+            return col < std::size(kSixRow3) ? kSixRow3[col] : kDirect;
+        }
+        return col < std::size(kSixRow4) ? kSixRow4[col] : kDirect;
+    }
+    if (width == 7) {
+        if (row == 1) {
+            return col < std::size(kSevenRow1) ? kSevenRow1[col] : kDirect;
+        }
+        if (row == 2) {
+            return col < std::size(kSevenRow2) ? kSevenRow2[col] : kDirect;
+        }
+        if (row == 3) {
+            return col < std::size(kSevenRow3) ? kSevenRow3[col] : kDirect;
+        }
+        if (row == 4) {
+            return col < std::size(kSevenRow4) ? kSevenRow4[col] : kDirect;
+        }
+        return col < std::size(kSevenRow5) ? kSevenRow5[col] : kDirect;
+    }
+    if (width == 8) {
+        if (row == 1) {
+            return col < std::size(kEightRow1) ? kEightRow1[col] : kDirect;
+        }
+        if (row == 2) {
+            return col < std::size(kEightRow2) ? kEightRow2[col] : kDirect;
+        }
+        if (row == 3) {
+            return col < std::size(kEightRow3) ? kEightRow3[col] : kDirect;
+        }
+        if (row == 4) {
+            return col < std::size(kEightRow4) ? kEightRow4[col] : kDirect;
+        }
+        if (row == 5) {
+            return col < std::size(kEightRow5) ? kEightRow5[col] : kDirect;
+        }
+        return col < std::size(kEightRow6) ? kEightRow6[col] : kDirect;
     }
     return kDirect;
 }
@@ -1255,7 +1318,7 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         isAttackOrder ? attackFormationWidth(landMembers.size())
                       : growthFormationWidth(landMembers.size());
     const bool rankGrowthLand = !isAttackOrder && landMembers.size() >= 5
-                                && (landWidthForRanks == 4 || landWidthForRanks == 5);
+                                && (landWidthForRanks >= 4 && landWidthForRanks <= 8);
     if ((isAttackOrder && landMembers.size() >= 5
          && (landWidthForRanks == 8 || landWidthForRanks == 10 || landWidthForRanks == 12
              || landWidthForRanks == 14 || landWidthForRanks == 16
