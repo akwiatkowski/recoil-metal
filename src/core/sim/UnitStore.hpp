@@ -211,6 +211,9 @@ public:
         std::vector<std::string> customNames;
         /// `C-250`'s per-slot capturable flags (see `setCapturable`).
         std::vector<bool> capturable;
+        /// `C-236`'s per-slot capture-time multipliers — see
+        /// `setCaptureTimeMultiplier`.
+        std::vector<Fx> captureTimeMultipliers;
     };
 
     UnitStore() = default;
@@ -567,6 +570,19 @@ public:
     [[nodiscard]] bool capturableAt(UnitIndex slot) const noexcept {
         return slot < capturable_.size() ? capturable_[slot] : true;
     }
+    /// `C-236`'s per-unit capture-time multiplier — retail's
+    /// `Unit.CaptureTimeMultiplier` read by `GetCaptureCosts` (`Unit.lua:2740`)
+    /// and written by `Unit:SetCaptureTimeMultiplier`. Live-unit state like
+    /// the capturable flag: newcomers spawn at 1.
+    [[nodiscard]] bool setCaptureTimeMultiplier(UnitId unit, Fx multiplier) noexcept;
+    /// The captor-side multiplier, 1 unless set. A dead handle reads 1 — the
+    /// value left with the unit, and only a live captor's budget consults it.
+    [[nodiscard]] Fx captureTimeMultiplier(UnitId unit) const noexcept;
+    /// Slot-indexed read for the capture budget, which walks slots.
+    [[nodiscard]] Fx captureTimeMultiplierAt(UnitIndex slot) const noexcept {
+        return slot < captureTimeMultipliers_.size() ? captureTimeMultipliers_[slot]
+                                                     : Fx::fromInt(1);
+    }
 
     /// Shared repeat/count operations. Exhaustion removes this exact object from every member
     /// queue, matching retail's cross-queue `DecreaseCommandCount` path.
@@ -672,6 +688,9 @@ private:
     std::vector<std::string> customNames_;
     /// `C-250`'s per-unit capturable flag — see `setCapturable`.
     std::vector<bool> capturable_;
+    /// `C-236`'s per-slot capture-time multipliers — see
+    /// `setCaptureTimeMultiplier`.
+    std::vector<Fx> captureTimeMultipliers_;
 
     CommandSerial nextCommandSerial_ = 0;
     std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters_{};

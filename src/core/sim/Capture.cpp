@@ -257,12 +257,15 @@ void syncCaptureWork(const UnitStore& store, const UnitCatalog& catalog,
         // whole build energy cost spread over that total (`0x0060B66C`-
         // `0x0060B6AA`). Retargeting starts over rather than inheriting.
         const Mag ratePerTick = effectiveBuildPerTick(store, catalog, captor);
+        // `C-236` (`Unit.lua:2740`): the CAPTOR's `CaptureTimeMultiplier`
+        // scales its own budget — a slowed captor works a longer bar.
+        const Fx timeMult = store.captureTimeMultiplierAt(captor);
         const auto ownTicks = [&](const unitdef::UnitDef* def) {
             return def != nullptr
                 ? captureWorkTicks(def->buildTime == Mag{} && !def->buildTimeSpecified
                                        ? Mag::fromInt(kMissingCaptureBuildTime)
                                        : def->buildTime,
-                                   ratePerTick, ticksPerSecond)
+                                   ratePerTick, ticksPerSecond, timeMult)
                 : 1;
         };
         int budget = ownTicks(targetDef);
@@ -454,6 +457,9 @@ UnitId transferUnitArmy(UnitStore& store, const UnitCatalog& catalog, UnitId uni
     const std::string keptCustomName = store.customName(unit);
     // The capturable flag rides the transfer like the shield toggle.
     const bool keptCapturable = store.capturableAt(victim);
+    // The captor-side multiplier rides too: a slowed unit stays slow under
+    // its new army — same live-unit state, same snapshot/restore shape.
+    const Fx keptTimeMult = store.captureTimeMultiplierAt(victim);
     motion.armyIndex = armyIndex;
     motion.moving = false;
     motion.path.clear();
@@ -515,6 +521,9 @@ UnitId transferUnitArmy(UnitStore& store, const UnitCatalog& catalog, UnitId uni
     }
     if (!keptCapturable) {
         (void)store.setCapturable(replacement, false);
+    }
+    if (keptTimeMult != Fx::fromInt(1)) {
+        (void)store.setCaptureTimeMultiplier(replacement, keptTimeMult);
     }
     // `C-240`/`C-404` aliasing, second half: the kept manipulator list and
     // bone mask land on the replacement. The spawn wiped both (newcomers

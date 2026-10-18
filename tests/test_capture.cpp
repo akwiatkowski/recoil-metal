@@ -148,6 +148,29 @@ TEST_CASE("a captor with a doubled capture time works a doubled budget", "[captu
                                     rm::sim::magFromFloat(1.0f), 10)
           == 50);
 }
+TEST_CASE("a slowed captor banks a scaled capture budget", "[capture]") {
+    // `Unit.lua:2740` (`C-236`): the CAPTOR's `CaptureTimeMultiplier` scales
+    // the budget — `captureWorkTicks` takes it, but `syncCaptureWork` must
+    // pass the captor's own value. A mult-2 captor on the 100-work acceptance
+    // target banks a 100-tick budget, not the stock 50.
+    Fixture f;
+    REQUIRE(f.roster.store.setCaptureTimeMultiplier(
+        f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f),
+        rm::sim::Fx::fromInt(2)));
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    const UnitId captor = f.roster.store.idAt(0);
+    REQUIRE(f.capture(captor, target));
+    f.tick();
+    REQUIRE(f.captures.size() == 1);
+    // Control: an unslowed captor on the same target banks the stock 50.
+    Fixture g;
+    const UnitId captor2 = g.roster.add(g.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target2 = g.roster.add(g.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(g.capture(captor2, target2));
+    g.tick();
+    REQUIRE(g.captures.size() == 1);
+    CHECK(g.captures.front().workTicks == 50);
+}
 
 TEST_CASE("capture distinguishes absent and authored zero BuildTime", "[capture]") {
     // `C-236`: URA0001 states BuildTime=0; Lua's `or 10` applies only when absent.

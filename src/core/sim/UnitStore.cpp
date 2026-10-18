@@ -40,7 +40,7 @@ UnitStore::UnitStore(const Snapshot& snapshot)
        manipulators_(snapshot.manipulators),
        boneHidden_(snapshot.boneHidden),
        customNames_(snapshot.customNames),
-       capturable_(snapshot.capturable),
+       capturable_(snapshot.capturable), captureTimeMultipliers_(snapshot.captureTimeMultipliers),
        nextCommandSerial_(snapshot.nextCommandSerial),
         nextCommandCounters_(snapshot.nextCommandCounters) {
     std::vector<std::shared_ptr<SharedCommand>> mutableCommands;
@@ -106,6 +106,9 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     // Older snapshots carry no capturable array: capturable is the pre-flag
     // default — `SetCapturable(false)` units did not exist yet.
     capturable_.resize(transforms_.size(), true);
+    // Older snapshots carry no multiplier array: 1 is the pre-field default —
+    // `SetCaptureTimeMultiplier` did not exist yet.
+    captureTimeMultipliers_.resize(transforms_.size(), Fx::fromInt(1));
     for (std::size_t child = 0; child < transforms_.size(); ++child) {
         if (parents_[child]) {
             if (deriveAttachmentHeights) {
@@ -166,6 +169,7 @@ UnitStore::Snapshot UnitStore::snapshot() const {
     saved.enhancements = enhancements_;
     saved.customNames = customNames_;
     saved.capturable = capturable_;
+    saved.captureTimeMultipliers = captureTimeMultipliers_;
     return saved;
 }
 
@@ -202,6 +206,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         boneHidden_.emplace_back();
         customNames_.emplace_back();
         capturable_.emplace_back(true);
+        captureTimeMultipliers_.emplace_back(Fx::fromInt(1));
         attachmentParentBones_.emplace_back(kNoBone);
         attachmentSelfBones_.emplace_back(kNoBone);
         attachmentParentRest_.emplace_back();
@@ -253,6 +258,11 @@ UnitId UnitStore::spawn(const Spawn& request) {
     // inherits its tombstone's refusal.
     if (slot < capturable_.size()) {
         capturable_[slot] = true;
+    }
+    // `C-236`: the multiplier is live-unit state — a recycled slot never
+    // inherits its tombstone's slowdown.
+    if (slot < captureTimeMultipliers_.size()) {
+        captureTimeMultipliers_[slot] = Fx::fromInt(1);
     }
     attachmentParentRest_[slot] = {};
     attachmentParentRestHeights_[slot] = {};
@@ -872,6 +882,25 @@ bool UnitStore::capturable(UnitId unit) const noexcept {
         return true;
     }
     return capturable_[unit.index];
+}
+
+bool UnitStore::setCaptureTimeMultiplier(UnitId unit, Fx multiplier) noexcept {
+    if (!alive(unit)) {
+        return false;
+    }
+    if (unit.index >= captureTimeMultipliers_.size()) {
+        captureTimeMultipliers_.resize(static_cast<std::size_t>(unit.index) + 1,
+                                       Fx::fromInt(1));
+    }
+    captureTimeMultipliers_[unit.index] = multiplier;
+    return true;
+}
+
+Fx UnitStore::captureTimeMultiplier(UnitId unit) const noexcept {
+    if (!alive(unit) || unit.index >= captureTimeMultipliers_.size()) {
+        return Fx::fromInt(1);
+    }
+    return captureTimeMultipliers_[unit.index];
 }
 
 } // namespace rm::sim
