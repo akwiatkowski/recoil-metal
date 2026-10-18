@@ -174,6 +174,22 @@ TEST_CASE("a truncated log is an error, not silent agreement") {
     REQUIRE_FALSE(read.has_value());
     REQUIRE(read.error().code == rm::sim::ReplayError::Code::Truncated);
 }
+TEST_CASE("trailing garbage after the hashes is an error, not silent agreement") {
+    // The command-log reader refuses trailing non-comment lines; the hash log
+    // must hold the same transport boundary, or an appended line replays as
+    // the match it was stapled onto.
+    const TempPath path{"rm_replay_trailing.log"};
+    const std::vector<rm::StateHash> hashes{1, 2, 3};
+    REQUIRE(rm::sim::writeHashLog(path.get(), header(), hashes).has_value());
+    {
+        std::FILE* f = std::fopen(path.get().c_str(), "a");
+        REQUIRE(f != nullptr);
+        std::fputs("zzzz-not-a-hash\n", f);
+        std::fclose(f);
+    }
+    const auto read = rm::sim::readHashLog(path.get());
+    REQUIRE_FALSE(read.has_value());
+}
 
 TEST_CASE("a missing file is an error rather than an empty log") {
     const auto read = rm::sim::readHashLog("/nonexistent/dir/rm_replay_missing.log");

@@ -174,6 +174,14 @@ std::expected<ReplayLog, ReplayError> readHashLog(const std::string& path) {
     while (in >> std::hex >> h) {
         log.hashes.push_back(h);
     }
+    if (!in.eof()) {
+        // Extraction stopped on non-hash input rather than end of file:
+        // trailing garbage a reader would otherwise silently agree with.
+        return std::unexpected(
+            ReplayError{ReplayError::Code::NotAReplay,
+                        path + ": trailing data after " + std::to_string(log.hashes.size())
+                            + " hashes"});
+    }
 
     if (log.hashes.size() != declaredTicks) {
         // A truncated log that compared equal as far as it went would read as agreement.
