@@ -716,3 +716,55 @@ TEST_CASE("distant emitters stop at their authored LODCutoff", "[weapon-visuals]
         {}, {}, {}, &farEye);
     CHECK(far.empty());
 }
+TEST_CASE("multi-strip emitter textures keep their authored stripcount", "[weapon-visuals]") {
+    // Retail `EmitterBlueprint.TextureStripcount` (e.g. 4 on
+    // `terran_cruise_missile_launch_05_emit.bp`, the cruise-missile launch
+    // smoke): the shader pages the texture by `strips`, but the loader never
+    // reads the key, so every material reports one strip.
+    const auto root = std::filesystem::temp_directory_path() / "rm_stripcount_emit";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "effects/emitters");
+    std::filesystem::create_directories(root / "textures/particles");
+    {
+        std::ofstream emit(root / "effects/emitters/strip_emit.bp");
+        emit << "EmitterBlueprint {\n"
+                "    Texture = [[/textures/particles/strip.dds]],\n"
+                "    Blendmode = 3.00,\n"
+                "    TextureStripcount = 4.00,\n"
+                "}\n";
+    }
+    {
+        std::ofstream tex(root / "textures/particles/strip.dds", std::ios::binary);
+        const char magic[4]{'D', 'D', 'S', ' '};
+        tex.write(magic, 4);
+        std::vector<std::byte> header(124, std::byte{0});
+        auto put = [&](std::size_t at, std::uint32_t v) {
+            header[at] = static_cast<std::byte>(v & 0xFFu);
+            header[at + 1] = static_cast<std::byte>((v >> 8) & 0xFFu);
+            header[at + 2] = static_cast<std::byte>((v >> 16) & 0xFFu);
+            header[at + 3] = static_cast<std::byte>((v >> 24) & 0xFFu);
+        };
+        put(0, 124);
+        put(8, 16);
+        put(12, 16);
+        put(24, 16);
+        put(72, 32);
+        put(76, 0x00000004u);
+        header[80] = std::byte{'D'};
+        header[81] = std::byte{'X'};
+        header[82] = std::byte{'T'};
+        header[83] = std::byte{'1'};
+        tex.write(reinterpret_cast<const char*>(header.data()),
+                  static_cast<std::streamsize>(header.size()));
+        const std::vector<char> payload(128, 0);
+        tex.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+    }
+    rm::WeaponVisuals visuals;
+    rm::vfs::Vfs content;
+    content.mountDirectory(root);
+    const std::array<std::string, 1> paths{"/effects/emitters/strip_emit.bp"};
+    rm::loadWeaponMaterials(visuals, content, "strip#FxMuzzleFlash", paths);
+    std::filesystem::remove_all(root);
+    REQUIRE(visuals.materials.size() == 1);
+    CHECK(visuals.materials.front().strips == 4);
+}
