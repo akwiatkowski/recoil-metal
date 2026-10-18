@@ -249,6 +249,7 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::EmpScorch: return 28.0f;  // elmos (`CIFEMPFluxWarhead02:116`)
         case Script::FragScorch: return 3.0f;  // elmos (2.25-3.75 midpoint, `:20`)
         case Script::ZhanaseeScorch: return 40.0f;  // elmos (`SBOZhanaseeBomb01:29`)
+        case Script::QuantumCrater: return 50.0f;  // elmos (`AIFQuantumWarhead02:119-120`)
         case Script::BaseScorch: break;
     }
     return impactMarkRadius(blastRadiusElmos);
@@ -265,6 +266,7 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::EmpScorch: return 13;  // `nuke_scorch_001_albedo`
         case Script::FragScorch: return 14;  // `scorch_004_albedo` scripted draw
         case Script::ZhanaseeScorch: return 15;  // `Scorch_012_albedo` scripted draw
+        case Script::QuantumCrater: return 16;  // `Crater01_albedo` scripted draw
         case Script::BaseScorch: break;
     }
     return base;
@@ -350,10 +352,10 @@ void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos,
 UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId) noexcept {
     using Script = UnitScene::ImpactMarkScript;
     // The filename stem names the script family (`.../NAME/NAME_proj.bp`):
-    // match the live corpus `OnImpact` decal writers (C-484) — commented-out
-    // draws (`AIFQuantumWarhead02`) and trail-thread splats
-    // (`ShellTankTerran01`) lay nothing on impact, so both ride base scorch.
+    // match the live corpus decal writers (C-484) — trail-thread splats
+    // (`ShellTankTerran01`) lay nothing on impact, so those ride base scorch.
     const auto stem = projectileId.substr(projectileId.find_last_of('/') + 1);
+    if (stem.starts_with("AIFQuantumWarhead02")) return Script::QuantumCrater;
     if (stem.starts_with("AIFSonanceShell02")) return Script::SonanceCrater;
     if (stem.starts_with("SIFSuthanusArtilleryShell02")) return Script::SonanceCrater;
     if (stem.starts_with("CIFArtilleryProton01")) return Script::ProtonScorch;

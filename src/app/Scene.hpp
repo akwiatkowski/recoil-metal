@@ -790,7 +790,7 @@ struct UnitScene {
     /// (C-484: `AIFSonanceShell02`/suthanus crater pair at 10/12 elmos,
     /// `CIFArtilleryProton01` scorch_011 at 10, napalm scorch_001 at 3.75-5,
     /// EMP nuke_scorch_001 at 28, frag scorch_004 at 2.25-3.75, zhanasee
-    /// Scorch_012 at 40). Carries the corpus site for the FA-PRESENT
+    /// Scorch_012 at 40, quantum `Crater01_*` pair at 50). Carries the corpus
     /// texture projection. Elmos and seconds; texture names in corpus files.
     enum class ImpactMarkScript : std::uint8_t {
         BaseScorch,  ///< `defaultexplosions.lua` splat/decal split (C-290)
@@ -800,6 +800,7 @@ struct UnitScene {
         EmpScorch,  ///< `CIFEMPFluxWarhead02_script.lua:116` (28 elmos)
         FragScorch,  ///< `AIFFragmentationSensorShell03_script.lua:20` (2.25-3.75 elmos)
         ZhanaseeScorch,  ///< `SBOZhanaseeBomb01_script.lua:29` (40 elmos)
+        QuantumCrater,  ///< `AIFQuantumWarhead02_script.lua:119-120` (`Crater01_*` pair, 50 elmos)
     };
     /// Where shots hit ground that killed nothing. Retail scorches terrain hits, and
     /// a battle that only marks its kills forgets most of what happened there.

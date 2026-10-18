@@ -755,9 +755,16 @@ TEST_CASE("impact marks tag a weapon's own decal from the shot's projectile id",
     CHECK(rm::app::scriptTagForProjectile(
               "/projectiles/TDFGauss01/TDFGauss01_proj.bp")
           == Script::BaseScorch);
+    // Retail's quantum crater (C-484): `AIFQuantumWarhead02_script.lua:119-120`
+    // lays LIVE `Crater01_albedo`/`_normals` decals at 50 elmos through the
+    // forked `ShakeAndBurnMe` thread — the old "commented-out draws" comment
+    // was wrong (only line 117 is a comment, naming the arg order). The tag
+    // table must match it, or a nuke impact rides base scorch.
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/AIFQuantumWarhead02/AIFQuantumWarhead02_proj.bp")
+          == Script::QuantumCrater);
     CHECK(rm::app::scriptTagForProjectile("") == Script::BaseScorch);
 }
-
 
 
 TEST_CASE("a chamfered square cuts its corners at 45 degrees", "[selection-square]") {
