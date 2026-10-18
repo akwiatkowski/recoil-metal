@@ -457,6 +457,12 @@ UnitId transferUnitArmy(UnitStore& store, const UnitCatalog& catalog, UnitId uni
     const std::string keptCustomName = store.customName(unit);
     // The capturable flag rides the transfer like the shield toggle.
     const bool keptCapturable = store.capturableAt(victim);
+    // `SetMaintenanceConsumption{Active,Inactive}` is last-writer-wins live-unit
+    // state (`Unit.lua:309-380`), like the shield toggle above — and the pause
+    // flag gates its income/upkeep in `Skirmish.cpp`. The spawn resets both, so
+    // they are snapshotted here and restored on the replacement below.
+    const bool keptMaintenanceOff = !store.maintenanceActive(unit);
+    const bool keptPaused = store.productionPaused(unit);
     // The captor-side multiplier rides too: a slowed unit stays slow under
     // its new army — same live-unit state, same snapshot/restore shape.
     const Fx keptTimeMult = store.captureTimeMultiplierAt(victim);
@@ -521,6 +527,12 @@ UnitId transferUnitArmy(UnitStore& store, const UnitCatalog& catalog, UnitId uni
     }
     if (!keptCapturable) {
         (void)store.setCapturable(replacement, false);
+    }
+    if (keptMaintenanceOff) {
+        (void)store.setMaintenanceActive(replacement, false);
+    }
+    if (keptPaused) {
+        (void)store.setProductionPaused(replacement, true);
     }
     if (keptTimeMult != Fx::fromInt(1)) {
         (void)store.setCaptureTimeMultiplier(replacement, keptTimeMult);

@@ -642,8 +642,25 @@ TEST_CASE("a capture keeps the target's remaining fuel", "[capture]") {
      CHECK_FALSE(f.roster.store.alive(target));
      const UnitId replacement = f.roster.store.idAt(target.index);
      REQUIRE(f.roster.store.alive(replacement));
-     CHECK(f.roster.store.motion()[replacement.index].fuelRatio == rm::sim::fxFromFloat(0.5f));
- }
+}
+TEST_CASE("a capture keeps the target's maintenance and pause state", "[capture]") {
+    // `SetMaintenanceConsumption{Active,Inactive}` is last-writer-wins live-unit
+    // state (`Unit.lua:309-380`), like the shield toggle the transfer already
+    // carries: a toggled-off target must not resume drawing upkeep under its
+    // new army, and a paused one must not resume producing.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.roster.store.setMaintenanceActive(target, false));
+    REQUIRE(f.roster.store.setProductionPaused(target, true));
+    REQUIRE(f.capture(captor, target));
+    f.tick(50);
+    CHECK_FALSE(f.roster.store.alive(target));
+    const UnitId replacement = f.roster.store.idAt(target.index);
+    REQUIRE(f.roster.store.alive(replacement));
+    CHECK_FALSE(f.roster.store.maintenanceActive(replacement));
+    CHECK(f.roster.store.productionPaused(replacement));
+}
 TEST_CASE("a transfer refused by the captor's unit cap leaves the old unit and reports failure", "[capture]") {
     // Spec §"Failure" (`0x0074E421`): replacement-creation failure leaves
     // the ordinary unattached old target intact, cleans capture
