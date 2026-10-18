@@ -1802,3 +1802,30 @@ TEST_CASE("attached cargo fires only when its Transport.CanFireFromTransport all
     REQUIRE(shots.size() == 1);
     CHECK(shots.front().firedBy == shooter);
 }
+
+TEST_CASE("C-197: destroying a loaded transport detaches its cargo alive",
+          "[fa-transport]") {
+    // `Unit::OnDestroy` passes `destroySome = false` (`0x005edeb0`, C-197):
+    // a destroy-without-kill detaches everything alive — the opposite of the
+    // kill cascade's 99% roll. The carrier leaves no wreck and takes nobody
+    // with it.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const UnitId transport = landedTransport(roster, transportType, 50.0f, 50.0f);
+    const UnitId first = roster.add(cargoType, 51.0f, 50.0f, 0, 500.0f);
+    const UnitId second = roster.add(cargoType, 52.0f, 50.0f, 0, 500.0f);
+    REQUIRE(roster.store.attach(transport, first));
+    REQUIRE(roster.store.attach(transport, second));
+
+    roster.store.destroy(transport);
+
+    CHECK_FALSE(roster.store.alive(transport));
+    CHECK(roster.store.alive(first));
+    CHECK(roster.store.alive(second));
+    CHECK_FALSE(roster.motion(first).attached);
+    CHECK_FALSE(roster.motion(second).attached);
+    CHECK_FALSE(roster.store.parentOf(first).has_value());
+    CHECK_FALSE(roster.store.parentOf(second).has_value());
+    CHECK(roster.store.childrenOf(transport).empty());
+}

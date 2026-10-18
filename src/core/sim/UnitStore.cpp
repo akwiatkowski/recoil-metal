@@ -522,8 +522,8 @@ void UnitStore::destroy(UnitId id) {
     // zeroed here, the corpse is never reported, never wrecked, never scored.
     // The health goes next because `shootable` reads health, not the handle:
     // without this the destroyed unit stays a valid target until its slot is
-    // recycled. Attached cargo is destroyed with it, recursively — a carrier's
-    // load dies with the carrier here exactly as it does under `kill`.
+    // recycled. Attached cargo is DETACHED alive (`C-197`: `OnDestroy` passes
+    // `destroySome = false`) — a destroy-without-kill takes nobody with it.
     const UnitIndex slot = id.index;
     motion_[slot].moving = false;
     motion_[slot].speedPerTick = Fx{};
@@ -531,15 +531,14 @@ void UnitStore::destroy(UnitId id) {
     health_[slot].current = Mag{};
     const std::vector<UnitId> cargo = children_[slot];
     for (const UnitId child : cargo) {
+        // `C-197`: `Unit::OnDestroy` passes `destroySome = false` — a
+        // destroy-without-kill detaches everything alive, the opposite of the
+        // kill cascade's 99% roll. The claw teardown is the same detach, so
+        // both branches land here; only the targetable flag differs.
+        (void)detach(child);
         if (attachmentParentBones_[child.index] == kTractorAttachBone) {
-            // `C-381`: same exemption as `kill` — `Destroy()` on the holder
-            // still runs the claw's `DetachAll(muzzle)` teardown, so the
-            // victim is dropped alive rather than destroyed with it.
-            (void)detach(child);
             (void)setDoNotTarget(child, false);
-            continue;
         }
-        destroy(child);
     }
     kill(id);
 }

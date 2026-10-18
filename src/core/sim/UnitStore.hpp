@@ -247,8 +247,8 @@ public:
     /// shoving the living until its slot is recycled. Destroy zeroes the radius
     /// FIRST — that is `retireDead`'s once-per-death guard, so the corpse is
     /// never reported — then the health, then releases the handle. Attached
-    /// cargo is destroyed with it, the way a carrier's load dies with the
-    /// carrier.
+    /// cargo is DETACHED alive (`C-197`: `OnDestroy` passes `destroySome =
+    /// false`) — the opposite of the kill cascade's 99% roll.
     void destroy(UnitId id);
 
     [[nodiscard]] bool alive(UnitId id) const noexcept { return ids_.alive(id); }
