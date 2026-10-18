@@ -137,6 +137,17 @@ TEST_CASE("capture budgeting follows the retail progress contract", "[capture]")
           == rm::sim::magFromFloat(4.0f));
     CHECK(rm::sim::captureDemand(rm::sim::magFromFloat(200.0f), 50).mass == rm::sim::Mag{});
 }
+TEST_CASE("a captor with a doubled capture time works a doubled budget", "[capture]") {
+    // `Unit.lua:2740`: `GetCaptureCosts` multiplies time by the captor's
+    // `CaptureTimeMultiplier` (set by `SetCaptureTimeMultiplier`). The same
+    // 100-work target at rate 10/s takes 100 ticks, not 50, at mult 2.
+    CHECK(rm::sim::captureWorkTicks(rm::sim::magFromFloat(100.0f),
+                                    rm::sim::magFromFloat(1.0f), 10, 2.0f)
+          == 100);
+    CHECK(rm::sim::captureWorkTicks(rm::sim::magFromFloat(100.0f),
+                                    rm::sim::magFromFloat(1.0f), 10)
+          == 50);
+}
 
 TEST_CASE("capture distinguishes absent and authored zero BuildTime", "[capture]") {
     // `C-236`: URA0001 states BuildTime=0; Lua's `or 10` applies only when absent.

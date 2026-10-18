@@ -71,17 +71,21 @@ bool capturableTarget(UnitIndex captor, UnitId target, const UnitStore& store,
 }
 
 int captureWorkTicks(Mag targetBuildTime, Mag ratePerTick,
-                     std::uint32_t ticksPerSecond) noexcept {
+                     std::uint32_t ticksPerSecond, float timeMult) noexcept {
+    if (timeMult <= 0.0f) {
+        timeMult = 1.0f;  // `or 1`: absent/false falls back, never zero or negative
+    }
     if (ratePerTick <= Mag{} || ticksPerSecond == 0) {
         return 1;
     }
     // The retail progress contract in fixed point: seconds is the target's build
     // time over the captor's per-second rate, halved (missing-value default
-    // supplied by the caller). The budget is that many seconds of ticks,
-    // at least one.
+    // supplied by the caller), times the captor's `CaptureTimeMultiplier`
+    // (`Unit.lua:2740`). The budget is that many seconds of ticks, at least one.
     const Mag ratePerSecond = ratePerTick * Fx::fromInt(static_cast<std::int32_t>(ticksPerSecond));
-    const Mag seconds =
+    Mag seconds =
         proportionalWork(targetBuildTime, Mag::fromInt(1), ratePerSecond + ratePerSecond);
+    seconds = seconds * fxFromFloat(timeMult);
     const int ticks =
         (seconds.toFx() * Fx::fromInt(static_cast<std::int32_t>(ticksPerSecond))).floorToInt();
     return std::max(1, ticks);
