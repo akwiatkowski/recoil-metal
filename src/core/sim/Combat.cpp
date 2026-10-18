@@ -112,7 +112,7 @@ inline constexpr Fx kStayUnderwaterClampElmos = Fx::fromRatio(2, 25);
 /// everything while the unit cools down.
 void redirectMissile(Projectile& shot, const UnitStore& store,
                      std::span<const Army> armies,
-                     std::span<MissileRedirect> redirects) noexcept {
+                     std::span<MissileRedirect> redirects, TickRate rate) noexcept {
     if (shot.ticksRemaining <= 0 || shot.pendingImpact != ImpactType::Invalid) {
         return;
     }
@@ -156,6 +156,12 @@ void redirectMissile(Projectile& shot, const UnitStore& store,
                                          shot.velocity[1]);
                 shot.velocity = {hx / leg * speed, hy / leg * speed, hz / leg * speed};
                 shot.guidanceTarget = shot.firedBy;
+                // `WaitingState.OnCollisionCheck` (`defaultantiprojectile.lua`):
+                // `other:SetTurnRate(720)` alongside `TrackTarget(true)` — the
+                // returned shot steers back onto its source at 720 deg/s. URL0303
+                // (C-088) is the corpus's only `Defense.AntiMissile` carrier.
+                // Degrees like the authored `TurnRate` the launch path converts.
+                shot.turnPerTick = rate.bradPerTick(720.0f * 0.017453292519943295f);
             }
             // The Lua's RedirectingState flips `CollideFriendly`/`DamageFriendly`/
             // `DamageSelf` on the returned shot — "so that when the missile
@@ -4239,7 +4245,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                     shot, gravityPerTickSquared, store, catalog, armies, terrain);
                 // The Cybran redirect answers second: it only fires on shots the
                 // flare ignored.
-                redirectMissile(shot, store, armies, redirects);
+                redirectMissile(shot, store, armies, redirects, rate);
 
                 // C-087: interception DAMAGES; it does not force-destroy. The struck
                 // shot dies only when its authored pool (`Defense.MaxHealth`:
@@ -4279,7 +4285,7 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
             // Redirect AFTER flight, BEFORE the outcome — the serial pass's
             // order. Its decision reads the staged position and lifetime just
             // applied, matching what the serial sweep order showed it.
-            redirectMissile(shot, store, armies, redirects);
+            redirectMissile(shot, store, armies, redirects, rate);
             // The depth-charge divert answers in the same slot: a TORPEDO the
             // flare ignored (flares match MISSILE, never TORPEDO) is turned
             // onto the in-flight charge whose radius it entered.
