@@ -207,8 +207,14 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         // a negative radius is meaningless as a reach and would invert the containment test.
         weapon.damageRadius = sim::fxFromFloat(
             std::max(0.0f, numberOr(entry, "DamageRadius", 0.0f)) * scmap::kElmosPerOgrid);
+        // `weapon.lua:GetDamageTable` defaults `DamageFriendly` to true when the
+        // blueprint states nothing (`weapon.lua:290-293`); death blasts keep the
+        // false default (`defaultweapons.lua:767` threads `or false`). `role` is
+        // parsed above, so the death check reads the resolved category.
         if (const lua::Value* damageFriendly = entry.find("DamageFriendly")) {
             weapon.damageFriendly = damageFriendly->asBoolean().value_or(false);
+        } else {
+            weapon.damageFriendly = weapon.role != WeaponRole::Death;
         }
 
         weapon.maxRange = sim::fxFromFloat(numberOr(entry, "MaxRadius", 0.0f)

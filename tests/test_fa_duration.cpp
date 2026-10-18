@@ -178,6 +178,16 @@ TEST_CASE("DamageFriendly is retained for a death weapon") {
     const Weapon death = parseOne("WeaponCategory = 'Death', DamageFriendly = true");
     CHECK(death.damageFriendly);
 }
+TEST_CASE("an ordinary weapon defaults DamageFriendly to true like GetDamageTable") {
+    // `weapon.lua:GetDamageTable` sets `DamageFriendly = true` when the blueprint
+    // states nothing (`weapon.lua:290-293`); `C-428`'s sphere bit then admits the
+    // shooter's side to the splash. Death weapons keep the false default
+    // (`defaultweapons.lua:767` threads `DamageFriendly or false`).
+    const Weapon gun = parseOne("Label = 'MainGun'");
+    CHECK(gun.damageFriendly);
+    const Weapon death = parseOne("WeaponCategory = 'Death'");
+    CHECK_FALSE(death.damageFriendly);
+}
 
 // --- The corpus, which is what catches a misreading -------------------------------------
 
