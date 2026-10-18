@@ -1224,11 +1224,12 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 }
 
 /// `StructureUnit.FlattenSkirt` (C-286, defaultunits.lua:68-73): a structure on the
-/// LAND layer flattens its skirt rect to its own Y the moment it exists — retail runs
-/// it from `OnCreate`, and our unit entity materialises at spawn. The skirt is the gate:
-/// `Physics.FlattenSkirt` is unparsed, and a skirtless structure's rect is empty, which
-/// is retail's no-op anyway. Floating, seabed and airborne structures are not Land —
-/// the same exclusion retail's `GetCurrentLayer() == 'Land'` makes.
+/// LAND layer whose blueprint sets `Physics.FlattenSkirt` flattens its skirt rect to
+/// its own Y the moment it exists — retail runs it from `OnCreate`, and our unit
+/// entity materialises at spawn. A false flag is a stated no-op: UEC1907 authors a
+/// 2x4 skirt with the flag false, and the gate reads the flag, not the geometry.
+/// Floating, seabed and airborne structures are not Land — the same exclusion
+/// retail's `GetCurrentLayer() == 'Land'` makes.
 ///
 /// Shared by `spawnUnit` and the `resolveUnits` crowd path: both are "the unit now
 /// exists" seams, and retail flattens scenario-placed structures the same way
@@ -1236,6 +1237,10 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
 static void flattenSkirtAt(UnitScene& scene, const rm::HeightField& field,
                            rm::UnitTypeIndex type, const rm::sim::Transform& transform,
                            const rm::sim::MoveState& motion) {
+    const rm::unitdef::UnitDef* def = scene.catalog.def(type);
+    if (def == nullptr || !def->flattenSkirt) {
+        return;
+    }
     rm::sim::Terrain terrain = scene.terrain(field);
     const rm::sim::UnitCatalog::AdjacencyInfo& skirt = scene.catalog.adjacency(type);
     if (skirt.participates() && !motion.surfaceWater && !motion.airborne

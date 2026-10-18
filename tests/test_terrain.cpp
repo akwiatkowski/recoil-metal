@@ -267,6 +267,7 @@ namespace {
     def.name = "TESTFAC";
     def.skirtSquaresX = 4.0f;
     def.skirtSquaresZ = 4.0f;
+    def.flattenSkirt = true;
     def.health = rm::sim::magFromFloat(1000.0f);
     return def;
 }
@@ -335,11 +336,35 @@ TEST_CASE("a structure spawn flattens its skirt to the placement height") {
                                 scene.terrain(field));
     CHECK(at.y == rm::sim::fxFromFloat(56.5f));
 }
+TEST_CASE("a skirted spawn with FlattenSkirt false leaves the terrain alone") {
+    // `Physics.FlattenSkirt` false is a stated no-op: UEC1907 authors a 2x4 skirt
+    // with the flag false, and retail's `StructureUnit.FlattenSkirt` gate
+    // (`defaultunits.lua:68-73`) reads the flag, not the skirt geometry.
+    rm::HeightField field = rampField();
+    rm::app::UnitScene scene;
+    rm::vfs::Vfs content;
+
+    rm::unitdef::UnitDef deco;
+    deco.name = "TESTDECO";
+    deco.skirtSquaresX = 2.0f;
+    deco.skirtSquaresZ = 4.0f;
+    deco.flattenSkirt = false;
+    deco.health = rm::sim::magFromFloat(100.0f);
+    (void)registerDef(scene, deco);
+
+    const rm::sim::Army army{};
+    const auto spawned = rm::app::spawnUnit(scene, content, field,
+                                            "/units/TESTDECO/TESTDECO_unit.bp",
+                                            {32.0f, 0.0f, 32.0f}, army, rm::Brad{0});
+    REQUIRE(spawned);
+    CHECK(field.heightAt(4, 4) == Approx(56.5f));
+    CHECK(field.heightAt(3, 3) == Approx(12.5f + (3 * 800 + 3 * 300) * 0.01f));
+}
+
 
 TEST_CASE("a mobile or skirtless spawn leaves the terrain alone") {
-    // The gate is the skirt, not the category: retail's `Physics.FlattenSkirt` flag is
-    // unparsed, and a skirtless structure's flatten is a retail no-op anyway — the rect
-    // is empty.
+    // The gate is the flag and the skirt: a mobile def has no skirt to flatten, and a
+    // skirtless structure's flatten is a retail no-op anyway — the rect is empty.
     rm::HeightField field = rampField();
     rm::app::UnitScene scene;
     rm::vfs::Vfs content;
