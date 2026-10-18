@@ -150,6 +150,11 @@ public:
         /// value, an absolute write like `NewMaxRadius` (XSL0001 `BlastAttack`
         /// 2, UEL0301 `HighExplosiveOrdnance` 2.5 ogrids).
         Fx damageRadiusElmos{};
+        /// `NewDamageRadiusMod` (UAL0301 `StabilitySuppressant` 4, Remove -4) —
+        /// the `AddDamageRadiusMod` value, additive on top of the blueprint
+        /// radius (`weapon.lua:287`: `DamageRadius + DamageRadiusMod`), unlike
+        /// the absolute `NewDamageRadius` write.
+        Fx damageRadiusModElmos{};
         float rateOfFire = 0.0f;
         Mag damageMod{};
         std::vector<std::string> buildableAdds;

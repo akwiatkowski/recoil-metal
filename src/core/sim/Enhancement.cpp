@@ -107,6 +107,7 @@ constexpr std::string_view kWeaponRightRipperMLG[]{"RightRipper", "MLG"};
 constexpr std::string_view kWeaponRightRipperMLGOC[]{"RightRipper", "MLG", "OverCharge"};
 constexpr std::string_view kWeaponRightDisintegrator[]{"RightDisintegrator"};
 constexpr std::string_view kWeaponRightHeavyPlasma[]{"RightHeavyPlasmaCannon"};
+constexpr std::string_view kWeaponRightReacton[]{"RightReactonCannon"};
 constexpr std::string_view kIntelJammer[]{"Jammer"};
 constexpr std::string_view kIntelStealth[]{"RadarStealth", "SonarStealth"};
 constexpr std::string_view kIntelCloak[]{"Cloak"};
@@ -213,6 +214,11 @@ constexpr ScriptEffectRow kScriptEffects[] = {
     // (`ChangeDamageRadius`, an absolute write like `NewMaxRadius`); its Remove
     // carries none, so the blast falls back to the authored radius.
     {"HighExplosiveOrdnance", {.damageRadiusLabels = kWeaponRightHeavyPlasma}},
+    // UAL0301's `StabilitySuppressant` adds `NewDamageRadiusMod` on top of the
+    // authored radius (`AddDamageRadiusMod`, `weapon.lua:287`); its Remove
+    // carries -4, so installing it walks the total back down.
+    {"StabilitySuppressant", {.damageRadiusLabels = kWeaponRightReacton}},
+    {"StabilitySuppressantRemove", {.damageRadiusLabels = kWeaponRightReacton}},
     {"FocusConvertor", {.damageModLabels = kWeaponRightDisintegrator}},
     {"FocusConvertorRemove", {.damageModLabels = kWeaponRightDisintegrator}},
     {"AdvancedCoolingUpgrade", {.rateOfFireLabels = kWeaponRightHeavyPlasma}},
@@ -730,17 +736,23 @@ Fx weaponDamageRadiusFor(const UnitStore& store, const UnitCatalog& catalog,
                          UnitIndex slot, const unitdef::Weapon& weapon) noexcept {
     if (statLabelled(store, slot, weapon.label,
                      &EnhancementScriptEffects::damageRadiusLabels)) {
-        // Last installed writer wins, like the scripts' sequential writes.
+        // `ChangeDamageRadius` is an absolute write while `AddDamageRadiusMod`
+        // accumulates (`weapon.lua:287`); both ride the same label list, so
+        // each installed branch applies its own shape in slot order.
         Fx result = weapon.damageRadius;
         for (const auto& [position, installed] : store.enhancements()[slot]) {
-            const EnhancementScriptEffects script =
+            const EnhancementScriptEffects branch =
                 enhancementScriptEffects(installed);
-            if (!capListHas(script.damageRadiusLabels, weapon.label)) continue;
-            if (const auto* effects =
-                    catalog.enhancementEffects(store.typeAt(slot), installed);
-                effects != nullptr && effects->damageRadiusElmos > Fx{}) {
-                result = effects->damageRadiusElmos;
+            if (!capListHas(branch.damageRadiusLabels, weapon.label)) continue;
+            const auto* params =
+                catalog.enhancementEffects(store.typeAt(slot), installed);
+            if (params == nullptr) {
+                continue;
             }
+            if (params->damageRadiusElmos > Fx{}) {
+                result = params->damageRadiusElmos;
+            }
+            result += params->damageRadiusModElmos;
         }
         return result;
     }

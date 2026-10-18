@@ -945,3 +945,48 @@ TEST_CASE("C-255: NaniteTorpedoTube and MicrowaveLaserGenerator arm their guns",
     REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "NaniteTorpedoTubeRemove"));
     CHECK_FALSE(rm::sim::weaponEnabledForUnit(roster.store, roster.catalog, unit.index, def.weapons[0]));
 }
+TEST_CASE("C-255: StabilitySuppressant adds its damage radius mod on top of the blast",
+          "[fa-progress][enhancement]") {
+    // Retail `UAL0301_script.lua:173-178`: `StabilitySuppressant` runs
+    // `wep:AddDamageRadiusMod(bp.NewDamageRadiusMod or 0)` on the
+    // `RightReactonCannon` label, and retail `weapon.lua:287` adds the mod to
+    // the blueprint radius (`DamageRadius + DamageRadiusMod`) — additive,
+    // unlike `ChangeDamageRadius` which is an absolute write (UAL0301 bp
+    // `NewDamageRadiusMod = 4`, Remove `-4`, base `DamageRadius = 10`).
+    rm::test::Roster roster;
+    roster.rate = rm::sim::TickRate{10};
+    rm::unitdef::UnitDef def;
+    def.name = "test_scu";
+    def.health = rm::test::mag(100.0f);
+    rm::unitdef::Weapon cannon;
+    cannon.label = "RightReactonCannon";
+    cannon.role = rm::unitdef::WeaponRole::DirectFire;
+    cannon.maxRange = rm::sim::Fx::fromInt(30);
+    cannon.rateOfFire = 1.0f;
+    cannon.damage = rm::test::mag(10.0f);
+    cannon.damageRadius = rm::sim::Fx::fromInt(10);
+    def.weapons = {cannon};
+    const auto params = rm::lua::parseTable("{ NewDamageRadiusMod=4 }");
+    REQUIRE(params);
+    def.enhancements.push_back({.name = "StabilitySuppressant", .slot = "RCH",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .parameters = *params});
+    def.enhancements.push_back({.name = "StabilitySuppressantRemove", .slot = "RCH",
+        .prerequisite = "StabilitySuppressant",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f),
+        .removes = {"StabilitySuppressant", "StabilitySuppressantRemove"},
+        .parameters = *rm::lua::parseTable("{ NewDamageRadiusMod=-4 }")});
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, cannon)
+          == rm::sim::Fx::fromInt(10));
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "StabilitySuppressant"));
+    // `NewDamageRadiusMod` is ogrids-authored like the weapon `DamageRadius` it
+    // adds to — mod 4 is 32 elmos on top of the 10-elmo base.
+    CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, cannon)
+          == rm::sim::Fx::fromInt(42));
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "StabilitySuppressantRemove"));
+    CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, cannon)
+          == rm::sim::Fx::fromInt(10));
+}

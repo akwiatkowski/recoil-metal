@@ -186,6 +186,13 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
             if (const auto radius = ogrid("NewDamageRadius")) {
                 effects.damageRadiusElmos = *radius;
             }
+            // `NewDamageRadiusMod` is ogrids-authored like the weapon `DamageRadius`
+            // it adds to (UAL0301 bp: mod 4 against base 10). Signed: the Remove
+            // carries -4, and retail adds it verbatim.
+            if (const auto mod = num("NewDamageRadiusMod")) {
+                effects.damageRadiusModElmos =
+                    fxFromFloat(static_cast<float>(*mod) * scmap::kElmosPerOgrid);
+            }
             if (const auto rof = num("NewRateOfFire")) {
                 effects.rateOfFire = static_cast<float>(*rof);
             }
