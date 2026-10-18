@@ -188,6 +188,23 @@ void stopSiloBuild(std::vector<SiloBuild>& queue, std::span<SiloAmmo> ammo,
         }
     }
 }
+ Fx siloBuildFraction(std::span<const SiloAmmo> ammo, std::span<const SiloBuild> queue,
+                      UnitId owner) noexcept {
+     // The building arm mirrors the head record's progress; no head or no ticks: zero.
+     const auto head = std::ranges::find_if(
+         queue, [&](const SiloBuild& entry) { return entry.owner == owner; });
+     if (head == queue.end()) {
+         return Fx{};
+     }
+     for (const SiloAmmo& record : ammo) {
+         if (record.owner == owner && record.slot == head->slot && record.totalTicks > 0) {
+             return std::clamp(Fx::fromRatio(static_cast<std::int32_t>(record.elapsedTicks),
+                                             static_cast<std::int32_t>(record.totalTicks)),
+                               Fx{}, Fx::fromInt(1));
+         }
+     }
+     return Fx{};
+ }
 int siloBuildCount(std::span<const SiloBuild> queue, UnitId owner) noexcept {
     // `0x005d5a20`: the linear walk over the queue, counting one owner's entries.
     return static_cast<int>(std::ranges::count_if(

@@ -356,6 +356,18 @@ TEST_CASE("the silo auto toggle holds the refill without losing queued work",
         nullptr, nullptr, {}, &ammo, &queue);
     CHECK(refused.accepted.empty());
 }
+TEST_CASE("a silo reports its head-build progress as a fraction", "[silo][queue]") {
+    // C-502's `Unit+0x2ac` progress mirror: the head record's elapsed/total ticks
+    // read out for the build bar — zero idle, rising mid-build, never above one.
+    const UnitId owner{5, 1};
+    std::vector<SiloAmmo> ammo{record(owner, false, 2)};
+    std::vector<SiloBuild> queue;
+    CHECK(rm::sim::siloBuildFraction(ammo, queue, owner) == rm::sim::Fx{});
+    REQUIRE(rm::sim::queueSiloBuild(queue, ammo, owner, 0));
+    Economy economy = banked(100000.0f, 1000000.0f);
+    for (int tick = 0; tick < 5; ++tick) beat(economy, ammo, queue);
+    CHECK(rm::sim::siloBuildFraction(ammo, queue, owner) == rm::sim::Fx::fromRatio(1, 2));
+}
 
 TEST_CASE("a dead silo leaves neither records nor queued builds", "[silo][queue]") {
     const rm::HeightField field = flatField();

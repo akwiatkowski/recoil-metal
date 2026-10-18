@@ -526,6 +526,12 @@ void stopSiloBuild(std::vector<SiloBuild>& queue, std::span<SiloAmmo> ammo,
 /// walk, for one owner.
 [[nodiscard]] int siloBuildCount(std::span<const SiloBuild> queue,
                                  UnitId owner) noexcept;
+/// C-502's `Unit+0x2ac` progress mirror (`0x005d5d1d` building arm): the owner's
+/// queue HEAD record reports elapsed/total ticks for the build bar — zero when
+/// idle, clamped to [0, 1].
+ [[nodiscard]] Fx siloBuildFraction(std::span<const SiloAmmo> ammo,
+                                    std::span<const SiloBuild> queue,
+                                    UnitId owner) noexcept;
 
 /// One Cybran Loyalist-style missile redirector (`C-088`, ART-S007
 /// `lua/sim/defaultantiprojectile.lua:MissileRedirect`). Match-owned like `SiloAmmo`:
