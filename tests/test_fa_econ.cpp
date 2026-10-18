@@ -698,6 +698,87 @@ TEST_CASE("C-161: a unit's production is throttled by its own consumption ratio"
           == Catch::Approx(0.1f).margin(0.001));
 }
 
+TEST_CASE("C-161: a repair bill throttles its builder's own production",
+          "[fa-econ]") {
+    // `0x006b1769`–`0x006b17c6`: `produced[k] = production[k] x ratio`, where
+    // the ratio is the unit's own `CEconRequest` grant fraction (`Unit+0x53c`,
+    // `C-071`) — and `Unit.lua` sums upkeep AND build/repair cost into that one
+    // request (`C-161`). A producer-builder paying a mass-bound repair bill it
+    // can only fifth-fund must make a fifth of its mass.
+    rm::HeightField field = flatField();
+    rm::sim::Terrain terrain{field};
+    rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    rm::test::Roster roster;
+
+    rm::unitdef::UnitDef producer;
+    producer.name = "test_producer";
+    producer.producesMassPerSecond = 2.0f;  // 0.2 a tick at 10 Hz
+    producer.buildRate = 10.0f;             // may hold the repair head
+    const auto producerType = roster.addType(producer);
+    rm::unitdef::UnitDef tank;
+    tank.name = "test_tank";
+    // Repair drain = cost x rate/time: 100 x 1/100 = 1.0 mass and energy a tick.
+    tank.buildCostMass = rm::sim::magFromFloat(100.0f);
+    tank.buildCostEnergy = rm::sim::magFromFloat(100.0f);
+    tank.buildTime = rm::sim::magFromFloat(100.0f);
+    const auto tankType = roster.addType(tank);
+    rm::unitdef::UnitDef pgen;
+    pgen.name = "test_pgen";
+    // Energy bankrolled (100 a tick); mass binds: repair wants 1.0 mass, the
+    // mex makes 0.2 — the grant fraction is 0.2, and the binding bucket's r1
+    // reaches the builder's repair-shaped request.
+    pgen.producesEnergyPerSecond = 1000.0f;
+    const auto pgenType = roster.addType(pgen);
+
+    const UnitId builder = roster.add(producerType, 200.0f, 200.0f, 0, 500.0f);
+    const UnitId patient = roster.add(tankType, 204.0f, 200.0f, 0, 500.0f);
+    (void)roster.add(pgenType, 220.0f, 200.0f, 0, 500.0f);
+    // Damaged, so the repair order is admitted and stays billable.
+    roster.store.health()[patient.index].current = rm::sim::magFromFloat(250.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<Player> players = rm::sim::onePlayerPerArmy(1, 0);
+    std::vector<rm::sim::Economy> economies{1};
+    economies[0].storage = {.mass = rm::sim::magFromFloat(1000.0f),
+                            .energy = rm::sim::magFromFloat(1000.0f)};
+    std::vector<rm::sim::Projectile> shots;
+    std::vector<rm::sim::Construction> building;
+    std::vector<int> commandersEver{0};
+    const std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(),
+                                                             &grid);
+    REQUIRE(rm::sim::applyCommand(
+        Command{.kind = CommandKind::Repair,
+                .unit = builder,
+                .targetX = rm::sim::fxFromFloat(200.0f),
+                .targetZ = rm::sim::fxFromFloat(200.0f),
+                .target = patient},
+        roster.store, roster.catalog, players, armies, terrain, grid, roster.rate,
+        &building));
+    const auto tick = [&] {
+        rm::sim::Match match{.armies = armies,
+                             .economies = economies,
+                             .projectiles = &shots,
+                             .building = &building,
+                             .passability = grids,
+                             .commandersEver = commandersEver,
+                             .baseStorage = {.mass = rm::sim::magFromFloat(1000.0f),
+                                             .energy = rm::sim::magFromFloat(1000.0f)}};
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                    roster.rate);
+    };
+
+    // Beat one: the ratio cache still reads fully funded, so the producer makes
+    // its whole 0.2 mass — and the allocator learns the repair bill is funded
+    // at 0.2 on the binding (mass) resource.
+    tick();
+    CHECK(rm::test::asFloat(economies[0].incomePerTick.mass)
+          == Catch::Approx(0.2f).margin(0.001));
+    // Beat two: last beat's grant ratio throttles the builder's own production
+    // to a fifth — 0.04 mass a tick.
+    tick();
+    CHECK(rm::test::asFloat(economies[0].incomePerTick.mass)
+          == Catch::Approx(0.04f).margin(0.001));
+}
 TEST_CASE("C-102: build progress crossing a quarter emits an event", "[fa-econ]") {
     // `OnBuildProgress`/`OnBeingBuiltProgress` fire at 25/50/75%
     // (`Unit.lua:555-620`): a funded build reports each boundary once, in

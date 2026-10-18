@@ -259,9 +259,47 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
     // asks this beat: upkeep plus whatever it is building or enhancing. The
     // build half mirrors `tickEconomy`'s `buildDrain` — the builder's own
     // adjacency discount included, because retail's request carries it too.
+    // `C-182`'s explicit repairs, projected from this tick's queue heads: the
+    // repair bills the TARGET's full build-cost rate at the builder's rate, so
+    // a repairing producer's own request carries that shape too. Paused
+    // builders and whole targets pay nothing.
+    std::vector<Resources> repairDemand(store.slotCount(), Resources{});
+    {
+        const std::span<const CommandQueue> repairOrders = store.orders();
+        for (UnitIndex builder = 0; builder < repairOrders.size(); ++builder) {
+            if (!store.slotAlive(builder) || !store.health()[builder].alive()
+                || store.productionPaused(store.idAt(builder))) {
+                continue;
+            }
+            const QueuedCommand* order = repairOrders[builder].active();
+            if (order == nullptr || order->kind() != CommandKind::Repair) {
+                continue;
+            }
+            const UnitIndex target = order->target().index;
+            if (target >= store.slotCount() || !store.alive(order->target())
+                || !store.health()[target].alive()) {
+                continue;
+            }
+            const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target));
+            if (targetDef == nullptr || targetDef->buildTime <= Mag{}
+                || store.health()[target].current >= store.health()[target].maximum) {
+                continue;
+            }
+            repairDemand[builder] += drainPerTick(Construction{
+                .cost = {.mass = targetDef->buildCostMass, .energy = targetDef->buildCostEnergy},
+                .totalBuildTime = targetDef->buildTime,
+                .buildPerTick = catalog.rates(store.typeAt(builder)).buildPerTick});
+        }
+    }
     std::vector<Resources> unitDemand;
-    if (match.building != nullptr || match.enhancements != nullptr) {
+    if (match.building != nullptr || match.enhancements != nullptr
+        || !std::ranges::all_of(repairDemand, [](const Resources& demand) {
+               return demand.mass <= Mag{} && demand.energy <= Mag{};
+           })) {
         unitDemand.assign(store.slotCount(), Resources{});
+        for (UnitIndex slot = 0; slot < repairDemand.size() && slot < unitDemand.size(); ++slot) {
+            unitDemand[slot] += repairDemand[slot];
+        }
         if (match.building != nullptr) {
             for (const Construction& work : *match.building) {
                 if (work.finished() || work.paused
