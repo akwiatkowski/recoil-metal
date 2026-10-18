@@ -347,7 +347,14 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
             }
             for (const SiloAssistWork& assist : siloAssists) {
                 if (assist.silo == ammo.owner) {
-                    demand += assist.demand;
+                    // The C-083 request prices the C-241 event tick, so it rides
+                    // the same owner discount as the silo's own demand above.
+                    Resources scaled = assist.demand;
+                    if (ammo.owner.index < adjacency.size()) {
+                        scaled.mass *= adjacency[ammo.owner.index].massBuild;
+                        scaled.energy *= adjacency[ammo.owner.index].energyBuild;
+                    }
+                    demand += scaled;
                 }
             }
             wanted += demand;
@@ -578,7 +585,13 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
             }
             for (const SiloAssistWork& assist : siloAssists) {
                 if (assist.silo == ammo.owner) {
-                    demand += assist.demand;
+                    // Same C-241 owner discount as the pass-one request above.
+                    Resources scaled = assist.demand;
+                    if (ammo.owner.index < adjacency.size()) {
+                        scaled.mass *= adjacency[ammo.owner.index].massBuild;
+                        scaled.energy *= adjacency[ammo.owner.index].energyBuild;
+                    }
+                    demand += scaled;
                 }
             }
             const Resources out = outstanding(demand, ammo.delivered);

@@ -14,6 +14,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include "core/sim/Adjacency.hpp"
+#include "core/sim/Assist.hpp"
 #include "core/sim/Command.hpp"
 #include "core/sim/Economy.hpp"
 #include "core/sim/Pathfinding.hpp"
@@ -489,4 +490,35 @@ TEST_CASE("build count walks the queue", "[silo][queue]") {
     CHECK(rm::sim::siloBuildCount(queue, owner) == 2);
     CHECK(rm::sim::siloBuildCount(queue, other) == 1);
     CHECK(rm::sim::siloBuildCount(queue, UnitId{9, 1}) == 0);
+}
+
+TEST_CASE("a silo assist beside a generator bills the adjacency-discounted demand",
+          "[silo][queue]") {
+    // C-241's event demand carries the owner's build discount, and the C-083
+    // assist request is `costPerTick x assistantRate / siloRate` of THAT demand:
+    // a discounted founder's helper must ask for the discounted tick price.
+    const UnitId silo{5, 1};
+    const UnitId helper{6, 1};
+    std::vector<rm::sim::SiloAmmo> ammo{record(silo, false, 2)};
+    std::vector<rm::sim::SiloBuild> queue;
+    REQUIRE(rm::sim::queueSiloBuild(queue, ammo, silo, 0));
+    // Silo rate 10/tick (record's buildPerTick), helper rate 20/tick: 2x.
+    const rm::sim::Mag siloRate = rm::sim::magFromFloat(10.0f);
+    const rm::sim::Mag helperRate = rm::sim::magFromFloat(20.0f);
+    const rm::sim::Fx ratio = helperRate.toFx() / siloRate.toFx();
+    std::vector<rm::sim::SiloAssistWork> assists{
+        {.silo = silo, .assistant = helper, .demand = ammo[0].costPerTick * ratio}};
+    Economy full = banked(100000.0f, 1000000.0f);
+    Economy halfBank = banked(100000.0f, 1000000.0f);
+    std::vector<rm::sim::AdjacencyEffects> adjacency(7);
+    adjacency[5].massBuild = rm::sim::fxFromFloat(0.5f);
+    adjacency[5].energyBuild = rm::sim::fxFromFloat(0.5f);
+    std::vector<SiloAmmo> fullAmmo = ammo;
+    std::vector<SiloBuild> fullQueue = queue;
+    rm::sim::tickEconomy(full, {}, {}, std::span<SiloAmmo>{fullAmmo}, false, {},
+                         rm::sim::kNoArmy, {}, {}, {}, &fullQueue, {}, assists);
+    rm::sim::tickEconomy(halfBank, {}, {}, std::span<SiloAmmo>{ammo}, false, {},
+                         rm::sim::kNoArmy, {}, {}, {}, &queue, adjacency, assists);
+    CHECK(halfBank.requestedLastTick.mass + halfBank.requestedLastTick.mass
+          == full.requestedLastTick.mass);
 }
