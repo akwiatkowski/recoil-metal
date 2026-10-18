@@ -832,10 +832,16 @@ struct UnitScene {
         /// the blast-derived splat/decal split, any other value draws the
         /// weapon's own authored texture at its authored size in elmos.
         ImpactMarkScript script = ImpactMarkScript::BaseScorch;
+        /// Retail's `ScorchThread` `CreateSplat` lifetime for this mark, in
+        /// seconds (`defaultcollisionbeams.lua` C-290): 100 for the seven
+        /// 100-life thread bodies, 250 for the quantum thread, 15 for the
+        /// orbital death laser. Read only when `beamThread` is set.
+        /// Presentation only, never hashed.
+        float beamLifetimeSeconds = 100.0f;
         /// True when laid by a dwelling collision beam's `ScorchThread`
         /// (`defaultcollisionbeams.lua` C-290): the thread's `CreateSplat`
-        /// carries its own fixed lifetime (LOD arg, 100 s for the 100-life
-        /// classes), not the 300-600 s explosion spread. Presentation only.
+        /// carries its own fixed lifetime (the 7th arg, per-class), not the
+        /// 300-600 s explosion spread. Presentation only.
         bool beamThread = false;
     };
     static constexpr std::size_t kMaxImpactMarks = 512;
@@ -1705,7 +1711,7 @@ void refreshWreckDecals(UnitScene& scene, const HeightField& field, TickIndex no
 void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos = 0.0f,
                     TickIndex tick = 0,
                     UnitScene::ImpactMarkScript script = UnitScene::ImpactMarkScript::BaseScorch,
-                    bool beamThread = false);
+                    bool beamThread = false, float beamLifetimeSeconds = 100.0f);
 /// Whether a collision-beam class lays scorch (C-290): retail forks
 /// `ScorchThread` on `impactType == 'Terrain'` in 8 of the 16 classes in
 /// `defaultcollisionbeams.lua` (`QuantumBeamGenerator`, both `MicrowaveLaser`,
@@ -1716,6 +1722,11 @@ void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos =
 /// lay nothing. Unknown names scorch: an unrecognised class is a content gap,
 /// not a proved opt-out. Presentation only, never hashed.
 [[nodiscard]] bool beamClassScorches(std::string_view beamClass) noexcept;
+/// A collision-beam class's `ScorchThread` `CreateSplat` lifetime, in seconds
+/// (`defaultcollisionbeams.lua` C-290, the 7th arg): 250 for the quantum
+/// thread, 15 for the orbital death laser, 100 for every other scorching
+/// class. Presentation only, never hashed.
+[[nodiscard]] float beamClassLifetimeSeconds(std::string_view beamClass) noexcept;
 /// Notes one beam strike's scorch (C-290 `ScorchThread` half): a beam is
 /// hitscan — no projectile, no `ProjectileImpact` — so the `BeamFired` event
 /// is the only record of where the strike landed. Retail's `OnImpact` forks

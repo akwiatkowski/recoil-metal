@@ -474,6 +474,44 @@ TEST_CASE("C-290: beam scorch retires at retail's fixed thread lifetime", "[fa-t
     CHECK(scene.impactMarks[0].x == Catch::Approx(600.0f));
 }
 
+TEST_CASE("C-290: beam scorch lifetimes follow the thread's own CreateSplat args", "[fa-terrain]") {
+    // `defaultcollisionbeams.lua` C-290: seven `ScorchThread` bodies pass
+    // (LOD 100, lifetime 100), the quantum thread passes (250, 250), and the
+    // orbital death laser passes (250, 15) — the 7th `CreateSplat` arg is the
+    // lifetime. Each class's mark must retire at its own thread's lifetime.
+    const rm::HeightField field = flatField(128, 0.0f);
+    const rm::sim::TickRate rate{};
+    const rm::TickIndex life15 = rate.ticks(rm::sim::seconds(15.0f));  // ticks, s (C-290)
+    const rm::TickIndex life100 = rate.ticks(rm::sim::seconds(100.0f));  // ticks, s (C-290)
+    const rm::TickIndex life250 = rate.ticks(rm::sim::seconds(250.0f));  // ticks, s (C-290)
+    rm::app::UnitScene scene = makeScene(false, 0.0f);
+    rm::sim::Event beam{};
+    beam.kind = rm::sim::EventKind::BeamFired;
+    beam.at = rm::test::at(500, 40, 500);
+    beam.unit = rm::sim::UnitId{0, 1};
+    (void)rm::app::noteBeamScorch(scene, beam, 40.0f, 0.0f, 0,
+                                  "OrbitalDeathLaserCollisionBeam");
+    beam.at = rm::test::at(520, 40, 500);
+    beam.unit = rm::sim::UnitId{0, 2};
+    (void)rm::app::noteBeamScorch(scene, beam, 40.0f, 0.0f, 0,
+                                  "QuantumBeamGeneratorCollisionBeam");
+    beam.at = rm::test::at(540, 40, 500);
+    beam.unit = rm::sim::UnitId{0, 3};
+    (void)rm::app::noteBeamScorch(scene, beam, 40.0f, 0.0f, 0,
+                                  "MicrowaveLaserCollisionBeam01");
+    REQUIRE(scene.impactMarks.size() == 3);
+    rm::app::refreshWreckDecals(scene, field, life15);
+    REQUIRE(scene.impactMarks.size() == 2);
+    CHECK(std::ranges::none_of(scene.impactMarks, [](const auto& mark) {
+        return mark.x == Catch::Approx(500.0f);
+    }));
+    rm::app::refreshWreckDecals(scene, field, life100);
+    REQUIRE(scene.impactMarks.size() == 1);
+    CHECK(scene.impactMarks[0].x == Catch::Approx(520.0f));
+    rm::app::refreshWreckDecals(scene, field, life250);
+    CHECK(scene.impactMarks.empty());
+}
+
 
 TEST_CASE("C-292: only a land-layer death scorches the ground", "[fa-terrain]") {
     // Retail's `Unit::OnKilled` gates `CreateScorchableDecal` on
