@@ -201,7 +201,7 @@ UnitTypeIndex UnitCatalog::add(const unitdef::UnitDef* def, TickRate rate) {
                 effects.auraRadiusElmos = *radius;
             }
             if (const auto regen = num("RegenPerSecond")) {
-                effects.auraRegenPerSecond = static_cast<float>(*regen);
+                effects.auraRegenPerSecond = fxFromFloat(static_cast<float>(*regen));
             }
             if (const auto floor = num("RegenFloor")) {
                 effects.auraRegenFloor = magFromFloat(static_cast<float>(*floor));

@@ -159,7 +159,7 @@ public:
         /// `RegenFloor`/`RegenCeiling`. `MaxHealthFactor` on the advanced tier
         /// is presentation-only here (no max-health aura path exists).
         Fx auraRadiusElmos{};
-        float auraRegenPerSecond = 0.0f;
+        Fx auraRegenPerSecond{};
         Mag auraRegenFloor{};
         Mag auraRegenCeiling{};
         float rateOfFire = 0.0f;

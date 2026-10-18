@@ -215,7 +215,7 @@ void tickRegeneration(UnitStore& store, const UnitCatalog& catalog, TickRate rat
             continue;
         }
         Fx auraRadius{};
-        float auraFactor = 0.0f;
+        Fx auraFactor{};
         Mag auraFloor{};
         Mag auraCeiling{};
         for (const auto& [position, installed] : store.enhancements()[carrier]) {
@@ -227,7 +227,7 @@ void tickRegeneration(UnitStore& store, const UnitCatalog& catalog, TickRate rat
                 auraCeiling = effects->auraRegenCeiling;
             }
         }
-        if (auraRadius <= Fx{} || auraFactor <= 0.0f) {
+        if (auraRadius <= Fx{} || auraFactor <= Fx{}) {
             continue;
         }
         const Transform& at = store.transforms()[carrier];
@@ -253,10 +253,11 @@ void tickRegeneration(UnitStore& store, const UnitCatalog& catalog, TickRate rat
             if (dx * dx + dz * dz > auraRadius * auraRadius) {
                 continue;
             }
-            const float perSecond = magToFloat(healths[slot].maximum) * auraFactor;
-            const float floored = std::max(perSecond, magToFloat(auraFloor));
-            const float capped = auraCeiling > Mag{} ? std::min(floored, magToFloat(auraCeiling)) : floored;
-            const Mag auraPerTick = rate.magPerTick(capped);
+            const Mag perSecond = healths[slot].maximum * auraFactor;
+            const Mag floored = std::max(perSecond, auraFloor);
+            const Mag capped = auraCeiling > Mag{} ? std::min(floored, auraCeiling) : floored;
+            const Mag auraPerTick =
+                capped * Fx::fromRatio(1, static_cast<std::int32_t>(rate.ticksPerSecond()));
             if (auraPerTick <= Mag{}) {
                 continue;
             }
