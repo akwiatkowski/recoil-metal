@@ -2897,8 +2897,10 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
 
             const std::array<Fx, 3> from = positionOf(transforms[slot]);
             const std::array<Fx, 3> to = positionOf(transforms[head->target().index]);
-            if (groundDistanceElmos(from, to) > weaponMaxRangeFor(store, catalog, slot, weapon)) {
-                continue;  // the pursuit is still closing
+            const Fx overchargeGap = groundDistanceElmos(from, to);
+            if (overchargeGap > weaponMaxRangeFor(store, catalog, slot, weapon)
+                || overchargeGap <= weapon.minRange) {
+                continue;  // the pursuit is still closing — the dead zone stays
             }
 
             // THE ENERGY GATE, and the mechanic: the shot costs `EnergyRequired` from the

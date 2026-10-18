@@ -179,6 +179,29 @@ TEST_CASE("one order is one shot, even into something that survives it") {
     CHECK(rm::test::asFloat(f.economies[0].stored.energy) == 5000.0f);
     CHECK(f.roster.store.orders()[acu.index].empty());
 }
+TEST_CASE("an overcharge inside the dead zone holds its shot") {
+    // Retail's reach class 1 (`C-091`, `0x006dc5c0`): inside `MinRadius` is a
+    // hole, not a shorter disc — `canShootExplicitTarget` and `fireMissiles`
+    // both refuse it. `fireOvercharge` must hold too, keeping the order and
+    // the energy bar, rather than firing point-blank.
+    Fixture f;
+    rm::unitdef::UnitDef rangedAcu;
+    rangedAcu.name = "test_acu_deadzone";
+    rm::unitdef::Weapon deadzoned = overchargeCannon();
+    deadzoned.minRange = rm::sim::fxFromFloat(50.0f);
+    rangedAcu.weapons.push_back(deadzoned);
+    const rm::UnitTypeIndex rangedType = f.roster.addType(std::move(rangedAcu));
+    const UnitId acu = f.roster.add(rangedType, 200.0f, 200.0f, 0, 10000.0f);
+    const UnitId victim = f.roster.add(f.tankType, 210.0f, 200.0f, 1, 500.0f);
+    f.economies[0].stored.energy = rm::sim::magFromFloat(6000.0f);
+
+    REQUIRE(f.overcharge(acu, victim));
+    const rm::sim::TickReport report = f.tick(3);
+    CHECK(report.shotsFired == 0);
+    CHECK(rm::test::asFloat(f.economies[0].stored.energy) == 6000.0f);
+    CHECK(f.roster.store.alive(victim));
+    REQUIRE(f.roster.store.orders()[acu.index].current() != nullptr);
+}
 
 TEST_CASE("a unit with no manual weapon cannot be asked to overcharge") {
     Fixture f;
