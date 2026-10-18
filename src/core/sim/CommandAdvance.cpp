@@ -681,12 +681,12 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // grid for the product's motion class. `startPending`, which does need one, looks it up
         // for itself.
         const QueuedCommand* current = orders[slot].active();
-        // A dead guardee retires legacy Assist at the head — except a factory
+        // A dead guardee retires a guard order at the head — except a factory
         // mirror finishing its shared build: the child owns its remaining
-        // lifetime and Assist ends only after it is done (pinned by the
+        // lifetime and the order ends only after it is done (pinned by the
         // guarding-factory reservation test).
         const bool assistWithMirror =
-            current->kind() == CommandKind::Assist && building != nullptr
+            isGuardCommand(current->kind()) && building != nullptr
             && std::ranges::any_of(*building, [&](const Construction& c) {
                    return !c.finished() && c.builder == store.idAt(slot);
                });

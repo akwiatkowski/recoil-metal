@@ -2015,6 +2015,60 @@ TEST_CASE("a guarding factory reserves one shared build and finishes it without 
     REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
     CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Assist);
 }
+TEST_CASE("a Guard-kind factory mirror survives its guardee until the child is done") {
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef factoryDef;
+    factoryDef.name = "factory";
+    factoryDef.categories = {"FACTORY"};
+    factoryDef.buildRate = 10.0f;
+    factoryDef.buildableCategory = {{"PRODUCT"}};
+    const rm::UnitTypeIndex factoryType = roster.addType(factoryDef);
+    rm::unitdef::UnitDef productDef = walkerDef();
+    productDef.name = "product";
+    productDef.categories = {"PRODUCT"};
+    productDef.buildTime = rm::sim::magFromFloat(100.0f);
+    const rm::UnitTypeIndex productType = roster.addType(productDef);
+    const UnitId guard = roster.add(factoryType, 40.0f, 40.0f, 0, 100.0f);
+    const UnitId guardee = roster.add(factoryType, 44.0f, 40.0f, 0, 100.0f);
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(1);
+    const std::vector<rm::sim::Player> players{rm::sim::Player{.index = 0, .army = 0}};
+    const std::vector<const rm::sim::PassabilityGrid*> grids{&grid, &grid};
+    std::vector<rm::sim::Construction> building;
+    const CommandIssue build{.source = 0,
+                             .id = rm::commandId(0, 61),
+                             .player = 0,
+                             .kind = CommandKind::Build,
+                             .units = {guardee},
+                             .buildType = productType,
+                             .count = 2};
+    REQUIRE(rm::sim::applyCommand(build, roster.store, roster.catalog, players, armies, terrain,
+                                  [&grid](UnitId) { return &grid; }, roster.rate, &building));
+    const CommandIssue guardOrder{.source = 0,
+                                  .id = rm::commandId(0, 62),
+                                  .player = 0,
+                                  .kind = CommandKind::Guard,
+                                  .units = {guard},
+                                  .target = guardee};
+    REQUIRE(rm::sim::applyCommand(guardOrder, roster.store, roster.catalog, players, armies,
+                                  terrain, [&grid](UnitId) { return &grid; }, roster.rate,
+                                  &building));
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building);
+    REQUIRE(building.size() == 2);
+    rm::sim::Construction& inFlightMirror =
+        *std::ranges::find(building, guard, &rm::sim::Construction::builder);
+    const rm::sim::Mag beforeTargetDeath = inFlightMirror.buildTimeRemaining;
+    roster.store.kill(guardee);
+    (void)rm::sim::advanceOrders(roster.store, roster.catalog, terrain, grids, roster.rate,
+                                 &building);
+    CHECK(inFlightMirror.buildTimeRemaining < beforeTargetDeath);
+    REQUIRE(roster.store.orders()[guard.index].active() != nullptr);
+    CHECK(roster.store.orders()[guard.index].active()->kind() == CommandKind::Guard);
+}
 
 TEST_CASE("factory guard skips a singleton head and locally takes the queued build behind it") {
     const rm::HeightField field = flatField();
