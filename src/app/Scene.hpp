@@ -1728,6 +1728,11 @@ void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos =
 /// thread, 15 for the orbital death laser, 100 for every other scorching
 /// class. Presentation only, never hashed.
 [[nodiscard]] float beamClassLifetimeSeconds(std::string_view beamClass) noexcept;
+/// A collision-beam class's `ScorchThread` `CreateSplat` LOD
+/// (`defaultcollisionbeams.lua` C-290, the 6th arg): 250 for the quantum
+/// thread and the orbital death laser, 100 for every other scorching class.
+/// Presentation only, never hashed.
+[[nodiscard]] int beamClassLod(std::string_view beamClass) noexcept;
 /// Notes one beam strike's scorch (C-290 `ScorchThread` half): a beam is
 /// hitscan — no projectile, no `ProjectileImpact` — so the `BeamFired` event
 /// is the only record of where the strike landed. Retail's `OnImpact` forks

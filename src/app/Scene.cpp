@@ -396,6 +396,20 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     }
     return 100.0f;  // s (the seven 100-life thread bodies)
 }
+/// A collision-beam class's `ScorchThread` `CreateSplat` LOD (C-290, the 6th
+/// arg): the quantum thread passes 250, the orbital death laser passes 250,
+/// the other seven thread bodies pass 100. Unknown/empty names read as the
+/// 100 common case — the same default the scorch gate applies. Presentation
+/// only, never hashed.
+[[nodiscard]] int beamClassLod(std::string_view beamClass) noexcept {
+    if (beamClass == "QuantumBeamGeneratorCollisionBeam") {
+        return 250;  // (`defaultcollisionbeams.lua:120`)
+    }
+    if (beamClass == "OrbitalDeathLaserCollisionBeam") {
+        return 250;  // (`defaultcollisionbeams.lua:555`)
+    }
+    return 100;  // (the seven 100-LOD thread bodies)
+}
 /// One beam strike's scorch (C-290 `ScorchThread` half). Retail forks the
 /// thread when the beam's `OnImpact` sees `impactType == 'Terrain'`
 /// (`defaultcollisionbeams.lua` — 8 of 16 classes; the rest scorch nothing),
@@ -418,7 +432,9 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     const float x = rm::sim::fxToFloat(event.at[0]);
     const float z = rm::sim::fxToFloat(event.at[2]);
     const float lifeSeconds = beamClassLifetimeSeconds(beamClass);  // s (C-290 7th arg)
+    const int lod = beamClassLod(beamClass);  // (C-290 6th arg)
     noteImpactMark(scene, x, z, 0.0f, tick, UnitScene::ImpactMarkScript::BaseScorch, true, lifeSeconds);
+    scene.impactMarks.back().lod = lod;
     // Retail's `ScorchThread` lays one `CreateSplat` per pass at the tracked
     // end while the beam dwells (`defaultcollisionbeams.lua` C-290): a dragged
     // end draws a continuous line, not one point per shot. Bridge from this
@@ -443,6 +459,7 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
         for (std::size_t i = 1; i <= middles; ++i) {
             const float t = static_cast<float>(i) / static_cast<float>(middles + 1);
             noteImpactMark(scene, prevX + dx * t, prevZ + dz * t, 0.0f, tick, UnitScene::ImpactMarkScript::BaseScorch, true, lifeSeconds);
+            scene.impactMarks.back().lod = lod;
         }
     }
     return true;

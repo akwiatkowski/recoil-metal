@@ -511,6 +511,34 @@ TEST_CASE("C-290: beam scorch lifetimes follow the thread's own CreateSplat args
     rm::app::refreshWreckDecals(scene, field, life250);
     CHECK(scene.impactMarks.empty());
 }
+TEST_CASE("C-290: beam scorch LOD follows the thread's own CreateSplat args", "[fa-terrain]") {
+    // `defaultcollisionbeams.lua` C-290: seven `ScorchThread` bodies pass
+    // (LOD 100, lifetime 100), the quantum thread passes (250, 250), and the
+    // orbital death laser passes (250, 15) — the 6th `CreateSplat` arg is the
+    // LOD. A beam mark must carry its own thread's LOD, not the 200-350
+    // explosion spread (`defaultexplosions.lua:211,215`).
+    rm::app::UnitScene scene = makeScene(false, 0.0f);
+    rm::sim::Event beam{};
+    beam.kind = rm::sim::EventKind::BeamFired;
+    beam.unit = rm::sim::UnitId{0, 1};
+    beam.at = rm::test::at(500, 40, 500);
+    (void)rm::app::noteBeamScorch(scene, beam, 40.0f, 0.0f, 0,
+                                  "MicrowaveLaserCollisionBeam01");
+    REQUIRE(scene.impactMarks.size() == 1);
+    CHECK(scene.impactMarks[0].lod == 100);
+    beam.unit = rm::sim::UnitId{1, 1};
+    beam.at = rm::test::at(520, 40, 500);
+    (void)rm::app::noteBeamScorch(scene, beam, 40.0f, 0.0f, 0,
+                                  "QuantumBeamGeneratorCollisionBeam");
+    REQUIRE(scene.impactMarks.size() == 2);
+    CHECK(scene.impactMarks[1].lod == 250);
+    beam.unit = rm::sim::UnitId{2, 1};
+    beam.at = rm::test::at(540, 40, 500);
+    (void)rm::app::noteBeamScorch(scene, beam, 40.0f, 0.0f, 0,
+                                  "OrbitalDeathLaserCollisionBeam");
+    REQUIRE(scene.impactMarks.size() == 3);
+    CHECK(scene.impactMarks[2].lod == 250);
+}
 
 
 TEST_CASE("C-292: only a land-layer death scorches the ground", "[fa-terrain]") {
