@@ -339,6 +339,12 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
         // Only the owner's queue HEAD builds — one economy event per unit (`C-081`).
         if (!ammo.paused && headActive(ammo)) {
             Resources demand = ammo.costPerTick;
+            // C-241 (`0x005d5e1a`-`e46`): the event demand carries the owner's
+            // `GetMass/EnergyBuildAdjMod` — the same builder discount construction gets.
+            if (ammo.owner.index < adjacency.size()) {
+                demand.mass *= adjacency[ammo.owner.index].massBuild;
+                demand.energy *= adjacency[ammo.owner.index].energyBuild;
+            }
             for (const SiloAssistWork& assist : siloAssists) {
                 if (assist.silo == ammo.owner) {
                     demand += assist.demand;
@@ -564,6 +570,12 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
             // grant lands in the one accumulator — which is what lets a single funded
             // assist call advance several production ticks (the `while` below).
             Resources demand = ammo.costPerTick;
+            // C-241: the discounted demand, matching the pass-one request above —
+            // grant, outstanding, and the tick-completion loop all price the same event.
+            if (ammo.owner.index < adjacency.size()) {
+                demand.mass *= adjacency[ammo.owner.index].massBuild;
+                demand.energy *= adjacency[ammo.owner.index].energyBuild;
+            }
             for (const SiloAssistWork& assist : siloAssists) {
                 if (assist.silo == ammo.owner) {
                     demand += assist.demand;
@@ -579,10 +591,19 @@ void tickEconomy(Economy& economy, std::span<Construction> building,
             // accumulator can pay for is a production tick, not just the first. One
             // completion per beat still holds — the spent head stays head until the
             // pass ends (`C-081`), and leftover delivery carries into the next build.
-            while (ammo.delivered.mass >= ammo.costPerTick.mass
-                   && ammo.delivered.energy >= ammo.costPerTick.energy) {
-                ammo.delivered.mass -= ammo.costPerTick.mass;
-                ammo.delivered.energy -= ammo.costPerTick.energy;
+            // Each production tick costs one (discounted) costPerTick: the assist
+            // demand in `demand` above is the EXTRA for extra ticks, not a
+            // per-tick price — pricing the loop at total demand would eat the
+            // helper's contribution instead of banking it (C-083).
+            Resources tickCost = ammo.costPerTick;
+            if (ammo.owner.index < adjacency.size()) {
+                tickCost.mass *= adjacency[ammo.owner.index].massBuild;
+                tickCost.energy *= adjacency[ammo.owner.index].energyBuild;
+            }
+            while (ammo.delivered.mass >= tickCost.mass
+                   && ammo.delivered.energy >= tickCost.energy) {
+                ammo.delivered.mass -= tickCost.mass;
+                ammo.delivered.energy -= tickCost.energy;
                 ++ammo.elapsedTicks;
                 if (ammo.elapsedTicks >= ammo.totalTicks) {
                     ++ammo.stored;

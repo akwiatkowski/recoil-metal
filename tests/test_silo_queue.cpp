@@ -13,8 +13,7 @@
 //   * the auto-refill has an off switch (`SetAutoMode`, the order button's right-click).
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-
-#include "core/map/HeightField.hpp"
+#include "core/sim/Adjacency.hpp"
 #include "core/sim/Command.hpp"
 #include "core/sim/Economy.hpp"
 #include "core/sim/Pathfinding.hpp"
@@ -177,6 +176,36 @@ TEST_CASE("a queued nuke waits behind the tactical head", "[silo][queue]") {
     CHECK(ammo[0].stored == 1);
     // The nuke is now the head: either mid-build or already landed.
     CHECK(static_cast<rm::TickCount>(ammo[1].stored) + ammo[1].elapsedTicks > 0);
+}
+
+TEST_CASE("a silo beside a generator pays the adjacency-discounted demand", "[silo][queue]") {
+    // C-241 (`0x005d5e1a`-`e46`): `massPerTick = BuildCostMass x GetMassBuildAdjMod /
+    // totalTicks` — the retail event demand carries the owner's build adjacency
+    // discount, the same `massBuild`/`energyBuild` multipliers construction gets.
+    const UnitId owner{5, 1};
+    Economy full = banked(100000.0f, 1000000.0f);
+    Economy halfBank = banked(100000.0f, 1000000.0f);
+    std::vector<SiloAmmo> fullAmmo{record(owner, false, 2)};
+    std::vector<SiloAmmo> halfAmmo{record(owner, false, 2)};
+    std::vector<SiloBuild> fullQueue;
+    std::vector<SiloBuild> halfQueue;
+    REQUIRE(rm::sim::queueSiloBuild(fullQueue, fullAmmo, owner, 0));
+    REQUIRE(rm::sim::queueSiloBuild(halfQueue, halfAmmo, owner, 0));
+    std::vector<rm::sim::AdjacencyEffects> adjacency(6);
+    adjacency[5].massBuild = rm::sim::fxFromFloat(0.5f);
+    adjacency[5].energyBuild = rm::sim::fxFromFloat(0.5f);
+
+    rm::sim::tickEconomy(full, {}, {}, std::span<SiloAmmo>{fullAmmo}, false, {},
+                         rm::sim::kNoArmy, {}, {}, {}, &fullQueue);
+    rm::sim::tickEconomy(halfBank, {}, {}, std::span<SiloAmmo>{halfAmmo}, false, {},
+                         rm::sim::kNoArmy, {}, {}, {}, &halfQueue, adjacency);
+    // `requestedLastTick` is the priced event demand: half the per-tick cost
+    // with the 0.5 build discount. (`delivered` cannot discriminate — the
+    // completion loop consumes a fully funded tick back to zero either way.)
+    CHECK(halfBank.requestedLastTick.mass + halfBank.requestedLastTick.mass
+          == full.requestedLastTick.mass);
+    CHECK(halfBank.requestedLastTick.energy + halfBank.requestedLastTick.energy
+          == full.requestedLastTick.energy);
 }
 
 TEST_CASE("a promoted head bills its own beat, not the completing one", "[silo][queue]") {

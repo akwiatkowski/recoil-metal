@@ -1005,8 +1005,8 @@ void spawnCommanders(UnitScene& scene, const rm::HeightField& field,
                     || gun.projectileTraits.buildTime <= rm::sim::Mag{}) {
                     continue;
                 }
-                // C-241 names an adjacency build modifier. It is fixed at 1 in this slice:
-                // per-unit adjacency is not threaded into silo-event demand yet.
+                // C-241's adjacency build modifier rides the owner's live row at
+                // demand time (`tickEconomy`), so spawn stores undiscounted costs.
                 // One record per retail silo SLOT (C-081): same-slot duplicates keep the
                 // FIRST weapon, the selection C-085 records for `GetCountedProjectileWeapon`.
                 const bool slotTaken = std::any_of(
