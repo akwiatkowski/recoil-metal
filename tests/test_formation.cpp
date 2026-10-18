@@ -527,6 +527,45 @@ TEST_CASE("a grouped sub attack-move sails its own attack blocks", "[formation]"
     CHECK(front == 5);
     CHECK(back == 1);
 }
+TEST_CASE("an air group ranks interceptors ahead of bombers in the chevron", "[formation]") {
+    // Retail `BlockBuilderAir` fills each chevron slot from `ChevronSlot`
+    // (formations.lua:359-366): AntiAir before Bombers. A bomber issued first
+    // still trails an interceptor issued second — chevron rank 0 rides the
+    // anchor line while rank 1 trails one 0.375-elmo step behind it
+    // (`GetChevronPosition`, formations.lua:1013-1020).
+    Fixture fix;
+    rm::unitdef::UnitDef bomberDef;
+    bomberDef.name = "test_bomber";
+    bomberDef.categories = {"AIR", "BOMBER", "TECH1"};
+    bomberDef.motion = rm::unitdef::MotionType::Air;
+    const rm::UnitTypeIndex bomber = fix.roster.addType(bomberDef);
+    rm::unitdef::UnitDef intieDef;
+    intieDef.name = "test_intie";
+    intieDef.categories = {"AIR", "ANTIAIR", "TECH1"};
+    intieDef.motion = rm::unitdef::MotionType::Air;
+    const rm::UnitTypeIndex intie = fix.roster.addType(intieDef);
+    const UnitId lead = fix.roster.add(bomber, 200.0f, 200.0f, 0, 500.0f);
+    const UnitId wing = fix.roster.add(intie, 200.0f, 210.0f, 0, 500.0f);
+    fix.roster.store.motion()[lead.index].canFly = true;
+    fix.roster.store.motion()[wing.index].canFly = true;
+    const std::vector<UnitId> group{lead, wing};
+    const rm::sim::ApplyCommandResult result = fix.issueMove(group, 900.0f, 215.0f);
+    REQUIRE(result.accepted == group);
+    // Project each slot onto the centroid-to-click facing: rank 0 rides the
+    // anchor line (projection 0), rank 1 trails 0.375 elmos behind it.
+    constexpr float dx = 700.0f;
+    constexpr float dz = 10.0f;
+    const float norm = std::sqrt(dx * dx + dz * dz);
+    const auto projection = [&](const UnitId member) {
+        const auto& entries = fix.roster.store.orders()[member.index].entries();
+        REQUIRE(entries.size() == 1);
+        const float x = rm::test::asFloat(entries.front().targetX());
+        const float z = rm::test::asFloat(entries.front().targetZ());
+        return ((x - 900.0f) * dx + (z - 215.0f) * dz) / norm;
+    };
+    CHECK(projection(wing) == Catch::Approx(0.0f).margin(0.05f));
+    CHECK(projection(lead) == Catch::Approx(-0.375f).margin(0.05f));
+}
 
 TEST_CASE("a grouped naval move spreads slots at sea spacing", "[formation]") {
     // Retail `GrowthFormation` (ART-S007 lua/formations.lua:722) calls

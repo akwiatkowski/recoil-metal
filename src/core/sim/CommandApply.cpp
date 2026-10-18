@@ -1285,6 +1285,47 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         }
         return 7;
     };
+    // Retail `ChevronSlot` (formations.lua:359): each chevron slot fills from
+    // AntiAir, then Experimental, AntiNavy, GroundAttack, Bombers, Intel,
+    // Transports, and what misses every family. Tech ranks high-to-low inside
+    // each family (`AirCategories`, formations.lua:322-344).
+    const auto formationAirClass = [&](UnitId unit) {
+        const unitdef::UnitDef* def = catalog.def(store.typeAt(unit.index));
+        if (def == nullptr) {
+            return std::pair{7, 3};
+        }
+        const int tech = def->hasCategory("TECH3") ? 0
+                       : def->hasCategory("TECH2") ? 1
+                       : def->hasCategory("TECH1") ? 2
+                                                   : 3;
+        const bool air = def->hasCategory("AIR");
+        if (air && def->hasCategory("ANTIAIR") && !def->hasCategory("GROUNDATTACK")) {
+            return std::pair{0, tech};
+        }
+        if (air && def->hasCategory("EXPERIMENTAL")) {
+            return std::pair{1, tech};
+        }
+        if (air && def->hasCategory("ANTINAVY")) {
+            return std::pair{2, tech};
+        }
+        if (air && def->hasCategory("GROUNDATTACK") && !def->hasCategory("ANTIAIR")) {
+            return std::pair{3, tech};
+        }
+        if (air && def->hasCategory("BOMBER")) {
+            return std::pair{4, tech};
+        }
+        if (air && (def->hasCategory("SCOUT") || def->hasCategory("RADAR"))) {
+            return std::pair{5, tech};
+        }
+        if (air && def->hasCategory("TRANSPORTATION")
+            && !def->hasCategory("GROUNDATTACK")) {
+            return std::pair{6, tech};
+        }
+        return std::pair{7, tech};
+    };
+    // Stable: ties keep canonical order, so a homogeneous group fills exactly as
+    // before and selection order stays presentation-only.
+    std::ranges::stable_sort(airMembers, {}, formationAirClass);
     // Stable: ties keep canonical order, so a homogeneous group fills exactly as
     // before and selection order stays presentation-only.
     std::ranges::stable_sort(formationMembers, {}, formationClass);
