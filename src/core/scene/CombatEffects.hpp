@@ -92,12 +92,16 @@ enum class ShotClass : std::uint8_t {
 /// `eye` is the camera position in world elmos. An emitter whose authored
 /// `LODCutoff` does not reach the eye emits nothing — C-299's only
 /// unimplemented LOD threshold, camera-side like mesh and sound. Null emits all.
+/// `waterLevelElmos` is the map's water plane in world elmos. An emitter with
+/// authored `OnlyEmitOnWater` emits nothing above it; one with `SnapToWaterline`
+/// moves its origin down/up to it. Null (dry map, gallery) emits all, unsnapped.
 void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> events,
                        const WeaponVisuals* visuals = nullptr,
                        CombatEffectState* state = nullptr, float seconds = 0.1f,
                        std::function<float(sim::UnitId)> unitRadius = {},
                        std::function<ShotClass(sim::UnitId, std::string_view)> shotClass = {},
                        std::function<std::uint8_t(sim::Fx, sim::Fx)> terrainTypeAt = {},
-                       const std::array<float,3>* eye = nullptr);
+                       const std::array<float,3>* eye = nullptr,
+                       const float* waterLevelElmos = nullptr);
 
 } // namespace rm

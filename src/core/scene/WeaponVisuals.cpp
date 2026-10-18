@@ -146,6 +146,8 @@ void loadWeaponMaterials(WeaponVisuals& result, const vfs::Vfs& content,
         material.localAcceleration = flag("LocalAcceleration");
         material.resistance = flag("ParticleResistance");
         material.alignRotation = flag("AlignRotation");
+        material.onlyEmitOnWater = flag("OnlyEmitOnWater");
+        material.snapToWaterline = flag("SnapToWaterline");
         material.resistanceCurve = readCurve(*table, "ResistanceCurve");
         material.emitterLifetime = static_cast<float>(table->numberAt("Lifetime").value_or(-1)) * 0.1f;
         material.repeatTime = std::max(0.1f, static_cast<float>(table->numberAt("Repeattime").value_or(10))*0.1f);

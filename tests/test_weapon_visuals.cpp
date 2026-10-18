@@ -768,3 +768,71 @@ TEST_CASE("multi-strip emitter textures keep their authored stripcount", "[weapo
     REQUIRE(visuals.materials.size() == 1);
     CHECK(visuals.materials.front().strips == 4);
 }
+
+TEST_CASE("water-gated emitters emit only near the waterline", "[weapon-visuals]") {
+    // Retail `EmitterBlueprint.OnlyEmitOnWater` / `SnapToWaterline` (891 of 2724
+    // shipped emitters snap, e.g. `seraphim_lancer_missile_hit_02_flat`; 15 emit
+    // only on water, e.g. `cannon_muzzle_water_shock_01_emit.bp`): neither flag
+    // is parsed, so a water shock would fire on dry land.
+    const auto root = std::filesystem::temp_directory_path() / "rm_watergate_emit";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "effects/emitters");
+    std::filesystem::create_directories(root / "textures/particles");
+    {
+        std::ofstream emit(root / "effects/emitters/water_emit.bp");
+        emit << "EmitterBlueprint {\n"
+                "    Texture = [[/textures/particles/strip.dds]],\n"
+                "    Blendmode = 3.00,\n"
+                "    OnlyEmitOnWater = true,\n"
+                "}\n";
+    }
+    {
+        std::ofstream tex(root / "textures/particles/strip.dds", std::ios::binary);
+        const char magic[4]{'D', 'D', 'S', ' '};
+        tex.write(magic, 4);
+        std::vector<std::byte> header(124, std::byte{0});
+        auto put = [&](std::size_t at, std::uint32_t v) {
+            header[at] = static_cast<std::byte>(v & 0xFFu);
+            header[at + 1] = static_cast<std::byte>((v >> 8) & 0xFFu);
+            header[at + 2] = static_cast<std::byte>((v >> 16) & 0xFFu);
+            header[at + 3] = static_cast<std::byte>((v >> 24) & 0xFFu);
+        };
+        put(0, 124);
+        put(8, 16);
+        put(12, 16);
+        put(24, 16);
+        put(72, 32);
+        put(76, 0x00000004u);
+        header[80] = std::byte{'D'};
+        header[81] = std::byte{'X'};
+        header[82] = std::byte{'T'};
+        header[83] = std::byte{'1'};
+        tex.write(reinterpret_cast<const char*>(header.data()),
+                  static_cast<std::streamsize>(header.size()));
+        const std::vector<char> payload(128, 0);
+        tex.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+    }
+    rm::WeaponVisuals visuals;
+    rm::vfs::Vfs content;
+    content.mountDirectory(root);
+    const std::array<std::string, 1> paths{"/effects/emitters/water_emit.bp"};
+    rm::loadWeaponMaterials(visuals, content, "water#FxMuzzleFlash", paths);
+    std::filesystem::remove_all(root);
+    REQUIRE(visuals.materials.size() == 1);
+    CHECK(visuals.materials.front().onlyEmitOnWater);
+    // A dry-land shot earns no burst once the waterline is known, and a null
+    // waterline (dry map, gallery) keeps the old emit-all behaviour.
+    const rm::sim::Event fired{.kind=rm::sim::EventKind::WeaponFired,
+        .at2={rm::sim::Fx::fromInt(0),rm::sim::Fx::fromInt(20),{}},
+        .visualId="water"};
+    const float water = 0.0f;
+    rm::CombatEffectState dry;
+    std::vector<rm::Particle> dryOut;
+    rm::emitCombatEffects(dryOut, std::array{fired}, &visuals, &dry, 0.05f,
+        {}, {}, {}, nullptr, &water);
+    CHECK(dry.bursts.empty());
+    rm::CombatEffectState unknown;
+    std::vector<rm::Particle> unknownOut;
+    rm::emitCombatEffects(unknownOut, std::array{fired}, &visuals, &unknown, 0.05f);
+    CHECK(unknown.bursts.size() == 1);
+}

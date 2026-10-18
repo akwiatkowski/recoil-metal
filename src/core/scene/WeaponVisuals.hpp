@@ -53,6 +53,12 @@ struct WeaponMaterial {
     /// faces its birth velocity. True on 332 of 2923 shipped emitters
     /// (e.g. `watersplash_m.bp`).
     bool alignRotation = false;
+    /// `OnlyEmitOnWater` / `SnapToWaterline` (retail `EmitterBlueprint`):
+    /// water-gated emission. 891 of 2724 shipped emitters snap their origin
+    /// to the waterline (e.g. `seraphim_lancer_missile_hit_02_flat`); 15 emit
+    /// only on water (e.g. `cannon_muzzle_water_shock_01_emit.bp`).
+    bool onlyEmitOnWater = false;
+    bool snapToWaterline = false;
     /// `LODCutoff` (retail `EmitterBlueprint`, FAF
     /// `engine/Core/Blueprints/EmitterBlueprint.lua`: "Distance at which
     /// emission cuts out"), in elmos — game units times the same 8-elmos-per-ogrid

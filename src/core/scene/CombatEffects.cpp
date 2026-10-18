@@ -63,7 +63,7 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
     std::function<float(sim::UnitId)> unitRadius,
     std::function<ShotClass(sim::UnitId, std::string_view)> shotClass,
     std::function<std::uint8_t(sim::Fx, sim::Fx)> terrainTypeAt,
-    const std::array<float,3>* eye) {
+    const std::array<float,3>* eye, const float* waterLevelElmos) {
     CombatEffectState immediate;
     if (visuals && !state) state = &immediate;
     const auto burst = [&](const std::string& key, std::array<float,3> position,
@@ -78,7 +78,12 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
                 const float dz = position[2] - (*eye)[2];
                 if (dx * dx + dy * dy + dz * dz > material.lodCutoffElmos * material.lodCutoffElmos) continue;
             }
-            state->bursts.push_back({id, position, 0, ++state->seed,
+            std::array<float,3> origin = position;
+            if (waterLevelElmos != nullptr) {
+                if (material.onlyEmitOnWater && origin[1] > *waterLevelElmos) continue;
+                if (material.snapToWaterline) origin[1] = *waterLevelElmos;
+            }
+            state->bursts.push_back({id, origin, 0, ++state->seed,
                 visuals->scale(key) * scale, owner, weapon, direction});
         }
         return true;
