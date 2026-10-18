@@ -636,6 +636,13 @@ void EnhancementTasks::onDestroy(UnitId unit, std::string_view task,
     std::erase_if(work_, [&](const auto& entry) { return entry.owner == unit && entry.name == name; });
 }
 
+void retireDeadEnhancementWork(const UnitStore& store,
+                               std::vector<EnhancementWork>& work) {
+    std::erase_if(work, [&](const EnhancementWork& entry) {
+        return !store.alive(entry.owner);
+    });
+}
+
 const UnitCatalog::ShieldInfo& shieldFor(const UnitStore& store,
                                          const UnitCatalog& catalog,
                                          UnitIndex slot) noexcept {

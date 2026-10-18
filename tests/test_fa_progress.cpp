@@ -10,7 +10,7 @@
 #include "app/SceneBuild.hpp"
 #include "core/lua/LuaTable.hpp"
 #include "core/sim/Combat.hpp"
-#include "core/sim/Events.hpp"
+#include "core/sim/Enhancement.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/StateHash.hpp"
 #include "core/sim/SaveState.hpp"
@@ -884,4 +884,22 @@ TEST_CASE("C-255: an installed enhancement's NewDamageRadius widens the blast",
     REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "BlastAttackRemove"));
     CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, chrono)
           == rm::sim::Fx{});
+}
+
+TEST_CASE("C-378: a dead owner's in-flight enhancement work retires with it",
+          "[fa-progress][enhancement]") {
+    // The install/fund/work/cancel edge the lifecycle owns: a unit killed
+    // mid-work leaves no funded work row behind — the C-254 registry rule
+    // extended to the work vector, so a recycled slot inherits neither the
+    // upgrades nor their half-paid bill.
+    rm::test::Roster roster;
+    const auto type = roster.addType(commanderDef());
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    std::vector<rm::sim::EnhancementWork> work{
+        {.owner = unit, .name = "AdvancedEngineering",
+         .totalBuildTime = rm::test::mag(8.0f),
+         .buildTimeRemaining = rm::test::mag(4.0f)}};
+    roster.store.kill(unit);
+    (void)rm::sim::retireDeadEnhancementWork(roster.store, work);
+    CHECK(work.empty());
 }

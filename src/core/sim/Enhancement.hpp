@@ -204,6 +204,12 @@ struct EnhancementScriptEffects {
 /// the unit's `regenWrite` says the write still stands (`C-258`).
 [[nodiscard]] std::optional<Mag> enhancementRegenOverride(
     const UnitStore& store, const UnitCatalog& catalog, UnitIndex slot) noexcept;
+/// `C-378`'s death edge: in-flight enhancement work dies with its owner, the
+/// work-vector half of the `C-254` registry rule — a dead owner's unfinished
+/// row retires (no refund, like every cancel) so a recycled slot inherits
+/// neither the upgrades nor their half-paid bill.
+void retireDeadEnhancementWork(const UnitStore& store,
+                               std::vector<EnhancementWork>& work);
 /// Native counterpart of retail EnhanceTask.lua. The host must outlive bound command queues.
 class EnhancementTasks final : public ScriptTaskHost {
 public:

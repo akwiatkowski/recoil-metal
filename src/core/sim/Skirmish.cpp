@@ -1326,6 +1326,12 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             return !store.alive(redirect.owner);
         });
     }
+    // In-flight enhancement work dies with its owner (`C-378`): a dead
+    // commander's half-paid row retires before partitioning, so it draws
+    // nothing and a recycled slot inherits neither it nor its bill.
+    if (match.enhancements != nullptr) {
+        retireDeadEnhancementWork(store, *match.enhancements);
+    }
     // Tarmac stamps die with their owners (`C-289`): retail's `DestroyTarmac`
     // runs from `OnDestroy`, and the sweep is the same component-removal rule
     // as the silo ammo above — a death, a reclaim, a capture-kill or an
