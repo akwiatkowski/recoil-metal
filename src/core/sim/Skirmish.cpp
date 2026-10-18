@@ -1146,6 +1146,21 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 emit(match.events, Event{.kind = EventKind::TeamDefeated,
                                          .army = match.armies[i].index});
                 match.defeatCleanupRemainingTicks[i] = cleanupTicks;
+                // `aibrain.lua:786`'s `OnDefeat` calls `SimPing.OnArmyDefeat`,
+                // which deletes every `PingMarkers[armyID]` entry. The guarded
+                // `UpdateMarker` delete would refuse a defeated army, so the
+                // flush erases directly rather than routing through the channel.
+                if (match.simCallbacks != nullptr) {
+                    const int fallen = match.armies[i].index;
+                    for (auto it = match.simCallbacks->markers.begin();
+                         it != match.simCallbacks->markers.end();) {
+                        if (it->first.first == fallen) {
+                            it = match.simCallbacks->markers.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                }
             }
         }
         }

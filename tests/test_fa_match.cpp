@@ -16,7 +16,8 @@
 
 #include "core/map/HeightField.hpp"
 #include "core/sim/Skirmish.hpp"
-#include "core/sim/ArmyStats.hpp"
+#include "core/sim/SimCallbacks.hpp"
+
 #include "core/sim/SaveState.hpp"
 
 #include "support/FxMatchers.hpp"
@@ -806,4 +807,40 @@ TEST_CASE("C-408: a first defeat with two alliances left decides nothing",
     CHECK_FALSE(match.over);
     CHECK_FALSE(report.matchEnded);
     CHECK_FALSE(match.pendingWinner.has_value());
+}
+
+TEST_CASE("C-210: a defeated army's map markers are flushed", "[fa-match]") {
+    // `aibrain.lua:786`'s `OnDefeat` calls `SimPing.OnArmyDefeat`, which deletes
+    // every `PingMarkers[armyID]` entry. A fallen army's markers must not linger
+    // on the map after the poll that observed its commanders missing.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex commander = roster.addType(commanderDef());
+    (void)roster.add(commander, 0.0f, 0.0f, 0, 12000.0f);
+    const UnitId doomed = roster.add(commander, 400.0f, 0.0f, 1, 12000.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<rm::sim::Projectile> projectiles;
+    rm::sim::SimCallbackState simCallbacks;
+    simCallbacks.markers[{1, 1}] = rm::sim::SimMarker{.owner = 1, .id = 1};
+    simCallbacks.markers[{0, 1}] = rm::sim::SimMarker{.owner = 0, .id = 1};
+    const std::vector<int> commandersEver{1, 1};
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .commandersEver = commandersEver,
+                .simCallbacks = &simCallbacks};
+    const rm::sim::TickRate rate{};
+    const rm::TickCount pollTicks = rate.ticks(rm::sim::seconds(3.0f));
+
+    roster.health(doomed).current = rm::sim::Mag{};
+    for (rm::TickCount tick = 0; tick < pollTicks; ++tick) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    REQUIRE(armies[1].defeated);
+    CHECK(simCallbacks.markers.find({1, 1}) == simCallbacks.markers.end());
+    CHECK(simCallbacks.markers.contains({0, 1}));
 }

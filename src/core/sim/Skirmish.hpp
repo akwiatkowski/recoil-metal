@@ -13,7 +13,7 @@
 #include "core/sim/Intel.hpp"
 #include "core/sim/Movement.hpp"
 #include "core/sim/UnitCatalog.hpp"
-#include "core/sim/UnitStore.hpp"
+#include "core/sim/SimCallbacks.hpp"
 #include "core/unit/UnitDef.hpp"
 
 #include <cstddef>
@@ -274,6 +274,11 @@ struct Match {
     /// sweeps dead owners' stamps each tick (retail's `DestroyTarmac`), and a
     /// scene with no type grid passes null so the sweep is a branch.
     TerrainTypeGrid* terrainTypes = nullptr;
+    /// `SimPing.lua`'s `PingMarkers` (`aibrain.lua:786`'s `OnDefeat` calls
+    /// `SimPing.OnArmyDefeat`, deleting every entry of the fallen army): the
+    /// defeat arm flushes the fallen army's entries here. Null keeps older
+    /// callers compiling — no markers to flush.
+    SimCallbackState* simCallbacks = nullptr;
 };
 
 /// The position and radius are CARRIED rather than looked up, because retiring a unit is
