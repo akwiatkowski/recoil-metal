@@ -4165,3 +4165,64 @@ TEST_CASE("ui_only mods never reach the sim sandbox", "[faf][ai][mods]") {
     std::filesystem::remove_all(root, ec);
     std::filesystem::remove_all(modDir, ec);
 }
+TEST_CASE("C-210/C-361: defeat and game-over events reach the brain callbacks",
+          "[faf][ai][victory]") {
+    // `aibrain.lua:782-805`: `OnDefeat` marks the brain out of game and files
+    // the defeat result, `OnVictory`/`OnDraw` file theirs. The sim's
+    // `TeamDefeated`/`GameOver` events are the native trigger — without this
+    // routing the FAF brain never hears the verdict the sim already decided.
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    auto scene = std::make_unique<rm::app::UnitScene>();
+    scene->armies = {{.index = 0, .alliance = 0}, {.index = 1, .alliance = 1}};
+    scene->economies.resize(scene->armies.size());
+    rm::HeightField field{.squaresX = 64, .squaresZ = 64};
+    field.raw.resize(field.sampleCount());
+    const std::array<rm::mapinfo::StartPosition, 2> starts{{
+        {.x = 0, .z = 100}, {.x = 50, .z = 100},
+    }};
+    rm::vfs::Vfs content;
+    const rm::ai::World world{.scene = *scene, .content = content, .field = field,
+                              .starts = starts, .markers = {}};
+    rm::ai::FafOpponent opponent(ai, 0);
+    opponent.observe(world, {});
+    opponent.advance(0);
+    REQUIRE(ai.eval(R"(
+        __rm_faf.verdicts = {}
+        local brain = __rm_faf.brains[0]
+        function brain:OnDefeat()
+            __rm_faf.verdicts[#__rm_faf.verdicts + 1] = 'defeat'
+        end
+        function brain:OnVictory()
+            __rm_faf.verdicts[#__rm_faf.verdicts + 1] = 'victory'
+        end
+        function brain:OnDraw()
+            __rm_faf.verdicts[#__rm_faf.verdicts + 1] = 'draw'
+        end
+    )"));
+    // Another army's fall is not ours: only the GameOver verdict dispatches.
+    const std::array<rm::sim::Event, 2> othersFall{{
+        {.kind = rm::sim::EventKind::TeamDefeated, .army = 1},
+        {.kind = rm::sim::EventKind::GameOver, .army = 0},
+    }};
+    opponent.observe(world, othersFall);
+    INFO(ai.lastError());
+    REQUIRE(ai.eval(R"(
+        assert(#__rm_faf.verdicts == 1 and __rm_faf.verdicts[1] == 'victory',
+            'only our win dispatches OnVictory')
+    )"));
+    // Our own fall dispatches OnDefeat; a draw (kNoArmy) dispatches OnDraw.
+    const std::array<rm::sim::Event, 2> weFall{{
+        {.kind = rm::sim::EventKind::TeamDefeated, .army = 0},
+        {.kind = rm::sim::EventKind::GameOver, .army = rm::sim::kNoArmy},
+    }};
+    opponent.observe(world, weFall);
+    INFO(ai.lastError());
+    REQUIRE(ai.eval(R"(
+        assert(__rm_faf.verdicts[2] == 'defeat', 'our fall dispatches OnDefeat')
+        assert(__rm_faf.verdicts[3] == 'draw', 'kNoArmy game-over dispatches OnDraw')
+    )"));
+}

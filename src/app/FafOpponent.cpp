@@ -3776,6 +3776,28 @@ void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> ev
                 lua_pushstring(lua, event.statName.c_str());
             });
             break;
+        case rm::sim::EventKind::TeamDefeated:
+            // `aibrain.lua:782` (`C-210`/`C-361`): the sim poll's defeat verdict
+            // reaches the fallen army's own brain as `OnDefeat`. Another army's
+            // fall is not ours — retail's `SetArmyOutOfGame` runs per brain.
+            if (event.army != army_) break;
+            callBrain("OnDefeat", 0, [] {});
+            break;
+        case rm::sim::EventKind::GameOver: {
+            // `aibrain.lua:797-805`: the winner's brain hears `OnVictory`, every
+            // other surviving brain hears nothing from this event — and a draw
+            // (`kNoArmy`) hears `OnDraw`. `army` names the winning ALLIANCE, so
+            // membership is read through our own army's alliance.
+            const std::size_t self = static_cast<std::size_t>(army_);
+            if (self >= scene.armies.size()) break;
+            const int alliance = scene.armies[self].alliance;
+            if (event.army == rm::sim::kNoArmy) {
+                callBrain("OnDraw", 0, [] {});
+            } else if (event.army == alliance) {
+                callBrain("OnVictory", 0, [] {});
+            }
+            break;
+        }
         case rm::sim::EventKind::UnitCapLimitReached:
             if (event.army != army_) break;
             callBrain("OnUnitCapLimitReached", 0, [] {});
