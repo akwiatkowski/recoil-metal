@@ -63,8 +63,8 @@ struct CaptureWork {
 /// (`Unit.lua:2740`, set by `SetCaptureTimeMultiplier`, default 1). The rate
 /// is the captor's effective build rate per tick; the budget is per second,
 /// so it scales with the tick rate rather than assuming one.
-[[nodiscard]] int captureWorkTicks(Mag targetBuildTime, Mag ratePerTick,
-                                   std::uint32_t ticksPerSecond, float timeMult = 1.0f) noexcept;
+ [[nodiscard]] int captureWorkTicks(Mag targetBuildTime, Mag ratePerTick,
+                                    std::uint32_t ticksPerSecond, Fx timeMult = Fx::fromInt(1)) noexcept;
 
 /// The per-beat energy demand for one capture: the target's whole build energy
 /// cost spread evenly over its work budget. Mass costs nothing to capture.

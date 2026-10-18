@@ -142,7 +142,7 @@ TEST_CASE("a captor with a doubled capture time works a doubled budget", "[captu
     // `CaptureTimeMultiplier` (set by `SetCaptureTimeMultiplier`). The same
     // 100-work target at rate 10/s takes 100 ticks, not 50, at mult 2.
     CHECK(rm::sim::captureWorkTicks(rm::sim::magFromFloat(100.0f),
-                                    rm::sim::magFromFloat(1.0f), 10, 2.0f)
+                                    rm::sim::magFromFloat(1.0f), 10, rm::sim::Fx::fromInt(2))
           == 100);
     CHECK(rm::sim::captureWorkTicks(rm::sim::magFromFloat(100.0f),
                                     rm::sim::magFromFloat(1.0f), 10)
