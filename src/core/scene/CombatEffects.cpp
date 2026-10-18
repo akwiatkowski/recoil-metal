@@ -62,7 +62,8 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
     const WeaponVisuals* visuals, CombatEffectState* state, float seconds,
     std::function<float(sim::UnitId)> unitRadius,
     std::function<ShotClass(sim::UnitId, std::string_view)> shotClass,
-    std::function<std::uint8_t(sim::Fx, sim::Fx)> terrainTypeAt) {
+    std::function<std::uint8_t(sim::Fx, sim::Fx)> terrainTypeAt,
+    const std::array<float,3>* eye) {
     CombatEffectState immediate;
     if (visuals && !state) state = &immediate;
     const auto burst = [&](const std::string& key, std::array<float,3> position,
@@ -70,6 +71,13 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
                            const std::string& weapon = "", float scale = 1.0f) {
         if (!visuals || !visuals->contains(key)) return false;
         for (const auto id : visuals->find(key)) {
+            const auto& material = visuals->materials[id];
+            if (eye != nullptr && material.lodCutoffElmos > 0.0f) {
+                const float dx = position[0] - (*eye)[0];
+                const float dy = position[1] - (*eye)[1];
+                const float dz = position[2] - (*eye)[2];
+                if (dx * dx + dy * dy + dz * dz > material.lodCutoffElmos * material.lodCutoffElmos) continue;
+            }
             state->bursts.push_back({id, position, 0, ++state->seed,
                 visuals->scale(key) * scale, owner, weapon, direction});
         }

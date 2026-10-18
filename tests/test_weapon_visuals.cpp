@@ -635,3 +635,84 @@ TEST_CASE("projectile ribbons retain turns, clip to the authored length and drai
     rm::appendProjectiles(bolts, shots, 0.0f, 1.0f, &visuals);
     CHECK(bolts.empty());
 }
+TEST_CASE("distant emitters stop at their authored LODCutoff", "[weapon-visuals]") {
+    // Retail `EmitterBlueprint.LODCutoff` (FAF
+    // `engine/Core/Blueprints/EmitterBlueprint.lua`: "Distance at which
+    // emission cuts out", game units like the prop LODs in
+    // `src/core/map/PropBlueprint.cpp`): the loader drops the key, so a
+    // far-zoomed battle emits every particle anyway.
+    const auto root = std::filesystem::temp_directory_path() / "rm_lodcutoff_emit";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "effects/emitters");
+    std::filesystem::create_directories(root / "textures/particles");
+    {
+        std::ofstream emit(root / "effects/emitters/cut_emit.bp");
+        emit << "EmitterBlueprint {\n"
+                "    Texture = [[/textures/particles/cut.dds]],\n"
+                "    Blendmode = 3.00,\n"
+                "    LODCutoff = 30.00,\n"
+                "    EmitRateCurve = {\n"
+                "        XRange = 1.00,\n"
+                "        Keys = {\n"
+                "            { x=0.000,y=60.000,z=0.000 },\n"
+                "        },\n"
+                "    },\n"
+                "    LifetimeCurve = {\n"
+                "        XRange = 1.00,\n"
+                "        Keys = {\n"
+                "            { x=0.000,y=5.000,z=0.000 },\n"
+                "        },\n"
+                "    },\n"
+                "}\n";
+    }
+    {
+        std::ofstream tex(root / "textures/particles/cut.dds", std::ios::binary);
+        const char magic[4]{'D', 'D', 'S', ' '};
+        tex.write(magic, 4);
+        std::vector<std::byte> header(124, std::byte{0});
+        auto put = [&](std::size_t at, std::uint32_t v) {
+            header[at] = static_cast<std::byte>(v & 0xFFu);
+            header[at + 1] = static_cast<std::byte>((v >> 8) & 0xFFu);
+            header[at + 2] = static_cast<std::byte>((v >> 16) & 0xFFu);
+            header[at + 3] = static_cast<std::byte>((v >> 24) & 0xFFu);
+        };
+        put(0, 124);
+        put(8, 16);
+        put(12, 16);
+        put(24, 16);
+        put(72, 32);
+        put(76, 0x00000004u);
+        header[80] = std::byte{'D'};
+        header[81] = std::byte{'X'};
+        header[82] = std::byte{'T'};
+        header[83] = std::byte{'1'};
+        tex.write(reinterpret_cast<const char*>(header.data()),
+                  static_cast<std::streamsize>(header.size()));
+        const std::vector<char> payload(128, 0);
+        tex.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+    }
+    rm::WeaponVisuals visuals;
+    rm::vfs::Vfs content;
+    content.mountDirectory(root);
+    const std::array<std::string, 1> paths{"/effects/emitters/cut_emit.bp"};
+    rm::loadWeaponMaterials(visuals, content, "cut#FxMuzzleFlash", paths);
+    std::filesystem::remove_all(root);
+    REQUIRE(visuals.materials.size() == 1);
+    // 30 game units ride the same ogrids-to-elmos scale as the prop LODs.
+    CHECK(visuals.materials.front().lodCutoffElmos == Catch::Approx(240.0f));
+    const rm::sim::Event fired{.kind=rm::sim::EventKind::WeaponFired,
+        .at2={rm::sim::Fx::fromInt(0),rm::sim::Fx::fromInt(20),{}},
+        .visualId="cut"};
+    rm::CombatEffectState nearEffects;
+    std::vector<rm::Particle> near;
+    const std::array<float,3> nearEye{0.0f, 0.0f, 0.0f};
+    rm::emitCombatEffects(near, std::array{fired}, &visuals, &nearEffects, 0.05f,
+        {}, {}, {}, &nearEye);
+    CHECK_FALSE(near.empty());
+    rm::CombatEffectState farEffects;
+    std::vector<rm::Particle> far;
+    const std::array<float,3> farEye{10000.0f, 0.0f, 0.0f};
+    rm::emitCombatEffects(far, std::array{fired}, &visuals, &farEffects, 0.05f,
+        {}, {}, {}, &farEye);
+    CHECK(far.empty());
+}

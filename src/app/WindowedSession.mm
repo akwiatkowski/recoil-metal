@@ -2283,6 +2283,8 @@ int runWindowed(const Session& session) {
                 // queue, so this tick's shots are visible now or never.
                 gatherVisibleEvents(visibleEvents, units);
                 units.updateCombatAttachments();
+                const simd_float3 cameraEye = window.camera().eye();
+                const std::array<float,3> eyeElmos{cameraEye.x, cameraEye.y, cameraEye.z};
                 rm::emitCombatEffects(particles, visibleEvents, &units.weaponVisuals,
                     &units.combatEffectState, gAppTickRate.secondsPerTick(),
                     [&units](rm::sim::UnitId id) {
@@ -2298,7 +2300,8 @@ int runWindowed(const Session& session) {
                     },
                     [&units](rm::sim::Fx x, rm::sim::Fx z) {
                         return units.terrainTypeGrid.at(x, z);
-                    });
+                    },
+                    &eyeElmos);
 
                 // ...and as SOUND, from the same per-tick queue for the same reason. The
                 // listener rides the camera every tick, so panning follows the view.

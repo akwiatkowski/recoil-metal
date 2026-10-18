@@ -150,7 +150,9 @@ void loadWeaponMaterials(WeaponVisuals& result, const vfs::Vfs& content,
         material.emitterLifetime = static_cast<float>(table->numberAt("Lifetime").value_or(-1)) * 0.1f;
         material.repeatTime = std::max(0.1f, static_cast<float>(table->numberAt("Repeattime").value_or(10))*0.1f);
         material.frames = static_cast<std::uint32_t>(std::max(1.0, table->numberAt("TextureFramecount").value_or(1)));
-        material.strips = static_cast<std::uint32_t>(std::max(1.0, table->numberAt("TextureStripcount").value_or(1)));
+        // `LODCutoff` is game units like every other effect dimension — the same
+        // eight-elmos-per-ogrid scale the width/length lines below use.
+        material.lodCutoffElmos = 8.0f * static_cast<float>(table->numberAt("LODCutoff").value_or(0));
         material.sortOrder = static_cast<float>(table->numberAt("SortOrder").value_or(0));
         if (const auto rampPath = table->stringAt("RampTexture")) {
             auto ramp = readTexture(content, *rampPath);

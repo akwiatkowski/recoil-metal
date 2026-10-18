@@ -53,6 +53,12 @@ struct WeaponMaterial {
     /// faces its birth velocity. True on 332 of 2923 shipped emitters
     /// (e.g. `watersplash_m.bp`).
     bool alignRotation = false;
+    /// `LODCutoff` (retail `EmitterBlueprint`, FAF
+    /// `engine/Core/Blueprints/EmitterBlueprint.lua`: "Distance at which
+    /// emission cuts out"), in elmos — game units times the same 8-elmos-per-ogrid
+    /// scale the prop LODs use (`PropBlueprint.cpp`). Zero means unauthored:
+    float lodCutoffElmos = 0.0f;
+
     /// A TrailBlueprint: drawn as a ribbon over the projectile's recorded path by
     /// ProjectileTrails, not as one straight strip. `length` is its TrailLength in elmos.
     bool ribbon = false;
