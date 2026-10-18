@@ -269,6 +269,12 @@ void divertToDepthChargeOwner(Projectile& shot, std::vector<Projectile>& project
         const Fx speed = fxHypot(fxHypot(shot.velocity[0], shot.velocity[2]),
                                  shot.velocity[1]);
         shot.velocity = {dx / leg * speed, dy / leg * speed, dz / leg * speed};
+        // Retail `SetNewTarget` replaces the track (`defaultantiprojectile.lua`
+        // `DepthCharge.OnCollisionCheck`, C-204): the new mark is the charge's
+        // owner projectile, which the sim cannot steer at, so the torpedo
+        // keeps the old unit mark nowhere — C-171 coasts with no live
+        // guidance instead of steering back to the pre-divert target.
+        shot.guidanceTarget = UnitId{};
         return;
     }
 }
