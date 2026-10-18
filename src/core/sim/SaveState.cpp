@@ -233,6 +233,10 @@ constexpr std::uint32_t kVersion65 = 65;
 // sparse like the custom names — a match where every unit is capturable
 // writes nothing, so older saves decode with every unit capturable.
 constexpr std::uint32_t kVersion66 = 66;
+// v67 adds the submitted-but-unapplied command input (`CommandBuffer::pending`).
+// Pre-v67 saves decode with no pending input — the match resumes without the
+// in-flight orders, as before.
+constexpr std::uint32_t kVersion67 = 67;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -2006,6 +2010,97 @@ void writeOpponentWaves(PayloadWriter& w, const std::optional<std::vector<std::u
     waves = std::move(out);
     return true;
 }
+// v67 trails the payload after the capturable flags: the submitted-but-unapplied
+// command input (`CommandBuffer::pending`), nullable like the wave flags — a
+// match with an empty buffer saves the absent byte, and a pre-v67 reader keeps
+// none. Fields mirror the command-log record (tick, phase, source, id, player,
+// kind, queued, units, targets, build type, count, script payload, cancel id,
+// build priority, script bit); Fx rides as raw words, exact round-trip.
+void writePendingInput(PayloadWriter& w, const std::optional<std::vector<CommandIssue>>& pending) {
+    w.u8(pending.has_value());
+    if (!pending) {
+        return;
+    }
+    w.count(pending->size());
+    for (const CommandIssue& issue : *pending) {
+        if (issue.scriptTask.size() > kMaxScriptTaskNameBytes
+            || issue.scriptData.size() > kMaxScriptTaskDataBytes) {
+            throw std::length_error("script command exceeds the v12 save-state limit");
+        }
+        w.u64(issue.tick);
+        w.u8(static_cast<std::uint8_t>(issue.phase));
+        w.u8(issue.source);
+        w.u32(issue.id);
+        w.u16(issue.player);
+        w.u8(static_cast<std::uint8_t>(issue.kind));
+        w.u8(issue.queued);
+        w.count(issue.units.size());
+        for (UnitId unit : issue.units) writeId(w, unit);
+        w.i32(issue.targetX.raw());
+        w.i32(issue.targetZ.raw());
+        writeId(w, issue.target);
+        w.u16(issue.buildType);
+        w.u32(issue.count);
+        w.text(issue.scriptTask);
+        w.bytes(issue.scriptData);
+        w.u32(issue.cancelCommandId);
+        w.u8(static_cast<std::uint8_t>(issue.priority));
+        w.u8(issue.scriptBit);
+    }
+}
+
+[[nodiscard]] bool readPendingInput(PayloadReader& r, std::optional<std::vector<CommandIssue>>& pending) {
+    std::uint8_t present{};
+    if (!r.u8(present) || present > 1) return false;
+    if (!present) {
+        pending.reset();
+        return true;
+    }
+    std::size_t count{};
+    if (!r.count(count, 0)) return false;
+    std::vector<CommandIssue> out;
+    out.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        CommandIssue issue;
+        std::uint8_t phase{}, source{}, kind{}, queued{}, priority{}, scriptBit{};
+        std::uint16_t player{};
+        std::size_t units{};
+        std::int32_t targetX{}, targetZ{};
+        if (!r.u64(issue.tick) || !r.u8(phase) || phase > 1 || !r.u8(source)
+            || source > kInvalidCommandSource || !r.u32(issue.id) || !r.u16(player)
+            || !r.u8(kind) || kind > static_cast<std::uint8_t>(CommandKind::Gift)
+            || !r.u8(queued) || queued > 1 || !r.count(units, 8)) {
+            return false;
+        }
+        issue.phase = static_cast<CommandPhase>(phase);
+        issue.source = source;
+        issue.player = static_cast<PlayerIndex>(player);
+        issue.kind = static_cast<CommandKind>(kind);
+        issue.queued = queued != 0;
+        issue.units.resize(units);
+        for (UnitId& unit : issue.units) if (!readId(r, unit)) return false;
+        if (!r.i32(targetX) || !r.i32(targetZ) || !readId(r, issue.target)
+            || !r.u16(issue.buildType) || !r.u32(issue.count)
+            || !r.text(issue.scriptTask)
+            || issue.scriptTask.size() > kMaxScriptTaskNameBytes
+            || !r.bytes(issue.scriptData, kMaxScriptTaskDataBytes)
+            || !r.u32(issue.cancelCommandId)) {
+            return false;
+        }
+        if (!r.u8(priority)
+            || priority > static_cast<std::uint8_t>(BuildPriority::High)
+            || !r.u8(scriptBit) || scriptBit > 8) {
+            return false;
+        }
+        issue.targetX = Fx::fromRaw(targetX);
+        issue.targetZ = Fx::fromRaw(targetZ);
+        issue.priority = static_cast<BuildPriority>(priority);
+        issue.scriptBit = scriptBit;
+        out.push_back(std::move(issue));
+    }
+    pending = std::move(out);
+    return true;
+}
 // V45 trails the payload after the unit pose: the emitter pool, nullable like
 // `features` — a match with no effect manager saves the absent byte, and an
 // older reader keeps no effects.
@@ -2855,6 +2950,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion64) writeStandingOrders(payloadWriter, state.standingOrders);
     if (version >= kVersion65) writeOpponentWaves(payloadWriter, state.opponentWaves);
     if (version >= kVersion66) writeCapturable(payloadWriter, state.units);
+    if (version >= kVersion67) writePendingInput(payloadWriter, state.pendingInput);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -2909,7 +3005,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion56 && version != kVersion57
                && version != kVersion58 && version != kVersion59 && version != kVersion60
                && version != kVersion61 && version != kVersion62 && version != kVersion63
-               && version != kVersion64 && version != kVersion65 && version != kVersion66)
+               && version != kVersion64 && version != kVersion65 && version != kVersion66
+               && version != kVersion67)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -3025,6 +3122,10 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion66 && !readCapturable(reader, units)) {
         return std::nullopt;
     }
+    std::optional<std::vector<CommandIssue>> pendingInput;
+    if (version >= kVersion67 && !readPendingInput(reader, pendingInput)) {
+        return std::nullopt;
+    }
     // Pre-v51 saves predate the flag: every feature they hold is a wreck, and
     // every wreck then marked the ground — restore that, or a loaded match
     // loses its scorch.
@@ -3050,7 +3151,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        .effects = std::move(effects),
                        .terrainStamps = std::move(terrainStamps),
                        .standingOrders = std::move(standingOrders),
-                       .opponentWaves = std::move(opponentWaves)};
+                       .opponentWaves = std::move(opponentWaves),
+                       .pendingInput = std::move(pendingInput)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -3078,7 +3180,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion66);
+    return rm::sim::encode(state, kVersion67);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

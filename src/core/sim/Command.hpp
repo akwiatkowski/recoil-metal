@@ -344,6 +344,10 @@ public:
 
     /// Removes and returns one tick/phase batch in deterministic application order.
     [[nodiscard]] std::vector<CommandIssue> take(TickIndex tick, CommandPhase phase);
+    /// Re-queues issues decoded from a save verbatim — no ID is allocated or
+    /// consumed, because the allocator counters already rode the unit
+    /// snapshot past them. The caller restores the store first.
+    void restorePending(std::vector<CommandIssue> issues);
 
     [[nodiscard]] std::size_t size() const noexcept { return pending_.size(); }
     [[nodiscard]] bool empty() const noexcept { return pending_.empty(); }

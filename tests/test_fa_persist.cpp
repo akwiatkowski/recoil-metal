@@ -851,3 +851,62 @@ TEST_CASE("v65: wave flags capture and restore onto the runner", "[fa-persist]")
     CHECK(continued.scripts[0]->attackLaunched());
     CHECK_FALSE(continued.scripts[1]->attackLaunched());
 }
+
+// v67: submitted-but-unapplied command input rides the save — a mid-combat
+// app save resumes the player's in-flight click instead of dropping it.
+// A pre-v67 save carries none, and the restore re-queues without minting
+// new IDs (the allocator state already rode the unit snapshot).
+TEST_CASE("v67: pending command input survives a save round-trip", "[fa-persist]") {
+    Scenario live;
+    const rm::sim::UnitId unit = live.spawn(tankDef(), 300, 300, 0);
+    auto runner = live.runner();
+    rm::sim::CommandIssue issue;
+    issue.tick = 5;
+    issue.phase = rm::sim::CommandPhase::PreTick;
+    issue.source = 0;
+    issue.player = 0;
+    issue.kind = rm::sim::CommandKind::Move;
+    issue.units = {unit};
+    issue.targetX = rm::sim::fxFromFloat(600.0f);
+    issue.targetZ = rm::sim::fxFromFloat(600.0f);
+    REQUIRE(live.scene.commandInput.submit(issue, live.scene.store).has_value());
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode({
+        .tick = 5,
+        .random = runner.match.random.snapshot(),
+        .pathServiceBeats = runner.pathService.serviceBeats(),
+        .units = live.scene.store.snapshot(),
+        .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+        .pathService = runner.pathService.snapshot(),
+        .pendingInput = std::vector<rm::sim::CommandIssue>(
+            live.scene.commandInput.pending().begin(),
+            live.scene.commandInput.pending().end())}));
+    REQUIRE(saved);
+    REQUIRE(saved->pendingInput.has_value());
+    REQUIRE(saved->pendingInput->size() == 1);
+    const rm::sim::CommandIssue& back = saved->pendingInput->front();
+    CHECK(back.tick == 5);
+    CHECK(back.kind == rm::sim::CommandKind::Move);
+    REQUIRE(back.units.size() == 1);
+    CHECK(back.units[0] == unit);
+    CHECK(back.targetX == rm::sim::fxFromFloat(600.0f));
+    CHECK(back.targetZ == rm::sim::fxFromFloat(600.0f));
+
+    rm::sim::CommandBuffer resumed;
+    resumed.restorePending(*saved->pendingInput);
+    const std::vector<rm::sim::CommandIssue> due =
+        resumed.take(5, rm::sim::CommandPhase::PreTick);
+    REQUIRE(due.size() == 1);
+    CHECK(due[0].id == back.id);
+    CHECK(resumed.empty());
+
+    const auto legacy = rm::sim::SaveState::decode(rm::sim::SaveState::encodeAtVersion(
+        {.tick = 5,
+         .random = runner.match.random.snapshot(),
+         .pathServiceBeats = runner.pathService.serviceBeats(),
+         .units = live.scene.store.snapshot(),
+         .economyArmies = rm::sim::EconomyArmyState::capture(runner.match),
+         .pathService = runner.pathService.snapshot()},
+        66));
+    REQUIRE(legacy);
+    CHECK_FALSE(legacy->pendingInput.has_value());
+}

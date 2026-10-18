@@ -129,6 +129,11 @@ struct SaveState {
     /// Empty when no opponent state rode the save; absent (nullopt) on
     /// pre-v65 decodes.
     std::optional<std::vector<std::uint8_t>> opponentWaves;
+    /// Submitted-but-unapplied command input (v67): the `CommandBuffer::pending`
+    /// issues waiting for their tick/phase. Empty when nothing is in flight;
+    /// absent (nullopt) on pre-v67 decodes. Re-queued verbatim on restore —
+    /// the allocator counters already rode the unit snapshot past the IDs.
+    std::optional<std::vector<CommandIssue>> pendingInput;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);

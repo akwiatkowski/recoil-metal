@@ -47,6 +47,9 @@ std::optional<CommandId> CommandBuffer::submit(CommandIssue issue, UnitStore& st
     pending_.push_back(std::move(issue));
     return id;
 }
+void CommandBuffer::restorePending(std::vector<CommandIssue> issues) {
+    pending_ = std::move(issues);
+}
 
 std::vector<CommandIssue> CommandBuffer::take(TickIndex tick, CommandPhase phase) {
     std::vector<CommandIssue> due;
