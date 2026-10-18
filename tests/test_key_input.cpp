@@ -5,9 +5,8 @@
 #include "core/sim/Command.hpp"
 #include "core/ui/CommandMode.hpp"
 
-#include <array>
-#include <optional>
-#include <utility>
+#include <map>
+#include <string>
 
 TEST_CASE("a character becomes one semantic event without losing event state") {
     const rm::KeyModifiers modifiers{.shift = true, .command = false, .control = true};
@@ -68,6 +67,17 @@ TEST_CASE("control-modified keys are key contexts, not camera pan") {
     CHECK_FALSE(rm::panAllowed({.control = true}));
     CHECK_FALSE(rm::panAllowed({.shift = true, .control = true}));
 }
+TEST_CASE("user key overrides remap a default binding") {
+    // `C-338`: retail reads user overrides from Prefs `UserKeyMap` (key to
+    // action) and `UserKeyActions` (action to console string); an override
+    // replaces the default binding while unmentioned keys keep theirs.
+    std::map<rm::Key, std::string> bindings{{rm::Key::E, "economy"}, {rm::Key::R, "reflections"}};
+    const std::map<rm::Key, std::string> overrides{{rm::Key::E, "custom_action"}};
+    rm::applyUserKeyMap(bindings, overrides);
+    CHECK(bindings[rm::Key::E] == "custom_action");
+    CHECK(bindings[rm::Key::R] == "reflections");
+}
+
 
 TEST_CASE("an issued armed command disarms unless shift queues it") {
     // `C-339`: retail's `commandmode.lua` keeps the armed command while Shift

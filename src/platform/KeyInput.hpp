@@ -62,6 +62,17 @@ struct KeyModifiers {
 [[nodiscard]] constexpr bool panAllowed(KeyModifiers modifiers) noexcept {
     return !modifiers.control;
 }
+/// `C-338` user overrides: retail's Prefs `UserKeyMap` replaces the default
+/// key-to-action binding entry by entry; keys the user never mentions keep
+/// their defaults. A map insert-or-assign over the defaults is the whole
+/// semantic — no whitelist, no fallback chain.
+template <typename Bindings, typename Overrides>
+inline void applyUserKeyMap(Bindings& bindings, const Overrides& overrides) {
+    for (const auto& [key, action] : overrides) {
+        bindings[key] = action;
+    }
+}
+
 
 /// One complete keyboard fact from the platform boundary.
 struct KeyEvent {
