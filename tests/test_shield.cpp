@@ -165,6 +165,36 @@ TEST_CASE("a NOSPLASHDAMAGE ally still rejects a friendly death blast") {
     CHECK(roster.health(tagged).current == rm::sim::Mag::fromInt(100));
     CHECK(rm::test::asFloat(roster.health(plain).current) == Approx(60.0f));
 }
+TEST_CASE("a collapsing no-forward bubble forwards nothing to a clear hull") {
+    // Retail `shield.lua` `OnDamage` with `PassOverkillDamage` ABSENT (the
+    // default: only Aeon's UAA0303 authors it, corpus-checked): the owner's
+    // hull stands clear of the blast and stays whole, and the charge loop
+    // forwards NOTHING extra — a no-forward collapse is not a hit on the hull.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef noForward = shieldDef();
+    noForward.name = "no_forward_collapse";
+    CHECK_FALSE(noForward.shield.passOverkillDamage);
+    const rm::UnitTypeIndex shieldType = roster.addType(noForward);
+    const rm::UnitTypeIndex targetType = roster.addType(plainDef());
+    const rm::sim::UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const rm::sim::UnitId sheltered = roster.add(targetType, 75.0f, 0.0f, 1, 100.0f);
+    roster.health(generator).shield.current = rm::sim::Mag::fromInt(25);
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+
+    (void)rm::sim::damageArea(
+        rm::test::at(100, 0, 0), rm::sim::Fx::fromInt(30),
+        rm::unitdef::flatDamage(rm::sim::Mag::fromInt(40)), 0, roster.store, armies,
+        &roster.catalog);
+
+    // The dome paid its 25 and collapsed; the sheltered hull took the
+    // unshielded remainder (40 - 25 = 15). The generator's own hull stands
+    // outside the blast and takes nothing — and with no authored
+    // `PassOverkillDamage` the charge loop forwards nothing extra.
+    CHECK(roster.health(generator).shield.current == rm::sim::Mag{});
+    CHECK(roster.health(generator).current == rm::sim::Mag::fromInt(100));
+    CHECK(rm::test::asFloat(roster.health(sheltered).current) == Approx(85.0f));
+}
+
 
 
 TEST_CASE("shield overkill collapses the bubble and leaks only the remainder") {
