@@ -328,6 +328,15 @@ struct Weapon {
     /// rather than waiting a quantum. That guard is why the correction is applied at the parse
     /// site and not inside `faWaitSeconds`.
     sim::Seconds burstDelay{};
+    /// The rack-salvo FX waits (`FaDuration.hpp`: Lua-timed, `faWaitSeconds`-
+    /// corrected at parse like the muzzle salvo delay). `RackSalvoChargeTime`
+    /// and `RackSalvoReloadTime` bracket the reload clip the batch plays
+    /// (`XSL0111`: 0 and 6.6666); `RackReloadTimeout` bounds the wait
+    /// (`XSL0111`: 10). Zero means unstated — the game's own zero-charge
+    /// racks (377 of them state `RackSalvoChargeTime = 0`) keep no wait.
+    sim::Seconds rackSalvoCharge{};
+    sim::Seconds rackSalvoReload{};
+    sim::Seconds rackReloadTimeout{};
 
     /// Whether this weapon delivers its shots as a burst rather than one at a time.
     ///

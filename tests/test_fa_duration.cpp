@@ -158,6 +158,18 @@ TEST_CASE("a stated salvo delay is corrected at parse time") {
     CHECK(burst.burstDelay.value == 0.3f);
     CHECK(burst.bursts());
 }
+TEST_CASE("a stated rack-salvo timing is corrected at parse time") {
+    // `FaDuration.hpp` lists `RackSalvoChargeTime`, `RackSalvoReloadTime` and
+    // `RackReloadTimeout` as Lua-timed, but the parse drops all three — the
+    // Laanse's `RackSalvoReloadTime = 6.6666` (`XSL0111_unit.bp:253`) never
+    // lands anywhere. Same `faWaitSeconds` correction as the muzzle salvo
+    // delay, at the parse site.
+    const Weapon rack = parseOne(
+        "RackSalvoChargeTime = 0.2, RackSalvoReloadTime = 6.6666, RackReloadTimeout = 10");
+    CHECK(rack.rackSalvoCharge.value == 0.3f);
+    CHECK(rack.rackSalvoReload.value == 6.7f);
+    CHECK(rack.rackReloadTimeout.value == 10.1f);
+}
 
 TEST_CASE("a salvo delay of zero stays zero") {
     // The game guards the wait with `if salvoDelay > 0` (`DefaultProjectileWeapon.lua:1130`), so

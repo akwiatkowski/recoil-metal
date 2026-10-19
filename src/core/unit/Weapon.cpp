@@ -376,6 +376,23 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         if (authoredDelay > 0.0f) {
             weapon.burstDelay = faWaitSeconds(sim::seconds(authoredDelay));
         }
+        // The rack-salvo FX waits (`FaDuration.hpp`: all three Lua-timed, so the
+        // same `faWaitSeconds` correction as the muzzle salvo delay). Guards mirror
+        // the muzzle's: a stated zero means no wait, not a one-tick wait — 377
+        // weapons state `RackSalvoChargeTime = 0` and 375 state
+        // `RackSalvoReloadTime = 0`, the game's idle racks.
+        const float authoredCharge = numberOr(entry, "RackSalvoChargeTime", 0.0f);
+        if (authoredCharge > 0.0f) {
+            weapon.rackSalvoCharge = faWaitSeconds(sim::seconds(authoredCharge));
+        }
+        const float authoredSalvoReload = numberOr(entry, "RackSalvoReloadTime", 0.0f);
+        if (authoredSalvoReload > 0.0f) {
+            weapon.rackSalvoReload = faWaitSeconds(sim::seconds(authoredSalvoReload));
+        }
+        const float authoredTimeout = numberOr(entry, "RackReloadTimeout", 0.0f);
+        if (authoredTimeout > 0.0f) {
+            weapon.rackReloadTimeout = faWaitSeconds(sim::seconds(authoredTimeout));
+        }
 
         weapon.muzzleVelocityElmosPerSecond =
             numberOr(entry, "MuzzleVelocity", 0.0f) * scmap::kElmosPerOgrid;
