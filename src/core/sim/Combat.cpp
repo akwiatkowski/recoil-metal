@@ -2385,6 +2385,11 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
             // difference between an ambush working and not.
             if (health.reloadRemaining[w] > 0) {
                 --health.reloadRemaining[w];
+                // `HideMuzzle` restore: the muzzle shows again once the breach
+                // is closed ("before muzzle recharge"), so idle aims unhide it.
+                if (health.reloadRemaining[w] == 0 && def->weapons[w].hideMuzzle) {
+                    (void)store.setBoneHidden(store.idAt(slot), kMuzzleBone, false);
+                }
             }
             if (health.reloadRemaining[w] > 0) {
                 continue;
@@ -2805,6 +2810,12 @@ std::size_t fireWeapons(UnitStore& store, const UnitCatalog& catalog,
                                                                 motions[slot], lastSecond))
                                     : std::array<Fx, 3>{},
                              });
+            }
+            // `HideMuzzle` (retail rack field): the muzzle bone hides when the
+            // shot leaves the art. Restored above when the reload completes,
+            // which is retail's "before muzzle recharge and during idle".
+            if (weapon.hideMuzzle) {
+                (void)store.setBoneHidden(store.idAt(slot), kMuzzleBone, true);
             }
             ++fired;
 

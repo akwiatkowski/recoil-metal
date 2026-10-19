@@ -2485,6 +2485,33 @@ TEST_CASE("a shot fired reloads, and does not fire again until it has") {
     CHECK(shots.size() == 2);
 }
 
+TEST_CASE("a HideMuzzle rack hides its muzzle bone while the shot is away") {
+    // Retail `Blueprint.md` rack field `HideMuzzle`: "the muzzle bones will be
+    // hidden when fired and turned back on before muzzle recharge and during
+    // idle. Useful for weapons that show the projectile in the art then fire
+    // it off. (Mobile missile launchers)". The sim never writes the mask, so
+    // the muzzle stays visible and the shown projectile never leaves the art.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon launcher = directFire(10.0f, 300.0f);
+    launcher.hideMuzzle = true;
+    const rm::UnitTypeIndex gunner = roster.addType(gunnerDef(launcher));
+    const UnitId shooter = roster.add(gunner, 0.0f, 0.0f, 0, 100.0f);
+    (void)roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 1000.0f);
+    std::vector<Projectile> shots;
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{}) == 1);
+    REQUIRE(shots.size() == 1);
+    CHECK(roster.store.boneHiddenAt(shooter.index, rm::sim::kMuzzleBone));
+    // Retail's "turned back on before muzzle recharge": with the target gone
+    // the reload ticks down without refiring, and the muzzle shows again.
+    roster.store.kill(roster.store.idAt(1));
+    for (int tick = 0; tick < 10; ++tick) {
+        (void)rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, rm::sim::TickRate{});
+    }
+    CHECK(shots.size() == 1);
+    CHECK_FALSE(roster.store.boneHiddenAt(shooter.index, rm::sim::kMuzzleBone));
+}
+
 TEST_CASE("a beam delivers the tick it fires: damage lands, nothing flies") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
 
@@ -2493,7 +2520,6 @@ TEST_CASE("a beam delivers the tick it fires: damage lands, nothing flies") {
     laser.beam = true;
     (void)roster.add(roster.addType(gunnerDef(laser)), 0.0f, 0.0f, 0, 100.0f);
     const UnitId victim = roster.add(roster.addType(targetDef()), 0.0f, 100.0f, 1, 1000.0f);
-
     std::vector<Projectile> shots;
     rm::sim::EventQueue events;
 

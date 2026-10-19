@@ -1107,6 +1107,7 @@ TEST_CASE("weapon manipulator specs arrive as authored", "[unitbp][manipulators]
                         {
                             RackBone = 'Turret_Barrel',
                             MuzzleBones = { 'Turret_Muzzle' },
+                            HideMuzzle = true,
                             TelescopeBone = 'Turret_Barrel_Tele',
                             TelescopeRecoilDistance = -6,
                         },
@@ -1132,6 +1133,7 @@ TEST_CASE("weapon manipulator specs arrive as authored", "[unitbp][manipulators]
     CHECK(gun.turretPitchSpeedRadPerSecond == Catch::Approx(60.0f * std::numbers::pi_v<float> / 180.0f));
     CHECK(gun.recoilBone == "Turret_Barrel");
     CHECK(gun.recoilDistanceMesh == Catch::Approx(-2.0f));
+    CHECK(gun.hideMuzzle);
     CHECK(gun.recoilReturnSpeedMeshPerSecond == Catch::Approx(10.0f));
     CHECK(gun.telescopeBone == "Turret_Barrel_Tele");
     REQUIRE(gun.telescopeDistanceMesh.has_value());

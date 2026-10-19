@@ -406,6 +406,11 @@ struct Weapon {
     /// (`(1/RateOfFire) - MuzzleChargeDelay`, defaultweapons.lua:62), so the
     /// spec keeps the raw number; a sim charge phase would want the corrected one.
     float muzzleChargeDelaySeconds = 0.0f;
+    /// First rack's `HideMuzzle` (retail `Blueprint.md`: "the muzzle bones will
+    /// be hidden when fired and turned back on before muzzle recharge and
+    /// during idle. Useful for weapons that show the projectile in the art
+    /// then fire it off. (Mobile missile launchers)"). False when unstated.
+    bool hideMuzzle = false;
     std::string animationReload;  ///< `AnimationReload` .sca path (2 weapons)
     std::string animationCharge;  ///< `AnimationCharge` .sca path (none shipped; the field exists)
     std::string weaponUnpackAnimation;  ///< 17 weapons

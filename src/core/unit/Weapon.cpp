@@ -322,6 +322,10 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
             racks != nullptr && !racks->items.empty()) {
             const lua::Value& rack = racks->items.front();
             weapon.recoilBone = std::string{rack.stringAt("RackBone").value_or("")};
+            if (const lua::Value* hidden = rack.find("HideMuzzle");
+                hidden != nullptr && hidden->boolean) {
+                weapon.hideMuzzle = true;
+            }
             weapon.telescopeBone = std::string{rack.stringAt("TelescopeBone").value_or("")};
             // Presence, not the value: `TelescopeRecoilDistance or RackRecoilDistance`
             // in Lua falls back only when the field is ABSENT — an authored zero
