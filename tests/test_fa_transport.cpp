@@ -1197,6 +1197,11 @@ TEST_CASE("C-225: a carrier stores aircraft in its pool and launches them airbor
     const UnitId third = roster.add(airType, 140.0f, 140.0f, 0, 500.0f);
     CHECK_FALSE(rm::sim::hasRoomFor(roster.store, roster.catalog, carrierId,
                                     aircraft));
+    // The pool-full gate lives in the attach itself (`AddUnitToStorage` refuses
+    // a full `StorageSlots` pool, `C-481`): a third aircraft does not board.
+    CHECK_FALSE(rm::sim::attachCargo(roster.store, roster.catalog, carrier,
+                                      carrierId, third));
+    CHECK_FALSE(roster.motion(third).attached);
 
     // The launch is a detach, not a landing: both aircraft leave the hold
     // already airborne at the carrier's position.

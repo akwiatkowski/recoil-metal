@@ -433,6 +433,12 @@ bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
         return false;
     }
     if (carrier.isCarrier()) {
+        // `C-481`: `AddUnitToStorage` refuses a full pool — `stored <
+        // StorageSlots` — so the attach itself refuses, not just the callers.
+        if (static_cast<int>(store.childrenOf(carrierId).size())
+            >= carrier.transport.storageSlots) {
+            return false;
+        }
         // `C-225`: a stored aircraft rides at the carrier's origin with no
         // bone and no deck — `IAiTransport::AttachUnit` is a plain list
         // append, and the unit is hidden while stored.
