@@ -1898,11 +1898,15 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                            rm::sim::fxToFloat(event.blastRadiusElmos),
                            static_cast<rm::TickIndex>(tickIndex),
                            scriptTagForProjectile(event.visualId));
-        } else if (event.kind == rm::sim::EventKind::BeamFired) {
+        } else if (event.kind == rm::sim::EventKind::BeamFired
+                   && !scene.store.alive(event.instigator)) {
             // A beam's scorch: hitscan, no projectile, so no `ProjectileImpact`
             // — the strike point rides `BeamFired.at` (C-290 `ScorchThread`
             // half). Retail forks the thread on `impactType == 'Terrain'`
-            // (`defaultcollisionbeams.lua`); here the water gate decides, from
+            // (`defaultcollisionbeams.lua`): a strike that landed on a hull is
+            // a unit impact, not terrain, so it scorches nothing. The event
+            // names the struck unit as instigator (`Combat.cpp`), so a live
+            // instigator means a hull strike. Here the water gate decides, from
             // the sim terrain the tick ran on. Blast-less: beams carry no
             // damage radius on the event, so the mark rides the base splat path.
             const rm::sim::Terrain terrain = scene.terrain(runner.field);

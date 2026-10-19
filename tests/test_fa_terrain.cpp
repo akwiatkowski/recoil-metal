@@ -325,11 +325,14 @@ TEST_CASE("C-290: a beam striking terrain leaves scorch at the strike point", "[
         (void)rm::app::noteBeamScorch(scene, sea, 10.0f, 32.0f);
         CHECK(scene.impactMarks.size() == 1);
     }
-    SECTION("a beam strike scorches through the match drain") {
-        // End to end: a real beam weapon firing through `advanceMatch` notes
-        // a mark at the strike point — the wire the unit-level SECTION pins
-        // the helper for. Turreted beam tank with vision vs a LAND victim in
-        // range: the strike lands on the hull, above water, so one mark.
+    SECTION("a beam that struck a hull scorches nothing through the match drain") {
+        // Retail forks `ScorchThread` only when the beam's `OnImpact` sees
+        // `impactType == 'Terrain'` (`defaultcollisionbeams.lua` C-290): a
+        // strike that landed on a hull is a unit impact, not terrain, so the
+        // drain must note nothing for it. Same rig as before — a turreted beam
+        // tank with vision vs a LAND victim in range — but firing means the
+        // `BeamFired` strike landed on the victim's hull (the event names it
+        // as instigator, `Combat.cpp`), so the ground stays clean.
         rm::app::UnitScene scene = makeScene(false, 0.0f);
         rm::unitdef::Weapon gun;
         gun.label = "BeamGun";
@@ -375,10 +378,10 @@ TEST_CASE("C-290: a beam striking terrain leaves scorch at the strike point", "[
         rm::app::MatchRunner runner =
             rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
         runner.scripts.clear();
-        for (int tick = 0; tick < 30 && scene.impactMarks.empty(); ++tick) {
+        for (int tick = 0; tick < 30; ++tick) {
             (void)rm::app::advanceMatch(runner, tick, 0.0f);
         }
-        CHECK(scene.impactMarks.size() == 1);
+        CHECK(scene.impactMarks.empty());
     }
 }
 
