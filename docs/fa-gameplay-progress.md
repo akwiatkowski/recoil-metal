@@ -95,57 +95,47 @@ Uncommitted at this checkpoint: `src/app/FafOpponent.cpp`,
 Full serial gate: **2,261 registered cases, 0 failures** (610.53 s; same
 asset/performance skip kinds as the prior gate).
 
-## What remains from 100% (2026-10-17, measured against the dashboard)
+## What remains from 100% (2026-10-19, audited against code truth)
 
-Dashboard `Implemented` scores are under rescore: the printed 70.0% average
-(1,400 / 20, 4 rows at 100%) predates 11 waves and 42 behavior slices landed
-since (gate now 2,306/2,306). Per-row rescore against code truth is in progress;
-no row is scored here until its section claims are re-verified. Full serial ctest 2,388/2,388 green (this turn, clean tree). Intel
- radar-error targeting and persist recovery-ownership verified in focused
-suites (1,810 assertions, 54 cases). Per-row gaps, from the sections below:
+Gate 2,388/2,388 green on a clean tree; ~125 behavior slices landed since the
+printed scores below were written, so every per-row percentage beneath is STALE
+and understates the tree. Spot-checks against code (not section prose) confirm
+these row texts are already wrong: INTEL water-vision/omni-bypass/sonar-graves
+(`Intel.cpp` C-279/C-280 + tests), PRESENT emitter resistance+drag, music
+director, Seraphim pool (`WeaponVisuals.cpp:147`, `MusicDirector.hpp`,
+`Interface.cpp:1199`), TRANSPORT shield denial, ECON fuel/shield-toggle/silo
+transfer, CMD refuel/ferry/staging rungs. Per-row rescore stays with subsystem
+owners; what follows is the honest structural gap to 100%, not percentages.
 
-- FA-CONTENT 50%: exact retail SCD mount/override precedence beyond the
-  pinned lua/mohodata collision; remaining blueprint/bootstrap surface.
-- FA-LUA 25%: general gameplay-script scheduler/threading and mod surface
-  beyond the EnhanceTask adapter and hook/mod-table plumbing. The
-  weapon→beam-class mapping also lives here: `BeamType` is script-side only.
-- FA-CMD 75%: remaining guard-ladder branches and factory intake edge cases.
-- FA-ECON 75%: transfer-parity remainder (fuel/ammo/shield edge cases,
-  concurrent captors, COMMAND targets).
-- FA-LAND 75%: naval/sub/air category ranks, HPA*, reservations. Arrival
-  re-forming is retail-absent, not a gap.
-- FA-AIR 75%: full three-axis solver (quaternion pitch, roll-rate state);
-  planar reduction with visual banking is the documented boundary (ADR-091).
-- FA-NAVY 75%: `OnEnterWater`/`OnExitWater` Lua hooks, `OnCollisionCheck`
-  default-deny gate — both need a script surface the sim lacks.
-- FA-TRANSPORT 75%: pickup-beacon exact semantics (spawned unit vs order
-  anchor, C-413 queue-head getter). The live-anchor slice is shelved in the
-  stash: it regresses the ferry route and arrived-cargo boarding needs the
-  waiter-assignment redesign, not another ring tweak.
-- FA-INTEL 50%: non-radar recon families beyond the pinned linger/expiry
-  loop and slot-reuse reaping.
-- FA-PROGRESS 75%: enhancement/special-unit remainder past the implemented
-  lifecycle, tray, toggle-cap, and veterancy slices.
-- FA-TERRAIN 75%: dwell-trail beam marks; wreck/terrain-type behavior
-  remainder. The beam-class gate is implemented at the helper; the drain
-  mapping is closed as script-side (FA-LUA).
-- FA-AI 50%: native retail brain/platoon architecture and naval combat
-  parity beyond the FAF binding surface.
-- FA-UI 75%: remaining WP-40 surface (idle selectors, overlays, key
-  contexts, split views).
-- FA-PRESENT 75%: reload/charge animation, Seraphim factory effects, native
-  emitter flags, some audio filters/curves, dynamic music.
-- FA-PERSIST 50%: mid-combat app saves now carry caller-owned standing orders
-  (rally points, auto-expand flags — v64 save path with capture/restore;
-  smallest next slice: external input, opponent VM, retail replay transport).
-  Recovery ownership now hashes.
-- FA-MATCH/WEAPONS/MISSILES/DAMAGE 100%: hold their bars; remaining work is
-  validation depth, not declared scope.
+Structural gaps that no slice wave can close (architectural, need design sign-off):
+- FA-LUA full scheduler + hosting shipped unit/projectile scripts; general mod
+  surface. `BeamType` weapon->beam-class mapping is script-side only and needs
+  unit-script hosting (FA-TERRAIN drain stays wired at unmapped=scorches).
+- FA-AI native retail brain/platoon architecture beyond the FAF binding surface.
+- FA-AIR three-axis solver (quaternion pitch, roll-rate); planar reduction with
+  visual banking is the documented boundary (ADR-091).
+- FA-PERSIST general mid-combat app save: external input, opponent VM, retail
+  replay transport (v64 standing orders, v65 waves, v67 pending input landed).
+- FA-NAVY `OnEnterWater`/`OnExitWater` + `OnCollisionCheck` default-deny need a
+  script surface the sim lacks.
+- FA-LAND HPA*/reservations are deliberate divergences (C-175/C-177/C-496);
+  arrival re-forming is retail-absent (C-178), not a gap.
+- FA-PROGRESS EMPCharge STUN buff registry (no weapon-buff modeling exists).
+- FA-TRANSPORT live-anchor refresh (shelved: regresses ferry route).
+- FA-DAMAGE installed-dome shelter (shelved: dome-centre vertical geometry).
+- FA-AI IssueDive naval dive (reverted: SIGSEGV in test, needs debug).
+
+Implementable remainder (slice-sized, verified genuinely absent at last check):
+- FA-CONTENT/FA-MATCH/FA-WEAPONS/FA-MISSILES/FA-TERRAIN/FA-INTEL/FA-UI rows:
+  continued retail-cite TDD slices; each wave keeps finding true small gaps.
+- FA-PRESENT reload/charge manipulator host; FA-UI split views (documented
+  single-view divergence unless re-decided).
 
 No subsystem is fully absent. The >97% bar needs 20/20 rows at 97%+ or an
-equivalent measured denominator; the current count is 4/20 rows at 100%.
-
-
+equivalent measured denominator; the printed count below (4/20 at 100%) is
+stale and cannot promote itself. Gate evidence: full serial ctest 2,388/2,388
+green (this turn, clean tree).
+Per-row gap texts below are retained as subsystem-owner input, not current truth:
 **Accuracy review (2026-09-23, `b845a1a`):** `ART-E001` still hashes to
 `c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`.
 The current 16 local `build/re-fa/coverage/FA-*.md` files report 298 TESTED,
