@@ -293,7 +293,7 @@ TEST_CASE("the retail UEF weapon bank names the Gauss cannon's three takes", "[c
     tank.name = "UEL0201";
     rm::unitdef::Weapon gun;
     gun.label = "MainGun";
-    gun.fireSound = rm::unitdef::Weapon::FireSound{"UELWeapon", "UEL0201_Cannon_Sgl"};
+    gun.fireSound = rm::unitdef::Weapon::FireSound{"UELWeapon", "UEL0201_Cannon_Sgl", "Weapon_LodCutoff"};
     tank.weapons.push_back(gun);
     rm::unitdef::Weapon silent;
     silent.label = "Quiet";

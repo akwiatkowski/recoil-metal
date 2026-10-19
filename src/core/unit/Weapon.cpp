@@ -113,7 +113,9 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
                 const auto bank = fire->stringAt("Bank");
                 const auto cue = fire->stringAt("Cue");
                 if (bank && cue && !bank->empty() && !cue->empty()) {
-                    weapon.fireSound = unitdef::Weapon::FireSound{std::string{*bank}, std::string{*cue}};
+                    weapon.fireSound = unitdef::Weapon::FireSound{
+                        std::string{*bank}, std::string{*cue},
+                        std::string{fire->stringAt("LodCutoff").value_or("")}};
                 }
             }
         }

@@ -127,18 +127,30 @@ namespace {
 
 } // namespace
 
-TEST_CASE("a weapon keeps its Audio.Fire bank and cue, and nothing when absent") {
+TEST_CASE("a weapon keeps its Audio.Fire LodCutoff class name") {
+    // Retail `UEL0201` names `LodCutoff = 'Weapon_LodCutoff'` beside bank/cue; the
+    // parse keeps the class name so the mixer can resolve it against SupCom.xgs.
     const Weapon named = parseOne(
         "Label = 'MainGun', Audio = { Fire = Sound { Bank = 'UELWeapon', "
         "Cue = 'UEL0201_Cannon_Sgl', LodCutoff = 'Weapon_LodCutoff' } }");
     REQUIRE(named.fireSound.has_value());
-    CHECK(named.fireSound->bank == "UELWeapon");
-    CHECK(named.fireSound->cue == "UEL0201_Cannon_Sgl");
+    CHECK(named.fireSound->lodCutoff == "Weapon_LodCutoff");
     const Weapon quiet = parseOne("Label = 'Quiet'");
-    CHECK_FALSE(quiet.fireSound.has_value());
-    const Weapon partial = parseOne("Label = 'Half', Audio = { Fire = Sound { Bank = 'UELWeapon' } }");
-    CHECK_FALSE(partial.fireSound.has_value());
+    REQUIRE(quiet.fireSound.has_value() == false);
 }
+
+ TEST_CASE("a weapon keeps its Audio.Fire bank and cue, and nothing when absent") {
+     const Weapon named = parseOne(
+         "Label = 'MainGun', Audio = { Fire = Sound { Bank = 'UELWeapon', "
+         "Cue = 'UEL0201_Cannon_Sgl', LodCutoff = 'Weapon_LodCutoff' } }");
+     REQUIRE(named.fireSound.has_value());
+     CHECK(named.fireSound->bank == "UELWeapon");
+     CHECK(named.fireSound->cue == "UEL0201_Cannon_Sgl");
+     const Weapon quiet = parseOne("Label = 'Quiet'");
+     CHECK_FALSE(quiet.fireSound.has_value());
+     const Weapon partial = parseOne("Label = 'Half', Audio = { Fire = Sound { Bank = 'UELWeapon' } }");
+     CHECK_FALSE(partial.fireSound.has_value());
+ }
 
 TEST_CASE("a stated salvo delay is corrected at parse time") {
     const Weapon burst = parseOne("MuzzleSalvoSize = 3, MuzzleSalvoDelay = 0.2");
