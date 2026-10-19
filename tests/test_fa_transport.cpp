@@ -1834,6 +1834,25 @@ TEST_CASE("C-197: destroying a loaded transport detaches its cargo alive",
     CHECK_FALSE(roster.store.parentOf(second).has_value());
     CHECK(roster.store.childrenOf(transport).empty());
 }
+TEST_CASE("C-197: cargo killed with its carrier names the transport as instigator",
+          "[fa-transport]") {
+    // `TransportDetachAllUnits` kills "with the transport as instigator"
+    // (`0x005edeb0`, C-197): the cascade stamps the carrier onto each doomed
+    // passenger's `lastHitBy`, so the passenger's death event names the
+    // carrier rather than whoever last shot the passenger.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const rm::UnitTypeIndex shooterType = roster.addType(shooterDef());
+    const UnitId transport = landedTransport(roster, transportType, 50.0f, 50.0f);
+    const UnitId cargo = roster.add(cargoType, 51.0f, 50.0f, 0, 500.0f);
+    REQUIRE(roster.store.attach(transport, cargo));
+    const UnitId shooter = roster.add(shooterType, 120.0f, 50.0f, 1, 500.0f);
+    roster.health(cargo).lastHitBy = shooter;
+    roster.store.kill(transport);
+    REQUIRE_FALSE(roster.store.alive(cargo));
+    CHECK(roster.health(cargo).lastHitBy == transport);
+}
 TEST_CASE("C-199: naval waiters stage onto the wide Guard ring", "[fa-transport]") {
     // `lua/formations.lua: GuardFormation` (ART-S007) widens when any waiter
     // is `NAVAL * MOBILE`: `sizeMult` starts at 8 elmos, not 3, and grows 8

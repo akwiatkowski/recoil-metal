@@ -506,6 +506,9 @@ void UnitStore::kill(UnitId id, RandomStream* random) {
                 continue;
             }
         }
+        // `C-197`: the roll kills "with the transport as instigator" — stamp
+        // the carrier before recursing so the passenger's death names it.
+        health_[child.index].lastHitBy = id;
         kill(child, random);
     }
     children_[id.index].clear();
