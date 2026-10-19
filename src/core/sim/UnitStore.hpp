@@ -214,6 +214,8 @@ public:
         /// `C-236`'s per-slot capture-time multipliers — see
         /// `setCaptureTimeMultiplier`.
         std::vector<Fx> captureTimeMultipliers;
+        /// Per-slot reclaim-time multipliers — see `setReclaimTimeMultiplier`.
+        std::vector<Fx> reclaimTimeMultipliers;
     };
 
     UnitStore() = default;
@@ -583,6 +585,12 @@ public:
         return slot < captureTimeMultipliers_.size() ? captureTimeMultipliers_[slot]
                                                      : Fx::fromInt(1);
     }
+    /// The reclaimer's `ReclaimTimeMultiplier` (`Unit.lua:2699-2712` unit branch,
+    /// written by `SetReclaimTimeMultiplier`, default 1): scales the live-unit
+    /// un-build pace — mult 2 halves it. Mirrors the capture-time multiplier.
+    [[nodiscard]] bool setReclaimTimeMultiplier(UnitId unit, Fx multiplier) noexcept;
+    /// The reclaimer-side multiplier, 1 unless set. A dead handle reads 1.
+    [[nodiscard]] Fx reclaimTimeMultiplier(UnitId unit) const noexcept;
 
     /// Shared repeat/count operations. Exhaustion removes this exact object from every member
     /// queue, matching retail's cross-queue `DecreaseCommandCount` path.
@@ -691,6 +699,8 @@ private:
     /// `C-236`'s per-slot capture-time multipliers — see
     /// `setCaptureTimeMultiplier`.
     std::vector<Fx> captureTimeMultipliers_;
+    /// Per-unit reclaim-time multipliers — see `setReclaimTimeMultiplier`.
+    std::vector<Fx> reclaimTimeMultipliers_;
 
     CommandSerial nextCommandSerial_ = 0;
     std::array<std::uint32_t, kInvalidCommandSource> nextCommandCounters_{};

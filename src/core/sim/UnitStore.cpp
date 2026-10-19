@@ -41,6 +41,7 @@ UnitStore::UnitStore(const Snapshot& snapshot)
        boneHidden_(snapshot.boneHidden),
        customNames_(snapshot.customNames),
        capturable_(snapshot.capturable), captureTimeMultipliers_(snapshot.captureTimeMultipliers),
+       reclaimTimeMultipliers_(snapshot.reclaimTimeMultipliers),
        nextCommandSerial_(snapshot.nextCommandSerial),
         nextCommandCounters_(snapshot.nextCommandCounters) {
     std::vector<std::shared_ptr<SharedCommand>> mutableCommands;
@@ -109,6 +110,7 @@ UnitStore::UnitStore(const Snapshot& snapshot)
     // Older snapshots carry no multiplier array: 1 is the pre-field default —
     // `SetCaptureTimeMultiplier` did not exist yet.
     captureTimeMultipliers_.resize(transforms_.size(), Fx::fromInt(1));
+    reclaimTimeMultipliers_.resize(transforms_.size(), Fx::fromInt(1));
     for (std::size_t child = 0; child < transforms_.size(); ++child) {
         if (parents_[child]) {
             if (deriveAttachmentHeights) {
@@ -170,6 +172,7 @@ UnitStore::Snapshot UnitStore::snapshot() const {
     saved.customNames = customNames_;
     saved.capturable = capturable_;
     saved.captureTimeMultipliers = captureTimeMultipliers_;
+    saved.reclaimTimeMultipliers = reclaimTimeMultipliers_;
     return saved;
 }
 
@@ -207,6 +210,7 @@ UnitId UnitStore::spawn(const Spawn& request) {
         customNames_.emplace_back();
         capturable_.emplace_back(true);
         captureTimeMultipliers_.emplace_back(Fx::fromInt(1));
+        reclaimTimeMultipliers_.emplace_back(Fx::fromInt(1));
         attachmentParentBones_.emplace_back(kNoBone);
         attachmentSelfBones_.emplace_back(kNoBone);
         attachmentParentRest_.emplace_back();
@@ -263,6 +267,9 @@ UnitId UnitStore::spawn(const Spawn& request) {
     // inherits its tombstone's slowdown.
     if (slot < captureTimeMultipliers_.size()) {
         captureTimeMultipliers_[slot] = Fx::fromInt(1);
+    }
+    if (slot < reclaimTimeMultipliers_.size()) {
+        reclaimTimeMultipliers_[slot] = Fx::fromInt(1);
     }
     attachmentParentRest_[slot] = {};
     attachmentParentRestHeights_[slot] = {};
@@ -903,5 +910,23 @@ Fx UnitStore::captureTimeMultiplier(UnitId unit) const noexcept {
     }
     return captureTimeMultipliers_[unit.index];
 }
+ bool UnitStore::setReclaimTimeMultiplier(UnitId unit, Fx multiplier) noexcept {
+     if (!alive(unit)) {
+         return false;
+     }
+     if (unit.index >= reclaimTimeMultipliers_.size()) {
+         reclaimTimeMultipliers_.resize(static_cast<std::size_t>(unit.index) + 1,
+                                        Fx::fromInt(1));
+     }
+     reclaimTimeMultipliers_[unit.index] = multiplier;
+     return true;
+ }
+
+ Fx UnitStore::reclaimTimeMultiplier(UnitId unit) const noexcept {
+     if (!alive(unit) || unit.index >= reclaimTimeMultipliers_.size()) {
+         return Fx::fromInt(1);
+     }
+     return reclaimTimeMultipliers_[unit.index];
+ }
 
 } // namespace rm::sim

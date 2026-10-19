@@ -664,6 +664,22 @@ TEST_CASE("only a builder un-builds, and never an ally or itself") {
     CHECK_FALSE(f.reclaimUnit(engineer, engineer)); // itself
     CHECK(f.reclaimUnit(engineer, enemy));
 }
+TEST_CASE("a slowed reclaimer's ReclaimTimeMultiplier stretches the un-build") {
+    // `Unit.lua:2699-2712` (`GetReclaimCosts`, unit branch): the RECLAIMER's
+    // `ReclaimTimeMultiplier` (written by `SetReclaimTimeMultiplier`, default 1)
+    // scales the work pace — a mult-2 engineer un-builds at half speed. The
+    // stock 200-work tank at rate 10/s takes 20 ticks; at mult 2 it takes 40.
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId victim = f.roster.add(f.tankType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.roster.store.setReclaimTimeMultiplier(engineer, rm::sim::Fx::fromInt(2)));
+    REQUIRE(f.reclaimUnit(engineer, victim));
+    f.tick(20);
+    CHECK(f.roster.store.alive(victim));
+    CHECK(rm::test::asFloat(f.roster.health(victim).current) == 50.0f);
+    f.tick(20);
+    CHECK_FALSE(f.roster.store.alive(victim));
+}
 
 TEST_CASE("a unit reclaim survives the log round trip") {
     rm::sim::CommandLog log;

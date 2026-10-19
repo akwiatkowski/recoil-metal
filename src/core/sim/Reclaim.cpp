@@ -340,11 +340,18 @@ std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
             continue;  // still walking there
         }
 
+        Mag pace = effectiveBuildPerTick(store, catalog, slot);
+        pace *= Fx::fromInt(10);
         // Work per tick is the reclaimer's BuildRate per SECOND: FAF's duration is
         // 0.1 × cost / BuildRate seconds for `cost` units of work, so a tick advances
         // BuildRate of them — ten times the per-tick build figure the catalog derived.
-        Mag pace = effectiveBuildPerTick(store, catalog, slot);
-        pace *= Fx::fromInt(10);
+        // `Unit.lua:2699-2712` unit branch: the RECLAIMER's `ReclaimTimeMultiplier`
+        // stretches the un-build — mult 2 halves the per-tick pace. Fx-exact via
+        // the Mag product over the multiplier (mult >= 1 by contract; guard anyway).
+        const Fx reclaimMult = store.reclaimTimeMultiplier(store.idAt(slot));
+        if (reclaimMult > Fx::fromInt(1)) {
+            pace = proportionalWork(pace, Mag::fromInt(1), Mag::fromFx(reclaimMult));
+        }
         Health& health = store.health()[victim];
         // The work left follows the fraction, and the fraction is the health (C-099).
         const Mag remaining = proportionalWork(total, health.current, health.maximum);
