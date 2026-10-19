@@ -549,15 +549,17 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     scene.impactMarks.back().lod = lod;
     scene.impactMarks.back().textureIndex = beamClassTextureIndex(scene.impactMarks.back().textureIndex, beamClass);  // (`SplatTexture` C-290)
     scene.impactMarks.back().beamSizeElmos = beamClassSize(x, z, beamClass);  // elmos (C-290 `size`)
-    // Retail's `ScorchThread` lays one `CreateSplat` per pass at the tracked
-    // end while the beam dwells (`defaultcollisionbeams.lua` C-290): a dragged
-    // end draws a continuous line, not one point per shot. Bridge from this
-    // shooter's last noted end to the current one with midpoint splats spaced
-    // one blast-less mark diameter apart (2.5 elmos, `kImpactMarkRadiusElmos`
-    // x2 — the same discs the projection draws, so the trail reads unbroken).
-    // Same-shooter only, matched on the firing handle's generation: a recycled
-    // slot's first strike notes but bridges nothing, and a stationary beam
-    // lays no filler. Presentation only, never hashed.
+    // Retail's `ScorchThread` lays its pass splat only when the tracked end
+    // moved more than 0.25 (`defaultcollisionbeams.lua:119` C-290) — positions
+    // retail measures in ogrids, 8 elmos each (`Scmap.hpp kElmosPerOgrid`), so
+    // the gate is 2 elmos. A trembling end inside it lays nothing between
+    // strikes; past it the thread draws a continuous line, not one point per
+    // shot. Bridge from this shooter's last noted end to the current one with
+    // midpoint splats spaced one blast-less mark diameter apart (2.5 elmos,
+    // `kImpactMarkRadiusElmos` x2 — the same discs the projection draws, so
+    // the trail reads unbroken). Same-shooter only, matched on the firing
+    // handle's generation: a recycled slot's first strike notes but bridges
+    // nothing. Presentation only, never hashed.
     const auto prior = scene.beamLastEnd.find(event.unit.index);
     const bool sameShooter = prior != scene.beamLastEnd.end()
                              && prior->second.first == event.unit.generation;
@@ -565,11 +567,18 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     const float prevZ = sameShooter ? prior->second.second[1] : z;
     scene.beamLastEnd[event.unit.index] = {event.unit.generation, {x, z}};
     if (sameShooter) {
+        // Elmos per ogrid: 8 (Scmap.hpp `kElmosPerOgrid`), written out so this
+        // app-side projection does not include a map header for one product.
+        constexpr float kBeamScorchMoveGateElmos = 0.25f * 8.0f;  // elmos (C-290 `:119`)
         const float dx = x - prevX;
         const float dz = z - prevZ;
         const float span = std::sqrt(dx * dx + dz * dz);
+        const float gated = span - kBeamScorchMoveGateElmos;  // elmos past the gate
+        if (!(gated > 0.0f)) {
+            return true;  // inside retail's move gate: endpoints only, no filler
+        }
         const float step = kImpactMarkRadiusElmos * 2.0f;  // elmos (one splat diameter)
-        const auto middles = static_cast<std::size_t>(span / step);
+        const auto middles = static_cast<std::size_t>(gated / step);
         for (std::size_t i = 1; i <= middles; ++i) {
             const float t = static_cast<float>(i) / static_cast<float>(middles + 1);
             const float fillX = prevX + dx * t;

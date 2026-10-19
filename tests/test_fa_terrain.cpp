@@ -629,7 +629,27 @@ TEST_CASE("C-290: dwell-trail filler marks use the thread's redraw size band", "
     }
 }
 
-
+TEST_CASE("C-290: a dwelling beam lays splats only past retail's move gate", "[fa-terrain]") {
+    // `defaultcollisionbeams.lua` C-290 (`:119`): each `ScorchThread` pass
+    // lays its `CreateSplat` only when the tracked end moved more than 0.25
+    // (`Util.GetDistanceBetweenTwoVectors(CurrentPosition, LastPosition) >
+    // 0.25`) — positions retail measures in ogrids, where 0.25 ogrid is 2
+    // elmos (`Scmap.hpp kElmosPerOgrid` = 8). A 4-elmo drag clears retail's
+    // gate but steps no 5-elmo filler disc, so the bridge must lay nothing
+    // between the two endpoint marks: exactly two marks, not three.
+    rm::app::UnitScene scene = makeScene(false, 0.0f);
+    rm::sim::Event first{};
+    first.kind = rm::sim::EventKind::BeamFired;
+    first.unit = rm::sim::UnitId{0, 1};
+    first.at = rm::test::at(500, 40, 500);
+    (void)rm::app::noteBeamScorch(scene, first, 40.0f, 0.0f, 0,
+                                  "MicrowaveLaserCollisionBeam01");
+    rm::sim::Event nudge = first;
+    nudge.at = rm::test::at(504, 40, 500);
+    (void)rm::app::noteBeamScorch(scene, nudge, 40.0f, 0.0f, 0,
+                                  "MicrowaveLaserCollisionBeam01");
+    CHECK(scene.impactMarks.size() == 2);  // 4 elmos: gate eats 2, 2 left: no disc
+}
 
 TEST_CASE("C-292: only a land-layer death scorches the ground", "[fa-terrain]") {
     // Retail's `Unit::OnKilled` gates `CreateScorchableDecal` on
