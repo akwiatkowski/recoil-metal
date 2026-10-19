@@ -86,12 +86,31 @@ namespace {
     if (targetDef == nullptr || targetDef->buildTime <= Mag{}) {
         return false;
     }
+    // `C-182`/`C-102` helper tail: when the target also needs shield repair the
+    // materialise delta is halved and the health rate doubled — one funded beat
+    // restores both hull and bubble, each at half the hull-only pace. The bill
+    // stays the target's full build-cost rate regardless of damage.
+    const Mag step = effectiveBuildPerTick(store, catalog, builder) * funded;
+    const bool shieldOwed = health.shield.maximum > Mag{} && health.shield.current < health.shield.maximum;
+    if (shieldOwed) {
+        const Mag hullRestored = std::min(
+            health.maximum - health.current,
+            proportionalWork(health.maximum, step, targetDef->buildTime + targetDef->buildTime));
+        const Mag shieldRestored = std::min(
+            health.shield.maximum - health.shield.current,
+            proportionalWork(health.shield.maximum, step, targetDef->buildTime + targetDef->buildTime));
+        if (hullRestored <= Mag{} && shieldRestored <= Mag{}) {
+            return false;
+        }
+        health.current += hullRestored;
+        health.shield.current += shieldRestored;
+        return true;
+    }
     // Recoil `CUnit::AddBuildPower` (`Unit.cpp:2030-2049`): repair step is build work /
     // target BuildTime, and health gained is maxHealth * step.
     const Mag restored = std::min(
         health.maximum - health.current,
-        proportionalWork(health.maximum, effectiveBuildPerTick(store, catalog, builder) * funded,
-                          targetDef->buildTime));
+        proportionalWork(health.maximum, step, targetDef->buildTime));
     if (restored <= Mag{}) {
         return false;
     }

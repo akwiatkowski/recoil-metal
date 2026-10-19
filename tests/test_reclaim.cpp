@@ -1216,3 +1216,35 @@ TEST_CASE("no rebuild list and no wreck in the footprint both start at zero",
     CHECK(f.building.back().fraction() == rm::sim::Fx{});
     CHECK(f.features.find(far) != nullptr);
 }
+
+TEST_CASE("C-182: repair on a shielded target heals hull and bubble together", "[reclaim]") {
+    // `CUnitRepairTask` halves the materialise delta when the target also needs
+    // shield repair and doubles the health rate, so one funded beat restores
+    // both hull and bubble (`C-182`, `C-102` helper-tail note). A hull-only
+    // repair would leave the bubble untouched.
+    Fixture f;
+    f.armies[1].alliance = f.armies[0].alliance;
+    rm::unitdef::UnitDef bubble;
+    bubble.name = "test_shielded_tank";
+    bubble.buildCostMass = rm::sim::magFromFloat(100.0f);
+    bubble.buildCostEnergy = rm::sim::magFromFloat(200.0f);
+    bubble.buildTime = rm::sim::magFromFloat(100.0f);
+    bubble.shield.maximum = rm::sim::magFromFloat(100.0f);
+    const rm::UnitTypeIndex bubbleType = f.roster.addType(bubble);
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId ally = f.roster.add(bubbleType, 210.0f, 200.0f, 1, 100.0f);
+    f.roster.health(ally).current = rm::sim::magFromFloat(50.0f);
+    f.roster.health(ally).shield.current = rm::sim::magFromFloat(50.0f);
+    f.roster.health(ally).shield.maximum = rm::sim::magFromFloat(100.0f);
+    f.economies[0].stored = {.mass = rm::sim::magFromFloat(100.0f),
+                             .energy = rm::sim::magFromFloat(200.0f)};
+
+    REQUIRE(f.repair(engineer, ally));
+    f.tick();
+
+    // One build unit of work at full funding: half a hull point and half a
+    // shield point, not a whole hull point with the bubble untouched.
+    CHECK(rm::test::asFloat(f.roster.health(ally).current) == Catch::Approx(50.5f).margin(0.01f));
+    CHECK(rm::test::asFloat(f.roster.health(ally).shield.current)
+          == Catch::Approx(50.5f).margin(0.01f));
+}
