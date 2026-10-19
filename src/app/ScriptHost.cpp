@@ -202,8 +202,8 @@ int concatSource(lua_State* lua) {
 // `LUnitMove`/`LUnitMoveNear` pair with zero shipped callers (`C-437`, dead
 // surface kept as no-ops). The unit table the task drives carries the
 // `EnhanceTask.lua:11-80` beat surface retail's own scripts touch:
-// `SetWorkProgress`/`SetUnitState`/`OnWorkBegin`/`OnWorkEnd`/`OnWorkFail`/
-// `OnBuildProgress` (state only), `IsMobile`/`IsMoving`/`IsPaused` (all false
+// `OnBuildProgress` (state only), `OnTargetLocation` (records the location),
+// `IsMobile`/`IsMoving`/`IsPaused` (all false
 // here — the sim owns motion), `GetNavigator():AbortMove()` (records the
 // abort), `GetResourceConsumed()` (0 until a test publishes funding),
 // `WorkProgress` (the funded fraction), `GetBuildRate` (1.0 build unit per
@@ -258,6 +258,16 @@ struct TaskNative {
     lua_pushnumber(lua, consumed);
     return 1;
 }
+[[nodiscard]] int taskTargetLocationFn(lua_State* lua) {
+    // `TargetLocation.lua:14`: `OnCreate` calls
+    // `self:GetUnit():OnTargetLocation(commandData.Location)`. Records the
+    // location argument on the unit table so the sim (which owns targeting)
+    // can observe it.
+    lua_pushvalue(lua, 2);
+    lua_setfield(lua, 1, "TargetLocation");
+    return 0;
+}
+
 [[nodiscard]] int taskSetProgressFn(lua_State* lua) {
     // `SetWorkProgress` mirrors the fraction onto the unit table's
     // `WorkProgress` field — the field the shipped beat READS
@@ -350,6 +360,8 @@ struct TaskNative {
         lua_setfield(lua, -2, "OnWorkFail");
         lua_pushcfunction(lua, &taskNoopFn);
         lua_setfield(lua, -2, "OnBuildProgress");
+        lua_pushcfunction(lua, &taskTargetLocationFn);
+        lua_setfield(lua, -2, "OnTargetLocation");
         lua_pushcfunction(lua, &taskBuildRateFn);
         lua_setfield(lua, -2, "GetBuildRate");
         lua_pushcfunction(lua, &taskAbortMoveFn);

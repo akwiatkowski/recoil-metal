@@ -1939,3 +1939,34 @@ TEST_CASE("C-228: ScriptHost Navigator AbortMove records the abort on the unit")
           == static_cast<std::int32_t>(rm::sim::ScriptTaskStatus::Done));
     CHECK(host.taskGlobalNumber("G_c228aborted") == 1.0);
 }
+TEST_CASE("C-228: ScriptHost binds OnTargetLocation so TargetLocation OnCreate survives") {
+    // `TargetLocation.lua:14`: `OnCreate` calls
+    // `self:GetUnit():OnTargetLocation(commandData.Location)`. The host's
+    // unit table binds no such method, so the real file dies in
+    // construction with `attempt to call a nil value (method
+    // 'OnTargetLocation')`. This case requires the call to land and record
+    // its argument on the unit table.
+    rm::vfs::Vfs content;
+    rm::app::ScriptHost host{content};
+    host.registerTask("C228Target", rm::app::ScriptTaskRegistration{
+        .source =
+            "TypeClass = Class({}) {\n"
+            "  OnCreate = function(self)\n"
+            "    self:GetUnit():OnTargetLocation('TGT')\n"
+            "    G_c228tgt = (self:GetUnit().TargetLocation == 'TGT') and 1 or 0\n"
+            "  end,\n"
+            "  TaskTick = function(self) return -1 end,\n"
+            "}\n",
+    });
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "c228_target";
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    rm::sim::ScriptTaskState state;
+    const std::string taskName = "C228Target";
+    host.onCreate(unit, std::string_view{taskName}, {}, state);
+    for (const auto& err : host.errors()) WARN("lua: " << err);
+    REQUIRE(host.errors().empty());
+    CHECK(host.taskGlobalNumber("G_c228tgt") == 1.0);
+}
