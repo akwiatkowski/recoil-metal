@@ -2906,10 +2906,13 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
 
             // C-156 (`FindBestEnemy` reject step 8): BENIGN hulls are never valid
             // targets — explicit Attack already holds on them, overcharge does too.
-            if (const unitdef::UnitDef* targetDef =
-                    catalog.def(store.typeAt(head->target().index));
-                targetDef != nullptr && targetDef->hasCategory("BENIGN")) {
+            const unitdef::UnitDef* overchargeDef =
+                catalog.def(store.typeAt(head->target().index));
+            if (overchargeDef != nullptr && overchargeDef->hasCategory("BENIGN")) {
                 continue;
+            }
+            if (overchargeDef != nullptr && !passesTargetRestrictions(weapon, *overchargeDef)) {
+                continue;  // C-229's per-weapon restrict, in the explicit path's place
             }
             const std::array<Fx, 3> from = positionOf(transforms[slot]);
             const std::array<Fx, 3> to = positionOf(transforms[head->target().index]);

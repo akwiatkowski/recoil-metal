@@ -219,6 +219,30 @@ TEST_CASE("an overcharge holds its shot on a BENIGN hull") {
      CHECK(f.roster.store.alive(hull));
      REQUIRE(f.roster.store.orders()[acu.index].current() != nullptr);
  }
+TEST_CASE("an overcharge holds its shot when the target fails the weapon restrict") {
+    // The per-weapon `TargetRestrict` gate (`C-229`) is not an acquisition-only
+    // rule: `canShootExplicitTarget` applies it to a clicked Attack (UAA0102
+    // authors `TargetRestrictOnlyAllow = 'AIR'` with a `LAND` disallow), and a
+    // manual overcharge click aims the same hardware — so it must hold too,
+    // keeping the order and the energy bar.
+    Fixture f;
+    rm::unitdef::UnitDef airOnly;
+    airOnly.name = "test_acu_aironly";
+    rm::unitdef::Weapon gated = overchargeCannon();
+    gated.targetRestrictOnlyAllow = std::vector<std::string>{"AIR"};
+    gated.targetRestrictOnlyDisallow = std::vector<std::string>{"LAND"};
+    airOnly.weapons.push_back(gated);
+    const rm::UnitTypeIndex gatedType = f.roster.addType(std::move(airOnly));
+    const UnitId acu = f.roster.add(gatedType, 200.0f, 200.0f, 0, 10000.0f);
+    const UnitId victim = f.roster.add(f.tankType, 230.0f, 200.0f, 1, 500.0f);
+    f.economies[0].stored.energy = rm::sim::magFromFloat(6000.0f);
+    REQUIRE(f.overcharge(acu, victim));
+    const rm::sim::TickReport report = f.tick(3);
+    CHECK(report.shotsFired == 0);
+    CHECK(rm::test::asFloat(f.economies[0].stored.energy) == 6000.0f);
+    CHECK(f.roster.store.alive(victim));
+    REQUIRE(f.roster.store.orders()[acu.index].current() != nullptr);
+}
 
 TEST_CASE("a unit with no manual weapon cannot be asked to overcharge") {
     Fixture f;
