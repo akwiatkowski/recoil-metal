@@ -559,23 +559,25 @@ std::optional<CommandId> UnitStore::allocateCommandId(CommandSource source) {
 }
 
 bool UnitStore::consumeCommandId(CommandSource source, CommandId id) {
-    if (source == kInvalidCommandSource || commandSource(id) != source) {
+    // C-153 (`0x00750580` rule 3): the gate is live-uniqueness only — a
+    // replayed issue carries its original ID, which may sit anywhere in the
+    // counter space. Refusing a non-live source-tagged ID for not being the
+    // sequential next would drop replayed input across a counter gap.
+    if (source == kInvalidCommandSource || commandSource(id) != source
+        || commandIdLive(id)) {
         return false;
     }
-    std::uint32_t next = nextCommandCounters_[source];
-    for (std::uint32_t tried = 0; tried <= kCommandCounterMask; ++tried) {
-        const CommandId candidate = commandId(source, next);
-        next = (next + 1U) & kCommandCounterMask;
-        if (commandIdLive(candidate)) {
-            continue;
-        }
-        if (candidate != id) {
-            return false;
-        }
-        nextCommandCounters_[source] = next;
-        return true;
+    // Keep the allocator from re-issuing the consumed ID: when it reaches at
+    // or past the live counter, the next allocation continues after it.
+    // Counter distance is modulo 2^24, so a wrapped-around replay behind the
+    // counter leaves the counter alone.
+    const std::uint32_t seen = commandCounter(id);
+    const std::uint32_t next = nextCommandCounters_[source];
+    const std::uint32_t ahead = (seen - next) & kCommandCounterMask;
+    if (ahead < (kCommandCounterMask >> 1)) {
+        nextCommandCounters_[source] = (seen + 1U) & kCommandCounterMask;
     }
-    return false;
+    return true;
 }
 
 bool UnitStore::registerCommand(const std::shared_ptr<SharedCommand>& command) {

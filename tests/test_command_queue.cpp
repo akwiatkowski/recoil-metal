@@ -924,6 +924,49 @@ TEST_CASE("replay preserves an ID consumed by an issue that no unit accepted") {
     REQUIRE(replayed.size() == 1);
     CHECK(replayed.front().units.empty());
 }
+TEST_CASE("a replayed explicit command ID lands across a counter gap") {
+    // C-153 (`0x00750580` rule 3 is live-uniqueness only): a replayed issue
+    // carries its original ID, and the submit must accept any non-live
+    // source-tagged ID — even when the local counter has moved past it —
+    // instead of demanding the sequential next.
+    rm::test::Roster roster;
+    const UnitId unit = roster.add(roster.addType(walkerDef()), 40.0f, 40.0f, 0, 100.0f);
+    rm::sim::CommandBuffer input;
+    // Move the live counter ahead first: three live issues consume 0..2.
+    for (int n = 0; n < 3; ++n) {
+        REQUIRE(input.submit(CommandIssue{
+                                 .tick = 5,
+                                 .source = 0,
+                                 .player = 0,
+                                 .kind = CommandKind::Stop,
+                                 .units = {unit},
+                             },
+                             roster.store)
+                == rm::commandId(0, static_cast<std::uint32_t>(n)));
+    }
+    REQUIRE(roster.store.nextCommandCounter(0) == 3);
+    // A replayed ID from beyond the consumed prefix still lands.
+    CommandIssue replayed{
+        .tick = 5,
+        .source = 0,
+        .id = rm::commandId(0, 9),
+        .player = 0,
+        .kind = CommandKind::Stop,
+        .units = {},
+    };
+    REQUIRE(input.submit(replayed, roster.store) == rm::commandId(0, 9));
+    // The counter moved past the replayed ID, so the next live issue does
+    // not collide with it.
+    REQUIRE(input.submit(CommandIssue{
+                             .tick = 5,
+                             .source = 0,
+                             .player = 0,
+                             .kind = CommandKind::Stop,
+                             .units = {unit},
+                         },
+                         roster.store)
+            == rm::commandId(0, 10));
+}
 
 TEST_CASE("a grouped first patrol stores each origin outside the shared payload") {
     const rm::HeightField field = flatField();
