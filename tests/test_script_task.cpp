@@ -974,6 +974,27 @@ TEST_CASE("enhancement weapon labels gate firing until the branch enables them",
                               roster.store, armies, nullptr, &roster.catalog)
                     .has_value());
 }
+TEST_CASE("ShieldHeavy install grants the shield toggle cap", "[enhancement][script-task]") {
+    // `C-255`: `UAL0001_script.lua`'s `ShieldHeavy` branch runs
+    // `AddToggleCap('RULEUTC_ShieldToggle')` before forking the heavy-shield
+    // thread; the table modeled only the bubble, so the toggle never arrived.
+    using namespace rm::sim;
+    rm::test::Roster roster;
+    roster.rate = TickRate{10};
+    rm::unitdef::UnitDef def;
+    def.name = "test_commander";
+    def.health = Mag::fromInt(100);
+    def.enhancements.push_back({.name="ShieldHeavy", .slot="Back",
+        .buildCostMass=Mag::fromInt(1), .buildCostEnergy=Mag::fromInt(1),
+        .buildTime=Fx::fromInt(1),
+        .parameters=*rm::lua::parseTable("{}")});
+    const auto unit = roster.add(roster.addType(def), 40, 40, 0, 100);
+    REQUIRE_FALSE(unitHasToggleCap(roster.store, roster.catalog, unit.index,
+                                   "RULEUTC_ShieldToggle"));
+    REQUIRE(installEnhancement(roster.store, roster.catalog, unit, "ShieldHeavy"));
+    CHECK(unitHasToggleCap(roster.store, roster.catalog, unit.index,
+                           "RULEUTC_ShieldToggle"));
+}
 
 TEST_CASE("enhancement shield, intel, pod, and silo effects apply on install", "[enhancement][script-task]") {
     // `C-255`/`C-379`: the remaining `CreateEnhancement` branches —

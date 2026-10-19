@@ -160,8 +160,9 @@ constexpr ScriptEffectRow kScriptEffects[] = {
     // URL0301's NaniteMissileSystem enables the NMissile label.
     {"NaniteMissileSystem", {.weaponEnables = kWeaponNMissile}},
     {"NaniteMissileSystemRemove", {.weaponDisables = kWeaponNMissile}},
-    // Shields: `Shield` adds the toggle cap everywhere; `ShieldHeavy` and
-    // `ShieldGeneratorField` do not — the Remove branches still take it away.
+    // Shields: `Shield` and `ShieldHeavy` add the toggle cap everywhere
+    // (`UEL0001`/`UAL0001`); `ShieldGeneratorField` forks its bubble without
+    // one — its Remove still takes it away.
     // Shields, intel, stat mods, pods and the silo purge live in the rows
     // below — merged here so each name appears once.
     // `C-255`/`C-379`: the rest of the shipped mutation surface — shield
@@ -169,7 +170,7 @@ constexpr ScriptEffectRow kScriptEffects[] = {
     // spawn/kill, silo-ammo purge. Values ride `EnhancementEffects`; these are
     // the script-side labels and flags.
     {"Shield", {.toggleCapAdds = kToggleShield, .createsShield = true}},
-    {"ShieldHeavy", {.createsShield = true}},
+    {"ShieldHeavy", {.toggleCapAdds = kToggleShield, .createsShield = true}},
     {"ShieldRemove", {.toggleCapRemoves = kToggleShield, .destroysShield = true}},
     {"ShieldHeavyRemove", {.toggleCapRemoves = kToggleShield,
                            .destroysShield = true}},
