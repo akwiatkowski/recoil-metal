@@ -21,11 +21,11 @@ namespace rm::sim {
     const UnitStore&, const UnitCatalog&, UnitId, std::string_view name);
 /// Called only by completed, funded enhancement work. Unsupported handlers fail explicitly.
 /// `siloAmmo` is the match's silo records — the `TacticalNukeMissile` swap
-/// purges them (`RemoveTacticalSiloAmmo`/`StopSiloBuild`, `C-255`); callers
-/// without silos pass an empty span.
+/// purges them (`RemoveTacticalSiloAmmo`/`StopSiloBuild`, `C-255`) along with
+/// the owner's queued builds; callers without silos pass empty spans.
 [[nodiscard]] std::expected<void, std::string> installEnhancement(
     UnitStore&, const UnitCatalog&, UnitId, std::string_view name,
-    std::span<SiloAmmo> siloAmmo = {});
+    std::span<SiloAmmo> siloAmmo = {}, std::vector<SiloBuild>* siloQueue = nullptr);
 /// What one shipped `CreateEnhancement`/`XxxRemove` script branch does, for the
 /// branches whose effect is a native setter the sim can honour (`C-255`,
 /// `C-379`). The NUMBERS come from the blueprint's `Enhancements` table
@@ -216,8 +216,10 @@ public:
     EnhancementTasks(UnitStore& store, const UnitCatalog& catalog,
                      std::vector<EnhancementWork>& work,
                      std::vector<SiloAmmo>* siloAmmo = nullptr,
+                     std::vector<SiloBuild>* siloQueue = nullptr,
                      EventQueue* events = nullptr)
-        : store_(store), catalog_(catalog), work_(work), siloAmmo_(siloAmmo), events_(events) {}
+        : store_(store), catalog_(catalog), work_(work), siloAmmo_(siloAmmo),
+          siloQueue_(siloQueue), events_(events) {}
     ~EnhancementTasks() override = default;
     EnhancementTasks(const EnhancementTasks&) = delete;
     EnhancementTasks& operator=(const EnhancementTasks&) = delete;
@@ -231,6 +233,7 @@ private:
     const UnitCatalog& catalog_;
     std::vector<EnhancementWork>& work_;
     std::vector<SiloAmmo>* siloAmmo_ = nullptr;
+    std::vector<SiloBuild>* siloQueue_ = nullptr;
     EventQueue* events_ = nullptr;
 };
 } // namespace rm::sim

@@ -1424,7 +1424,7 @@ void runOpponents(UnitScene& scene, const rm::vfs::Vfs& content, const rm::Heigh
                                             const rm::scenario::ScenarioOptions& scenarioOptions) {
     if (!scene.enhancementTasks) {
         scene.enhancementTasks = std::make_unique<rm::sim::EnhancementTasks>(
-            scene.store, scene.catalog, scene.enhancementWork, nullptr, &scene.events);
+            scene.store, scene.catalog, scene.enhancementWork, &scene.siloAmmo, &scene.siloQueue, &scene.events);
     }
     MatchRunner runner{
         .scene = scene,

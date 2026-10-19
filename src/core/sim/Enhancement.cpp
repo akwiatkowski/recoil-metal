@@ -415,7 +415,7 @@ template <typename Field>
 
 std::expected<void, std::string> installEnhancement(
     UnitStore& store, const UnitCatalog& catalog, UnitId unit, std::string_view name,
-    std::span<SiloAmmo> siloAmmo) {
+    std::span<SiloAmmo> siloAmmo, std::vector<SiloBuild>* siloQueue) {
     if (const auto valid = canInstallEnhancement(store, catalog, unit, name); !valid) return valid;
     const auto* def = catalog.def(store.typeAt(unit.index));
     const auto* spec = def->enhancement(name);
@@ -524,12 +524,17 @@ std::expected<void, std::string> installEnhancement(
     }
     if (own.clearsSiloAmmo) {
         // `RemoveTacticalSiloAmmo`/`RemoveNukeSiloAmmo`/`StopSiloBuild`: every
-        // record the owner carries empties and stops mid-build.
+        // record the owner carries empties and stops mid-build, and the queued
+        // builds behind it leave the FIFO (UEL0001_script.lua:444-459).
         for (SiloAmmo& ammo : siloAmmo) {
             if (ammo.owner == unit) {
                 ammo.stored = 0;
                 ammo.elapsedTicks = 0;
             }
+        }
+        if (siloQueue != nullptr) {
+            std::erase_if(*siloQueue,
+                          [unit](const SiloBuild& queued) { return queued.owner == unit; });
         }
     }
     return {};
@@ -637,7 +642,8 @@ std::int32_t EnhancementTasks::taskTick(UnitId unit, std::string_view task,
     return static_cast<std::int32_t>(
         installEnhancement(store_, catalog_, unit, name,
                            siloAmmo_ != nullptr ? std::span{*siloAmmo_}
-                                                : std::span<SiloAmmo>{})
+                                                : std::span<SiloAmmo>{},
+                           siloQueue_)
             ? ScriptTaskStatus::Done : ScriptTaskStatus::Abort);
 }
 void EnhancementTasks::onDestroy(UnitId unit, std::string_view task,

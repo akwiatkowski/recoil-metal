@@ -1069,11 +1069,18 @@ TEST_CASE("enhancement shield, intel, pod, and silo effects apply on install", "
     std::vector<SiloAmmo> siloAmmo{
         {.owner = unit, .stored = 3, .elapsedTicks = 40},
         {.owner = UnitId{9999, 1}, .stored = 2, .elapsedTicks = 10}};
+    // Retail's `StopSiloBuild` (UEL0001_script.lua:447) also drops the owner's
+    // queued builds — the half-paid missile bill dies with the swap.
+    std::vector<SiloBuild> siloQueue{
+        {.owner = unit, .slot = 0},
+        {.owner = UnitId{9999, 1}, .slot = 0}};
     REQUIRE(installEnhancement(roster.store, roster.catalog, unit,
-                               "TacticalNukeMissile", siloAmmo));
+                               "TacticalNukeMissile", siloAmmo, &siloQueue));
     CHECK(siloAmmo[0].stored == 0);
     CHECK(siloAmmo[0].elapsedTicks == 0);
     CHECK(siloAmmo[1].stored == 2);  // another owner's record is untouched
+    CHECK(siloQueue.size() == 1);
+    CHECK(siloQueue[0].owner == UnitId{9999, 1});
 }
 
 TEST_CASE("enhancement stat mods override range, rate, and damage", "[enhancement][script-task]") {
