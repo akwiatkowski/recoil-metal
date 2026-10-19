@@ -526,7 +526,7 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
     // so the constructor default (off) stands either way.
     def.autoSurfaceToAttack = flagAt(*parsed, "AutoSurfaceToAttack");
     def.layerChangeOffsetElmos =
-        numberOr(*physics, "LayerChangeOffsetHeight", 0.0f) * scmap::kElmosPerOgrid;
+        numberOr(*physics, "LayerChangeOffsetHeight", -0.1f) * scmap::kElmosPerOgrid;
     def.diveSurfaceSpeedElmosPerSecond =
         numberOr(*physics, "DiveSurfaceSpeed", 1.0f) * scmap::kElmosPerOgrid;
     if (const lua::Value* airBlock = parsed->path("Air")) {

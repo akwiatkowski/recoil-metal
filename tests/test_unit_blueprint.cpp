@@ -1831,3 +1831,18 @@ TEST_CASE("Physics.FuelRechargeRate parses the authored refuel scalar, defaultin
     REQUIRE(none.has_value());
     CHECK(none->airFuelRechargeRatePerSec == Catch::Approx(0.0f));
 }
+
+TEST_CASE("C-218: LayerChangeOffsetHeight defaults to retail's -0.1 ogrid") {
+    // `C-218` closing constructor defaults (`fa-exe-analysis-plan.md`): retail
+    // constructs `Physics.LayerChangeOffsetHeight` as -0.1 ogrids. Only 16 of
+    // 571 shipped blueprints author the key, so the default governs the rest.
+    const Blueprint bare{"XXB0907_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land' },
+            SizeX = 1, SizeY = 0.5, SizeZ = 1,
+        }
+    )"};
+    const auto none = rm::unitbp::loadFile(bare.path());
+    REQUIRE(none.has_value());
+    CHECK(none->layerChangeOffsetElmos == Catch::Approx(-0.8f));
+}
