@@ -516,7 +516,10 @@ TEST_CASE("a death explosion goes off once, and hurts what is standing nearby") 
     const rm::HeightField field = flatField();
 
     Weapon blast;
-    blast.label = "test death";
+    // Retail `DoDeathWeapon` detonates only `Label == 'DeathWeapon'`
+    // (`lua/sim/Unit.lua:955-970`); any other label is a crash/scripted blast
+    // the death thread never fires.
+    blast.label = "DeathWeapon";
     blast.role = WeaponRole::Death;
     blast.damage = rm::test::mag(400.0f);
     blast.damageRadius = rm::test::fx(100.0f);

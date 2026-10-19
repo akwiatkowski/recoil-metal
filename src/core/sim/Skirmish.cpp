@@ -1118,8 +1118,14 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
     retireDead(store, catalog, report, match.events, match.features, match.armyStats,
                &match.random);
 
-    // 99 of the 494 shipped weapons are `WeaponCategory = 'Death'` — a blast with no
-    // target and no rate of fire. This is where they finally go off.
+    // Retail `DoDeathWeapon` (`lua/sim/Unit.lua:955-970`) detonates only the
+    // weapon labelled `DeathWeapon`. The 56 corpus `DeathImpact` weapons are
+    // the air-crash blast instead (`lua/defaultunits.lua:1469-1486`,
+    // `OnImpact` at the crash position), and the exotic `CollossusDeath` /
+    // `MegalithDeath` labels are crash/scripted deaths the death thread never
+    // fires — so a corpse carrying only one of those leaves no death-site
+    // blast. `deathWeapon` still finds the first `Death`-category weapon for
+    // direct callers; the tick honours the label retail honours.
     //
     // Anything a blast kills is retired on the NEXT tick rather than this one, so a
     // chain of detonations propagates one link per tick instead of recursing here. That
@@ -1131,7 +1137,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         // "death is a tombstone").
         const UnitIndex slot = death.ref.index;
         const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
-        if (def == nullptr || deathWeapon(*def) == nullptr) {
+        const unitdef::Weapon* blast = def != nullptr ? deathWeapon(*def) : nullptr;
+        if (blast == nullptr || blast->label != "DeathWeapon") {
             continue;
         }
         // ATTRIBUTED TO THE CORPSE, by handle as well as by army — so a unit killed by a

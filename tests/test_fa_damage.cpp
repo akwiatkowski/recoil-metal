@@ -256,3 +256,46 @@ TEST_CASE("C-397: a strategic missile's splash bypasses the bubble it penetrated
     CHECK(rm::test::asFloat(roster.health(generator).current) == Approx(60.0f));
     CHECK(rm::test::asFloat(roster.health(sheltered).current) == Approx(60.0f));
 }
+TEST_CASE("a crashed aircraft's DeathImpact is a crash blast, not a death-site detonation",
+          "[fa-damage]") {
+    // `lua/sim/Unit.lua:955-970` (`DoDeathWeapon`) detonates only the weapon
+    // labelled `DeathWeapon`; the `DeathImpact` blast lives on the air-crash
+    // path instead (`lua/defaultunits.lua:1469-1486`, `OnImpact` at the corpse's
+    // crash position — 56 of the corpus's 99 `WeaponCategory = 'Death'`
+    // weapons). A unit carrying ONLY a `DeathImpact` must therefore leave no
+    // blast at its death site: the crater happens where the wreck hits the
+    // ground, not where the unit died.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex targetType = roster.addType(mobileDef());
+    const UnitId bystander = roster.add(targetType, 0.0f, 0.0f, 1, 100.0f);
+
+    UnitDef crashing;
+    crashing.name = "test_air_crash";
+    crashing.categories = {"AIR", "MOBILE"};
+    rm::unitdef::Weapon impact;
+    impact.label = "DeathImpact";
+    impact.role = rm::unitdef::WeaponRole::Death;
+    impact.damage = rm::test::mag(100.0f);
+    impact.maxRange = rm::test::fx(1.0f);
+    impact.damageRadius = rm::test::fx(30.0f);
+    crashing.weapons.push_back(impact);
+
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<int> commandersEver(2, 0);
+    std::vector<rm::sim::Projectile> projectiles;
+    rm::sim::EventQueue events;
+    Match match = loneMatch(armies, economies, commandersEver);
+    match.projectiles = &projectiles;
+    match.events = &events;
+
+    const rm::UnitTypeIndex crashType = roster.addType(crashing);
+    const UnitId doomed = roster.add(crashType, 0.0f, 0.0f, 0, 100.0f);
+    roster.health(doomed).current = rm::sim::Mag{};
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+
+    // No detonation at the death site: the bystander standing on it is unhurt.
+    CHECK(roster.health(bystander).current == rm::sim::Mag::fromInt(100));
+}
