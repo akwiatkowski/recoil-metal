@@ -870,6 +870,12 @@ end
 -- (`medium-ai.lua:925`, `sorianutilities.lua:1168`). The snapshot carries the
 -- flag on each army view, so the global reads the one-based army's live view —
 -- retail's 1-based `army` argument included — and an unknown army reads false.
+-- `IsGameOver` (`aibrain.lua:3586`): `AbandonedByPlayer` gates `OnDefeat` on
+-- it. The driver answers from the observed `GameOver` event — false while the
+-- match runs, true once the sim's verdict lands.
+function IsGameOver()
+    return __rm_faf.gameOver == true
+end
 function ArmyIsCivilian(army)
     local view = __rm_faf.armyViews[(army or 0) - 1]
     return view and view.civilian == true or false
@@ -3799,7 +3805,14 @@ void FafOpponent::observe(const World& world, std::span<const rm::sim::Event> ev
             // `aibrain.lua:797-805`: the winner's brain hears `OnVictory`, every
             // other surviving brain hears nothing from this event — and a draw
             // (`kNoArmy`) hears `OnDraw`. `army` names the winning ALLIANCE, so
-            // membership is read through our own army's alliance.
+            // membership is read through our own army's alliance. The verdict
+            // also flips the driver's `IsGameOver` answer (`aibrain.lua:3586`'s
+            // `AbandonedByPlayer` gate) — set before the callbacks so a brain
+            // re-checking inside `OnVictory`/`OnDraw` sees the ended match.
+            lua_getglobal(lua, "__rm_faf");
+            lua_pushboolean(lua, 1);
+            lua_setfield(lua, -2, "gameOver");
+            lua_pop(lua, 1);
             const std::size_t self = static_cast<std::size_t>(army_);
             if (self >= scene.armies.size()) break;
             const int alliance = scene.armies[self].alliance;

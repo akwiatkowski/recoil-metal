@@ -4263,3 +4263,42 @@ TEST_CASE("C-210: ArmyIsCivilian reads the sim's civilian flag, not a stub",
         assert(ArmyIsCivilian(2) == false, 'the enemy army is not civilian')
     )"));
 }
+
+TEST_CASE("C-210: IsGameOver reads the observed game-over verdict, not a stub",
+          "[faf][ai][victory]") {
+    // `aibrain.lua:3586`: `AbandonedByPlayer` gates `OnDefeat` on `IsGameOver()`.
+    // A stubbed global answers nil, so a brain checked after the verdict sees
+    // "not over" forever. The driver answers from the observed `GameOver`
+    // event — false while the match runs, true once it ends.
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    auto scene = std::make_unique<rm::app::UnitScene>();
+    scene->armies = {{.index = 0, .alliance = 0}, {.index = 1, .alliance = 1}};
+    scene->economies.resize(scene->armies.size());
+    rm::HeightField field{.squaresX = 64, .squaresZ = 64};
+    field.raw.resize(field.sampleCount());
+    const std::array<rm::mapinfo::StartPosition, 2> starts{{
+        {.x = 0, .z = 100}, {.x = 50, .z = 100},
+    }};
+    rm::vfs::Vfs content;
+    const rm::ai::World world{.scene = *scene, .content = content, .field = field,
+                              .starts = starts, .markers = {}};
+    rm::ai::FafOpponent opponent(ai, 0);
+    opponent.observe(world, {});
+    opponent.advance(0);
+    INFO(ai.lastError());
+    REQUIRE(ai.eval(R"(
+        assert(IsGameOver() == false, 'the running match is not over')
+    )"));
+    const std::array<rm::sim::Event, 1> over{{
+        {.kind = rm::sim::EventKind::GameOver, .army = rm::sim::kNoArmy},
+    }};
+    opponent.observe(world, over);
+    INFO(ai.lastError());
+    REQUIRE(ai.eval(R"(
+        assert(IsGameOver() == true, 'the ended match reads over')
+    )"));
+}
