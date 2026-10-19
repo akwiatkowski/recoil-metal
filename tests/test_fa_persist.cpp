@@ -946,3 +946,36 @@ TEST_CASE("v67: pending input capture and restore onto the scene", "[fa-persist]
     CHECK(due[0].units.size() == 1);
     CHECK(due[0].units[0] == kept);
 }
+// The retail-replay-transport edge `C-150/C-151` leaves open: the log writer
+// spells `toggle-script-bit`, `offer-draw`, `sacrifice` and `gift`
+// (`commandKindName`), but the reader's `kindFromName` vocabulary stops at
+// `self-destruct` — a saved replay holding one of those four issues fails to
+// parse instead of round-tripping.
+TEST_CASE("v7 log: toggle-script-bit, offer-draw, sacrifice and gift round-trip", "[fa-persist]") {
+    rm::sim::CommandLog log;
+    const rm::sim::CommandKind kinds[] = {
+        rm::sim::CommandKind::ToggleScriptBit, rm::sim::CommandKind::OfferDraw,
+        rm::sim::CommandKind::Sacrifice, rm::sim::CommandKind::Gift};
+    for (rm::sim::CommandKind kind : kinds) {
+        rm::sim::CommandIssue issue;
+        issue.tick = 1;
+        issue.phase = rm::sim::CommandPhase::PreTick;
+        issue.source = 0;
+        issue.id = rm::commandId(0, static_cast<std::uint32_t>(log.size()));
+        issue.player = 0;
+        issue.kind = kind;
+        issue.scriptBit = kind == rm::sim::CommandKind::ToggleScriptBit ? 0 : 1;
+        REQUIRE(log.record(std::move(issue)));
+    }
+    const auto path = std::filesystem::temp_directory_path()
+        / ("rm-fa-persist-kinds-" + std::to_string(::getpid()) + ".commands");
+    REQUIRE(rm::sim::writeCommandLog(log, path.string()));
+    const auto back = rm::sim::readCommandLog(path.string());
+    REQUIRE(back);
+    REQUIRE(back->size() == 4);
+    CHECK(back->all()[0].kind == rm::sim::CommandKind::ToggleScriptBit);
+    CHECK(back->all()[1].kind == rm::sim::CommandKind::OfferDraw);
+    CHECK(back->all()[2].kind == rm::sim::CommandKind::Sacrifice);
+    CHECK(back->all()[3].kind == rm::sim::CommandKind::Gift);
+    std::filesystem::remove(path);
+}
