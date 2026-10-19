@@ -521,6 +521,7 @@ TEST_CASE("a death explosion goes off once, and hurts what is standing nearby") 
     // the death thread never fires.
     blast.label = "DeathWeapon";
     blast.role = WeaponRole::Death;
+    blast.fireOnDeath = true;
     blast.damage = rm::test::mag(400.0f);
     blast.damageRadius = rm::test::fx(100.0f);
 

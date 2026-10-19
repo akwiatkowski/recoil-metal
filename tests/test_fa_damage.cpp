@@ -345,3 +345,46 @@ TEST_CASE("a dummy script-driven DeathWeapon leaves no death-site blast",
     CHECK(roster.health(bystander).current == rm::sim::Mag::fromInt(100));
     CHECK(report.deathBlasts == 0);
 }
+TEST_CASE("a DeathWeapon without FireOnDeath leaves no death-site blast",
+          "[fa-damage]") {
+    // The authored split across the corpus's 40 `DeathWeapon` blocks is
+    // exact: the 9 firing ones (ACUs, `UEL0001_unit.bp`) state
+    // `FireOnDeath = true` with no dummy flag, while the 31 silent ones
+    // (factories, `UAB1101_unit.bp`) state `DummyWeapon = true` with no
+    // `FireOnDeath`. The death thread fires only a weapon the blueprint
+    // marks for firing — a labelled, non-dummy, harmful blast that omits
+    // the flag still leaves no detonation at the death site.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex targetType = roster.addType(mobileDef());
+    const UnitId bystander = roster.add(targetType, 0.0f, 0.0f, 1, 100.0f);
+
+    UnitDef silent;
+    silent.name = "test_silent_death";
+    silent.categories = {"STRUCTURE"};
+    rm::unitdef::Weapon blast;
+    blast.label = "DeathWeapon";
+    blast.role = rm::unitdef::WeaponRole::Death;
+    blast.damage = rm::test::mag(250.0f);
+    blast.damageRadius = rm::test::fx(16.0f);
+    silent.weapons.push_back(blast);
+
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<int> commandersEver(2, 0);
+    std::vector<rm::sim::Projectile> projectiles;
+    rm::sim::EventQueue events;
+    Match match = loneMatch(armies, economies, commandersEver);
+    match.projectiles = &projectiles;
+    match.events = &events;
+
+    const rm::UnitTypeIndex silentType = roster.addType(silent);
+    const UnitId doomed = roster.add(silentType, 0.0f, 0.0f, 0, 100.0f);
+    roster.health(doomed).current = rm::sim::Mag{};
+    const rm::sim::TickReport report =
+        rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+
+    CHECK(roster.health(bystander).current == rm::sim::Mag::fromInt(100));
+    CHECK(report.deathBlasts == 0);
+}

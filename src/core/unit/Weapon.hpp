@@ -292,6 +292,11 @@ struct Weapon {
     /// `DamageFriendly = true` on a death weapon makes its blast damage allies as well as
     /// enemies. `Unit.lua:956-966` passes this value to `DeathWeaponDamageThread`; ordinary
     /// projectile impacts retain their hostile-only policy.
+    /// `FireOnDeath`: the blueprint marks the death weapon that actually fires.
+    /// Corpus split across the 40 `DeathWeapon` blocks is exact — the 9 firing
+    /// ones (ACUs, `UEL0001_unit.bp`) state `FireOnDeath = true`, the 31 silent
+    /// ones (factories, `UAB1101_unit.bp`) state only `DummyWeapon = true`.
+    bool fireOnDeath = false;
     /// `DummyWeapon`: the blueprint "instructs the engine not to create a C++
     /// weapon object" — purely script-driven (death weapons). Corpus: every
     /// factory's `DeathWeapon` states `DummyWeapon = true` (`UAB1101_unit.bp`:

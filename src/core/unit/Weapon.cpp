@@ -217,6 +217,9 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         // `DummyWeapon` means no C++ weapon object — purely script-driven, so
         // the death thread never fires it (every factory `DeathWeapon` states
         // it; the commanders' firing ones do not).
+        if (const lua::Value* fireOnDeath = entry.find("FireOnDeath")) {
+            weapon.fireOnDeath = fireOnDeath->asBoolean().value_or(false);
+        }
         if (const lua::Value* dummy = entry.find("DummyWeapon")) {
             weapon.dummyWeapon = dummy->asBoolean().value_or(false);
         }

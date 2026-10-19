@@ -1117,16 +1117,11 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
 
     retireDead(store, catalog, report, match.events, match.features, match.armyStats,
                &match.random);
-
     // Retail `DoDeathWeapon` (`lua/sim/Unit.lua:955-970`) detonates only the
-    // weapon labelled `DeathWeapon`. The 56 corpus `DeathImpact` weapons are
-    // the air-crash blast instead (`lua/defaultunits.lua:1469-1486`,
-    // `OnImpact` at the crash position), and the exotic `CollossusDeath` /
-    // `MegalithDeath` labels are crash/scripted deaths the death thread never
-    // fires — so a corpse carrying only one of those leaves no death-site
-    // blast. `deathWeapon` still finds the first `Death`-category weapon for
-    // direct callers; the tick honours the label retail honours.
-    //
+    // weapon labelled `DeathWeapon` that the blueprint marks with
+    // `FireOnDeath`. Crash/scripted labels (`DeathImpact`, `CollossusDeath`,
+    // `MegalithDeath`) never fire on the death thread, and neither does an
+    // unflagged `DeathWeapon` — the corpus's 40 blocks split exactly that way.
     // Anything a blast kills is retired on the NEXT tick rather than this one, so a
     // chain of detonations propagates one link per tick instead of recursing here. That
     // is both the cheaper answer and the deterministic one: recursion would make the
@@ -1140,8 +1135,12 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         const unitdef::Weapon* blast = def != nullptr ? deathWeapon(*def) : nullptr;
         // A `DummyWeapon` has no C++ weapon object — purely script-driven — so
         // the death thread never fires it (every factory `DeathWeapon` states
-        // it: `UAB1101_unit.bp` `Damage = 250` / `DamageRadius = 2`).
-        if (blast == nullptr || blast->label != "DeathWeapon" || blast->dummyWeapon) {
+        // it: `UAB1101_unit.bp` `Damage = 250` / `DamageRadius = 2`). The 9
+        // firing `DeathWeapon`s (ACUs, `UEL0001_unit.bp`) carry retail's
+        // `FireOnDeath = true`; a labelled non-dummy blast omitting the flag
+        // is not marked for firing and likewise leaves no detonation.
+        if (blast == nullptr || blast->label != "DeathWeapon" || blast->dummyWeapon
+            || !blast->fireOnDeath) {
             continue;
         }
         // ATTRIBUTED TO THE CORPSE, by handle as well as by army — so a unit killed by a
