@@ -18,7 +18,7 @@ with weapons read from the shipped blueprints, and a match that *ends* — last
 ACU standing. Playable on `SCMP_009` from the same binary that renders it today.
 
 **The horizon, stated once so the near target has a direction:** an open-source
-Moho. This engine, GPL-2.0-or-later like the Recoil code it adapts, playing
+Moho. This engine, GPL-3.0-or-later (adapted Recoil code keeps its v2-or-later terms), playing
 Supreme Commander on macOS **and Linux**, running the existing mods through a
 hosted Lua layer while offering a clean modern API for new ones (ADR-028), and
 playing multiplayer through FAF's open lobby ecosystem on its **own**

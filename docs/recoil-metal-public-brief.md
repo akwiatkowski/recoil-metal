@@ -7,7 +7,7 @@ context.
 
 ## Project brief
 
-Recoil Metal is an experiment: can a clean-room, open-source engine recreate enough of *Supreme
+Recoil Metal is an experiment: can an independently written, open-source engine recreate enough of *Supreme
 Commander: Forged Alliance* to provide a modern foundation for the game when the original engine
 source is unavailable?
 
@@ -22,8 +22,9 @@ archives before implementing more systems. The executable campaign has recovered
 script-visible native API, class and vtable maps, hundreds of object fields, the blueprint schema,
 serializer layouts, and `Analyzed` evidence for twenty-seven work packages, with partial scopes
 labelled explicitly in the ledger. Findings become concise behavioral evidence, failing tests and
-independent clean-room code. Decompiled source or
-proprietary assets are not copied into or distributed with the project.
+independently written code. Decompiled source or
+proprietary assets are not copied into or distributed with the project. This is not a formal
+two-team clean-room process: the same developer analyzes the executable and writes the engine.
 
 ## Current status snapshot
 
@@ -76,7 +77,7 @@ Games, Square Enix, or THQ Nordic.
   expected retail-content-dependent skips.
 - FAF's Lua builder data and conditions run through a partial adapter. The full manager stack and
   full native API semantics are not implemented.
-- The executable campaign is static-analysis-first, clean-room, artifact-hashed and
+- The executable campaign is static-analysis-first, artifact-hashed and
   hypothesis-driven. The retail executable is the behavior authority; the older engine DLL is used
   only as a naming dictionary because its offsets and behavior differ.
 - `WP-15` economy is the first subsystem labelled Confirmed with EXE analysis; no other work
@@ -100,7 +101,7 @@ Games, Square Enix, or THQ Nordic.
 ## Story the artifact should tell
 
 1. **The community problem:** the game has an open Lua ecosystem on top of a closed, old engine.
-2. **The experiment:** test whether a new clean-room engine is possible without original source.
+2. **The experiment:** test whether a new, independently written engine is possible without original source.
 3. **What exists:** a tested, playable, deterministic native engine and renderer, not a paper plan.
 4. **What remains:** formations, transports, missiles/interception, enhancements, submerged
    warfare, factory controls, full unit scripts, save/resume, and full AI behavior.
@@ -118,7 +119,7 @@ Games, Square Enix, or THQ Nordic.
 Community need: a maintainable engine foundation
                         |
                         v
-Playable clean-room vertical slice
+Playable independent vertical slice
     original C++ simulation + native Metal renderer
                         |
                         v
@@ -126,7 +127,7 @@ Owned retail artifacts
     EXE + DLLs + SCD archives + Lua + blueprints
                         |
                         v
-Bounded clean-room analysis
+Bounded static analysis
     known evidence -> candidate mechanisms -> decisive EXE trace
                         |
                         v
@@ -168,9 +169,9 @@ Explain:
 
 1. The community motivation: the April Fools post pretended the long-wanted source had finally been
    recovered. Present Recoil Metal as a possible epilogue: not recovered source, but an attempt to
-   reach the hoped-for result through a new clean-room engine. Use the thread as context, not
+   reach the hoped-for result through a new, independently written engine. Use the thread as context, not
    technical evidence.
-2. The experiment: determine whether a new clean-room, open-source engine can recreate enough
+2. The experiment: determine whether a new, independently written open-source engine can recreate enough
    Forged Alliance behavior without original source.
 3. What already works, with concrete examples and current test evidence.
 4. What remains incomplete and why this is not a feature-parity claim.
@@ -180,7 +181,8 @@ Explain:
 6. The three labels exactly: Not ready; Ready but not confirmed; Confirmed with EXE analysis. State
    that `WP-15` economy is the first and currently only EXE-confirmed package.
 7. Why this is a long, multi-session research effort and how its ledgers make it resumable.
-8. Clean-room and copyright boundaries. No proprietary assets, executable code, or decompiler
+8. Independent-implementation and copyright boundaries. Do not call it clean-room: the same
+   developer analyzes the executable and writes the engine. No proprietary assets, executable code, or decompiler
    listings are redistributed.
 
 Include one simple pipeline diagram and a compact status summary. Make current achievements,
@@ -197,6 +199,6 @@ brief.
 - The test count matches current repository evidence.
 - The retail disk is described as disconnected.
 - The forum thread is motivation, not evidence or endorsement.
-- The artifact says clean-room reimplementation and includes the non-affiliation boundary.
+- The artifact says independent reimplementation (not a formal clean-room process) and includes the non-affiliation boundary.
 - It does not reproduce proprietary images or imply decompiled code will be copied.
 - Every technical claim traces to a supplied file.

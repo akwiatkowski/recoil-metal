@@ -1,6 +1,6 @@
 # Retail Forged Alliance executable analysis plan
 
-This is the durable control document for a long, multi-session clean-room analysis of the
+This is the durable control document for a long, multi-session static analysis of the
 owned retail *Supreme Commander: Forged Alliance* executable and its relationship to the
 shipped Lua, blueprints, archives, maps, and data.
 

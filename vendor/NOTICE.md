@@ -44,7 +44,7 @@ line comments, zero use `arg[]`, 49 sites use the Lua 5.1 `#x` operator, against
 | **Upstream** | https://github.com/rlcevg/CircuitAI.git |
 | **Pin** | `0ef3626` (2025-12-17, *"Add move_state tag. Add PatrolTask for static constructors…"*) |
 | **Provenance** | **Verified.** The pinned fetch succeeded — git rejects a sha upstream does not have — and the result is byte-identical to the tree the measurements were taken on. |
-| **Licence** | **GPL-2.0**, `LICENSE` in the tree. Compatible with this project. |
+| **Licence** | **GPL-2.0**, `LICENSE` in the tree. Fetched as a reference only — never compiled or linked into this project, whose own code is GPL-3.0-or-later. |
 
 **On the name.** Recoil checks this out as `AI/Skirmish/BARb`, which reads as though BARb were a
 fork. It is not: it is `rlcevg/CircuitAI` itself, pinned by Beyond All Reason at a newer commit

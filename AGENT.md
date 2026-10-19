@@ -14,8 +14,8 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
 1. **Recoil source is read-only reference.** It lives at
    `../faf/forged-alliance-reborn/reference/RecoilEngine` (owned by the FAR
    project — never edit it, never re-clone it from here). Adapting its loader
-   code into this repo is allowed and expected; that's why this repo is
-   GPL-2.0-or-later (see `LICENSE`).
+   code into this repo is allowed and expected; Recoil's "v2 or any later"
+   terms allow that inside this repo's GPL-3.0-or-later licence (see `LICENSE`).
 
    **Read the analysis before the source.** `../faf/forged-alliance-reborn/docs/`
    holds a ten-agent study of that tree and of the Supreme Commander content
@@ -61,7 +61,7 @@ formats, built test-first in modern C++, as both research and a C++ showcase.
 | Windowing | **AppKit + CAMetalDisplayLink**, no SDL/GLFW | Mac-native means Mac-native; dependencies stay near zero |
 | Test framework | **Catch2 v3**, FetchContent at configure time | Standard, BDD-friendly, good matchers |
 | Strategy | **Vertical slices through data formats** | See README — horizontal port of Recoil is ~250k lines before a pixel |
-| Licence | **GPL-2.0-or-later** | We adapt Recoil loader code; upstream grants "v2 or, at your option, any later" and narrowing it would strip that choice |
+| Licence | **GPL-3.0-or-later** | Own code; adapted Recoil loader code keeps upstream's "v2 or, at your option, any later" terms, which permit GPL-3.0-or-later distribution (ADR in `ADR_DECISIONS.md`) |
 
 ## C++ style — this repo is a showcase
 

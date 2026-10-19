@@ -4235,3 +4235,10 @@ player MOVE/BUILD and actual SimpleAI construction assertions. The black-frame
 regression failed before the RGBA fix and passes after it. No public multiplayer,
 BAR-wide visual parity, or OS-level BAR input delivery claim is made.
 
+
+## ADR — Relicense own code to GPL-3.0-or-later (2026-10-19)
+
+**Context:** The repo was GPL-2.0-or-later to match the Recoil loader code it adapts. The author wants their own code under GPLv3 or later, in line with their other projects.
+**Decision:** `LICENSE` is now GPLv3. Original code is GPL-3.0-or-later; files adapted from Recoil keep Recoil's GPL-2.0-or-later terms, which allow distribution as part of a GPLv3 work.
+**Alternatives considered:** Staying GPL-2.0-or-later (rejected: not what the author wants); GPL-2.0-only (narrower than upstream, incompatible with v3).
+**Consequences:** GPL-2.0-only code (e.g. CircuitAI, fetched as a reference) must never be compiled or linked in.

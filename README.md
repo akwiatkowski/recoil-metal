@@ -989,13 +989,15 @@ Recoil separately. Neither game shares unit storage, tick arithmetic or Lua stat
 
 ## Legal
 
-**Licence: GPL-2.0-or-later** — the full text is in [LICENSE](LICENSE).
+**Licence: GPL-3.0-or-later** — the full text is in [LICENSE](LICENSE).
 
-Recoil states its own terms as "version 2 of the License, or (at your option)
-any later version" (`LICENSE` in the engine tree). Loader code here is adapted
-from it, so this project takes the same terms rather than a subset: `GPL-2.0`
-alone would be *narrower* than upstream and would strip the downstream choice
-Recoil deliberately grants.
+The original code in this repository is licensed under the GNU General Public
+License, version 3 or (at your option) any later version. Third-party code keeps
+its own licence: fetched dependencies (`third_party/`, `vendor/`, the pinned
+Recoil engine) are not part of this repository, and the files adapted from
+Recoil below remain under Recoil's terms — "version 2 of the License, or (at
+your option) any later version" — which permit distributing them as part of
+this GPL-3.0-or-later work.
 
 What is adapted, and therefore what carries the obligation:
 
@@ -1010,7 +1012,7 @@ What is adapted, and therefore what carries the obligation:
 Supreme Commander shaders (`terrain.fx`, `mesh.fx`, `water2.fx`, `sky.fx`) are
 read as a **specification** and reimplemented in MSL — no HLSL is copied, and
 none of it is redistributed here. Reading either engine's source as a spec is
-unrestricted; it is the *adapted* Recoil code above that sets the licence.
+unrestricted; the *adapted* Recoil code above keeps Recoil's licence.
 
 No game assets are or will ever be committed — same rule as FAR. The
 screenshots under `docs/images/` are output of this renderer, not game content,
