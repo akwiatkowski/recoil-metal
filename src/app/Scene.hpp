@@ -418,6 +418,13 @@ struct UnitScene {
     /// Grid by default — the game's rule; `--placement free` for the exact-coordinate mode.
     rm::sim::PlacementMode placementMode = rm::sim::PlacementMode::Grid;
 
+    /// The waterline `emitCombatEffects` gates `OnlyEmitOnWater` /
+    /// `SnapToWaterline` on: the scene's level on a wet map, null on a dry
+    /// one (emit all, the gallery behaviour).
+    [[nodiscard]] const float* waterLevelForEffects() const noexcept {
+        return hasWater ? &waterLevelElmos : nullptr;
+    }
+
     [[nodiscard]] rm::sim::Terrain terrain(const rm::HeightField& field) const noexcept {
         rm::sim::Terrain terrain{field, hasWater, waterLevelElmos, lookAhead.get(),
                                  resourceDeposits, placementMode};

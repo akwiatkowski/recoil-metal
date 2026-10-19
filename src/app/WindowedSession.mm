@@ -2303,7 +2303,7 @@ int runWindowed(const Session& session) {
                     [&units](rm::sim::Fx x, rm::sim::Fx z) {
                         return units.terrainTypeGrid.at(x, z);
                     },
-                    &eyeElmos);
+                    &eyeElmos, units.waterLevelForEffects());
 
                 // ...and as SOUND, from the same per-tick queue for the same reason. The
                 // listener rides the camera every tick, so panning follows the view.

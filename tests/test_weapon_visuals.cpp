@@ -836,3 +836,18 @@ TEST_CASE("water-gated emitters emit only near the waterline", "[weapon-visuals]
     rm::emitCombatEffects(unknownOut, std::array{fired}, &visuals, &unknown, 0.05f);
     CHECK(unknown.bursts.size() == 1);
 }
+
+TEST_CASE("the scene's water level feeds effect water-gating", "[weapon-visuals]") {
+    // `emitCombatEffects` gates `OnlyEmitOnWater` / `SnapToWaterline` on the
+    // waterline pointer it is handed; a dry map passes null (emit all) and a
+    // wet map its level. The scene owns that choice so the live loop cannot
+    // forget it.
+    rm::app::UnitScene dry;
+    CHECK(dry.waterLevelForEffects() == nullptr);
+    rm::app::UnitScene wet;
+    wet.hasWater = true;
+    wet.waterLevelElmos = 12.0f;
+    const float* level = wet.waterLevelForEffects();
+    REQUIRE(level != nullptr);
+    CHECK(*level == Catch::Approx(12.0f));
+}
