@@ -312,7 +312,13 @@ void divertToDepthChargeOwner(Projectile& shot, std::vector<Projectile>& project
     // `TrackingRadius` belongs exclusively to point-defence acquisition. A multiplier at or
     // below one cannot shorten ordinary `MaxRadius`; no unit-targeting path consults it.
     const Fx reach = std::max(weapon.maxRange, weapon.maxRange * weapon.trackingRadius);
-    for (std::size_t index = 0; index < projectiles.size(); ++index) {
+    // `C-095` (fa-exe-analysis-plan.md): retail's anti-projectile acquire issues its
+    // own grid query into a 20-slot inline buffer — only the first twenty shots in
+    // walk order are visible, and the nearest is picked among those. Vector order
+    // is this engine's walk order, so the scan stops at twenty.
+    constexpr std::size_t kAcquireBufferSlots = 20;
+    for (std::size_t index = 0; index < projectiles.size() && index < kAcquireBufferSlots;
+         ++index) {
         const Projectile& candidate = projectiles[index];
         if (candidate.ticksRemaining <= 0 || candidate.pendingImpact != ImpactType::Invalid
             || !projectileHostile(fromArmy, candidate, armies)

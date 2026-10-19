@@ -304,6 +304,32 @@ TEST_CASE("point defence fires an interceptor at the nearest hostile projectile"
     CHECK(shots.back().velocity[0] == rm::sim::Fx{});
     CHECK(shots.back().velocity[2] == rm::test::fx(10.0f));
 }
+TEST_CASE("point defence acquire sees only the first twenty in-flight shots") {
+    // `C-095` (fa-exe-analysis-plan.md): retail's anti-projectile acquire issues its
+    // own grid query into a 20-slot inline buffer — the nearest is picked among the
+    // buffered twenty, so a nearer 21st shot is invisible to the mount.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon pointDefence = directFire(10.0f, 300.0f);
+    pointDefence.targetsProjectiles = true;
+    (void)roster.add(roster.addType(gunnerDef(pointDefence)), 0.0f, 0.0f, 0, 100.0f);
+
+    std::vector<Projectile> shots;
+    for (int i = 0; i < 20; ++i) {
+        shots.push_back(Projectile{.position = rm::test::at(0, 4, 200),
+                                   .firedByArmy = 1, .ticksRemaining = 10});
+    }
+    // Nearer than every buffered shot, but 21st in walk order.
+    shots.push_back(Projectile{.position = rm::test::at(0, 4, 50),
+                               .firedByArmy = 1, .ticksRemaining = 10});
+
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                 rm::sim::TickRate{}) == 1);
+    REQUIRE(shots.size() == 22);
+    // Engages the first buffered shot (all twenty tie, vector order wins),
+    // not the nearer unbuffered 21st at index 20.
+    CHECK(shots.back().interceptTargetIndex == 0);
+}
 
 TEST_CASE("firing diagnostics retain actual launch velocity", "[alignment]") {
     const auto armies = rm::sim::freeForAll(2);
