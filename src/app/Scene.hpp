@@ -519,6 +519,11 @@ struct UnitScene {
     /// deploy animations. Absent means match start — pre-placed units unfold as
     /// the match opens. Erased with the slot, like every other per-slot map.
     std::unordered_map<rm::UnitIndex, rm::TickIndex> deployedTick;
+    /// The tick each slot's rack last fired, for the authored `AnimationReload`
+    /// clip (`defaultweapons.lua:202-210` `PlayFxRackSalvoReloadSequence`).
+    /// Stamped by WeaponFired in advanceMatch when the batch carries the clip;
+    /// gather stamps the clip's one-shot phase from it. Erased with the slot.
+    std::unordered_map<rm::UnitIndex, rm::TickIndex> reloadTick;
 
     /// What happened that the player should look at: own units dying under fire,
     /// big things exploding. Recorded per tick from the sim's events, drawn on
@@ -1064,6 +1069,9 @@ struct UnitScene {
         std::erase_if(deployedTick, [this](const auto& kv) {
             return !store.alive(store.idAt(kv.first));
         });
+        std::erase_if(reloadTick, [this](const auto& kv) {
+            return !store.alive(store.idAt(kv.first));
+        });
 
         // STAGE, fork-joined (ADR-036/D15). Everything a lane computes is a
         // pure function of its own DrawUnit plus read-only tables — fog,
@@ -1160,6 +1168,17 @@ struct UnitScene {
                 instance.animationPhase = rm::unpackPhase(
                     since, snapshotCurrent.tick, gAppTickRate.secondsPerTick(),
                     batches[batch].unpackAnimation->duration);
+            } else if (batch < batches.size() && batches[batch].reloadAnimation != nullptr
+                && batches[batch].reloadAnimation->duration > 0.0f) {
+                // Authored rack reload: same one-shot clock from the last fire
+                // tick. Deploy wins — a unit still unfolding reloads nothing.
+                const auto reloaded = reloadTick.find(unit.id.index);
+                if (reloaded != reloadTick.end()) {
+                    instance.animationPhase = rm::unpackPhase(
+                        reloaded->second, snapshotCurrent.tick,
+                        gAppTickRate.secondsPerTick(),
+                        batches[batch].reloadAnimation->duration);
+                }
             }
             drawScratch[batch].push_back(instance);
             drawSlotOf[batch].push_back(unit.id.index);

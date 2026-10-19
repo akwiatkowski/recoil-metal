@@ -364,6 +364,82 @@ TEST_CASE("registering the Laanse wires its reload clip into the batch", "[recoi
 
 
 
+TEST_CASE("a fired rack stamps its reload clip from the fire tick", "[recoil]") {
+    // The stored-but-never-played half of the Laanse slice: `ensureDrawableType`
+    // wires `reloadAnimation` into the batch, but no gather path ever stamps
+    // it — the clip rides no pose. A fire tick must start the clip's clock on
+    // the slot, and gather must stamp the clip's phase, one-shot like deploy.
+    rm::HeightField field;
+    field.squaresX = 128;
+    field.squaresZ = 128;
+    field.baseHeight = 0.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(2);
+    scene.players = rm::sim::onePlayerPerArmy(2, 0);
+    scene.economies.assign(2, rm::sim::Economy{});
+
+    rm::unitdef::UnitDef launcher;
+    launcher.name = "test_reload_rack";
+    launcher.motion = rm::unitdef::MotionType::Land;
+    launcher.health = rm::sim::Mag::fromInt(100);
+    launcher.categories = {"LAND"};
+    scene.definitions.push_back(launcher);
+    const rm::UnitTypeIndex type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(type, rm::data::moveDefFor(launcher), 1.0f);
+
+    rm::Model model;
+    model.family = rm::Family::SupremeCommander;
+    model.bones = {rm::ModelBone{.name = "Root", .parent = -1}};
+    scene.models.push_back(std::move(model));
+    scene.animations.push_back(rm::sca::Animation{
+        .name = "test_reload",
+        .duration = 2.0f,
+        .boneNames = {"Root"},
+        .boneParents = {-1},
+        .frames = {rm::sca::Frame{.time = 0.0f, .bones = {rm::sca::Key{}}},
+                   rm::sca::Frame{.time = 2.0f, .bones = {rm::sca::Key{}}}},
+    });
+    scene.batches.push_back(rm::UnitBatch{
+        .model = &scene.models.back(),
+        .reloadAnimation = &scene.animations.back(),
+    });
+    scene.setBatchForType(type, 0);
+
+    const rm::sim::UnitId first = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = type,
+        .transform = {.x = rm::sim::fxFromFloat(0.0f), .z = rm::sim::fxFromFloat(0.0f)},
+        .motion = rm::app::motionFor(launcher, 0),
+        .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+    });
+    // The match half: a WeaponFired inside the tick's own frame starts the
+    // clock. Emitting BEFORE the tick dies in `beginFrame`, so tick once to
+    // open the frame, emit into it, and tick the SAME tick again — the
+    // second `beginFrame` is a no-op and the consumer reads the emit.
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+    (void)rm::app::advanceMatch(runner, 99, 9.9f);
+    scene.events.emit(rm::sim::Event{
+        .kind = rm::sim::EventKind::WeaponFired,
+        .unit = first,
+        .army = 0,
+    });
+    (void)rm::app::advanceMatch(runner, 99, 9.9f);
+    REQUIRE(scene.reloadTick.contains(first.index));
+    CHECK(scene.reloadTick[first.index] == 99);
+    scene.publish(109);
+    scene.publish(109);
+    scene.gatherForDrawing(1.0f, nullptr, {}, 0.0f);
+    REQUIRE(scene.batches[0].instances.size() == 1);
+    // Ten ticks at ten hertz into a two-second reload: half reloaded.
+    CHECK(scene.batches[0].instances[0].animationPhase == Approx(0.5f));
+}
+
 TEST_CASE("a built unit plays its unfold once from completion", "[recoil]") {
     // The deploy path end to end with a hand-made fold: two frames over two
     // seconds, batch flagged one-shot, deployed ten ticks ago. Gather must

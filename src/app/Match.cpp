@@ -1828,6 +1828,7 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             // A recycled slot must not inherit its predecessor's deploy time or
             // rally point.
             scene.deployedTick.erase(event.unit.index);
+            scene.reloadTick.erase(event.unit.index);
             scene.rallyPoints.erase(event.unit.index);
             // The victim's type is still in its slot: `types_` is written only at spawn
             // and a corpse's slot is recycled by a LATER spawn, all of which happen in
@@ -1925,6 +1926,12 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                 if (scene.batches[batch].telescopeDistanceElmos != 0.0f) {
                     slide.telescope = 1.0f;
                 }
+            }
+            // Authored rack reload: start the clip's one-shot clock on the
+            // slot — gather stamps the phase, the shader holds the last frame.
+            if (batch != rm::app::UnitScene::kNoBatch && batch < scene.batches.size()
+                && scene.batches[batch].reloadAnimation != nullptr) {
+                scene.reloadTick[event.unit.index] = static_cast<rm::TickIndex>(tickIndex);
             }
         }
     }

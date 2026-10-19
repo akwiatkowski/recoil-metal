@@ -327,11 +327,15 @@ void Renderer::setUnits(std::span<const dds::Texture> textures, std::span<const 
 
         // A deploy animation stands in for a missing loop: statics do not walk,
         // so there is nothing to displace, and the one-shot flag (below) keeps
-        // the fold from looping once it has played.
-        const sca::Animation* animation =
-            batch.animation != nullptr ? batch.animation : batch.unpackAnimation;
-        const bool unpackOneshot =
-            animation != nullptr && animation == batch.unpackAnimation && batch.unpackOneshot;
+        // the fold from looping once it has played. The rack reload stands in
+        // for both — a reloading rack (Laanse, Mongoose) names no walk clip,
+        // so without this the stored clip bakes no pose and gather stamps air.
+        const sca::Animation* animation = batch.animation != nullptr   ? batch.animation
+            : batch.unpackAnimation != nullptr ? batch.unpackAnimation
+                                              : batch.reloadAnimation;
+        const bool unpackOneshot = animation != nullptr
+            && ((animation == batch.unpackAnimation && batch.unpackOneshot)
+                || (animation == batch.reloadAnimation && batch.unpackAnimation == nullptr));
         if (animation != nullptr && !animation->empty()) {
             const std::vector<int> boneMap = mapBonesToAnimation(model, *animation);
             const bool drivesAnything =
