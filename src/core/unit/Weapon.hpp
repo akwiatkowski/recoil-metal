@@ -288,8 +288,15 @@ struct Weapon {
     /// `DamageFriendly = true` on a death weapon makes its blast damage allies as well as
     /// enemies. `Unit.lua:956-966` passes this value to `DeathWeaponDamageThread`; ordinary
     /// projectile impacts retain their hostile-only policy.
-    bool damageFriendly = false;
+    /// `DummyWeapon`: the blueprint "instructs the engine not to create a C++
+    /// weapon object" — purely script-driven (death weapons). Corpus: every
+    /// factory's `DeathWeapon` states `DummyWeapon = true` (`UAB1101_unit.bp`:
+    /// `Damage = 250`, `DamageRadius = 2`); the commanders' firing
+    /// `DeathWeapon`s state `FireOnDeath = true` with no dummy flag
+    /// (`UEL0001_unit.bp`). A dummy never detonates on the death path.
+    bool dummyWeapon = false;
 
+     bool damageFriendly = false;
     /// How far the weapon reaches, in elmos. `MinRadius` is a dead zone inside which
     /// it cannot fire — 87 weapons have one, and without it a unit walks up to an
     /// artillery piece and stands in the one place it cannot be shot from.

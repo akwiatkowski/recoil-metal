@@ -1138,7 +1138,10 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         const UnitIndex slot = death.ref.index;
         const unitdef::UnitDef* def = catalog.def(store.typeAt(slot));
         const unitdef::Weapon* blast = def != nullptr ? deathWeapon(*def) : nullptr;
-        if (blast == nullptr || blast->label != "DeathWeapon") {
+        // A `DummyWeapon` has no C++ weapon object — purely script-driven — so
+        // the death thread never fires it (every factory `DeathWeapon` states
+        // it: `UAB1101_unit.bp` `Damage = 250` / `DamageRadius = 2`).
+        if (blast == nullptr || blast->label != "DeathWeapon" || blast->dummyWeapon) {
             continue;
         }
         // ATTRIBUTED TO THE CORPSE, by handle as well as by army — so a unit killed by a

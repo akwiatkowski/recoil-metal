@@ -299,3 +299,49 @@ TEST_CASE("a crashed aircraft's DeathImpact is a crash blast, not a death-site d
     // No detonation at the death site: the bystander standing on it is unhurt.
     CHECK(roster.health(bystander).current == rm::sim::Mag::fromInt(100));
 }
+TEST_CASE("a dummy script-driven DeathWeapon leaves no death-site blast",
+          "[fa-damage]") {
+    // `reference/supcom-wiki/pages/weapons/Blueprint_Weapon.md:311-316`
+    // (`DummyWeapon`): the field "instructs the engine not to create a C++
+    // weapon object" — a dummy is purely script-driven, and the death thread
+    // never fires it. Corpus shape: every factory's `DeathWeapon`
+    // (`UAB1101_unit.bp`: `Damage = 250`, `DamageRadius = 2`,
+    // `DummyWeapon = true`, no `FireOnDeath`) versus the commanders'
+    // (`UEL0001_unit.bp`: `FireOnDeath = true`, rings, no dummy flag).
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex targetType = roster.addType(mobileDef());
+    const UnitId bystander = roster.add(targetType, 0.0f, 0.0f, 1, 100.0f);
+
+    UnitDef factory;
+    factory.name = "test_factory_dummy_death";
+    factory.categories = {"STRUCTURE"};
+    rm::unitdef::Weapon dummy;
+    dummy.label = "DeathWeapon";
+    dummy.role = rm::unitdef::WeaponRole::Death;
+    dummy.dummyWeapon = true;
+    dummy.damage = rm::test::mag(250.0f);
+    dummy.damageRadius = rm::test::fx(16.0f);
+    factory.weapons.push_back(dummy);
+
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<int> commandersEver(2, 0);
+    std::vector<rm::sim::Projectile> projectiles;
+    rm::sim::EventQueue events;
+    Match match = loneMatch(armies, economies, commandersEver);
+    match.projectiles = &projectiles;
+    match.events = &events;
+
+    const rm::UnitTypeIndex factoryType = roster.addType(factory);
+    const UnitId doomed = roster.add(factoryType, 0.0f, 0.0f, 0, 100.0f);
+    roster.health(doomed).current = rm::sim::Mag{};
+    const rm::sim::TickReport report =
+        rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+
+    // No death-site detonation: the bystander on the corpse is unhurt and no
+    // blast is reported.
+    CHECK(roster.health(bystander).current == rm::sim::Mag::fromInt(100));
+    CHECK(report.deathBlasts == 0);
+}

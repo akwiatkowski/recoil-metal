@@ -213,11 +213,18 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         // blueprint states nothing (`weapon.lua:290-293`); death blasts keep the
         // false default (`defaultweapons.lua:767` threads `or false`). `role` is
         // parsed above, so the death check reads the resolved category.
-        if (const lua::Value* damageFriendly = entry.find("DamageFriendly")) {
-            weapon.damageFriendly = damageFriendly->asBoolean().value_or(false);
-        } else {
-            weapon.damageFriendly = weapon.role != WeaponRole::Death;
+        // `reference/supcom-wiki/pages/weapons/Blueprint_Weapon.md:311-316`:
+        // `DummyWeapon` means no C++ weapon object — purely script-driven, so
+        // the death thread never fires it (every factory `DeathWeapon` states
+        // it; the commanders' firing ones do not).
+        if (const lua::Value* dummy = entry.find("DummyWeapon")) {
+            weapon.dummyWeapon = dummy->asBoolean().value_or(false);
         }
+         if (const lua::Value* damageFriendly = entry.find("DamageFriendly")) {
+             weapon.damageFriendly = damageFriendly->asBoolean().value_or(false);
+         } else {
+             weapon.damageFriendly = weapon.role != WeaponRole::Death;
+         }
 
         weapon.maxRange = sim::fxFromFloat(numberOr(entry, "MaxRadius", 0.0f)
                                            * scmap::kElmosPerOgrid);
