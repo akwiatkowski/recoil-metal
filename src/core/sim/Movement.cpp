@@ -387,6 +387,14 @@ void updateWingedAttack(MoveState& state, const Transform& aircraft, const Trans
     const Fx aimZ = target.z + targetStepZ * lead;
     state.destinationX = aimX;
     state.destinationZ = aimZ;
+    // `C-412` (`Air+0x18`): inside `StartTurnDistance` of a moving target the
+    // flyer begins to align with it; outside, the combat machine falls back
+    // to its proportional close-rate. The flag is the observable contract —
+    // the steering destination arithmetic stays the planar reduction's own.
+    const Fx range = direction.length;
+    const bool targetMoving = targetStepX != Fx{} || targetStepZ != Fx{};
+    state.aligningWithTarget = targetMoving && state.airStartTurnDistanceElmos > Fx{}
+                               && range <= state.airStartTurnDistanceElmos;
     if (state.airCombatState == State::BreakOff) {
         state.destinationX = aircraft.x + fxSin(aircraft.heading) * state.airMaxSpeedElmosPerSec;
         state.destinationZ = aircraft.z + fxCos(aircraft.heading) * state.airMaxSpeedElmosPerSec;

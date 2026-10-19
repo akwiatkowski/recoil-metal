@@ -585,11 +585,12 @@ std::expected<unitdef::UnitDef, lua::ParseError> load(std::string_view source,
         // a flyer needs to line up scales with the hull length. Kept here in raw
         // ogrid form so the field's ogrid-ness is a property of the loader, not a
         // hidden conversion. DAA0206 (the Mercy, SizeZ = 1.4) derives 4.2.
-        def.startTurnDistance = numberOr(*airBlock, "StartTurnDistance", 0.0f);
+        def.startTurnDistanceElmos = numberOr(*airBlock, "StartTurnDistance", 0.0f);
         if (airBlock->find("StartTurnDistance") == nullptr) {
-            def.startTurnDistance =
+            def.startTurnDistanceElmos =
                 numberOr(*parsed, "SizeZ", 0.0f) * 3.0f;
         }
+        def.startTurnDistanceElmos *= scmap::kElmosPerOgrid;
         def.airAutoLandTimeSec = numberOr(*airBlock, "AutoLandTime", 0.0f);
         def.airFuelUseTimeSec = numberOr(*airBlock, "FuelUseTime", 0.0f);
         def.airFuelRechargeRatePerSec = numberOr(*physics, "FuelRechargeRate", 0.0f);

@@ -2029,7 +2029,6 @@ TEST_CASE("C-224: the attack cone is 30 degrees, widened to 90 in a hard turn",
         rm::sim::updateWingedAttack(state, aircraft, target, false,
                                     Fx::fromInt(1024), Fx::fromInt(1024), tick, random);
     };
-
     // Inside the cone (25 degrees): the run is head-on.
     MoveState inCone;
     step(inCone, targetAt(25.0f * kPi / 180.0f), 10);
@@ -2105,6 +2104,38 @@ TEST_CASE("C-224: the attack cone is 30 degrees, widened to 90 in a hard turn",
     for (std::size_t i = 0; i < seen.size(); ++i) {
         CHECK(seen[i]);
     }
+}
+
+TEST_CASE("C-412: a flyer inside StartTurnDistance aligns with its target",
+          "[air-combat]") {
+    // `C-412` (`Air+0x18`, schema `0x00e62210` — "Distance from target at
+    // which to start turning to align with it"): a winged flyer inside its
+    // authored `StartTurnDistance` (UAA0102 interceptor: 5 ogrids) begins to
+    // align with a moving target; outside it the combat machine falls back
+    // to its proportional close-rate. Parsed but never read — the smallest
+    // true missing air remainder inside the planar boundary.
+    using rm::sim::Fx;
+    const rm::sim::Transform here{.x = Fx::fromInt(400), .z = Fx::fromInt(400)};
+    const rm::sim::Transform target{.x = Fx::fromInt(400), .z = Fx::fromInt(400 - 24)};
+    rm::sim::RandomStream random{std::uint32_t{1}};
+    // Inside: 24 elmos of range — under the authored 5-ogrid (40-elmo) distance.
+    MoveState close;
+    close.airStartTurnDistanceElmos = Fx::fromInt(5 * 8);
+    rm::sim::updateWingedAttack(close, here, target, false,
+                                Fx::fromInt(1024), Fx::fromInt(1024), 10, random,
+                                /*targetStepX=*/Fx::fromInt(2),
+                                /*targetStepZ=*/Fx::fromInt(1));
+    CHECK(close.aligningWithTarget);
+    // Outside: the same mover against a target 240 elmos out keeps the
+    // proportional close-rate instead.
+    MoveState far;
+    far.airStartTurnDistanceElmos = Fx::fromInt(5 * 8);
+    const rm::sim::Transform distant{.x = Fx::fromInt(400), .z = Fx::fromInt(400 - 30 * 8)};
+    rm::sim::updateWingedAttack(far, here, distant, false,
+                                Fx::fromInt(1024), Fx::fromInt(1024), 10, random,
+                                /*targetStepX=*/Fx::fromInt(2),
+                                /*targetStepZ=*/Fx::fromInt(1));
+    CHECK_FALSE(far.aligningWithTarget);
 }
 
 TEST_CASE("C-244: carried mass halves the lift and turn gains, never KMove",

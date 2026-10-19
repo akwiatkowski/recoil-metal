@@ -1463,10 +1463,11 @@ TEST_CASE("C-218 (6): CatchUpAcc derives from max(MaxAcceleration, MaxBrake)") {
 
 TEST_CASE("C-218 (6): StartTurnDistance derives from SizeZ x 3 when unauthored") {
     // `C-218`'s sixth explicit-0-vs-absent chain: `Air.StartTurnDistance`
-    // (`UnitBlueprint.lua:254-255`) — the ogrids from a moving target at which a
+    // (`UnitBlueprint.lua:254-255`) — the elmos from a moving target at which a
     // flyer begins to align. Changelog 2026-02-14-3830 tunes it freely
-    // (UAA0102: 10 → 5); an authored value wins, an absent key derives as
-    // `SizeZ x 3`. Discriminator: DAA0206 (the Mercy, SizeZ = 1.4) derives 4.2.
+    // (UAA0102: 10 → 5 ogrids); an authored value wins, an absent key derives as
+    // `SizeZ x 3` ogrids in elmos. Discriminator: DAA0206 (the Mercy,
+    // SizeZ = 1.4) derives 4.2 ogrids = 33.6 elmos.
     const Blueprint authored{"XXB0706_unit.bp", R"(
         UnitBlueprint {
             Physics = { MotionType = 'RULEUMT_Air', MaxSpeed = 1 },
@@ -1476,7 +1477,7 @@ TEST_CASE("C-218 (6): StartTurnDistance derives from SizeZ x 3 when unauthored")
     )"};
     const auto def = rm::unitbp::loadFile(authored.path());
     REQUIRE(def.has_value());
-    CHECK(def->startTurnDistance == Catch::Approx(5.0f));
+    CHECK(def->startTurnDistanceElmos == Catch::Approx(5.0f * 8.0f));
 
     const Blueprint bare{"XXB0707_unit.bp", R"(
         UnitBlueprint {
@@ -1487,7 +1488,7 @@ TEST_CASE("C-218 (6): StartTurnDistance derives from SizeZ x 3 when unauthored")
     )"};
     const auto none = rm::unitbp::loadFile(bare.path());
     REQUIRE(none.has_value());
-    CHECK(none->startTurnDistance == Catch::Approx(4.2f));
+    CHECK(none->startTurnDistanceElmos == Catch::Approx(4.2f * 8.0f));
 }
 TEST_CASE("C-218: BuildOnLayerCaps reads the authored LAYER allow-set") {
     // `C-218`'s constructor-default tail (`BuildOnLayerCaps 1`): the allow-set

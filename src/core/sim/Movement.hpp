@@ -301,6 +301,18 @@ struct MoveState {
     TickCount airMinChangeTicks = 30;
     TickCount airMaxChangeTicks = 60;
     bool airBreakOffNearTarget = false;
+    /// `Air.StartTurnDistance` in elmos (`C-412`, `Air+0x18`, schema
+    /// `0x00e62210` — "Distance from target at which to start turning to
+    /// align with it"): inside this range of a moving target the winged
+    /// attack steering aligns with the target's motion; outside it the
+    /// combat machine keeps its proportional close-rate. UAA0102 authors 5
+    /// ogrids; absent derives as `SizeZ x 3` (`C-218`). Spawn-copied.
+    Fx airStartTurnDistanceElmos{};
+    /// Whether the last `updateWingedAttack` pass aligned with the target's
+    /// motion (`C-412`): true when the target moved last tick and the range
+    /// sits inside `airStartTurnDistanceElmos`. Diagnostic only — neither
+    /// saved nor hashed.
+    bool aligningWithTarget = false;
 
     [[nodiscard]] bool makingAttackRun() const noexcept {
         return airCombatState == AirCombatState::HeadOn

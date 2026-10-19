@@ -374,6 +374,7 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
         motion.airMinChangeTicks = static_cast<rm::TickCount>(def.airMinChangeSec * 10);
         motion.airMaxChangeTicks = static_cast<rm::TickCount>(def.airMaxChangeSec * 10);
         motion.airBreakOffNearTarget = def.airBreakOffNearTarget;
+        motion.airStartTurnDistanceElmos = rm::sim::fxFromFloat(def.startTurnDistanceElmos);
         motion.airKMove = rm::sim::fxFromFloat(def.airKMove);
         motion.airKMoveDamping = rm::sim::fxFromFloat(def.airKMoveDamping);
         motion.airKLift = rm::sim::fxFromFloat(def.airKLift);

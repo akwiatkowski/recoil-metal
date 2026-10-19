@@ -2239,6 +2239,7 @@ constexpr std::array kAirControllerFx{
     &MoveState::airAttackElevation,
     &MoveState::airElevation,
     &MoveState::airElevationAdjustment,
+    &MoveState::airStartTurnDistanceElmos,
     &MoveState::fuelDrainPerTick
 };
 
