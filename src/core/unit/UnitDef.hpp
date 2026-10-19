@@ -579,13 +579,12 @@ struct UnitDef {
     /// blueprint key; no shipped unit states it and retail's reader was never
     /// found, so the constructor default (off) stands.
     bool autoSurfaceToAttack = false;
-    /// `Physics.LayerChangeOffsetHeight` (`C-205`, `RUnitBlueprintPhysics+0x74`;
-    /// `C-218` constructor default -0.1 ogrids): the offset added to the waterline
-    /// when the layer evaluator compares terrain height — dry ground is
-    /// `terrainY > waterY + offset`. Negative on every authored unit (XRL0305's
-    /// -0.9 ogrids is -7.2 elmos), so a walker on ground just under the surface
-    /// still reads Land. Absent reads -0.8 elmos, not zero.
-    float layerChangeOffsetElmos = -0.8f;
+    /// `Physics.LayerChangeOffsetHeight` (`C-205`, `RUnitBlueprintPhysics+0x74`):
+    /// the offset added to the waterline when the layer evaluator compares
+    /// terrain height — dry ground is `terrainY > waterY + offset`. Negative on
+    /// every authored unit (XRL0305's -0.9 ogrids is -7.2 elmos), so a walker
+    /// on ground just under the surface still reads Land. Zero when unauthored.
+    float layerChangeOffsetElmos = 0.0f;
     /// C-218: retail constructor defaults DiveSurfaceSpeed to 1 ogrid/s.
     float diveSurfaceSpeedElmosPerSecond = 8.0f;
     float airAutoLandTimeSec = 0.0f;
