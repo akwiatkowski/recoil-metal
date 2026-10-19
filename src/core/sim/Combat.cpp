@@ -2898,6 +2898,13 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                 continue;  // still cooling from the last click; `fireWeapons` ticks it
             }
 
+            // C-156 (`FindBestEnemy` reject step 8): BENIGN hulls are never valid
+            // targets — explicit Attack already holds on them, overcharge does too.
+            if (const unitdef::UnitDef* targetDef =
+                    catalog.def(store.typeAt(head->target().index));
+                targetDef != nullptr && targetDef->hasCategory("BENIGN")) {
+                continue;
+            }
             const std::array<Fx, 3> from = positionOf(transforms[slot]);
             const std::array<Fx, 3> to = positionOf(transforms[head->target().index]);
             const Fx overchargeGap = groundDistanceElmos(from, to);

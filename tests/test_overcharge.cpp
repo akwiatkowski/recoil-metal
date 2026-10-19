@@ -202,6 +202,23 @@ TEST_CASE("an overcharge inside the dead zone holds its shot") {
     CHECK(f.roster.store.alive(victim));
     REQUIRE(f.roster.store.orders()[acu.index].current() != nullptr);
 }
+TEST_CASE("an overcharge holds its shot on a BENIGN hull") {
+     // C-156 (`FindBestEnemy` reject step 8): BENIGN is a hard reject ahead of
+     // per-weapon checks — explicit Attack already holds, overcharge does too.
+     Fixture f;
+     rm::unitdef::UnitDef benign;
+     benign.name = "test_benign";
+     benign.categories.push_back("BENIGN");
+     const rm::UnitTypeIndex benignType = f.roster.addType(std::move(benign));
+     const UnitId acu = f.roster.add(f.acuType, 200.0f, 200.0f, 0, 10000.0f);
+     const UnitId hull = f.roster.add(benignType, 230.0f, 200.0f, 1, 500.0f);
+     f.economies[0].stored.energy = rm::sim::magFromFloat(6000.0f);
+     REQUIRE(f.overcharge(acu, hull));
+     const rm::sim::TickReport report = f.tick(3);
+     CHECK(report.shotsFired == 0);
+     CHECK(f.roster.store.alive(hull));
+     REQUIRE(f.roster.store.orders()[acu.index].current() != nullptr);
+ }
 
 TEST_CASE("a unit with no manual weapon cannot be asked to overcharge") {
     Fixture f;
