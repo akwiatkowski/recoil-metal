@@ -2923,6 +2923,13 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                 continue;  // still cooling from the last click; `fireWeapons` ticks it
             }
 
+            // An attached unit rides its carrier's hull — guns shoot the
+            // transport, not the cargo racked under it (retail's transport
+            // invulnerability, the attached reject `nearestTarget` and
+            // `canShootExplicitTarget` already hold on).
+            if (store.motion()[head->target().index].attached) {
+                continue;
+            }
             // C-156 (`FindBestEnemy` reject step 8): BENIGN hulls are never valid
             // targets — explicit Attack already holds on them, overcharge does too.
             const unitdef::UnitDef* overchargeDef =

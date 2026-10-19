@@ -240,7 +240,25 @@ TEST_CASE("an overcharge holds its shot when the target fails the weapon restric
     const rm::sim::TickReport report = f.tick(3);
     CHECK(report.shotsFired == 0);
     CHECK(rm::test::asFloat(f.economies[0].stored.energy) == 6000.0f);
-    CHECK(f.roster.store.alive(victim));
+    REQUIRE(f.roster.store.orders()[acu.index].current() != nullptr);
+}
+
+TEST_CASE("an overcharge holds its shot on cargo riding its carrier") {
+    // Retail's transport invulnerability (`nearestTarget`'s attached reject):
+    // an attached unit rides its carrier's hull — guns shoot the transport,
+    // not the cargo racked under it. The explicit Attack path holds via
+    // `canShootExplicitTarget`, but `fireOvercharge` walks the order target
+    // directly and never asks — so a clicked cargo would take the 12000.
+    Fixture f;
+    const UnitId acu = f.roster.add(f.acuType, 200.0f, 200.0f, 0, 10000.0f);
+    const UnitId carrier = f.roster.add(f.tankType, 230.0f, 200.0f, 1, 500.0f);
+    const UnitId cargo = f.roster.add(f.tankType, 232.0f, 200.0f, 1, 500.0f);
+    REQUIRE(f.roster.store.attach(carrier, cargo));
+    f.economies[0].stored.energy = rm::sim::magFromFloat(6000.0f);
+    REQUIRE(f.overcharge(acu, cargo));
+    const rm::sim::TickReport report = f.tick(3);
+    CHECK(report.shotsFired == 0);
+    CHECK(f.roster.store.alive(cargo));
     REQUIRE(f.roster.store.orders()[acu.index].current() != nullptr);
 }
 
