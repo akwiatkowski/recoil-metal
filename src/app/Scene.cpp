@@ -6,8 +6,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <numbers>
 #include <cstdint>
+#include <limits>
+#include <numbers>
 
 namespace rm::app {
 
@@ -254,6 +255,30 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
     }
     return impactMarkRadius(blastRadiusElmos);
 }
+/// A scripted mark's authored decal duration, in seconds (C-484): each
+/// per-weapon `OnImpact` passes its own `duration` to `CreateDecal` — napalm
+/// 15 (`TIFNapalmCarpetBomb01_script.lua:13`), frag 15
+/// (`AIFFragmentationSensorShell03_script.lua:20`), proton 200
+/// (`CIFArtilleryProton01_script.lua:15`), zhanasee 200
+/// (`SBOZhanaseeBomb01_script.lua:29`), sonance 300
+/// (`AIFSonanceShell02_script.lua:19-20`), EMP 0 = permanent
+/// (`CIFEMPFluxWarhead02_script.lua:116`), quantum 0 = permanent
+/// (`AIFQuantumWarhead02_script.lua:119-120`). `BaseScorch` keeps the 300-600
+/// s spread. Zero reads as permanent. Presentation only, never hashed.
+[[nodiscard]] float impactMarkScriptedLifetimeSeconds(UnitScene::ImpactMarkScript script) noexcept {
+    using Script = UnitScene::ImpactMarkScript;
+    switch (script) {
+        case Script::SonanceCrater: return 300.0f;  // s (`:19-20` LOD arg)
+        case Script::ProtonScorch: return 200.0f;  // s (`:15`)
+        case Script::NapalmScorch: return 15.0f;  // s (`:13`)
+        case Script::EmpScorch: return 0.0f;  // s (`:116` permanent)
+        case Script::FragScorch: return 15.0f;  // s (`:20`)
+        case Script::ZhanaseeScorch: return 200.0f;  // s (`:29`)
+        case Script::QuantumCrater: return 0.0f;  // s (`:119-120` permanent)
+        case Script::BaseScorch: break;
+    }
+    return -1.0f;  // (base spread, not a fixed duration)
+}
 /// A scripted mark's texture stream (C-484): past the base ten
 /// (`scorch_001`-`010`), so the FA-PRESENT projection samples the weapon's
 /// own texture rather than the splat/decal stream. Base marks keep 0..9.
@@ -311,6 +336,13 @@ inline constexpr float kImpactMarkLifetimeSecondsWidth = 300.0f;  // s (C-290 60
 [[nodiscard]] rm::TickIndex impactMarkLifetime(const UnitScene::ImpactMark& mark) noexcept {
     if (mark.beamThread) {
         return gAppTickRate.ticks(rm::sim::seconds(mark.beamLifetimeSeconds));  // ticks (C-290)
+    }
+    if (mark.script != UnitScene::ImpactMarkScript::BaseScorch) {
+        const float authored = impactMarkScriptedLifetimeSeconds(mark.script);  // s (C-484)
+        if (authored <= 0.0f) {
+            return std::numeric_limits<rm::TickIndex>::max();  // ticks (retail duration 0 = permanent)
+        }
+        return gAppTickRate.ticks(rm::sim::seconds(authored));  // ticks (C-484)
     }
     std::uint32_t bits = static_cast<std::uint32_t>(std::llround(
                              static_cast<double>(mark.x) * 4096.0))  // 1/4096 elmo

@@ -765,6 +765,28 @@ TEST_CASE("impact marks tag a weapon's own decal from the shot's projectile id",
           == Script::QuantumCrater);
     CHECK(rm::app::scriptTagForProjectile("") == Script::BaseScorch);
 }
+TEST_CASE("scripted decals retire at their authored duration", "[decals]") {
+    // Retail's per-weapon `OnImpact` decals pass their OWN duration, not the
+    // 300-600 s base spread (C-484): napalm `TIFNapalmCarpetBomb01` passes 15,
+    // frag `AIFFragmentationSensorShell03` passes 15, proton
+    // `CIFArtilleryProton01` passes 200, zhanasee `SBOZhanaseeBomb01` passes
+    // 200, sonance crater pair passes 300, while EMP `CIFEMPFluxWarhead02` and
+    // quantum `AIFQuantumWarhead02` pass 0 — permanent. Presentation only,
+    // replay-identical, off the sim RNG (C-297).
+    using Script = rm::app::UnitScene::ImpactMarkScript;
+    const HeightField field = flatAt(64, 0);
+    const rm::sim::TickRate rate{};
+    const rm::TickIndex pastNapalm = rate.ticks(rm::sim::seconds(16.0f));
+    const rm::TickIndex pastBase = rate.ticks(rm::sim::seconds(601.0f));
+    rm::app::UnitScene napalm;
+    rm::app::noteImpactMark(napalm, 10.0f, 20.0f, 8.0f, 0, Script::NapalmScorch);
+    rm::app::refreshWreckDecals(napalm, field, pastNapalm);
+    CHECK(napalm.wreckDecals.empty());
+    rm::app::UnitScene quantum;
+    rm::app::noteImpactMark(quantum, 30.0f, 40.0f, 8.0f, 0, Script::QuantumCrater);
+    rm::app::refreshWreckDecals(quantum, field, pastBase);
+    CHECK_FALSE(quantum.wreckDecals.empty());
+}
 
 
 TEST_CASE("a chamfered square cuts its corners at 45 degrees", "[selection-square]") {
