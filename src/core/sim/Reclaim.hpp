@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/sim/ArmyStats.hpp"
 #include "core/sim/Combat.hpp"
 #include "core/sim/Economy.hpp"
 #include "core/sim/Events.hpp"
@@ -63,20 +64,25 @@ struct GuardWork {
 /// `wreckage.lua::DoTakeDamage`; a lethal hit removes it. Returns health actually removed.
 Mag damageFeature(FeatureStore& features, FeatureId id, Mag damage);
 
-/// One tick of every reclaim order in the store: drains wrecks, credits economies,
-/// removes what is emptied. Returns how many units actually harvested this tick — the
+/// One tick of every reclaim order in the store: drains wrecks, credits economies
+/// and the reclaimer's `Economy_Reclaimed_*` army stats (C-147: the task credits
+/// the resource vector and the reclaimed-resource statistics together), removes
+/// what is emptied. Returns how many units actually harvested this tick — the
 /// outward sign a reclaim is progressing, for the report and for tests.
 ///
 /// Run AFTER movement (a reclaimer harvests from where it ended the tick) and BEFORE
 /// `tickEconomy` (so the cap applies to this tick's haul in this tick).
+/// An empty stats span skips the counters; the store credit always lands.
 std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
-                           FeatureStore& features, std::span<Economy> economies);
+                           FeatureStore& features, std::span<Economy> economies,
+                           std::span<ArmyStats> armyStats = {});
 
 /// Applies reclaim-copy decisions made by the guard ladder. Manual reclaim has already run;
 /// patrol work runs afterwards.
 std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
                               FeatureStore& features, std::span<Economy> economies,
-                              std::span<const GuardWork> work);
+                              std::span<const GuardWork> work,
+                              std::span<ArmyStats> armyStats = {});
 
 /// Collects every explicit repair that is actively holding its target into economy requests,
 /// then every guard's repair pick, then every idle engineering station's: a station with no
@@ -103,7 +109,8 @@ std::size_t applyRepairWork(UnitStore& store, const UnitCatalog& catalog,
 /// convenience; explicit repair is collected separately so its demand joins the economy pass.
 std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
                                   std::span<const Army> armies, FeatureStore* features,
-                                  std::span<Economy> economies);
+                                  std::span<Economy> economies,
+                                  std::span<ArmyStats> armyStats = {});
 
 // Reclaiming a LIVING UNIT (`CommandKind::ReclaimUnit`).
 //
@@ -123,10 +130,12 @@ std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
 // `ReclaimTimeMultiplier` (a script field, taken as 1), and reclaiming one's own units.
 
 /// One tick of every ReclaimUnit order in reach: un-builds the target, credits the reclaimer's
-/// army, and destroys a fully reclaimed unit without a wreck. Run in the economy step with
-/// `harvestReclaim`. Returns how many reclaimers made progress.
+/// army and its `Economy_Reclaimed_*` stats (C-147), and destroys a fully reclaimed unit
+/// without a wreck. Run in the economy step with `harvestReclaim`. Returns how many
+/// reclaimers made progress.
 std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
-                         std::span<Economy> economies, EventQueue* events);
+                         std::span<Economy> economies, EventQueue* events,
+                         std::span<ArmyStats> armyStats = {});
 
 /// The units being un-built this tick and by whose side, for C-157's targeting exemption.
 /// Derived from the active ReclaimUnit queue heads after dispatch; never saved.

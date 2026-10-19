@@ -820,3 +820,71 @@ TEST_CASE("C-102: build progress crossing a quarter emits an event", "[fa-econ]"
     f.tick(25);
     CHECK(progressEvents() == 3);
 }
+TEST_CASE("C-147: reclaim credits the army's Economy_Reclaimed stats", "[fa-econ]") {
+    // C-147 reads the whole reclaim credit end to end: the task credits the
+    // army economy's resource vector AND its reclaimed-resource statistics
+    // together. The `stored` half is covered in test_reclaim; the stats half
+    // (`Economy_Reclaimed_Mass/Energy`, the names shipped Lua's
+    // `ScenarioFramework.lua` lists for army-stat triggers) never lands.
+    // Retail source: `ScenarioFramework.lua:425-438` stat list; C-147 text.
+    rm::HeightField field = flatField();
+    rm::sim::Terrain terrain{field};
+    rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef engineer;
+    engineer.name = "test_econ_reclaimer";
+    engineer.buildRate = 10.0f;  // 1 build unit per tick at 10 Hz
+    const auto engineerType = roster.addType(engineer);
+    rm::unitdef::UnitDef tank;
+    tank.name = "test_econ_victim";
+    tank.buildCostMass = rm::sim::magFromFloat(100.0f);
+    tank.buildCostEnergy = rm::sim::magFromFloat(200.0f);
+    tank.buildTime = rm::sim::magFromFloat(100.0f);
+    const auto tankType = roster.addType(tank);
+    const UnitId builder = roster.add(engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId victim = roster.add(tankType, 206.0f, 200.0f, 1, 100.0f);
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<Player> players = rm::sim::onePlayerPerArmy(2, 0);
+    std::vector<rm::sim::Economy> economies{2};
+    for (auto& economy : economies) {
+        economy.storage = {.mass = rm::sim::magFromFloat(10000.0f),
+                           .energy = rm::sim::magFromFloat(10000.0f)};
+    }
+    std::vector<rm::sim::ArmyStats> stats(2);
+    std::vector<rm::sim::Projectile> shots;
+    std::vector<rm::sim::Construction> building;
+    std::vector<int> commandersEver{0, 0};
+    rm::sim::EventQueue events;
+    const std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(),
+                                                             &grid);
+    // An enemy unit is the reclaimable target (ReclaimUnit refuses own/allied).
+    REQUIRE(rm::sim::applyCommand(
+        Command{.kind = CommandKind::ReclaimUnit,
+                .unit = builder,
+                .targetX = rm::sim::fxFromFloat(206.0f),
+                .targetZ = rm::sim::fxFromFloat(200.0f),
+                .target = victim},
+        roster.store, roster.catalog, players, armies, terrain, grid, roster.rate,
+        &building, &events, nullptr));
+    rm::sim::Match match{.armies = armies,
+                         .economies = economies,
+                         .projectiles = &shots,
+                         .building = &building,
+                         .events = &events,
+                         .passability = grids,
+                         .commandersEver = commandersEver,
+                         .baseStorage = {.mass = rm::sim::magFromFloat(10000.0f),
+                                         .energy = rm::sim::magFromFloat(10000.0f)},
+                         .armyStats = &stats};
+    // 200 work units at 10 a tick: twenty funded beats fully un-build the
+    // 100-mass/200-energy victim, granting its whole build cost.
+    for (int i = 0; i < 20; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                    roster.rate);
+    }
+    CHECK_FALSE(roster.store.alive(victim));
+    CHECK(rm::test::asFloat(rm::sim::armyStat(stats[0], "Economy_Reclaimed_Mass"))
+          == Catch::Approx(100.0f).margin(0.01));
+    CHECK(rm::test::asFloat(rm::sim::armyStat(stats[0], "Economy_Reclaimed_Energy"))
+          == Catch::Approx(200.0f).margin(0.01));
+}

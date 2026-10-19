@@ -1360,15 +1360,19 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                 std::min(economy.stored.energy + def->storageEnergy, economy.storage.energy);
         }
     }
+    const std::span<ArmyStats> reclaimStats =
+        match.armyStats != nullptr ? std::span<ArmyStats>{*match.armyStats} : std::span<ArmyStats>{};
     if (match.features != nullptr) {
-        (void)harvestReclaim(store, catalog, *match.features, match.economies);
-        (void)applyGuardReclaim(store, catalog, *match.features, match.economies, guardWork);
+        (void)harvestReclaim(store, catalog, *match.features, match.economies, reclaimStats);
+        (void)applyGuardReclaim(store, catalog, *match.features, match.economies, guardWork,
+                                reclaimStats);
     }
     // Units being un-built, in the same economy step and for the same reason as wrecks.
-    (void)reclaimUnits(store, catalog, match.economies, match.events);
+    (void)reclaimUnits(store, catalog, match.economies, match.events, reclaimStats);
     // Manual reclaim has priority over autonomous patrol service when both reach the same
     // final scrap. Patrol helpers also use the freshly recomputed storage cap to avoid waste.
-    (void)servicePatrolBuilders(store, catalog, match.armies, match.features, match.economies);
+    (void)servicePatrolBuilders(store, catalog, match.armies, match.features, match.economies,
+                                reclaimStats);
 
     // Explicit repair is an economy consumer, not a pre-allocation debit. Its requests enter
     // the same pass as upkeep and construction; their awarded ratios are applied below.

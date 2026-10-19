@@ -30,10 +30,27 @@ namespace {
     const Mag clipped = std::min(part, total);
     return Fx::fromRaw(saturate((FxWide{clipped.raw()} << kFxFractionalBits) / total.raw()));
 }
+/// C-147's second credit: the reclaim task credits the army economy's resource
+/// vector AND its reclaimed-resource statistics together. Stats live beside the
+/// economies (C-227's store); an empty span skips the counters.
+void creditReclaimed(int army, Mag mass, Mag energy, std::span<ArmyStats> armyStats) {
+    if (army < 0 || static_cast<std::size_t>(army) >= armyStats.size()) {
+        return;
+    }
+    ArmyStats& stats = armyStats[static_cast<std::size_t>(army)];
+    if (mass > Mag{}) {
+        addArmyStat(stats, "Economy_Reclaimed_Mass", mass);
+    }
+    if (energy > Mag{}) {
+        addArmyStat(stats, "Economy_Reclaimed_Energy", energy);
+    }
+}
+
 
 [[nodiscard]] bool drainWreck(UnitIndex reclaimer, FeatureId id, UnitStore& store,
                               const UnitCatalog& catalog, FeatureStore& features,
-                              std::span<Economy> economies) {
+                              std::span<Economy> economies,
+                              std::span<ArmyStats> armyStats = {}) {
     Feature* wreck = features.findMutable(id);
     if (wreck == nullptr) {
         return false;
@@ -73,6 +90,7 @@ namespace {
         economies[static_cast<std::size_t>(owner)].stored.mass += massGrant;
         economies[static_cast<std::size_t>(owner)].stored.energy += energyGrant;
     }
+    creditReclaimed(owner, massGrant, energyGrant, armyStats);
     if (wreck->reclaimWorkRemaining <= Mag{}) {
         features.remove(id);
     }
@@ -269,7 +287,8 @@ std::optional<RebuildBonus> findRebuildBonus(const FeatureStore& features,
 }
 
 std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
-                           FeatureStore& features, std::span<Economy> economies) {
+                           FeatureStore& features, std::span<Economy> economies,
+                           std::span<ArmyStats> armyStats) {
     std::size_t harvesting = 0;
 
     const std::span<const CommandQueue> orders = store.orders();
@@ -296,7 +315,8 @@ std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
             continue;  // still walking there
         }
 
-        if (drainWreck(slot, head->target(), store, catalog, features, economies)) {
+        if (drainWreck(slot, head->target(), store, catalog, features, economies,
+                       armyStats)) {
             ++harvesting;
         }
     }
@@ -305,7 +325,8 @@ std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
 }
 
 std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
-                         std::span<Economy> economies, EventQueue* events) {
+                         std::span<Economy> economies, EventQueue* events,
+                         std::span<ArmyStats> armyStats) {
     std::size_t reclaiming = 0;
     const std::span<const CommandQueue> orders = store.orders();
     const std::span<const Transform> transforms = store.transforms();
@@ -373,6 +394,7 @@ std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
             economies[static_cast<std::size_t>(owner)].stored.mass += massGrant;
             economies[static_cast<std::size_t>(owner)].stored.energy += energyGrant;
         }
+        creditReclaimed(owner, massGrant, energyGrant, armyStats);
 
         if (finalSlice) {
             // Destroyed, not killed: no kill credit, no wreck, no death explosion. Retiring
@@ -420,7 +442,8 @@ std::vector<WorkClaim> collectUnitWorkClaims(const UnitStore& store) {
 
 std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
                               FeatureStore& features, std::span<Economy> economies,
-                              std::span<const GuardWork> work) {
+                              std::span<const GuardWork> work,
+                              std::span<ArmyStats> armyStats) {
     std::size_t serviced = 0;
     for (const GuardWork& item : work) {
         if (item.kind != GuardWorkKind::Reclaim || !store.slotAlive(item.builder)
@@ -472,6 +495,7 @@ std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
                             economies[static_cast<std::size_t>(owner)].stored.energy +=
                                 energyGrant;
                         }
+                        creditReclaimed(owner, massGrant, energyGrant, armyStats);
                         if (finalSlice) {
                             health.current = Mag{};
                             store.motion()[item.target.index].moving = false;
@@ -493,7 +517,8 @@ std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
         const MoveState& motion = store.motion()[item.builder];
         if (groundDistanceElmos(positionOf(store.transforms()[item.builder]), wreck->at)
             <= reclaimReach(catalog, store.typeAt(item.builder), motion, *wreck)
-            && drainWreck(item.builder, item.target, store, catalog, features, economies)) {
+            && drainWreck(item.builder, item.target, store, catalog, features, economies,
+                          armyStats)) {
             ++serviced;
         }
     }
@@ -620,7 +645,8 @@ std::size_t applyRepairWork(UnitStore& store, const UnitCatalog& catalog,
 
 std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
                                   std::span<const Army> armies, FeatureStore* features,
-                                  std::span<Economy> economies) {
+                                  std::span<Economy> economies,
+                                  std::span<ArmyStats> armyStats) {
     std::size_t serviced = 0;
 
     for (UnitIndex builder = 0; builder < store.orders().size(); ++builder) {
@@ -703,7 +729,8 @@ std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
             }
         }
         if (reclaimTarget
-            && drainWreck(builder, *reclaimTarget, store, catalog, *features, economies)) {
+            && drainWreck(builder, *reclaimTarget, store, catalog, *features, economies,
+                          armyStats)) {
             ++serviced;
         }
     }
