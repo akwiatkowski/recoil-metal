@@ -1862,3 +1862,41 @@ TEST_CASE("C-199: naval waiters stage onto the wide Guard ring", "[fa-transport]
     CHECK(rm::sim::fxToFloat(spot[0]) == Approx(30.0f).margin(0.01f));
     CHECK(rm::sim::fxToFloat(spot[1]) == Approx(38.0f).margin(0.01f));
 }
+TEST_CASE("C-413: re-ordering the queue head changes the ferry beacon", "[fa-transport]") {
+    // `Unit:GetTransportFerryBeacon` (`0x006d4160`, C-413) reads ONLY the
+    // first queue entry — re-ordering the head changes the beacon. A
+    // transport guarding a beacon that is then told to guard an ordinary
+    // unit names no beacon; guarding the beacon again re-answers it.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const rm::UnitTypeIndex beaconType = roster.addType(beaconDef());
+    const UnitId transport = roster.add(transportType, 30.0f, 30.0f, 0, 500.0f);
+    const UnitId beacon = roster.add(beaconType, 30.0f, 30.0f, 0, 10.0f);
+    const UnitId plain = roster.add(cargoType, 40.0f, 40.0f, 0, 500.0f);
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+    auto guardAt = [&](const UnitId target, std::uint32_t serial) {
+        CommandIssue guard{.source = 0,
+                           .id = rm::commandId(0, serial),
+                           .player = 0,
+                           .kind = CommandKind::Guard,
+                           .units = {transport},
+                           .target = target};
+        REQUIRE(rm::sim::applyCommand(guard, roster.store, roster.catalog, players, armies,
+                                      terrain, gridFor, roster.rate)
+                    .accepted.size()
+                == 1);
+    };
+    guardAt(beacon, 1);
+    REQUIRE(rm::sim::ferryBeaconFor(roster.store, roster.catalog, transport) == beacon);
+    guardAt(plain, 2);
+    CHECK_FALSE(rm::sim::ferryBeaconFor(roster.store, roster.catalog, transport).has_value());
+    guardAt(beacon, 3);
+    CHECK(rm::sim::ferryBeaconFor(roster.store, roster.catalog, transport) == beacon);
+}
