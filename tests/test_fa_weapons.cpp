@@ -12,7 +12,7 @@
 #include "core/data/MoveDef.hpp"
 #include "core/map/HeightField.hpp"
 #include "core/sim/Command.hpp"
-#include "core/sim/Economy.hpp"
+#include "core/sim/Combat.hpp"
 #include "core/sim/Pathfinding.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/unit/UnitDef.hpp"
@@ -213,4 +213,48 @@ TEST_CASE("C-381: a claw victim walks free when the colossus dies mid-pull",
     CHECK(roster.store.alive(tank));
     CHECK(!roster.motion(tank).attached);
     CHECK(!roster.store.doNotTarget(tank));
+}
+
+TEST_CASE("C-322: overcharge holds its shot at a BelowWaterTargetsOnly seabed target",
+          "[fa-weapons]") {
+    // The C-322 target-side water gate is missing from `fireOvercharge`: the
+    // automatic path and explicit Attack both refuse a Seabed-layer candidate
+    // whose Y reads "above" its own `Physics.Elevation` datum when the weapon
+    // states `BelowWaterTargetsOnly` (`lua/sim/Unit.lua` `CanFire` checks,
+    // read at `0x6db78b`-`0x6db829`). Overcharge must hold the same way.
+    rm::test::Roster roster;
+    UnitDef commander;
+    commander.name = "test_commander";
+    commander.categories = {"MOBILE", "COMMAND"};
+    Weapon overcharge;
+    overcharge.label = "OverCharge";
+    overcharge.role = rm::unitdef::WeaponRole::DirectFire;
+    overcharge.damage = rm::sim::magFromFloat(12000.0f);
+    overcharge.maxRange = Fx::fromInt(25);
+    overcharge.rateOfFire = 1.0f;
+    overcharge.muzzleVelocityElmosPerSecond = 100.0f;
+    overcharge.manualFire = true;
+    overcharge.belowWaterTargetsOnly = true;
+    commander.weapons.push_back(overcharge);
+    const rm::UnitTypeIndex commanderType = roster.addType(commander);
+    UnitDef walker;
+    walker.name = "test_walker";
+    walker.categories = {"LAND", "MOBILE"};
+    walker.motion = rm::unitdef::MotionType::Amphibious;
+    const rm::UnitTypeIndex walkerType = roster.addType(walker);
+    const UnitId shooter = roster.add(commanderType, 100.0f, 100.0f, 0, 9000.0f);
+    const UnitId victim = roster.add(walkerType, 110.0f, 100.0f, 1, 500.0f);
+    roster.motion(victim).seabed = true;
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    economies[0].stored.energy = rm::sim::magFromFloat(5000.0f);
+    rm::sim::Command order{.kind = rm::sim::CommandKind::Overcharge,
+                            .unit = shooter,
+                            .target = victim};
+    (void)roster.store.orders()[shooter.index].give(order, false);
+    roster.store.orders()[shooter.index].markCurrentActive();
+    std::vector<rm::sim::Projectile> shots;
+    CHECK(rm::sim::fireOvercharge(roster.store, roster.catalog, armies, shots, economies,
+                                  roster.rate) == 0);
+    CHECK(shots.empty());
 }

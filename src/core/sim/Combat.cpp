@@ -2956,6 +2956,11 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
             if (overchargeDef != nullptr && !passesTargetRestrictions(weapon, *overchargeDef)) {
                 continue;  // C-229's per-weapon restrict, in the explicit path's place
             }
+            if (!passesWaterTargetGate(weapon, overchargeDef,
+                                       store.motion()[head->target().index].seabed,
+                                       transforms[head->target().index].y)) {
+                continue;  // C-322: the Seabed-only target gate, in the explicit path's place
+            }
             const std::array<Fx, 3> from = positionOf(transforms[slot]);
             const std::array<Fx, 3> to = positionOf(transforms[head->target().index]);
             const Fx overchargeGap = groundDistanceElmos(from, to);
