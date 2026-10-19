@@ -573,6 +573,30 @@ TEST_CASE("C-290: beam scorch sizes follow the thread's own size bands", "[fa-te
     REQUIRE(replay.impactMarks.size() == 1);
     CHECK(replay.impactMarks[0].beamSizeElmos == quantumSize);
 }
+TEST_CASE("C-290: beam scorch textures follow the thread's own SplatTexture", "[fa-terrain]") {
+    // `defaultcollisionbeams.lua` C-290: seven `ScorchThread` bodies lay
+    // `czar_mark01_albedo`; the experimental phason lays `scorch_004_albedo`.
+    // A beam mark must carry its own thread's texture, not the 0..9 explosion
+    // splat stream — so the FA-PRESENT projection samples what retail drew.
+    rm::app::UnitScene exp = makeScene(false, 0.0f);
+    rm::app::UnitScene micro = makeScene(false, 0.0f);
+    rm::sim::Event beam{};
+    beam.kind = rm::sim::EventKind::BeamFired;
+    beam.unit = rm::sim::UnitId{0, 1};
+    beam.at = rm::test::at(500, 40, 500);
+    (void)rm::app::noteBeamScorch(exp, beam, 40.0f, 0.0f, 0,
+                                  "ExperimentalPhasonLaserCollisionBeam");
+    (void)rm::app::noteBeamScorch(micro, beam, 40.0f, 0.0f, 0,
+                                  "MicrowaveLaserCollisionBeam01");
+    REQUIRE(exp.impactMarks.size() == 1);
+    REQUIRE(micro.impactMarks.size() == 1);
+    CHECK(exp.impactMarks[0].textureIndex != micro.impactMarks[0].textureIndex);
+    rm::app::UnitScene replay = makeScene(false, 0.0f);
+    (void)rm::app::noteBeamScorch(replay, beam, 40.0f, 0.0f, 0,
+                                  "ExperimentalPhasonLaserCollisionBeam");
+    REQUIRE(replay.impactMarks.size() == 1);
+    CHECK(replay.impactMarks[0].textureIndex == exp.impactMarks[0].textureIndex);
+}
 
 
 

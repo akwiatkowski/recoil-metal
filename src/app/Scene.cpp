@@ -448,6 +448,18 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     const float unit = static_cast<float>(static_cast<double>(bits) / 4294967296.0);  // 0..1
     return base + unit * width;  // elmos (C-290 `size` band)
 }
+/// A collision-beam class's `ScorchThread` splat texture, as a mark texture
+/// index (`defaultcollisionbeams.lua` C-290): seven thread bodies lay
+/// `czar_mark01_albedo` (the base stream's pick), the experimental phason
+/// lays `scorch_004_albedo` (past the C-484 scripted stream, like the
+/// quantum `Crater01` pair at 16). Presentation only, never hashed.
+[[nodiscard]] int beamClassTextureIndex(int base, std::string_view beamClass) noexcept {
+    if (beamClass == "ExperimentalPhasonLaserCollisionBeam") {
+        return 17;  // `scorch_004_albedo` (`:235`)
+    }
+    return base;
+}
+
 /// One beam strike's scorch (C-290 `ScorchThread` half). Retail forks the
 /// thread when the beam's `OnImpact` sees `impactType == 'Terrain'`
 /// (`defaultcollisionbeams.lua` — 8 of 16 classes; the rest scorch nothing),
@@ -473,6 +485,7 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     const int lod = beamClassLod(beamClass);  // (C-290 6th arg)
     noteImpactMark(scene, x, z, 0.0f, tick, UnitScene::ImpactMarkScript::BaseScorch, true, lifeSeconds);
     scene.impactMarks.back().lod = lod;
+    scene.impactMarks.back().textureIndex = beamClassTextureIndex(scene.impactMarks.back().textureIndex, beamClass);  // (`SplatTexture` C-290)
     scene.impactMarks.back().beamSizeElmos = beamClassSize(x, z, beamClass);  // elmos (C-290 `size`)
     // Retail's `ScorchThread` lays one `CreateSplat` per pass at the tracked
     // end while the beam dwells (`defaultcollisionbeams.lua` C-290): a dragged
@@ -501,6 +514,7 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
             const float fillZ = prevZ + dz * t;
             noteImpactMark(scene, fillX, fillZ, 0.0f, tick, UnitScene::ImpactMarkScript::BaseScorch, true, lifeSeconds);
             scene.impactMarks.back().lod = lod;
+            scene.impactMarks.back().textureIndex = beamClassTextureIndex(scene.impactMarks.back().textureIndex, beamClass);  // (`SplatTexture` C-290)
             scene.impactMarks.back().beamSizeElmos = beamClassSize(fillX, fillZ, beamClass);  // elmos (C-290 `size`)
         }
     }
