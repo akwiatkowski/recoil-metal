@@ -1900,3 +1900,25 @@ TEST_CASE("C-413: re-ordering the queue head changes the ferry beacon", "[fa-tra
     guardAt(beacon, 3);
     CHECK(rm::sim::ferryBeaconFor(roster.store, roster.catalog, transport) == beacon);
 }
+TEST_CASE("C-456: a docked aircraft takes the pad's facing", "[fa-transport]") {
+    // `CUnitRefuel::TaskTick` (`0x00627f60`, C-456) docks through
+    // `GetAttachFacing` (`IAiTransport +0x5c`): the aircraft lands aligned
+    // with the pad, not holding the heading it flew in on.
+    rm::test::Roster roster;
+    UnitDef padDef;
+    padDef.name = "test_pad";
+    padDef.categories = {"AIRSTAGINGPLATFORM", "STRUCTURE"};  // sorted for hasCategory
+    padDef.transport.dockingSlots = 4;
+    const rm::UnitTypeIndex padType = roster.addType(padDef);
+    const std::array<rm::sim::UnitCatalog::AttachBoneSpec, 1> bones{{
+        {.bone = 19, .cargoClass = 1, .rest = {2.0f, 6.0f, 0.0f}},
+    }};
+    roster.catalog.setAttachBones(padType, bones);
+    const rm::UnitTypeIndex jetType = roster.addType(cargoDef(1));
+    const UnitId pad = roster.add(padType, 100.0f, 100.0f, 0, 500.0f);
+    roster.transform(pad).heading = rm::sim::kBradQuarterTurn;
+    const UnitId jet = roster.add(jetType, 103.0f, 100.0f, 0, 500.0f);
+    roster.transform(jet).heading = rm::Brad{0};
+    REQUIRE(rm::sim::dockOnStagingBone(roster.store, roster.catalog, pad, jet));
+    CHECK(roster.transform(jet).heading == roster.transform(pad).heading);
+}

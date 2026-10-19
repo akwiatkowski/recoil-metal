@@ -415,6 +415,9 @@ bool dockOnStagingBone(UnitStore& store, const UnitCatalog& catalog, UnitId pad,
     at.x = padAt.x + world[0];
     at.z = padAt.z + world[1];
     at.y = padAt.y + best->rest[1];
+    // C-456 (`GetAttachFacing`): the aircraft lands aligned with the pad, not
+    // holding the heading it flew in on.
+    at.heading = padAt.heading;
     return store.attach(pad, aircraft,
                         UnitStore::AttachBones{.parent = best->bone,
                                                .parentRest = {best->rest[0], best->rest[2]},
