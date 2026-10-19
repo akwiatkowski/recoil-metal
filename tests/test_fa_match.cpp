@@ -884,3 +884,42 @@ TEST_CASE("C-383: a gift to an army at its cap is refused", "[fa-match]") {
     CHECK(roster.store.alive(unit));
     CHECK(roster.store.motion()[unit.index].armyIndex == 0);
 }
+
+TEST_CASE("C-383: a gift refused by the cap notifies the recipient brain", "[fa-match]") {
+    // Retail's creation gate (`0x0074fda0`) fires `OnUnitCapLimitReached` when
+    // the caller asks — and a gift IS a creation on the recipient's side.
+    // The scaffold refusal (`CommandAdvance.cpp`) and the capped factory
+    // (`Skirmish.cpp`) both notify; the gift refusal must too, so the
+    // recipient's brain hears the same callback retail reports.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    const rm::sim::TickRate rate{};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex tank = roster.addType(tankDef());
+    const UnitId unit = roster.add(tank, 0.0f, 0.0f, 0, 500.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    armies[0].alliance = armies[1].alliance;  // allies, or the gift is refused anyway
+    armies[1].unitCap = rm::sim::Fx::fromInt(0);  // no room for even a CapCost-1 unit
+    rm::sim::EventQueue events;
+    const std::vector<rm::sim::Player> players = rm::sim::onePlayerPerArmy(2, 0);
+
+    const rm::sim::CommandIssue gift{
+        .tick = 0,
+        .source = 0,
+        .id = rm::commandId(0, 0),
+        .player = 0,
+        .kind = rm::sim::CommandKind::Gift,
+        .units = {unit},
+        .scriptBit = 1,
+    };
+    const rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
+        gift, roster.store, roster.catalog, players, armies, terrain,
+        [&](UnitId) { return &grid; }, rate, nullptr, &events, nullptr, nullptr, {},
+        nullptr, nullptr, nullptr, nullptr);
+    CHECK_FALSE(result.acceptedUnit(unit));
+    REQUIRE(events.count(rm::sim::EventKind::UnitCapLimitReached) == 1);
+    CHECK(events.all().front().army == 1);
+}

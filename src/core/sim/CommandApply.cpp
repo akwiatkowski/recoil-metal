@@ -1678,6 +1678,9 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
             // `0x0074fda0` refuses `costTotal + CapCost > unitCap` at the moment
             // the entity would exist. A rising build already reserves its cost
             // there, so the gate's own reserved row is the right denominator.
+            // `C-361`: the refused creation is the `OnUnitCapLimitReached`
+            // trigger — the recipient's brain hears it, like the scaffold and
+            // factory refusals, which is what retail's cap callback reports.
             const unitdef::UnitDef* giftDef = catalog.def(store.typeAt(unit.index));
             if (giftDef != nullptr
                 && unitCapBlocks(armies, recipient, catalog,
@@ -1685,6 +1688,9 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
                                      ? std::span<const Construction>{*building}
                                      : std::span<const Construction>{},
                                  *giftDef)) {
+                emit(events, Event{.kind = EventKind::UnitCapLimitReached,
+                                   .unit = unit,
+                                   .army = recipient});
                 continue;
             }
             const UnitId replacement = transferUnitArmy(
