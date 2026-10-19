@@ -1251,6 +1251,8 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
             match.over = true;
             report.matchEnded = true;
             report.winner = std::nullopt;
+            match.endGamePending = true;
+            match.endGameElapsedTicks = 0;
             emit(match.events, Event{.kind = EventKind::GameOver,
                                      .army = kNoArmy});
         } else {
@@ -1288,12 +1290,25 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                     match.over = true;
                     report.matchEnded = true;
                     report.winner = winner;
+                    match.endGamePending = true;
+                    match.endGameElapsedTicks = 0;
                     // A draw is an ordinary outcome — every commander dying at once — so the event
                     // carries `kNoArmy` rather than being suppressed.
                     emit(match.events, Event{.kind = EventKind::GameOver,
                                              .army = report.winner.value_or(kNoArmy)});
                 }
             }
+        }
+    }
+    // `victory.lua:93-98`'s forked `WaitSeconds(3)` before the native `EndGame()`:
+    // the pause lands three seconds after the verdict armed it, not on the same
+    // tick. Runs outside `!match.over` — the verdict tick arms and counts within
+    // this same pass, so the pause lands exactly the delay after `GameOver`.
+    if (match.endGamePending && !match.endGameDone) {
+        ++match.endGameElapsedTicks;
+        if (match.endGameElapsedTicks >= rate.ticks(seconds(3.0f))) {
+            match.endGameDone = true;
+            report.endGameFired = true;
         }
     }
 

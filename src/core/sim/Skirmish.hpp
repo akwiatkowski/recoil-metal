@@ -227,7 +227,18 @@ struct Match {
     /// Set once the match has been decided, so the result is announced once rather than
     /// every tick for the rest of the run.
     bool over = false;
-
+    /// `victory.lua:93-98`'s `CallEndGame(true, ...)`: the verdict (`gameOver =
+    /// true`, the `GameOver` event) lands immediately, but the native `EndGame()`
+    /// — the permanent pause — runs on a forked thread after `WaitSeconds(3)`, so
+    /// a client sees `Sync.GameResult` before the freeze. `endGamePending` arms
+    /// on the verdict tick; `endGameDone` latches three seconds later when the
+    /// pause lands. Statistically-only defeats (`CallEndGame(false, true)`) arm
+    /// nothing. Stats submission itself (`SubmitXMLArmyStats`) is UI-side.
+    bool endGamePending = false;
+    bool endGameDone = false;
+    /// Ticks since the verdict armed the delayed pause; meaningful only while
+    /// `endGamePending` and before `endGameDone`.
+    TickCount endGameElapsedTicks = 0;
     /// C-210: a terminal winner (or draw) must remain unchanged for fifteen seconds before
     /// it becomes GameOver. This is match state, rather than caller state, so every tick path
     /// confirms the same candidate.
@@ -333,6 +344,9 @@ struct TickReport {
 
     /// Whether this tick ended the match, true on the ONE tick that decided it.
     bool matchEnded = false;
+    /// The delayed native `EndGame()` pause (`victory.lua:93-98`) landed this tick —
+    /// three seconds after `matchEnded` armed it. True on that ONE tick only.
+    bool endGameFired = false;
 
     /// The winning team, when the match ended with one. Empty on a draw — every army
     /// losing its commander at once is a legitimate outcome, not an error.

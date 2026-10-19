@@ -923,3 +923,48 @@ TEST_CASE("C-383: a gift refused by the cap notifies the recipient brain", "[fa-
     REQUIRE(events.count(rm::sim::EventKind::UnitCapLimitReached) == 1);
     CHECK(events.all().front().army == 1);
 }
+
+TEST_CASE("C-210: the native EndGame pause lands three seconds after the verdict",
+          "[fa-match]") {
+    // `victory.lua:93-98`'s `CallEndGame(true, ...)`: `gameOver = true` and the
+    // `GameOver` verdict land immediately, but the native `EndGame()` — the
+    // permanent pause — runs on a forked thread after `WaitSeconds(3)`. The
+    // sim reports the verdict first and the pause three seconds later, so a
+    // client sees `Sync.GameResult` before the freeze.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex commander = roster.addType(commanderDef());
+    (void)roster.add(commander, 0.0f, 0.0f, 0, 12000.0f);
+    const UnitId theirs = roster.add(commander, 400.0f, 0.0f, 1, 12000.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<rm::sim::Projectile> projectiles;
+    const std::vector<int> commandersEver{1, 1};
+    Match match{.armies = armies,
+                .economies = economies,
+                .projectiles = &projectiles,
+                .commandersEver = commandersEver};
+    const rm::sim::TickRate rate{};
+    const rm::TickCount pollTicks = rate.ticks(rm::sim::seconds(3.0f));
+    const rm::TickCount confirmTicks = rate.ticks(rm::sim::seconds(15.0f));
+
+    roster.health(theirs).current = rm::sim::Mag{};
+    TickReport report{};
+    for (rm::TickCount tick = 0; tick < pollTicks + confirmTicks && !report.matchEnded;
+         ++tick) {
+        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    REQUIRE(report.matchEnded);
+    REQUIRE(match.over);
+    CHECK(match.endGamePending);
+    CHECK_FALSE(match.endGameDone);
+
+    for (rm::TickCount tick = 0; tick < pollTicks && !match.endGameDone; ++tick) {
+        report = rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain, rate);
+    }
+    CHECK(match.endGameDone);
+    CHECK(report.endGameFired);
+}

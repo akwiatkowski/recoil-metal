@@ -36,6 +36,11 @@ struct EconomyArmyState {
     std::uint64_t pendingSurvivorMask = 0;
     TickCount defeatPollElapsedTicks = 0;
     std::vector<TickCount> defeatCleanupRemainingTicks;
+    /// `victory.lua:93-98`'s delayed native `EndGame()` pause — armed on the
+    /// verdict tick, landed three seconds later.
+    bool endGamePending = false;
+    bool endGameDone = false;
+    TickCount endGameElapsedTicks = 0;
 
     [[nodiscard]] static EconomyArmyState capture(const Match& match);
     /// Rebind spans after replacing their owning vectors. Call after constructing the runner,

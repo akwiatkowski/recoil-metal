@@ -1208,12 +1208,13 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         feed(h, match.pendingSurvivorMask);
     }
     feed(h, static_cast<std::uint64_t>(match.winnerStableTicks));
-    // C-210's poll phase and delayed cleanups decide future defeats and deaths, so they are
-    // authority state rather than implementation detail.
-    feed(h, static_cast<std::uint64_t>(match.defeatPollElapsedTicks));
-    feed(h, match.defeatCleanupRemainingTicks.size());
-    for (const TickCount remaining : match.defeatCleanupRemainingTicks) {
-        feed(h, static_cast<std::uint64_t>(remaining));
+    // `victory.lua:93-98`'s delayed `EndGame()` pause decides a future
+    // `endGameFired` report, so it is authority while armed. Conditional so a
+    // match that never reached a verdict hashes exactly as before.
+    if (match.endGamePending) {
+        feed(h, match.endGamePending);
+        feed(h, match.endGameDone);
+        feed(h, static_cast<std::uint64_t>(match.endGameElapsedTicks));
     }
 
     // `C-263`'s deficit-covering rates: a Paragon's recomputed override decides

@@ -244,6 +244,10 @@ constexpr std::uint32_t kVersion68 = 68;
 // v69 adds the player seat (`playerArmy` — the `human` argument the roster is
 // derived from). Pre-v69 saves decode with no seat — observer, as before.
 constexpr std::uint32_t kVersion69 = 69;
+// v70 adds `victory.lua:93-98`'s delayed native `EndGame()` pause (`C-210`) —
+// the armed/done flags plus the elapsed ticks. Pre-v70 saves decode with
+// nothing pending and nothing done — the pre-pause verdict behaviour.
+constexpr std::uint32_t kVersion70 = 70;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -381,7 +385,7 @@ bool readMag(PayloadReader& r, Mag& value) {
 void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>& state,
                         bool includesOfferingDraw, bool includesUnitCap,
                         bool includesCheat, bool includesDiplomacy, bool includesHandicap,
-                        bool includesPlayableRect) {
+                        bool includesPlayableRect, bool includesEndGamePause) {
     w.u8(state.has_value());
     if (!state) return;
     const auto& s = *state;
@@ -436,11 +440,16 @@ void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>&
     if (includesOfferingDraw) w.u64(s.pendingSurvivorMask);
     w.count(s.defeatCleanupRemainingTicks.size());
     for (const auto ticks : s.defeatCleanupRemainingTicks) w.u32(ticks);
+    // v70: the delayed `EndGame()` pause. Older writers stop above; the reader
+    // below defaults to nothing pending and nothing done.
+    if (includesEndGamePause) {
+        w.u8(s.endGamePending); w.u8(s.endGameDone); w.u32(s.endGameElapsedTicks);
+    }
 }
 bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
                        bool includesOfferingDraw, bool includesUnitCap,
                        bool includesCheat, bool includesDiplomacy, bool includesHandicap,
-                       bool includesPlayableRect) {
+                       bool includesPlayableRect, bool includesEndGamePause) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) return true;
@@ -528,6 +537,13 @@ bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
         || !r.count(count, 4) || (count != 0 && count != s.armies.size())) return false;
     s.defeatCleanupRemainingTicks.resize(count);
     for (auto& ticks : s.defeatCleanupRemainingTicks) if (!r.u32(ticks)) return false;
+    // v70: pre-v70 saves decode with nothing pending and nothing done.
+    s.endGamePending = false;
+    s.endGameDone = false;
+    s.endGameElapsedTicks = 0;
+    if (includesEndGamePause
+        && (!readFlag(r, s.endGamePending) || !readFlag(r, s.endGameDone)
+            || !r.u32(s.endGameElapsedTicks))) return false;
     return true;
 }
 
@@ -2979,7 +2995,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion15) writeEconomyArmies(payloadWriter, state.economyArmies,
                                                   version >= kVersion40, version >= kVersion41,
                                                   version >= kVersion43, version >= kVersion47,
-                                                  version >= kVersion53, version >= kVersion60);
+                                                  version >= kVersion53, version >= kVersion60,
+                                                  version >= kVersion70);
     if (version >= kVersion16)
         writeAirController(payloadWriter, state.units.motion, version >= kVersion21,
                            version >= kVersion55, version >= kVersion56,
@@ -3078,7 +3095,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion58 && version != kVersion59 && version != kVersion60
                && version != kVersion61 && version != kVersion62 && version != kVersion63
                && version != kVersion64 && version != kVersion65 && version != kVersion66
-               && version != kVersion67 && version != kVersion68 && version != kVersion69)
+               && version != kVersion67 && version != kVersion68 && version != kVersion69
+               && version != kVersion70)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -3129,7 +3147,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion15 && !readEconomyArmies(reader, economyArmies,
                                                     version >= kVersion40, version >= kVersion41,
                                                     version >= kVersion43, version >= kVersion47,
-                                                    version >= kVersion53, version >= kVersion60)) return std::nullopt;
+                                                    version >= kVersion53, version >= kVersion60,
+                                                    version >= kVersion70)) return std::nullopt;
     if (version >= kVersion16
         && !readAirController(reader, units.motion, version >= kVersion21,
                               version >= kVersion55, version >= kVersion56,
@@ -3258,7 +3277,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion69);
+    return rm::sim::encode(state, kVersion70);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {
@@ -3276,7 +3295,9 @@ EconomyArmyState EconomyArmyState::capture(const Match& match) {
         .pendingWinner = match.pendingWinner, .winnerStableTicks = match.winnerStableTicks,
         .pendingSurvivorMask = match.pendingSurvivorMask,
         .defeatPollElapsedTicks = match.defeatPollElapsedTicks,
-        .defeatCleanupRemainingTicks = match.defeatCleanupRemainingTicks};
+        .defeatCleanupRemainingTicks = match.defeatCleanupRemainingTicks,
+        .endGamePending = match.endGamePending, .endGameDone = match.endGameDone,
+        .endGameElapsedTicks = match.endGameElapsedTicks};
 }
 
 void EconomyArmyState::restore(Match& match, std::vector<Economy>& economyStorage,
@@ -3305,6 +3326,9 @@ void EconomyArmyState::restore(Match& match, std::vector<Economy>& economyStorag
     match.pendingSurvivorMask = pendingSurvivorMask;
     match.defeatPollElapsedTicks = defeatPollElapsedTicks;
     match.defeatCleanupRemainingTicks = defeatCleanupRemainingTicks;
+    match.endGamePending = endGamePending;
+    match.endGameDone = endGameDone;
+    match.endGameElapsedTicks = endGameElapsedTicks;
 }
 
 } // namespace rm::sim
