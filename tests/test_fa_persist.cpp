@@ -910,3 +910,39 @@ TEST_CASE("v67: pending command input survives a save round-trip", "[fa-persist]
     REQUIRE(legacy);
     CHECK_FALSE(legacy->pendingInput.has_value());
 }
+// The app half of v67: capture lifts submitted-but-unapplied input off the
+// live scene's buffer, and restore re-queues it verbatim — a mid-combat app
+// save resumes the player's in-flight click instead of dropping it.
+TEST_CASE("v67: pending input capture and restore onto the scene", "[fa-persist]") {
+    Scenario live;
+    const rm::sim::UnitId unit = live.spawn(tankDef(), 300, 300, 0);
+    auto runner = live.runner();
+    rm::sim::CommandIssue issue;
+    issue.tick = 5;
+    issue.phase = rm::sim::CommandPhase::PreTick;
+    issue.source = 0;
+    issue.player = 0;
+    issue.kind = rm::sim::CommandKind::Move;
+    issue.units = {unit};
+    issue.targetX = rm::sim::fxFromFloat(600.0f);
+    issue.targetZ = rm::sim::fxFromFloat(600.0f);
+    REQUIRE(live.scene.commandInput.submit(issue, live.scene.store).has_value());
+    const std::vector<rm::sim::CommandIssue> captured =
+        rm::app::capturePendingInput(runner);
+    REQUIRE(captured.size() == 1);
+    CHECK(captured[0].tick == 5);
+    CHECK(captured[0].kind == rm::sim::CommandKind::Move);
+
+    Scenario resumed;
+    const rm::sim::UnitId kept = resumed.spawn(tankDef(), 300, 300, 0);
+    auto continued = resumed.runner();
+    REQUIRE(continued.scene.commandInput.empty());
+    rm::app::restorePendingInput(continued, captured);
+    REQUIRE(continued.scene.commandInput.size() == 1);
+    const std::vector<rm::sim::CommandIssue> due =
+        continued.scene.commandInput.take(5, rm::sim::CommandPhase::PreTick);
+    REQUIRE(due.size() == 1);
+    CHECK(due[0].id == captured[0].id);
+    CHECK(due[0].units.size() == 1);
+    CHECK(due[0].units[0] == kept);
+}

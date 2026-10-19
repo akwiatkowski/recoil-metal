@@ -408,6 +408,18 @@ void restoreStandingOrders(MatchRunner& runner,
 /// unlaunched, long ones are truncated; only scripted opponents are re-seated.
 void restoreOpponentWaves(MatchRunner& runner, std::span<const std::uint8_t> waves);
 
+/// Captures the submitted-but-unapplied command input for the save envelope
+/// (v67): the scene buffer's pending issues waiting for their tick/phase.
+/// Empty when nothing is in flight; re-queued verbatim on restore — the
+/// allocator counters already rode the unit snapshot past the IDs.
+[[nodiscard]] std::vector<rm::sim::CommandIssue> capturePendingInput(
+    const MatchRunner& runner);
+
+/// Restores pending input decoded from a save. The caller restores the unit
+/// store first, so the queued unit handles already name live slots.
+void restorePendingInput(MatchRunner& runner,
+                         std::vector<rm::sim::CommandIssue> pending);
+
 /// One `ScriptedOpponent` per army, each told which army it plays. Declared
 /// here so save/resume tests can re-seat opponents the harness silenced.
 [[nodiscard]] std::vector<std::unique_ptr<rm::ai::Opponent>> makeScriptedOpponents(

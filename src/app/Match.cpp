@@ -933,6 +933,15 @@ void restoreOpponentWaves(MatchRunner& runner, std::span<const std::uint8_t> wav
         }
     }
 }
+std::vector<rm::sim::CommandIssue> capturePendingInput(const MatchRunner& runner) {
+    const std::span<const rm::sim::CommandIssue> pending = runner.scene.commandInput.pending();
+    return {pending.begin(), pending.end()};
+}
+
+void restorePendingInput(MatchRunner& runner, std::vector<rm::sim::CommandIssue> pending) {
+    runner.scene.commandInput.restorePending(std::move(pending));
+}
+
 
 std::size_t runAutoExpansion(MatchRunner& runner, rm::TickIndex tick) {
     UnitScene& scene = runner.scene;
