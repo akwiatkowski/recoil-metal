@@ -384,6 +384,16 @@ void feedOrders(StateHash& h, const CommandQueue& orders) noexcept {
             feed(h, (*entry.patrolOrigin())[1]);
             feed(h, entry.returningToPatrolOrigin());
         }
+        if (entry.transportAnchor()) {
+            // The ferry beacon steers the route home while the drop target names
+            // the far end (`C-199`): feed it only when present so every
+            // non-ferry hash keeps its byte shape, same rule as the patrol
+            // origin above. The phase picks the leg, so it always joins.
+            feed(h, true);
+            feed(h, (*entry.transportAnchor())[0]);
+            feed(h, (*entry.transportAnchor())[1]);
+            feed(h, static_cast<std::uint8_t>(entry.transportPhase()));
+        }
         if (command.kind == CommandKind::Script) {
             const ScriptTaskState& state = entry.scriptState();
             feed(h, state.created);

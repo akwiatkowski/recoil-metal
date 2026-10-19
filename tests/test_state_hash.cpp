@@ -1036,3 +1036,31 @@ TEST_CASE("installed enhancement slots participate in match hashes", "[enhanceme
     fixture.store.enhancements()[0]["LCH"] = "T3Engineering";
     CHECK(fixture.hash() != engineering);
 }
+TEST_CASE("ferry route state changes the hash", "[state-hash]") {
+    // `QueuedCommand::transportAnchor`/`transportPhase` ride the save (v-state
+    // path) but `feedOrders` never feeds them: two ferries at the same drop
+    // target hash identically whether one is still flying out or already
+    // loading at the beacon. Retail's `CUnitFerryTask` phase is sim state —
+    // the phase picks the leg — so the hash must separate the legs.
+    Fixture anchored;
+    Fixture drifting;
+    for (rm::sim::UnitStore* store : {&anchored.store, &drifting.store}) {
+        store->orders()[0].append(rm::sim::QueuedCommand{
+            store->idAt(0),
+            std::make_shared<const rm::sim::SharedCommand>(rm::sim::SharedCommand{
+                .kind = rm::sim::CommandKind::Ferry,
+                .units = {store->idAt(0)},
+                .targetX = rm::test::fx(300.0f),
+                .targetZ = rm::test::fx(300.0f),
+            })});
+    }
+    auto* loading = anchored.store.orders()[0].currentMutable();
+    REQUIRE(loading != nullptr);
+    loading->beginFerry({rm::test::fx(100.0f), rm::test::fx(100.0f)});
+    loading->setTransportPhase(rm::sim::TransportPhase::Loading);
+    auto* outbound = drifting.store.orders()[0].currentMutable();
+    REQUIRE(outbound != nullptr);
+    outbound->beginFerry({rm::test::fx(100.0f), rm::test::fx(100.0f)});
+    outbound->setTransportPhase(rm::sim::TransportPhase::ToDrop);
+    CHECK(anchored.hash() != drifting.hash());
+}
