@@ -83,6 +83,13 @@ struct Projectile {
     UnitId firedBy{};
     UnitId guidanceTarget{};
     std::int32_t turnPerTick = 0;
+    /// Ticks until the shot stops tracking (`C-088`): retail's
+    /// `RedirectingState.Main` calls `other:TrackTarget(false)` once the
+    /// `WaitSeconds(1 / RedirectRateOfFire)` wait ends, so a returned missile
+    /// steers home for exactly one rate cycle and then coasts straight.
+    /// Zero means no expiry pending — the ordinary case — so launch-time
+    /// shots and ordinary tracking missiles keep their behavior.
+    int trackTicksRemaining = 0;
     Fx accelerationPerTickSquared{};
     Fx maxSpeedPerTick{};
 

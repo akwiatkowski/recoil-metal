@@ -62,6 +62,44 @@ TEST_CASE("a redirected missile steers at the Lua's 720 deg-per-second turn rate
     REQUIRE(shots.size() == 1);
     CHECK(shots.front().turnPerTick > 0);
 }
+TEST_CASE("a returned missile stops tracking when the redirect's wait expires") {
+    // `defaultantiprojectile.lua` `RedirectingState.Main` calls
+    // `other:TrackTarget(false)` once the `WaitSeconds(1/RedirectRateOfFire)`
+    // wait ends. A returned shot that has coasted a full rate cycle past its
+    // redirect therefore flies straight — no guidance mark, no turn budget.
+    using rm::sim::Fx;
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    rm::test::Roster roster;
+    (void)roster.add(roster.addType(rm::unitdef::UnitDef{}), 0.0f, 0.0f, 0, 100.0f);
+    const rm::sim::UnitId launcher = roster.add(roster.addType(rm::unitdef::UnitDef{}),
+                                                3000.0f, 0.0f, 1, 100.0f);
+    rm::sim::Projectile shot{.position = rm::test::at(100, 400, 0),
+                             .velocity = rm::test::at(20, 0, 0),
+                             .firedBy = launcher,
+                             .firedByArmy = 1,
+                             .ticksRemaining = 400,
+                             .categories = std::vector<std::string>{"MISSILE", "TACTICAL"}};
+    std::vector<rm::sim::MissileRedirect> redirects{
+        rm::sim::MissileRedirect{.owner = roster.store.idAt(0),
+                                 .radiusElmos = Fx::fromInt(500),
+                                 .cooldownTicks = 11,
+                                 .remaining = 0}};
+    std::vector<rm::sim::Projectile> shots{shot};
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{levelField()}, roster.rate, nullptr,
+                                &roster.catalog, redirects);
+    REQUIRE(shots.size() == 1);
+    REQUIRE(shots.front().turnPerTick > 0);
+    redirects.front().radiusElmos = Fx{};
+    for (int tick = 0; tick < 11; ++tick) {
+        rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                    rm::sim::Terrain{levelField()}, roster.rate, nullptr,
+                                    &roster.catalog, redirects);
+    }
+    REQUIRE(shots.size() == 1);
+    CHECK(shots.front().guidanceTarget == rm::sim::UnitId{});
+    CHECK(shots.front().turnPerTick == 0);
+}
 
 TEST_CASE("an interceptor flies through a wreck instead of bursting on it") {
     // C-086 (ART-E001 `0x006a3c60`): the interception sweep issues ONE query

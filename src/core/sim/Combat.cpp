@@ -162,6 +162,12 @@ void redirectMissile(Projectile& shot, const UnitStore& store,
                 // (C-088) is the corpus's only `Defense.AntiMissile` carrier.
                 // Degrees like the authored `TurnRate` the launch path converts.
                 shot.turnPerTick = rate.bradPerTick(720.0f * 0.017453292519943295f);
+                // `RedirectingState.Main` calls `other:TrackTarget(false)` once
+                // the wait ends, so the returned shot steers for exactly one
+                // rate cycle and then coasts. The countdown is per-shot — a
+                // second redirect restarts it — and `advanceFlight` clears the
+                // mark with the budget when it expires.
+                shot.trackTicksRemaining = redirect.cooldownTicks;
             }
             // The Lua's RedirectingState flips `CollideFriendly`/`DamageFriendly`/
             // `DamageSelf` on the returned shot — "so that when the missile
@@ -3844,6 +3850,15 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos,
     }
 
     const std::array<Fx, 3> oldVelocity = shot.velocity;
+    // `RedirectingState.Main`'s `other:TrackTarget(false)` (`C-088`): the
+    // returned shot's steering ends when the rate cycle does. The budget
+    // clears WITH the mark — a coasting shot flies straight and the gravity
+    // gate below reads it as non-tracking, matching a Lua projectile whose
+    // tracking flag is off.
+    if (shot.trackTicksRemaining > 0 && --shot.trackTicksRemaining == 0) {
+        shot.guidanceTarget = UnitId{};
+        shot.turnPerTick = 0;
+    }
     if (store.alive(shot.guidanceTarget) && shot.turnPerTick > 0) {
         const auto target = positionOf(store.transforms()[shot.guidanceTarget.index]);
         const Fx dx = target[0] - shot.position[0];
@@ -3954,6 +3969,8 @@ struct StagedFlight {
     bool inWater = false;
     Fx depthChargeRadiusElmos{};
     std::array<Fx, 3> zigZagApplied{};
+    int trackTicksRemaining = 0;
+    std::int32_t turnPerTick = 0;
     bool computed = false;
 };
 
@@ -4238,6 +4255,8 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
                     .inWater = flying.inWater,
                     .depthChargeRadiusElmos = flying.depthChargeRadiusElmos,
                     .zigZagApplied = flying.zigZagApplied,
+                    .trackTicksRemaining = flying.trackTicksRemaining,
+                    .turnPerTick = flying.turnPerTick,
                     .computed = true,
                 };
             }
@@ -4292,6 +4311,8 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
             shot.position = flight.position;
             shot.velocity = flight.velocity;
             shot.guidanceTarget = flight.guidanceTarget;
+            shot.turnPerTick = flight.turnPerTick;
+            shot.trackTicksRemaining = flight.trackTicksRemaining;
             shot.ticksRemaining = flight.ticksRemaining;
             shot.inWater = flight.inWater;
             shot.depthChargeRadiusElmos = flight.depthChargeRadiusElmos;

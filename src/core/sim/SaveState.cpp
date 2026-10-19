@@ -1152,6 +1152,10 @@ void writeProjectiles(PayloadWriter& w,
             // The depth-charge divert radius: zero for every ordinary shot, so
             // pre-slice saves (which read no word here) decode identically.
             w.i32(shot.depthChargeRadiusElmos.raw());
+            // The redirect's tracking-expiry countdown (`C-088`): zero for
+            // every ordinary and still-tracking shot, so pre-slice saves
+            // (which read no word here) decode identically.
+            w.i32(shot.trackTicksRemaining);
         }
     }
 }
@@ -1293,6 +1297,14 @@ bool readProjectiles(PayloadReader& r,
                 return false;
             }
             shot.depthChargeRadiusElmos = Fx::fromRaw(depthCharge);
+            // The tracking-expiry countdown trails the divert radius;
+            // pre-slice saves stop above and decode with no expiry pending,
+            // which is what a pre-C-088-expiry shot was anyway.
+            std::int32_t trackExpiry{};
+            if (!r.i32(trackExpiry) || trackExpiry < 0) {
+                return false;
+            }
+            shot.trackTicksRemaining = trackExpiry;
         }
     }
     return true;
