@@ -97,6 +97,7 @@ namespace {
     if (name == "offer-draw") return CommandKind::OfferDraw;
     if (name == "sacrifice") return CommandKind::Sacrifice;
     if (name == "gift") return CommandKind::Gift;
+    if (name == "self-destruct") return CommandKind::SelfDestruct;
     return std::nullopt;
 }
 

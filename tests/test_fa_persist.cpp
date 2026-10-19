@@ -979,6 +979,28 @@ TEST_CASE("v7 log: toggle-script-bit, offer-draw, sacrifice and gift round-trip"
     CHECK(back->all()[3].kind == rm::sim::CommandKind::Gift);
     std::filesystem::remove(path);
 }
+// The writer spells `self-destruct` (`commandKindName`, C-345) but the
+// reader's `kindFromName` vocabulary has no such word — a saved replay
+// holding a self-destruct issue fails to parse instead of round-tripping.
+TEST_CASE("v7 log: self-destruct round-trips", "[fa-persist]") {
+    rm::sim::CommandLog log;
+    rm::sim::CommandIssue issue;
+    issue.tick = 1;
+    issue.phase = rm::sim::CommandPhase::PreTick;
+    issue.source = 0;
+    issue.id = rm::commandId(0, 0);
+    issue.player = 0;
+    issue.kind = rm::sim::CommandKind::SelfDestruct;
+    REQUIRE(log.record(std::move(issue)));
+    const auto path = std::filesystem::temp_directory_path()
+        / ("rm-fa-persist-selfdestruct-" + std::to_string(::getpid()) + ".commands");
+    REQUIRE(rm::sim::writeCommandLog(log, path.string()));
+    const auto back = rm::sim::readCommandLog(path.string());
+    REQUIRE(back);
+    REQUIRE(back->size() == 1);
+    CHECK(back->all()[0].kind == rm::sim::CommandKind::SelfDestruct);
+    std::filesystem::remove(path);
+}
 // v69: the mid-combat envelope carries who is at the keyboard. `scene.players`
 // authorises every resumed order (`CommandApply.cpp:authorised`) and is built
 // by `onePlayerPerArmy(armies, human)` (`SceneBuild.cpp:925`) — so the seat
