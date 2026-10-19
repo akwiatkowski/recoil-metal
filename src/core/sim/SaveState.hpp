@@ -134,6 +134,11 @@ struct SaveState {
     /// absent (nullopt) on pre-v67 decodes. Re-queued verbatim on restore —
     /// the allocator counters already rode the unit snapshot past the IDs.
     std::optional<std::vector<CommandIssue>> pendingInput;
+    /// The player seat (v69): which army the keyboard drives — the `human`
+    /// argument of `onePlayerPerArmy` (`SceneBuild.cpp:925`) the roster is
+    /// derived from. `kNoArmy` seats nobody (observer). Absent on pre-v69
+    /// decodes; the match resumes as observer, as before.
+    std::optional<int> playerSeat;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);

@@ -241,6 +241,9 @@ constexpr std::uint32_t kVersion67 = 67;
 // `other != self.EnemyProj`). Pre-v68 saves decode with zero, which excludes
 // nothing — the old behavior.
 constexpr std::uint32_t kVersion68 = 68;
+// v69 adds the player seat (`playerArmy` — the `human` argument the roster is
+// derived from). Pre-v69 saves decode with no seat — observer, as before.
+constexpr std::uint32_t kVersion69 = 69;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -2117,6 +2120,30 @@ void writePendingInput(PayloadWriter& w, const std::optional<std::vector<Command
     pending = std::move(out);
     return true;
 }
+// v69 trails the payload after the pending input: the player seat, nullable
+// like the wave flags — an observer match saves the absent byte, and a
+// pre-v69 reader keeps none. The roster is derived from it on restore, so
+// only the seat rides the wire (retail source: `SceneBuild.cpp:925`).
+void writePlayerSeat(PayloadWriter& w, const std::optional<int>& seat) {
+    w.u8(seat.has_value());
+    if (!seat) {
+        return;
+    }
+    w.i32(*seat);
+}
+
+[[nodiscard]] bool readPlayerSeat(PayloadReader& r, std::optional<int>& seat) {
+    std::uint8_t present{};
+    if (!r.u8(present) || present > 1) return false;
+    if (!present) {
+        seat.reset();
+        return true;
+    }
+    std::int32_t value{};
+    if (!r.i32(value)) return false;
+    seat = value;
+    return true;
+}
 // V45 trails the payload after the unit pose: the emitter pool, nullable like
 // `features` — a match with no effect manager saves the absent byte, and an
 // older reader keeps no effects.
@@ -2981,6 +3008,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion65) writeOpponentWaves(payloadWriter, state.opponentWaves);
     if (version >= kVersion66) writeCapturable(payloadWriter, state.units);
     if (version >= kVersion67) writePendingInput(payloadWriter, state.pendingInput);
+    if (version >= kVersion69) writePlayerSeat(payloadWriter, state.playerSeat);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -3036,7 +3064,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion58 && version != kVersion59 && version != kVersion60
                && version != kVersion61 && version != kVersion62 && version != kVersion63
                && version != kVersion64 && version != kVersion65 && version != kVersion66
-               && version != kVersion67 && version != kVersion68)
+               && version != kVersion67 && version != kVersion68 && version != kVersion69)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -3157,6 +3185,10 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion67 && !readPendingInput(reader, pendingInput)) {
         return std::nullopt;
     }
+    std::optional<int> playerSeat;
+    if (version >= kVersion69 && !readPlayerSeat(reader, playerSeat)) {
+        return std::nullopt;
+    }
     // Pre-v51 saves predate the flag: every feature they hold is a wreck, and
     // every wreck then marked the ground — restore that, or a loaded match
     // loses its scorch.
@@ -3183,7 +3215,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        .terrainStamps = std::move(terrainStamps),
                        .standingOrders = std::move(standingOrders),
                        .opponentWaves = std::move(opponentWaves),
-                       .pendingInput = std::move(pendingInput)};
+                       .pendingInput = std::move(pendingInput),
+                       .playerSeat = std::move(playerSeat)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -3211,7 +3244,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion68);
+    return rm::sim::encode(state, kVersion69);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

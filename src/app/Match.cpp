@@ -941,6 +941,16 @@ std::vector<rm::sim::CommandIssue> capturePendingInput(const MatchRunner& runner
 void restorePendingInput(MatchRunner& runner, std::vector<rm::sim::CommandIssue> pending) {
     runner.scene.commandInput.restorePending(std::move(pending));
 }
+int capturePlayerSeat(const MatchRunner& runner) {
+    return runner.scene.playerArmy;
+}
+
+void restorePlayerSeat(MatchRunner& runner, int seat) {
+    const int armies = static_cast<int>(runner.scene.armies.size());
+    const int human = (seat >= 0 && seat < armies) ? seat : rm::sim::kNoArmy;
+    runner.scene.playerArmy = human;
+    runner.scene.players = rm::sim::onePlayerPerArmy(runner.scene.armies.size(), human);
+}
 
 
 std::size_t runAutoExpansion(MatchRunner& runner, rm::TickIndex tick) {

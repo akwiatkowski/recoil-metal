@@ -420,6 +420,14 @@ void restoreOpponentWaves(MatchRunner& runner, std::span<const std::uint8_t> wav
 void restorePendingInput(MatchRunner& runner,
                          std::vector<rm::sim::CommandIssue> pending);
 
+/// Captures the player seat for the save envelope (v69): the `human` army
+/// the roster is derived from (`SceneBuild.cpp:925`).
+[[nodiscard]] int capturePlayerSeat(const MatchRunner& runner);
+
+/// Restores the seat decoded from a save. Rebuilds the roster through
+/// `onePlayerPerArmy`, so a stale or out-of-range seat resumes as observer.
+void restorePlayerSeat(MatchRunner& runner, int seat);
+
 /// One `ScriptedOpponent` per army, each told which army it plays. Declared
 /// here so save/resume tests can re-seat opponents the harness silenced.
 [[nodiscard]] std::vector<std::unique_ptr<rm::ai::Opponent>> makeScriptedOpponents(

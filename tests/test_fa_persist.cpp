@@ -979,3 +979,32 @@ TEST_CASE("v7 log: toggle-script-bit, offer-draw, sacrifice and gift round-trip"
     CHECK(back->all()[3].kind == rm::sim::CommandKind::Gift);
     std::filesystem::remove(path);
 }
+// v69: the mid-combat envelope carries who is at the keyboard. `scene.players`
+// authorises every resumed order (`CommandApply.cpp:authorised`) and is built
+// by `onePlayerPerArmy(armies, human)` (`SceneBuild.cpp:925`) — so the seat
+// alone restores the roster, and a pre-v69 save resumes as observer, as before.
+TEST_CASE("v69: player seat survives a save round-trip", "[fa-persist]") {
+    rm::sim::SaveState state;
+    state.playerSeat = 0;
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode(state));
+    REQUIRE(saved);
+    REQUIRE(saved->playerSeat.has_value());
+    CHECK(*saved->playerSeat == 0);
+    const auto legacy = rm::sim::SaveState::decode(
+        rm::sim::SaveState::encodeAtVersion(state, 68));
+    REQUIRE(legacy);
+    CHECK(!legacy->playerSeat.has_value());
+}
+TEST_CASE("v69: player seat capture and restore onto the scene", "[fa-persist]") {
+    Scenario live;
+    auto runner = live.runner();
+    CHECK(rm::app::capturePlayerSeat(runner) == 0);
+    Scenario resumed;
+    auto continued = resumed.runner();
+    continued.scene.playerArmy = rm::sim::kNoArmy;
+    continued.scene.players = rm::sim::onePlayerPerArmy(2, rm::sim::kNoArmy);
+    rm::app::restorePlayerSeat(continued, rm::app::capturePlayerSeat(runner));
+    CHECK(continued.scene.playerArmy == 0);
+    CHECK(rm::sim::commands(continued.scene.players[0], 0));
+    CHECK(!continued.scene.players[1].human);
+}
