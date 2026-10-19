@@ -4226,3 +4226,40 @@ TEST_CASE("C-210/C-361: defeat and game-over events reach the brain callbacks",
         assert(__rm_faf.verdicts[3] == 'draw', 'kNoArmy game-over dispatches OnDraw')
     )"));
 }
+
+TEST_CASE("C-210: ArmyIsCivilian reads the sim's civilian flag, not a stub",
+          "[faf][ai][victory]") {
+    // `victory.lua` skips civilian brains in every poll arm via `ArmyIsCivilian`
+    // (`C-210`): the sim marks `Scenario.Armies` `NEUTRAL_CIVILIAN` on
+    // `Army::civilian`, and the FAF brains that filter allies on it
+    // (`medium-ai.lua:925`, `sorianutilities.lua:1168`) need the live answer.
+    // A bound stub returns nil here, so every brain reads every army —
+    // civilian included — as non-civilian.
+    const auto root = corpusRoot();
+    if (root.empty()) SKIP("no vendored corpus; run `make ai`");
+    FafAi ai(root);
+    REQUIRE(installFafDriver(ai));
+    importAiEntryPoints(ai);
+    auto scene = std::make_unique<rm::app::UnitScene>();
+    scene->armies = {{.index = 0, .alliance = 0},
+                     {.index = 1, .alliance = 1},
+                     {.index = 2, .alliance = 2, .civilian = true}};
+    scene->economies.resize(scene->armies.size());
+    rm::HeightField field{.squaresX = 64, .squaresZ = 64};
+    field.raw.resize(field.sampleCount());
+    const std::array<rm::mapinfo::StartPosition, 3> starts{{
+        {.x = 0, .z = 100}, {.x = 50, .z = 100}, {.x = 100, .z = 100},
+    }};
+    rm::vfs::Vfs content;
+    const rm::ai::World world{.scene = *scene, .content = content, .field = field,
+                              .starts = starts, .markers = {}};
+    rm::ai::FafOpponent opponent(ai, 0, "TechMain");
+    opponent.observe(world, {});
+    opponent.advance(0);
+    INFO(ai.lastError());
+    REQUIRE(ai.eval(R"(
+        assert(ArmyIsCivilian(3) == true, 'the NEUTRAL_CIVILIAN army reads civilian')
+        assert(ArmyIsCivilian(1) == false, 'a seated army is not civilian')
+        assert(ArmyIsCivilian(2) == false, 'the enemy army is not civilian')
+    )"));
+}

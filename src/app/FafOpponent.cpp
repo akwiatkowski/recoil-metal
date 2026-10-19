@@ -865,7 +865,16 @@ function methods:SetCurrentEnemy(index)
         self.__currentEnemyOverride = -1
     end
 end
-function __rm_faf_army(army, x, z, faction, defeated, alliance)
+-- `ArmyIsCivilian` (`C-210`, `Sim.lua:62`): `victory.lua` skips civilian brains
+-- in every poll arm, and the FAF brains filter allies on it too
+-- (`medium-ai.lua:925`, `sorianutilities.lua:1168`). The snapshot carries the
+-- flag on each army view, so the global reads the one-based army's live view —
+-- retail's 1-based `army` argument included — and an unknown army reads false.
+function ArmyIsCivilian(army)
+    local view = __rm_faf.armyViews[(army or 0) - 1]
+    return view and view.civilian == true or false
+end
+function __rm_faf_army(army, x, z, faction, defeated, alliance, civilian)
     local view = __rm_faf.armyViews[army]
     if not view then
         view = { army = army, __currentEnemyOverride = -1 }
@@ -875,12 +884,14 @@ function __rm_faf_army(army, x, z, faction, defeated, alliance)
     end
     view.startX, view.startZ, view.faction, view.defeated = x, z, faction, defeated
     view.alliance = alliance
+    view.civilian = civilian
     view.BrainType = 'AI'
     local own = __rm_faf.brains[army]
     view.BuilderManagers = own and own.BuilderManagers or { MAIN = {Position = {x, 0, z}} }
     if own then
         own.startX, own.startZ, own.faction, own.defeated = x, z, faction, defeated
         own.alliance, own.BrainType = alliance, 'AI'
+        own.civilian = civilian
     end
     -- aiutilities.GetAlliesThreat excludes self by object identity. Keep foreign
     -- army views, but publish the actual querying brain at its one-based index.
@@ -1737,7 +1748,8 @@ function __rm_faf_boot(army, info)
     __rm_faf.brains[army] = brain
     local view = __rm_faf.armyViews[army]
     __rm_faf_army(army, info.startX, info.startZ, info.faction,
-        view and view.defeated or false, view and view.alliance or army)
+        view and view.defeated or false, view and view.alliance or army,
+        view and view.civilian or false)
 
     -- Every unit id this faction's factory builders could ask for, handed back so the
     -- adapter can teach their category sets — the tech gate below needs the categories of
@@ -4176,7 +4188,8 @@ void FafOpponent::advance(rm::TickIndex tick) {
         lua_pushinteger(lua, fafFactionIndex(scene.armies[i].faction));
         lua_pushboolean(lua, scene.armies[i].defeated);
         lua_pushinteger(lua, scene.armies[i].alliance);
-        if (lua_pcall(lua, 6, 0, 0) != LUA_OK) {
+        lua_pushboolean(lua, scene.armies[i].civilian);
+        if (lua_pcall(lua, 7, 0, 0) != LUA_OK) {
             std::printf("faf-opponent: army snapshot failed: %s\n", lua_tostring(lua, -1));
             lua_pop(lua, 2);  // error and unfinished snapshot
             return;
