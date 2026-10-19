@@ -93,8 +93,10 @@ namespace {
     const Mag step = effectiveBuildPerTick(store, catalog, builder) * funded;
     const bool shieldOwed = health.shield.maximum > Mag{} && health.shield.current < health.shield.maximum;
     if (shieldOwed) {
+        const Mag hullOwed = health.maximum > health.current ? health.maximum - health.current
+                                                             : Mag{};
         const Mag hullRestored = std::min(
-            health.maximum - health.current,
+            hullOwed,
             proportionalWork(health.maximum, step, targetDef->buildTime + targetDef->buildTime));
         const Mag shieldRestored = std::min(
             health.shield.maximum - health.shield.current,
@@ -512,7 +514,7 @@ void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
         const Army* owner = armyFor(builderMotion.armyIndex, armies);
         const Army* targetArmy = armyFor(store.motion()[target].armyIndex, armies);
         const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target));
-        if (health.current >= health.maximum || owner == nullptr || targetArmy == nullptr
+        if (!needsRepair(health) || owner == nullptr || targetArmy == nullptr
             || !allied(*owner, *targetArmy) || targetDef == nullptr
             || targetDef->buildTime <= Mag{}) {
             continue;
@@ -544,7 +546,7 @@ void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
         const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target));
         if (owner == nullptr || targetArmy == nullptr || !allied(*owner, *targetArmy)
             || targetDef == nullptr || targetDef->buildTime <= Mag{}
-            || store.health()[target].current >= store.health()[target].maximum
+            || !needsRepair(store.health()[target])
             || groundDistanceElmos(positionOf(store.transforms()[item.builder]),
                                    positionOf(store.transforms()[target]))
                    > repairReach(catalog, store.typeAt(item.builder), builderMotion,
@@ -572,7 +574,7 @@ void collectRepairWork(const UnitStore& store, const UnitCatalog& catalog,
         Fx nearestGap{};
         for (UnitIndex target = 0; target < store.orders().size(); ++target) {
             if (target == station || !store.slotAlive(target) || !store.health()[target].alive()
-                || store.health()[target].current >= store.health()[target].maximum) continue;
+                || !needsRepair(store.health()[target])) continue;
             const Army* targetArmy = armyFor(store.motion()[target].armyIndex, armies);
             const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target));
             if (targetArmy == nullptr || !allied(*owner, *targetArmy) || targetDef == nullptr
@@ -640,7 +642,7 @@ std::size_t servicePatrolBuilders(UnitStore& store, const UnitCatalog& catalog,
             Health& health = store.health()[target];
             const Army* targetArmy = armyFor(store.motion()[target].armyIndex, armies);
             const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target));
-            if (!health.alive() || health.current >= health.maximum || targetArmy == nullptr
+            if (!health.alive() || !needsRepair(health) || targetArmy == nullptr
                 || !allied(*owner, *targetArmy) || targetDef == nullptr
                 || targetDef->buildTime <= Mag{}) {
                 continue;

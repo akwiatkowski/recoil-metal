@@ -1322,7 +1322,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                     const Health& health = store.health()[target];
                     const Army* candidateArmy = armyFor(store.motion()[target].armyIndex, armies);
                     const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target));
-                    if (!health.alive() || health.current >= health.maximum
+                    if (!health.alive() || !needsRepair(health)
                         || candidateArmy == nullptr || !allied(*owner, *candidateArmy)
                         || targetDef == nullptr || targetDef->buildTime <= Mag{}
                         || groundDistanceElmos(centre, positionOf(store.transforms()[target]))
@@ -1596,8 +1596,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         if (const QueuedCommand* head = orders[slot].active();
             head != nullptr && head->kind() == CommandKind::Repair) {
             if (!store.alive(head->target()) || !store.health()[head->target().index].alive()
-                || store.health()[head->target().index].current
-                       >= store.health()[head->target().index].maximum
+                || !needsRepair(store.health()[head->target().index])
                 || !repairStillAllied(slot, head->target(), store, armies)) {
                 (void)orders[slot].finish();
                 startPending();
@@ -2589,8 +2588,7 @@ bool startCommand(const Command& command, UnitStore& store, const UnitCatalog& c
         // Validation at issue time establishes the alliance and damaged target. A queued repair
         // is still refused when it reaches the head after the target has already been restored.
         if (!store.alive(command.target) || !store.health()[command.target.index].alive()
-            || store.health()[command.target.index].current
-                   >= store.health()[command.target.index].maximum) {
+            || !needsRepair(store.health()[command.target.index])) {
             return false;
         }
         const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));

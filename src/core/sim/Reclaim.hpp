@@ -47,8 +47,16 @@ struct GuardWork {
 [[nodiscard]] Fx reclaimReach(const UnitCatalog& catalog, UnitTypeIndex type,
                                const MoveState& reclaimer, const Feature& wreck) noexcept;
 
-/// The initial build-distance reach for repairing another unit, centre to centre.
-[[nodiscard]] Fx repairReach(const UnitCatalog& catalog, UnitTypeIndex type,
+/// Whether a target needs repair: hull damage, or a drained shield bubble.
+/// `C-182` heals both together, so a full-hull unit with a drained shield
+/// still admits repair work — the hull-only check refused it.
+[[nodiscard]] inline bool needsRepair(const Health& health) noexcept {
+    if (health.current < health.maximum) return true;
+    return health.shield.maximum > Mag{} && health.shield.current < health.shield.maximum;
+}
+
+ /// The initial build-distance reach for repairing another unit, centre to centre.
+ [[nodiscard]] Fx repairReach(const UnitCatalog& catalog, UnitTypeIndex type,
                               const MoveState& builder, const MoveState& target) noexcept;
 
 /// Damages a wreck and recalculates its reclaim value from the immutable maximums, exactly as

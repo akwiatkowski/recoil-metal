@@ -282,7 +282,7 @@ void recomputeIncome(const UnitStore& store, const UnitCatalog& catalog, Match& 
             }
             const unitdef::UnitDef* targetDef = catalog.def(store.typeAt(target));
             if (targetDef == nullptr || targetDef->buildTime <= Mag{}
-                || store.health()[target].current >= store.health()[target].maximum) {
+                || !needsRepair(store.health()[target])) {
                 continue;
             }
             repairDemand[builder] += drainPerTick(Construction{

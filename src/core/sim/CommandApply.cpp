@@ -158,7 +158,7 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     const unitdef::UnitDef* builder = catalog.def(store.typeAt(command.unit.index));
     const unitdef::UnitDef* target = catalog.def(store.typeAt(command.target.index));
     if (builder == nullptr || target == nullptr || !builder->isBuilder()
-        || store.health()[command.target.index].current >= store.health()[command.target.index].maximum
+        || !needsRepair(store.health()[command.target.index])
         || target->buildTime <= Mag{}) {
         return false;
     }
