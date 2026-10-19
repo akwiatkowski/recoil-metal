@@ -773,6 +773,32 @@ TEST_CASE("an interceptor removes the nearest projectile on its sweep") {
     REQUIRE(shots.size() == 1);
     CHECK(shots.front().position == far.position);
 }
+TEST_CASE("an interceptor skips a projectile on its DoNotCollideList") {
+    // `C-169`'s `DoNotCollideList` half of the Lua gate (`Projectile.lua:107-123`,
+    // `OnCollisionCheck`): a shot whose projectile blueprint lists the candidate's
+    // category refuses the contact. The depth charge (`AANDepthCharge01_proj.bp`)
+    // authors `DoNotCollideList = {'TORPEDO'}` — a charge never intercepts a torpedo.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+
+    Projectile torpedo{.position = rm::test::at(0, 0, 5),
+                       .firedByArmy = 1,
+                       .ticksRemaining = 2,
+                       .categories = std::vector<std::string>{"TORPEDO"}};
+    Projectile charge{.position = rm::test::at(0, 0, 0),
+                      .velocity = rm::test::at(0, 0, 20),
+                      .damage = rm::unitdef::flatDamage(rm::test::mag(10.0f)),
+                      .firedByArmy = 0,
+                      .interceptor = true,
+                      .ticksRemaining = 2,
+                      .doNotCollide = std::vector<std::string>{"TORPEDO"}};
+    std::vector<Projectile> shots{torpedo, charge};
+
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate, nullptr,
+                                &roster.catalog);
+    CHECK(shots.size() == 2);
+}
 
 TEST_CASE("interception uses projectile positions from the start of the tick") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);

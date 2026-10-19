@@ -1159,6 +1159,11 @@ void writeProjectiles(PayloadWriter& w,
             // The depth-charge divert radius: zero for every ordinary shot, so
             // pre-slice saves (which read no word here) decode identically.
             w.i32(shot.depthChargeRadiusElmos.raw());
+            // `C-169`'s `DoNotCollideList` refusal: empty for every ordinary
+            // shot, so pre-slice saves (which read no words here) decode
+            // identically.
+            w.count(shot.doNotCollide.size());
+            for (const std::string& tag : shot.doNotCollide) w.text(tag);
             // The redirect's tracking-expiry countdown (`C-088`): zero for
             // every ordinary and still-tracking shot, so pre-slice saves
             // (which read no word here) decode identically.
@@ -1304,7 +1309,16 @@ bool readProjectiles(PayloadReader& r,
                 return false;
             }
             shot.depthChargeRadiusElmos = Fx::fromRaw(depthCharge);
-            // The tracking-expiry countdown trails the divert radius;
+            // `C-169`'s refusal list trails the divert radius; pre-slice saves
+            // stop above and decode with no refusal, the ordinary case.
+            std::size_t refusals{};
+            if (!r.count(refusals, 60)) return false;
+            shot.doNotCollide.resize(refusals);
+            for (std::string& tag : shot.doNotCollide) {
+                if (!r.text(tag)) return false;
+            }
+            std::sort(shot.doNotCollide.begin(), shot.doNotCollide.end());
+            // The tracking-expiry countdown trails the refusal list;
             // pre-slice saves stop above and decode with no expiry pending,
             // which is what a pre-C-088-expiry shot was anyway.
             std::int32_t trackExpiry{};

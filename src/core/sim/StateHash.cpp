@@ -994,14 +994,22 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
                 feed(h, shot.splashFriendly);
             }
             // `C-095`/`C-169`/`C-172`/`C-262`: the cap, the assigned-target
-            // gate, the gravity flag, the launch serial and engagement pair,
-            // and the ring bands — all conditional so an ordinary shot keeps
-            // its byte stream.
-            if (shot.desiredShooterCap > 0 || shot.hitAssignedTarget || shot.useGravity || shot.serial != 0
-                || shot.innerRing.harmful() || shot.outerRing.harmful()) {
+            // gate, the `DoNotCollideList` refusal, the gravity flag, the launch
+            // serial and engagement pair, and the ring bands — all conditional
+            // so an ordinary shot keeps its byte stream.
+            if (shot.desiredShooterCap > 0 || shot.hitAssignedTarget || !shot.doNotCollide.empty()
+                || shot.useGravity || shot.serial != 0 || shot.innerRing.harmful()
+                || shot.outerRing.harmful()) {
                 feed(h, true);
                 feed(h, static_cast<std::size_t>(shot.desiredShooterCap));
                 feed(h, shot.hitAssignedTarget);
+                feed(h, shot.doNotCollide.size());
+                for (const std::string& tag : shot.doNotCollide) {
+                    feed(h, tag.size());
+                    for (const char c : tag) {
+                        feed(h, static_cast<std::size_t>(c));
+                    }
+                }
                 feed(h, shot.useGravity);
                 feed(h, static_cast<std::size_t>(shot.serial));
                 feed(h, shot.interceptTargetIndex);

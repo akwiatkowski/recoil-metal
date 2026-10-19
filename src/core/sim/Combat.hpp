@@ -187,6 +187,13 @@ struct Projectile {
     /// carry none. Sorted, like every other category list in this engine.
     std::vector<std::string> categories{};
 
+    /// `C-169` (`Projectile.lua:107-123`, `OnCollisionCheck`): the interceptor's own
+    /// projectile-blueprint `DoNotCollideList` — categories it never intercepts.
+    /// The depth charge (`AANDepthCharge01_proj.bp`) authors `{'TORPEDO'}`, so a
+    /// charge never intercepts a torpedo. Copied at launch like `categories`;
+    /// empty means no refusal. Sorted, like every other category list here.
+    std::vector<std::string> doNotCollide{};
+
     /// The body recorded by a pending unit impact. Generational so a retired slot reused before
     /// delivery cannot redirect the damage to its new occupant.
     UnitId impactTarget{};

@@ -1118,6 +1118,21 @@ loadProjectileTraits(std::string_view source) {
         std::sort(categories.begin(), categories.end());
         categories.erase(std::unique(categories.begin(), categories.end()), categories.end());
     }
+    std::vector<std::string> doNotCollide;
+    if (const lua::Value* listed = parsed->find("DoNotCollideList")) {
+        // Top-level list beside `Defense`/`Physics` (`AANDepthCharge01_proj.bp`
+        // `{'TORPEDO'}`): positional strings, kept sorted like `categories`
+        // because the sweep matches per tag.
+        doNotCollide.reserve(listed->items.size());
+        for (const lua::Value& entry : listed->items) {
+            if (const std::optional<std::string_view> tag = entry.asString()) {
+                doNotCollide.emplace_back(*tag);
+            }
+        }
+        std::sort(doNotCollide.begin(), doNotCollide.end());
+        doNotCollide.erase(std::unique(doNotCollide.begin(), doNotCollide.end()),
+                           doNotCollide.end());
+    }
     return unitdef::Weapon::ProjectileTraits{
         .buildCostMass = economy ? sim::magFromFloat(numberOr(*economy, "BuildCostMass", 0.0f)) : sim::Mag{},
         .buildCostEnergy = economy ? sim::magFromFloat(numberOr(*economy, "BuildCostEnergy", 0.0f)) : sim::Mag{},
@@ -1128,21 +1143,12 @@ loadProjectileTraits(std::string_view source) {
         .turnRateDegreesPerSecond = physics ? numberOr(*physics, "TurnRate", 0.0f) : 0.0f,
         .accelerationElmosPerSecond2 = physics ? numberOr(*physics, "Acceleration", 0.0f) * scmap::kElmosPerOgrid : 0.0f,
         .maxSpeedElmosPerSecond = physics ? numberOr(*physics, "MaxSpeed", 0.0f) * scmap::kElmosPerOgrid : 0.0f,
-        // `C-204`'s torpedo pair: `StayUnderwater` clamps the shot's position
-        // under the waterline while it is in the water; `DestroyOnWater` kills
-        // it outright there. Both live in the projectile's `Physics` block.
         .stayUnderwater = physics && flagAt(*physics, "StayUnderwater"),
         .destroyOnWater = physics && flagAt(*physics, "DestroyOnWater"),
-        // `C-171`'s weave: `MaxZigZag` is the amplitude in ogrids,
-        // `ZigZagFrequency` the seconds between direction re-rolls. Both live
-        // in `Physics`; a tactical missile authors 5 / 0.2.
         .maxZigZagElmos = physics ? numberOr(*physics, "MaxZigZag", 0.0f) * scmap::kElmosPerOgrid : 0.0f,
         .zigZagPeriodSeconds = physics ? numberOr(*physics, "ZigZagFrequency", 0.0f) : 0.0f,
-        // `C-095`'s anti-overkill gate: `DesiredShooterCap` caps how many
-        // point-defence shooters may engage this projectile at once (nuke
-        // missiles carry 1-2; zero means uncapped). `C-172`'s `UseGravity`
-        // gives the shot the ballistic acceleration even with no arc.
         .hitAssignedTarget = physics && flagAt(*physics, "HitAssignedTarget"),
+        .doNotCollide = std::move(doNotCollide),
         .desiredShooterCap = physics ? static_cast<int>(numberOr(*physics, "DesiredShooterCap", 0.0f)) : 0,
         .useGravity = physics && flagAt(*physics, "UseGravity"),
     };

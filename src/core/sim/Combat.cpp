@@ -587,6 +587,22 @@ struct ProjectileTickStart {
                 || candidate.serial != interceptor.interceptTargetSerial)) {
             continue;
         }
+        // `C-169`'s `DoNotCollideList` half of the Lua gate (`Projectile.lua:107-114`):
+        // the interceptor's own blueprint list refuses the candidate's categories —
+        // the depth charge (`AANDepthCharge01_proj.bp` `{'TORPEDO'}`) never
+        // intercepts a torpedo. Either side unsorted still matches: the lists are
+        // small and this path runs once per candidate per interceptor tick.
+        bool refused = false;
+        for (const std::string& tag : interceptor.doNotCollide) {
+            if (std::find(candidate.categories.begin(), candidate.categories.end(), tag)
+                != candidate.categories.end()) {
+                refused = true;
+                break;
+            }
+        }
+        if (refused) {
+            continue;
+        }
         // Projectiles have no authored collision radius in this slice. Their positions are
         // therefore the contact primitive, tested against the interceptor's swept segment.
         const std::optional<SweepFraction> entry =
@@ -3273,11 +3289,12 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     // redirect-only) — an authored splash admits the shooter's SIDE, never the
     // shooter itself, and never steers a direct hit onto an ally.
     shot.splashFriendly = weapon.damageFriendly;
-    // `C-095`/`C-169`/`C-172`: the cap, the assigned-target gate, and the
-    // gravity flag — all authored on the projectile blueprint, carried on
-    // the shot like `maxHealth` above.
+    // `C-095`/`C-169`/`C-172`: the cap, the assigned-target gate, the
+    // `DoNotCollideList` refusal, and the gravity flag — all authored on the
+    // projectile blueprint, carried on the shot like `maxHealth` above.
     shot.desiredShooterCap = weapon.projectileTraits.desiredShooterCap;
     shot.hitAssignedTarget = weapon.projectileTraits.hitAssignedTarget;
+    shot.doNotCollide = weapon.projectileTraits.doNotCollide;
     shot.useGravity = weapon.projectileTraits.useGravity;
     shot.arc = weapon.arc;
     shot.ticksRemaining = static_cast<int>(rate.ticks(kProjectileLifetime));

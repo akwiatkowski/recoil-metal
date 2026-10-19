@@ -180,6 +180,10 @@ struct Weapon {
         /// interceptor blueprints author it (e.g.
         /// `TIMMissileIntercerptor01_proj.bp`).
         bool hitAssignedTarget = false;
+        /// Top-level `DoNotCollideList` (C-169, `Projectile.lua:107-123`): categories
+        /// this shot's interception sweep refuses. The depth charge
+        /// (`AANDepthCharge01_proj.bp`) authors `{'TORPEDO'}`. Sorted like `categories`.
+        std::vector<std::string> doNotCollide{};
         /// `Physics.DesiredShooterCap` (C-095): how many shooters may engage
         /// this projectile at once — the anti-overkill gate on point-defence
         /// acquisition. Nuke missiles carry 1-2; zero means uncapped.
