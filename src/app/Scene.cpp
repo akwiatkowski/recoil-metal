@@ -480,6 +480,36 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     const float unit = static_cast<float>(static_cast<double>(bits) / 4294967296.0);  // 0..1
     return base + unit * width;  // elmos (C-290 `size` band)
 }
+/// A collision-beam class's `ScorchThread` redrawn `CreateSplat` size, in
+/// elmos (`defaultcollisionbeams.lua` C-290): the `size` reassignment after
+/// every pass — quantum/orbital 3.2+Random*3.5 (`:128`), experimental phason
+/// 4.0+Random*1.0 (`:317`, unchanged), every other thread body
+/// 1.2+Random*1.5 (`:195`). Same position-bit splitmix32 pick as the opening
+/// band — replay-identical, off the sim RNG (C-297), presentation only.
+[[nodiscard]] float beamClassRedrawSize(float x, float z, std::string_view beamClass) noexcept {
+    if (beamClass == "ExperimentalPhasonLaserCollisionBeam") {
+        return beamClassSize(x, z, beamClass);  // elmos (redraw == opening, `:317`)
+    }
+    const bool heavy = beamClass == "QuantumBeamGeneratorCollisionBeam"
+                    || beamClass == "OrbitalDeathLaserCollisionBeam";
+    const float base = heavy ? 3.2f : 1.2f;  // elmos (C-290 redraw bands)
+    const float width = heavy ? 3.5f : 1.5f;  // elmos (C-290 redraw bands)
+    std::uint32_t bits = static_cast<std::uint32_t>(std::llround(
+                             static_cast<double>(x) * 4096.0))  // 1/4096 elmo
+                         * 0x85EBCA6Bu
+                       ^ static_cast<std::uint32_t>(std::llround(
+                             static_cast<double>(z) * 4096.0))  // 1/4096 elmo
+                             * 0x9E3779B1u;
+    bits ^= bits >> 16;  // splitmix32 finaliser
+    bits *= 0x7FEB352Du;
+    bits ^= bits >> 15;
+    bits ^= bits >> 9;  // one more round past the LOD stream
+    bits *= 0x1B873593u;
+    bits ^= bits >> 15;
+    const float unit = static_cast<float>(static_cast<double>(bits) / 4294967296.0);  // 0..1
+    return base + unit * width;  // elmos (C-290 `size` redraw band)
+}
+
 /// A collision-beam class's `ScorchThread` splat texture, as a mark texture
 /// index (`defaultcollisionbeams.lua` C-290): seven thread bodies lay
 /// `czar_mark01_albedo` (the base stream's pick), the experimental phason
@@ -547,7 +577,7 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
             noteImpactMark(scene, fillX, fillZ, 0.0f, tick, UnitScene::ImpactMarkScript::BaseScorch, true, lifeSeconds);
             scene.impactMarks.back().lod = lod;
             scene.impactMarks.back().textureIndex = beamClassTextureIndex(scene.impactMarks.back().textureIndex, beamClass);  // (`SplatTexture` C-290)
-            scene.impactMarks.back().beamSizeElmos = beamClassSize(fillX, fillZ, beamClass);  // elmos (C-290 `size`)
+            scene.impactMarks.back().beamSizeElmos = beamClassRedrawSize(fillX, fillZ, beamClass);  // elmos (C-290 redrawn `size`)
         }
     }
     return true;

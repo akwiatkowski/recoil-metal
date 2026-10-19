@@ -600,6 +600,34 @@ TEST_CASE("C-290: beam scorch textures follow the thread's own SplatTexture", "[
     REQUIRE(replay.impactMarks.size() == 1);
     CHECK(replay.impactMarks[0].textureIndex == exp.impactMarks[0].textureIndex);
 }
+TEST_CASE("C-290: dwell-trail filler marks use the thread's redraw size band", "[fa-terrain]") {
+    // `defaultcollisionbeams.lua` C-290: each `ScorchThread` redraws `size`
+    // after every pass — the quantum thread at 3.2+Random*3.5 (first-pass
+    // 3.5..7), the photon-chromatic bodies at 1.2+Random*1.5 (first-pass
+    // 1.5..3). Trail filler marks stand in for later passes, so they must
+    // sample the redraw band, not the opening one.
+    rm::app::UnitScene scene = makeScene(false, 0.0f);
+    rm::sim::Event first{};
+    first.kind = rm::sim::EventKind::BeamFired;
+    first.unit = rm::sim::UnitId{0, 1};
+    first.at = rm::test::at(100, 40, 500);
+    (void)rm::app::noteBeamScorch(scene, first, 40.0f, 0.0f, 0,
+                                  "QuantumBeamGeneratorCollisionBeam");
+    rm::sim::Event second{};
+    second.kind = rm::sim::EventKind::BeamFired;
+    second.unit = first.unit;
+    second.at = rm::test::at(400, 40, 500);
+    (void)rm::app::noteBeamScorch(scene, second, 40.0f, 0.0f, 0,
+                                  "QuantumBeamGeneratorCollisionBeam");
+    REQUIRE(scene.impactMarks.size() > 2);
+    for (const auto& mark : scene.impactMarks) {
+        if (mark.x <= 100.0f || mark.x >= 400.0f) {
+            continue;  // endpoints ride the opening band
+        }
+        CHECK(mark.beamSizeElmos >= 3.2f);
+        CHECK(mark.beamSizeElmos <= 6.7f);
+    }
+}
 
 
 
