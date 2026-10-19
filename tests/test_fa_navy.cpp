@@ -1327,7 +1327,7 @@ TEST_CASE("C-205: LayerChangeOffsetHeight lifts the seabed threshold for a wader
     plain.name = "test_wader";
     plain.categories = {"LAND", "MOBILE"};
     plain.motion = rm::unitdef::MotionType::Land;
-    plain.speedElmosPerSecond = 6.0f;
+    plain.occupancyCaps = rm::unitdef::occupancyCapsFor(plain.motion);  // Land|Seabed
     plain.health = rm::sim::Mag::fromInt(1000);
     UnitDef offset = plain;
     offset.name = "test_offset_wader";
@@ -1345,4 +1345,36 @@ TEST_CASE("C-205: LayerChangeOffsetHeight lifts the seabed threshold for a wader
     // stands on retail-dry ground and reads Land.
     CHECK(roster.motion(bare).seabed);
     CHECK_FALSE(roster.motion(band).seabed);
+}
+
+TEST_CASE("C-205: LayerChangeOffsetHeight is inert without the Land cap", "[fa-navy]") {
+    // `UpdateCurrentLayer` (`0x006ca040`) applies the offset only when the
+    // footprint has the `Land` cap. A structure (`RULEUMT_None`, caps 0) with
+    // an authored offset still reads the bare waterline: 78 < 80 is wet no
+    // matter the offset.
+    rm::HeightField field = flatField();
+    field.baseHeight = 78.0f;  // ground 2 elmos under the 80-elmo waterline
+    const rm::sim::Terrain terrain = waterTerrain(field);
+
+    rm::test::Roster roster;
+    UnitDef hut;
+    hut.name = "test_hut";
+    hut.categories = {"STRUCTURE"};
+    hut.motion = rm::unitdef::MotionType::None;
+    hut.occupancyCaps = rm::unitdef::occupancyCapsFor(hut.motion);  // 0: no Land cap
+    hut.health = rm::sim::Mag::fromInt(1000);
+    UnitDef offsetHut = hut;
+    offsetHut.name = "test_offset_hut";
+    offsetHut.layerChangeOffsetElmos = -7.2f;  // XRL0305_unit.bp, ogrids x8
+    const rm::UnitTypeIndex hutType = roster.addType(hut);
+    const rm::UnitTypeIndex offsetHutType = roster.addType(offsetHut);
+    const UnitId bare = spawnDef(roster, hutType, hut, 300.0f, 300.0f, 0);
+    const UnitId band = spawnDef(roster, offsetHutType, offsetHut, 400.0f, 300.0f, 0);
+    roster.transform(bare).y = Fx::fromInt(78);
+    roster.transform(band).y = Fx::fromInt(78);
+    roster.reindex();
+
+    rm::sim::tick(roster.store.transforms(), roster.store.motion(), terrain);
+    CHECK(roster.motion(bare).seabed);
+    CHECK(roster.motion(band).seabed);
 }

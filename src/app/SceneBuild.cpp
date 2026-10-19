@@ -331,10 +331,13 @@ rm::sim::MoveState motionFor(const rm::unitdef::UnitDef& def, int armyIndex) {
     // is authored state, so it is copied unconditionally.
     motion.autoSurface = def.autoSurfaceToAttack;
     // `LayerChangeOffsetHeight` (`C-205`, `0x006ca040`): the layer evaluator's
-    // threshold shift, authored per unit (XRL0305's -0.9 ogrids). Copied
-    // unconditionally like the auto-surface flag — the mover, not the spawn,
-    // decides which layers consult it.
-    motion.layerChangeOffset = rm::sim::fxFromFloat(def.layerChangeOffsetElmos);
+    // threshold shift, authored per unit (XRL0305's -0.9 ogrids). The offset
+    // applies only when the footprint has the `Land` cap (Land bit 0x1 per
+    // `C-202`/`C-219`) — the spawner bakes the gate in so the per-tick mover
+    // needs no catalog.
+    motion.layerChangeOffset = (def.occupancyCaps & 0x1) != 0
+        ? rm::sim::fxFromFloat(def.layerChangeOffsetElmos)
+        : rm::sim::Fx{};
     motion.hovering = def.motion == rm::unitdef::MotionType::Hover;
     motion.hoverElevation = motion.hovering ? rm::sim::fxFromFloat(def.elevationElmos)
                                            : rm::sim::Fx{};

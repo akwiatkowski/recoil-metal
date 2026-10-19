@@ -752,9 +752,12 @@ void tickRange(std::span<Transform> transforms, std::span<MoveState> motion,
         // walking out of the water stops being a seabed target the same tick.
         // `C-205` (`0x006ca040`): the threshold is `waterY + offset`, not the
         // bare waterline — XRL0305's -7.2 elmos keeps a wader on near-shore
-        // ground reading Land. The `Land`-cap gate the address applies the
-        // offset under is future work; the threshold shift is what the sim
-        // can observe today.
+        // ground reading Land. The offset is zero unless the footprint has
+        // the `Land` cap (gated at spawn); the `Land`-cap gate the address
+        // applies it under is baked in, and the full layer-class branch table
+        // (Amphibious→Seabed vs Hover→Water) rides on the existing
+        // surfaceWater/submersible/hovering flags, so the threshold shift is
+        // what the sim can observe today.
         motion[i].seabed = !motion[i].airborne && !motion[i].surfaceWater
             && !motion[i].submersible && !motion[i].hovering
             && terrain.hasWater()
