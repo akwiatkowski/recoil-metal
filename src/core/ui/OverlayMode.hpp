@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 
+#include "core/scene/TeamColours.hpp"
 #include "platform/KeyInput.hpp"
 
 namespace rm::ui {
@@ -39,6 +40,30 @@ inline void toggleOverlay(OverlayState& state, Overlay overlay) noexcept {
     case Overlay::Economy: return state.economy;
     case Overlay::TeamColor: return state.teamColor;
     }
+}
+
+// Retail's team-color ON (`multifunction.lua` `calculateTeamColors`): the focus
+// army paints itself Player blue and every other army by diplomacy — ally
+// green, enemy red, civilians/neutrals burlywood — rather than by per-army
+// colour. OFF keeps the unit's own army colour. First-slot defaults from
+// `teamColorSettings.colors` (`ff436eee` Player, `ff40bf40` ally, `ffe80a0a`
+// enemy, `ffdeb887` neutral), decoded AARRGGBB to linear 0..1.
+[[nodiscard]] inline TeamColour iconTintFor(const OverlayState& state, int focusArmy,
+                                            int army, int alliance, bool neutral,
+                                            TeamColour own) noexcept {
+    if (!state.teamColor) {
+        return own;
+    }
+    if (army == focusArmy) {
+        return TeamColour{0x43 / 255.0f, 0x6e / 255.0f, 0xee / 255.0f, 1.0f};
+    }
+    if (neutral) {
+        return TeamColour{0xde / 255.0f, 0xb8 / 255.0f, 0x87 / 255.0f, 1.0f};
+    }
+    if (alliance >= 0 && alliance == focusArmy) {
+        return TeamColour{0x40 / 255.0f, 0xbf / 255.0f, 0x40 / 255.0f, 1.0f};
+    }
+    return TeamColour{0xe8 / 255.0f, 0x0a / 255.0f, 0x0a / 255.0f, 1.0f};
 }
 
 // Key context for retail's overlay hotkeys (`lua/lua/keymap/defaultKeyMap.lua`:
