@@ -100,6 +100,44 @@ TEST_CASE("a returned missile stops tracking when the redirect's wait expires") 
     CHECK(shots.front().guidanceTarget == rm::sim::UnitId{});
     CHECK(shots.front().turnPerTick == 0);
 }
+TEST_CASE("a redirector does not re-catch the shot it just turned") {
+    // `defaultantiprojectile.lua` `WaitingState.OnCollisionCheck` keeps
+    // `self.EnemyProj` across the redirect and refuses it on the next pass
+    // (`other != self.EnemyProj`): a returned missile loitering inside the
+    // radius is never re-redirected by the same unit, even past its cooldown.
+    using rm::sim::Fx;
+    const std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    rm::test::Roster roster;
+    (void)roster.add(roster.addType(rm::unitdef::UnitDef{}), 0.0f, 0.0f, 0, 100.0f);
+    const rm::sim::UnitId launcher = roster.add(roster.addType(rm::unitdef::UnitDef{}),
+                                                3000.0f, 0.0f, 1, 100.0f);
+    rm::sim::Projectile shot{.position = rm::test::at(100, 4, 0),
+                             .velocity = rm::test::at(-20, 0, 0),
+                             .firedBy = launcher,
+                             .firedByArmy = 1,
+                             .ticksRemaining = 400,
+                             .categories = std::vector<std::string>{"MISSILE", "TACTICAL"},
+                             .serial = 7};
+    std::vector<rm::sim::MissileRedirect> redirects{
+        rm::sim::MissileRedirect{.owner = roster.store.idAt(0),
+                                 .radiusElmos = Fx::fromInt(500),
+                                 .cooldownTicks = 11,
+                                 .remaining = 0}};
+    std::vector<rm::sim::Projectile> shots{shot};
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{levelField()}, roster.rate, nullptr,
+                                &roster.catalog, redirects);
+    REQUIRE(shots.size() == 1);
+    REQUIRE(shots.front().guidanceTarget == launcher);
+    // The second tick past the cooldown: without the exclusion the unit
+    // re-catches its own return and spends the rate cycle again.
+    redirects.front().remaining = 0;
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{levelField()}, roster.rate, nullptr,
+                                &roster.catalog, redirects);
+    CHECK(shots.size() == 1);
+    CHECK(redirects.front().remaining == 0);
+}
 
 TEST_CASE("an interceptor flies through a wreck instead of bursting on it") {
     // C-086 (ART-E001 `0x006a3c60`): the interception sweep issues ONE query

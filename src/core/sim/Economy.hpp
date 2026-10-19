@@ -543,6 +543,14 @@ struct MissileRedirect {
     Fx radiusElmos{};
     int cooldownTicks = 0;
     int remaining = 0;
+    /// The turned shot's launch serial (`C-088`, ART-S007
+    /// `lua/sim/defaultantiprojectile.lua:MissileRedirect.WaitingState`):
+    /// retail keeps `self.EnemyProj` across the redirect and refuses it on
+    /// the next pass (`other != self.EnemyProj`), so a returned missile
+    /// loitering inside the radius is never re-caught by the same unit.
+    /// Zero matches nothing — the serial mint never emits it — so a fresh
+    /// redirector excludes nothing.
+    std::uint64_t lastRedirectedSerial = 0;
 };
 
 /// Creates one silo component from already-bound fixed-point blueprint values (`C-083`, C-241).

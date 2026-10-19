@@ -129,7 +129,8 @@ void redirectMissile(Projectile& shot, const UnitStore& store,
     }
     const std::span<const Transform> transforms = store.transforms();
     for (MissileRedirect& redirect : redirects) {
-        if (!store.alive(redirect.owner) || redirect.remaining > 0) {
+        if (!store.alive(redirect.owner) || redirect.remaining > 0
+            || (shot.serial != 0 && shot.serial == redirect.lastRedirectedSerial)) {
             continue;
         }
         const Army* ownerArmy =
@@ -183,6 +184,7 @@ void redirectMissile(Projectile& shot, const UnitStore& store,
                 shot.ticksRemaining = 0;
             }
         }
+        redirect.lastRedirectedSerial = shot.serial;
         redirect.remaining = redirect.cooldownTicks;
         return;
     }

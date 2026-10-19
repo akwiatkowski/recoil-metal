@@ -237,6 +237,10 @@ constexpr std::uint32_t kVersion66 = 66;
 // Pre-v67 saves decode with no pending input — the match resumes without the
 // in-flight orders, as before.
 constexpr std::uint32_t kVersion67 = 67;
+// v68 adds the redirector's turned-shot exclusion serial (`C-088`'s
+// `other != self.EnemyProj`). Pre-v68 saves decode with zero, which excludes
+// nothing — the old behavior.
+constexpr std::uint32_t kVersion68 = 68;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -2198,13 +2202,20 @@ void writeEffects(PayloadWriter& w, const std::optional<std::vector<SimEmitter>>
     return true;
 }
 
-void writeRedirects(PayloadWriter& w, std::span<const MissileRedirect> redirects) {
+void writeRedirects(PayloadWriter& w, std::span<const MissileRedirect> redirects,
+                     bool exclusionSerial) {
     w.count(redirects.size());
     for (const MissileRedirect& value : redirects) {
         writeId(w, value.owner);
         w.i32(value.radiusElmos.raw());
         w.i32(value.cooldownTicks);
         w.i32(value.remaining);
+        // v68 trails the record: the turned shot's exclusion serial
+        // (`C-088`). Older streams stop above and decode with zero, which
+        // excludes nothing — the old behavior.
+        if (exclusionSerial) {
+            w.u64(value.lastRedirectedSerial);
+        }
     }
 }
 
@@ -2518,7 +2529,8 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool co
     return true;
 }
 
-[[nodiscard]] bool readRedirects(PayloadReader& r, std::vector<MissileRedirect>& redirects) {
+[[nodiscard]] bool readRedirects(PayloadReader& r, std::vector<MissileRedirect>& redirects,
+                                 bool exclusionSerial) {
     std::size_t count{};
     if (!r.count(count, 20)) return false;
     redirects.resize(count);
@@ -2531,6 +2543,10 @@ void writeAirMotion(PayloadWriter& w, std::span<const MoveState> motion, bool co
         value.radiusElmos = Fx::fromRaw(radius);
         value.cooldownTicks = cooldown;
         value.remaining = remaining;
+        // v68's trailing exclusion serial; older streams stop above and
+        // decode with zero, which excludes nothing — the old behavior.
+        value.lastRedirectedSerial = 0;
+        if (exclusionSerial && !r.u64(value.lastRedirectedSerial)) return false;
     }
     return true;
 }
@@ -2912,7 +2928,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                    version >= kVersion49, version >= kVersion53);
     if (version >= kVersion9)
         writeSiloAmmo(payloadWriter, state.siloAmmo, version >= kVersion33);
-    if (version >= kVersion10) writeRedirects(payloadWriter, state.redirects);
+    if (version >= kVersion10)
+        writeRedirects(payloadWriter, state.redirects, version >= kVersion68);
     if (version >= kVersion11) {
         writeAirMotion(payloadWriter, state.units.motion, version >= kVersion13,
                        version >= kVersion14);
@@ -3018,7 +3035,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion58 && version != kVersion59 && version != kVersion60
                && version != kVersion61 && version != kVersion62 && version != kVersion63
                && version != kVersion64 && version != kVersion65 && version != kVersion66
-               && version != kVersion67)
+               && version != kVersion67 && version != kVersion68)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -3060,7 +3077,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion9
         && !readSiloAmmo(reader, siloAmmo, version >= kVersion33)) return std::nullopt;
     std::vector<MissileRedirect> redirects;
-    if (version >= kVersion10 && !readRedirects(reader, redirects)) return std::nullopt;
+    if (version >= kVersion10 && !readRedirects(reader, redirects, version >= kVersion68))
+        return std::nullopt;
     if (version >= kVersion11
         && !readAirMotion(reader, units.motion, version >= kVersion13,
                           version >= kVersion14, version >= kVersion16)) return std::nullopt;
@@ -3192,7 +3210,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion67);
+    return rm::sim::encode(state, kVersion68);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

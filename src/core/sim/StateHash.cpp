@@ -1124,6 +1124,7 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, redirect.radiusElmos);
             feed(h, redirect.cooldownTicks);
             feed(h, redirect.remaining);
+            feed(h, redirect.lastRedirectedSerial);
         }
     }
 
