@@ -1139,6 +1139,34 @@ TEST_CASE("enhancement stat mods override range, rate, and damage", "[enhancemen
     CHECK(weaponDamageModFor(roster.store, roster.catalog, unit.index, gun)
           == Mag{});
 }
+TEST_CASE("CoolingUpgrade retunes only RightRipper's rate, not the MLG's", "[enhancement][script-task]") {
+    // Retail `URL0001_script.lua:440-448`: the install `ChangeRateOfFire`s
+    // only `RightRipper` (the MLG and OverCharge get `ChangeMaxRadius`
+    // alone); the Remove restores rate on `RightRipper` only. An installed
+    // CoolingUpgrade must leave an MLG-labelled weapon's authored rate alone.
+    using namespace rm::sim;
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "test_cybran_acu";
+    def.health = Mag::fromInt(100);
+    rm::unitdef::Weapon mlg;
+    mlg.label = "MLG";
+    mlg.role = rm::unitdef::WeaponRole::DirectFire;
+    mlg.maxRange = Fx::fromInt(22);
+    mlg.rateOfFire = 3.0f;
+    def.weapons = {mlg};
+    const auto params = rm::lua::parseTable(
+        "{ NewMaxRadius=30, NewRateOfFire=2.0 }");
+    REQUIRE(params);
+    def.enhancements.push_back({.name="CoolingUpgrade", .slot="RCH",
+        .buildCostMass=Mag::fromInt(1), .buildCostEnergy=Mag::fromInt(1),
+        .buildTime=Fx::fromInt(1), .parameters=*params});
+    const auto unit = roster.add(roster.addType(def), 40, 40, 0, 100);
+    REQUIRE(installEnhancement(roster.store, roster.catalog, unit,
+                               "CoolingUpgrade"));
+    CHECK(weaponRateOfFireFor(roster.store, roster.catalog, unit.index, mlg)
+          == fxFromFloat(3.0f));
+}
 TEST_CASE("C-388: ScriptHost resolves TaskName by sprintf path with ScriptTask.lua fallback") {
     // `C-388` (`0x00629530`): the loader reads `TaskName`, sprintfs
     // `/lua/sim/tasks/%s.lua`, and on a miss logs `Can't find task %s, using

@@ -103,7 +103,7 @@ constexpr std::string_view kWeaponRightZephyr[]{"RightZephyr"};
 constexpr std::string_view kWeaponRightZephyrOC[]{"RightZephyr", "OverCharge"};
 constexpr std::string_view kWeaponChronotron[]{"ChronotronCannon"};
 constexpr std::string_view kWeaponChronotronOC[]{"ChronotronCannon", "OverCharge"};
-constexpr std::string_view kWeaponRightRipperMLG[]{"RightRipper", "MLG"};
+constexpr std::string_view kWeaponRightRipper[]{"RightRipper"};
 constexpr std::string_view kWeaponRightRipperMLGOC[]{"RightRipper", "MLG", "OverCharge"};
 constexpr std::string_view kWeaponRightDisintegrator[]{"RightDisintegrator"};
 constexpr std::string_view kWeaponRightHeavyPlasma[]{"RightHeavyPlasmaCannon"};
@@ -223,10 +223,14 @@ constexpr ScriptEffectRow kScriptEffects[] = {
     {"FocusConvertorRemove", {.damageModLabels = kWeaponRightDisintegrator}},
     {"AdvancedCoolingUpgrade", {.rateOfFireLabels = kWeaponRightHeavyPlasma}},
     {"AdvancedCoolingUpgradeRemove", {.rateOfFireLabels = kWeaponRightHeavyPlasma}},
+    // `CoolingUpgrade` (`URL0001_script.lua:440-448`): the install
+    // `ChangeRateOfFire`s only `RightRipper` — the MLG and OverCharge get
+    // `ChangeMaxRadius` alone — and the Remove restores rate on `RightRipper`
+    // only (`Weapon[1]` authored values, not the enhancement's own).
     {"CoolingUpgrade", {.maxRadiusLabels = kWeaponRightRipperMLGOC,
-                        .rateOfFireLabels = kWeaponRightRipperMLG}},
+                        .rateOfFireLabels = kWeaponRightRipper}},
     {"CoolingUpgradeRemove", {.maxRadiusLabels = kWeaponRightRipperMLGOC,
-                              .rateOfFireLabels = kWeaponRightRipperMLG}},
+                              .rateOfFireLabels = kWeaponRightRipper}},
     // Pods: UEL0001's LeftPod/RightPod and UEL0301's Pod — `CreateUnitHPR` +
     // `SetParent`; the Remove branches `Kill()` them.
     {"LeftPod", {.podBlueprint = "UEA0001", .podBone = "AttachSpecial02"}},
