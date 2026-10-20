@@ -791,6 +791,18 @@ TEST_CASE("impact marks tag a weapon's own decal from the shot's projectile id",
     CHECK(rm::app::scriptTagForProjectile(
               "/projectiles/TIFMissileNuke02/TIFMissileNuke02_proj.bp")
           == Script::StrategicNukeCrater);
+    // Retail's Seraphim experimental nuke crater (C-484):
+    // `SIFExperimentalStrategicMissile01` and
+    // `SBOInfernoExperimentalStrategicBomb01` detonate through
+    // `SeraphimNukeEffectController01_script.lua:187-188`, which lays
+    // `Scorch_012_albedo` at 300 elmos (plus `Crater01_normals` at 150),
+    // duration 0 = permanent — not the blast-derived split.
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/SIFExperimentalStrategicMissile01/SIFExperimentalStrategicMissile01_proj.bp")
+          == Script::SeraphimNukeCrater);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/SBOInfernoExperimentalStrategicBomb01/SBOInfernoExperimentalStrategicBomb01_proj.bp")
+          == Script::SeraphimNukeCrater);
     CHECK(rm::app::scriptTagForProjectile("") == Script::BaseScorch);
 }
 TEST_CASE("scripted decals retire at their authored duration", "[decals]") {
