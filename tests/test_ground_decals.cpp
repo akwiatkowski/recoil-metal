@@ -776,6 +776,9 @@ TEST_CASE("impact marks tag a weapon's own decal from the shot's projectile id",
               "/projectiles/CIFProtonBomb01/CIFProtonBomb01_proj.bp")
           == Script::CybranProtonScorch);
     CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/AIFBombQuark01/AIFBombQuark01_proj.bp")
+          == Script::QuarkSplat);
+    CHECK(rm::app::scriptTagForProjectile(
               "/projectiles/AIFQuantumWarhead02/AIFQuantumWarhead02_proj.bp")
           == Script::QuantumCrater);
     CHECK(rm::app::scriptTagForProjectile("") == Script::BaseScorch);

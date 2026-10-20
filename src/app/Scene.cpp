@@ -255,6 +255,7 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::AntimatterShellScorch: return 16.0f;  // elmos (`FxSplatScale` 8 x2 albedo, `:118`)
         case Script::AntimatterSmallScorch: return 8.0f;  // elmos (`FxSplatScale` 4 x2 albedo, `:118`)
         case Script::SmallYieldScorch: return 6.0f;  // elmos (`:284` splat)
+        case Script::QuarkSplat: return 12.0f;  // elmos (scale 3 splat x4, `aeonprojectiles.lua:600`)
         case Script::CybranProtonScorch: return 12.0f;  // elmos (`cybranprojectiles.lua:79`)
         case Script::BaseScorch: break;
     }
@@ -284,6 +285,7 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::AntimatterShellScorch: return 30.0f;  // s (`terranprojectiles.lua:118`)
         case Script::AntimatterSmallScorch: return 30.0f;  // s (`terranprojectiles.lua:118`)
         case Script::SmallYieldScorch: return 200.0f;  // s (`terranprojectiles.lua:284`)
+        case Script::QuarkSplat: break;  // s (base 300-600 s spread, `defaultexplosions.lua:211`)
         case Script::CybranProtonScorch: return 200.0f;  // s (`cybranprojectiles.lua:79`)
         case Script::BaseScorch: break;
     }
@@ -306,6 +308,7 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::AntimatterShellScorch: return 19;  // `nuke_scorch_002_albedo` scripted draw
         case Script::AntimatterSmallScorch: return 19;  // `nuke_scorch_002_albedo` scripted draw
         case Script::SmallYieldScorch: return 20;  // `scorch_008_albedo` scripted draw
+        case Script::QuarkSplat: break;  // base ten stream, `defaultexplosions.lua:222-232`
         case Script::CybranProtonScorch: return 11;  // `scorch_011_albedo` scripted draw
         case Script::BaseScorch: break;
     }
@@ -415,6 +418,7 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     if (stem.starts_with("TIFAntiMatterShells02")) return Script::AntimatterSmallScorch;
     if (stem.starts_with("TIFSmallYieldNuclearBomb01")) return Script::SmallYieldScorch;
     if (stem.starts_with("CIFProtonBomb01")) return Script::CybranProtonScorch;
+    if (stem.starts_with("AIFBombQuark01")) return Script::QuarkSplat;
     if (stem.starts_with("SBOZhanaseeBomb01")) return Script::ZhanaseeScorch;
     return Script::BaseScorch;
 }
