@@ -528,3 +528,37 @@ TEST_CASE("a death blast that kills detonates again on the next tick",
     CHECK(secondTick.deathBlasts == 1);
     CHECK(roster.health(bystander).current < rm::sim::Mag::fromInt(1000));
 }
+
+TEST_CASE("a crashing aircraft's blast passes through shields", "[fa-damage]") {
+    // `reference/supcom-wiki/pages/weapons/Air_Crash.md:14`: "crashing units
+    // pass through shields (changed in FAF)". The crash blast is hull damage
+    // under the dome, never a charge on it — the `DeathImpact` (`DAA0206`
+    // `DisplayName = 'Air Crash'`, `DummyWeapon`, no `FireOnDeath`) must reach
+    // the sheltered hull with the bubble untouched. The wreck goes down
+    // OUTSIDE the dome so the blast is genuinely admitted (a centre inside
+    // the dome skips it under C-143's inside-origin rule).
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex shieldType = roster.addType(shieldDef());
+    const rm::UnitTypeIndex targetType = roster.addType(mobileDef());
+    const UnitId generator = roster.add(shieldType, 0.0f, 0.0f, 1, 100.0f);
+    const UnitId sheltered = roster.add(targetType, 20.0f, 0.0f, 1, 100.0f);
+    const UnitId dying = roster.add(targetType, 120.0f, 0.0f, 0, 100.0f);
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+
+    UnitDef crashing;
+    crashing.name = "test_air_crash_shield";
+    crashing.categories = {"AIR", "MOBILE"};
+    rm::unitdef::Weapon impact;
+    impact.label = "DeathImpact";
+    impact.role = rm::unitdef::WeaponRole::Death;
+    impact.dummyWeapon = true;
+    impact.damageFriendly = true;
+    impact.damage = rm::sim::Mag::fromInt(40);
+    impact.damageRadius = rm::sim::Fx::fromInt(120);
+    crashing.weapons.push_back(impact);
+    (void)rm::sim::explodeOnDeath(crashing, rm::test::at(120, 0, 0), 0, roster.store,
+                                  armies, dying, nullptr, &roster.catalog);
+
+    CHECK(roster.health(generator).shield.current == rm::sim::Mag::fromInt(100));
+    CHECK(roster.health(sheltered).current == rm::sim::Mag::fromInt(60));
+}

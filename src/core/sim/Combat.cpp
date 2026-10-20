@@ -2936,6 +2936,13 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
                                     sourceMotion.belowWater)) {
                 continue;
             }
+            // Cargo rides silent unless its own Transport block allows it
+            // (`weapon.lua:SetOnTransport`, C-198) — the firer-side hold the
+            // automatic pass keeps (`cargoMayFireFromRack`).
+            if (slot < store.motion().size() && store.motion()[slot].attached
+                && !cargoMayFireFromRack(store, catalog, slot)) {
+                continue;
+            }
             healths[slot].reloadRemaining.resize(def->weapons.size(), 0);
             if (healths[slot].reloadRemaining[w] > 0) {
                 continue;  // still cooling from the last click; `fireWeapons` ticks it
@@ -4499,6 +4506,11 @@ Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy
     if (blast == nullptr || !blast->harmful()) {
         return Mag{};
     }
+    // `Air_Crash.md:14`: "crashing units pass through shields (changed in
+    // FAF)" — a `DeathImpact` crash blast admits no bubble: hulls beneath
+    // take it, the domes pay nothing. Threaded as the existing
+    // `shieldPenetrating` refusal (C-397's path), not a new gate.
+    const bool crashBlast = blast->label == "DeathImpact";
 
     // TWO RINGS when the weapon states them — the four commanders do — applied outer first
     // and inner second. The order matters: `damageArea` falls off to nothing at its rim, so
@@ -4519,16 +4531,18 @@ Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy
         Mag dealt{};
         dealt += damageTargets(at, blast->outerRingRadius, profile(blast->outerRingDamage), byArmy,
                                 store, armies, catalog, by, events, blast->targetLayers,
-                                blast->damageFriendly, std::nullopt, std::nullopt, features);
+                                blast->damageFriendly, std::nullopt, std::nullopt, features,
+                                false, Fx{}, crashBlast);
         dealt += damageTargets(at, blast->innerRingRadius, profile(blast->innerRingDamage), byArmy,
                                 store, armies, catalog, by, events, blast->targetLayers,
-                                blast->damageFriendly, std::nullopt, std::nullopt, features);
+                                blast->damageFriendly, std::nullopt, std::nullopt, features,
+                                false, Fx{}, crashBlast);
         return dealt;
     }
 
     return damageTargets(at, blast->damageRadius, profile(blast->damage), byArmy, store, armies,
                          catalog, by, events, blast->targetLayers, blast->damageFriendly,
-                         std::nullopt, std::nullopt, features);
+                         std::nullopt, std::nullopt, features, false, Fx{}, crashBlast);
 }
 
 std::vector<UnitId> deadUnits(const UnitStore& store) {
