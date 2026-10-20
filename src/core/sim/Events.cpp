@@ -88,6 +88,8 @@ std::string_view eventKindName(EventKind kind) noexcept {
         return "template-shared";
     case EventKind::TransportAttach:
         return "transport-attach";
+    case EventKind::NukeLaunched:
+        return "nuke-launched";
     }
     return "unknown";
 }

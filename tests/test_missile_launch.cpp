@@ -20,6 +20,7 @@
 #include "support/FxMatchers.hpp"
 #include "support/TestRoster.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -71,6 +72,7 @@ struct Fixture {
     std::vector<rm::sim::Construction> building;
     std::vector<rm::sim::SiloAmmo> siloAmmo;
     std::vector<int> commandersEver{0, 0};
+    rm::sim::EventQueue launchEvents;
 
     rm::UnitTypeIndex siloType{};
     rm::UnitTypeIndex tankType{};
@@ -145,6 +147,7 @@ struct Fixture {
                              .projectiles = &shots,
                              .building = &building,
                              .siloAmmo = &siloAmmo,
+                             .events = &launchEvents,
                              .passability = grids,
                              .commandersEver = commandersEver,
                              .baseStorage = {.mass = rm::sim::magFromFloat(1000.0f),
@@ -295,4 +298,35 @@ TEST_CASE("a missile order survives the log round trip") {
     REQUIRE(reread.has_value());
     REQUIRE(reread->size() == 1);
     CHECK(reread->all()[0] == log.all()[0]);
+}
+
+TEST_CASE("a strategic launch reports the nuke-launch edge") {
+    // `C-501` (`CUnitFireAtTask::TaskTick`, `0x00611e50`): retail's nuke-launch arm
+    // (task+0x58 == ESiloType-nuke) fires `OnNukeLaunched` with the goal commits —
+    // the observable edge behind `Unit.lua:NukeCreatedAtUnit`'s launch audio.
+    // A tactical launch reports nothing; a strategic one reports the launcher.
+    Fixture f;
+    rm::unitdef::Weapon nuke = cruiseMissile();
+    nuke.label = "StrategicMissile";
+    nuke.nukeWeapon = true;
+    rm::unitdef::UnitDef nukeSilo;
+    nukeSilo.name = "test_nuke_silo";
+    nukeSilo.weapons.push_back(nuke);
+    const rm::UnitTypeIndex nukeSiloType = f.roster.addType(nukeSilo);
+    const UnitId launcher = f.roster.add(nukeSiloType, 200.0f, 200.0f, 0, 2000.0f);
+    f.siloAmmo.push_back(rm::sim::SiloAmmo{.owner = launcher,
+                                           .weapon = 0,
+                                           .slot = 1,
+                                           .stored = 1,
+                                           .capacity = 1});
+    REQUIRE(f.launchAt(launcher, 800.0f, 800.0f));
+    (void)f.tick(1);
+    REQUIRE(f.shots.size() == 1);
+    REQUIRE(f.launchEvents.count(rm::sim::EventKind::NukeLaunched) == 1);
+    const rm::sim::Event& edge = *std::ranges::find_if(
+        f.launchEvents.all(), [](const rm::sim::Event& event) {
+            return event.kind == rm::sim::EventKind::NukeLaunched;
+        });
+    CHECK(edge.unit == launcher);
+    CHECK(edge.army == 0);
 }

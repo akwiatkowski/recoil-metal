@@ -219,6 +219,11 @@ enum class EventKind : std::uint8_t {
     /// (`0x0074e1fc`-`0x0074e3d8`). `unit` is the re-attached child,
     /// `instigator` the carrier it now rides.
     TransportAttach,
+    /// `C-501` (`CUnitFireAtTask::TaskTick`, `0x00611e50`): the nuke-launch arm
+    /// (task+0x58 == ESiloType-nuke(1)) fires `OnNukeLaunched` with the goal
+    /// commits — the edge behind `Unit.lua:NukeCreatedAtUnit`'s launch audio.
+    /// `unit` is the launcher, `army` its army, `at` where it stands.
+    NukeLaunched,
 };
 
 /// `UpdateMarker`'s action word (`SimPing.lua:106`), as a byte on the event and

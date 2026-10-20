@@ -3164,6 +3164,17 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
                              .visualDirection = {to[0]-from[0], to[1]-from[1], to[2]-from[2]},
                              .launchVelocity = projectiles.back().velocity,
                          });
+            // `C-501`'s nuke-launch arm: a strategic (ESiloType-nuke) launch fires
+            // `OnNukeLaunched` — the retail hook behind the launch audio. Tactical
+            // shots report nothing extra.
+            if (weapon.nukeWeapon) {
+                emit(events, Event{
+                                 .kind = EventKind::NukeLaunched,
+                                 .unit = store.idAt(slot),
+                                 .army = army,
+                                 .at = from,
+                             });
+            }
             ++fired;
 
             // ONE SHOT PER ORDER: the spent marker is the LAUNCHER itself — a position
