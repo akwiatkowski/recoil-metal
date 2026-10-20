@@ -213,6 +213,22 @@ TEST_CASE("cargo class comes from TransportClass and defaults to one", "[transpo
     CHECK(stinger.transportAttachCost(3) == 0);
 }
 
+TEST_CASE("a commander boards only a carrier flagged CANTRANSPORTCOMMANDER", "[transport]") {
+    // `C-198`: `TransportCanCarryUnit` rejects a `COMMAND`-category target
+    // unless the transport's own categories contain `CANTRANSPORTCOMMANDER`.
+    // UEL0401 prices a commander (class 3, four slots of ten) but ships no
+    // flag, so cost alone would admit it.
+    UnitDef carrier = transportDef();
+    UnitDef commander = cargoDef(3);
+    commander.name = "test_commander";
+    commander.categories = {"COMMAND", "LAND", "MOBILE"};  // sorted
+    CHECK_FALSE(rm::sim::canEverCarry(carrier, commander));
+    UnitDef flagged = transportDef();
+    flagged.categories = {"AIR", "CANTRANSPORTCOMMANDER", "MOBILE", "TRANSPORTATION"};  // sorted
+    CHECK(rm::sim::canEverCarry(flagged, commander));
+    CHECK(rm::sim::canEverCarry(carrier, cargoDef()));  // ordinary cargo unaffected
+}
+
 // --- Loading ---------------------------------------------------------------
 
 TEST_CASE("a cargo unit walks to a landed transport and boards", "[transport]") {

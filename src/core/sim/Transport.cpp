@@ -262,6 +262,14 @@ std::optional<UnitId> ferryBeaconFor(const UnitStore& store, const UnitCatalog& 
 
 
 bool canEverCarry(const unitdef::UnitDef& carrier, const unitdef::UnitDef& cargo) noexcept {
+    // `C-198`: `TransportCanCarryUnit` rejects a `COMMAND`-category target
+    // unless the transport's own categories contain
+    // `CANTRANSPORTCOMMANDER` — a native gate beside the slot costs, so a
+    // carrier that prices a commander (UEA0107: 4 of 10 slots) still refuses
+    // it without the flag. UEL0401 ships exactly that shape.
+    if (cargo.hasCategory("COMMAND") && !carrier.hasCategory("CANTRANSPORTCOMMANDER")) {
+        return false;
+    }
     // `C-225`: a CARRIER's storage pool takes aircraft only — the retail
     // script feeds it `AddUnitToStorage` straight off the build pad, and the
     // native capacity check is `(stored + reserved) < StorageSlots` with no
