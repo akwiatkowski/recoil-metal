@@ -763,6 +763,23 @@ TEST_CASE("a captured unit keeps its custom name on the replacement", "[capture]
     rm::sim::UnitStore reloaded(back->units);
     CHECK(reloaded.customName(reloaded.idAt(replacement.index)) == "Bob");
 }
+TEST_CASE("a captured unit keeps its reclaim slowdown on the replacement", "[capture]") {
+    // `SetReclaimTimeMultiplier` is live-unit state like `SetCaptureTimeMultiplier`
+    // (`Unit.lua:2693-2712`): the victim's own mult rides the transfer the way
+    // the kept capture-time mult already does — a slowed unit stays slow under
+    // its new army.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.roster.store.setReclaimTimeMultiplier(target, rm::sim::Fx::fromInt(2)));
+    REQUIRE(f.capture(captor, target));
+    f.tick(120);
+    CHECK_FALSE(f.roster.store.alive(target));
+    const UnitId replacement = f.roster.store.idAt(target.index);
+    REQUIRE(f.roster.store.alive(replacement));
+    CHECK(f.roster.store.reclaimTimeMultiplier(replacement) == rm::sim::Fx::fromInt(2));
+}
+
 TEST_CASE("a captured silo keeps its queued missile builds on the replacement", "[capture]") {
     // `C-240`/`SimUtils.lua:68-132`: the transfer's Lua restores ammo onto the
     // replacement — the match-side records that keyed on the old handle follow

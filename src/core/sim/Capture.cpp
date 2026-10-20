@@ -466,6 +466,9 @@ UnitId transferUnitArmy(UnitStore& store, const UnitCatalog& catalog, UnitId uni
     // The captor-side multiplier rides too: a slowed unit stays slow under
     // its new army — same live-unit state, same snapshot/restore shape.
     const Fx keptTimeMult = store.captureTimeMultiplierAt(victim);
+    // The victim's own reclaim slowdown rides too: `SetReclaimTimeMultiplier`
+    // (`Unit.lua:2693-2694`) is live-unit state like the capture-time mult.
+    const Fx keptReclaimMult = store.reclaimTimeMultiplier(unit);
     motion.armyIndex = armyIndex;
     motion.moving = false;
     motion.path.clear();
@@ -536,6 +539,9 @@ UnitId transferUnitArmy(UnitStore& store, const UnitCatalog& catalog, UnitId uni
     }
     if (keptTimeMult != Fx::fromInt(1)) {
         (void)store.setCaptureTimeMultiplier(replacement, keptTimeMult);
+    }
+    if (keptReclaimMult != Fx::fromInt(1)) {
+        (void)store.setReclaimTimeMultiplier(replacement, keptReclaimMult);
     }
     // `C-240`/`C-404` aliasing, second half: the kept manipulator list and
     // bone mask land on the replacement. The spawn wiped both (newcomers
