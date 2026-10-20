@@ -747,9 +747,12 @@ Fx weaponDamageRadiusFor(const UnitStore& store, const UnitCatalog& catalog,
                          UnitIndex slot, const unitdef::Weapon& weapon) noexcept {
     if (statLabelled(store, slot, weapon.label,
                      &EnhancementScriptEffects::damageRadiusLabels)) {
-        // `ChangeDamageRadius` is an absolute write while `AddDamageRadiusMod`
-        // accumulates (`weapon.lua:287`); both ride the same label list, so
-        // each installed branch applies its own shape in slot order.
+        // Every shipped `NewDamageRadius` read is an `AddDamageRadiusMod` call
+        // (`XSL0001_script.lua:547`, `UEL0301_script.lua:204`), and retail
+        // `weapon.lua:425-427` adds the mod to the authored radius — additive
+        // on top of a nonzero base, not an absolute write. Each installed
+        // branch adds its own value in slot order; a Remove carrying no
+        // positive radius falls back to the authored blast.
         Fx result = weapon.damageRadius;
         for (const auto& [position, installed] : store.enhancements()[slot]) {
             const EnhancementScriptEffects branch =
@@ -761,7 +764,7 @@ Fx weaponDamageRadiusFor(const UnitStore& store, const UnitCatalog& catalog,
                 continue;
             }
             if (params->damageRadiusElmos > Fx{}) {
-                result = params->damageRadiusElmos;
+                result += params->damageRadiusElmos;
             }
             result += params->damageRadiusModElmos;
         }

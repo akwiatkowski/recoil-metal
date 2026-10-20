@@ -146,9 +146,11 @@ public:
         /// these are the parameters the scripts read. Radius and rate are
         /// absolute writes; damage is additive.
         Fx maxRadiusElmos{};
-        /// `NewDamageRadius` (`UnitBlueprint.lua:862`) — the `ChangeDamageRadius`
-        /// value, an absolute write like `NewMaxRadius` (XSL0001 `BlastAttack`
-        /// 2, UEL0301 `HighExplosiveOrdnance` 2.5 ogrids).
+        /// `NewDamageRadius` (`UnitBlueprint.lua:862`) — read by every shipped
+        /// branch through `AddDamageRadiusMod` (`XSL0001_script.lua:547`,
+        /// `UEL0301_script.lua:204`), additive on the authored blast like
+        /// `NewDamageRadiusMod` (XSL0001 `BlastAttack` 2, UEL0301
+        /// `HighExplosiveOrdnance` 2.5 ogrids).
         Fx damageRadiusElmos{};
         Fx damageRadiusModElmos{};
         /// `C-255`: the Seraphim Restoration Field family (`XSL0001`

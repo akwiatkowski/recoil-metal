@@ -885,6 +885,40 @@ TEST_CASE("C-255: an installed enhancement's NewDamageRadius widens the blast",
     CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, chrono)
           == rm::sim::Fx{});
 }
+TEST_CASE("C-255: NewDamageRadius adds to a nonzero authored blast",
+          "[fa-progress][enhancement]") {
+    // Retail `UEL0301_script.lua:202-204`: `HighExplosiveOrdnance` widens its
+    // cannon with `wep:AddDamageRadiusMod(bp.NewDamageRadius)`, and retail
+    // `weapon.lua:425-427` adds the mod to the authored radius
+    // (`DamageRadius + DamageRadiusMod`) — additive on top of a nonzero base,
+    // not an absolute write.
+    rm::test::Roster roster;
+    roster.rate = rm::sim::TickRate{10};
+    rm::unitdef::UnitDef def;
+    def.name = "test_heo_gunner";
+    def.health = rm::test::mag(100.0f);
+    rm::unitdef::Weapon cannon;
+    cannon.label = "RightHeavyPlasmaCannon";
+    cannon.role = rm::unitdef::WeaponRole::DirectFire;
+    cannon.maxRange = rm::sim::Fx::fromInt(30);
+    cannon.rateOfFire = 1.0f;
+    cannon.damage = rm::test::mag(10.0f);
+    cannon.damageRadius = rm::sim::Fx::fromInt(80);
+    def.weapons = {cannon};
+    const auto params = rm::lua::parseTable("{ NewDamageRadius=2.5 }");
+    REQUIRE(params);
+    def.enhancements.push_back({.name = "HighExplosiveOrdnance", .slot = "RCH",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .parameters = *params});
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, cannon)
+          == rm::sim::Fx::fromInt(80));
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "HighExplosiveOrdnance"));
+    // 2.5 ogrids = 20 elmos on top of the 80-elmo authored blast.
+    CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, cannon)
+          == rm::sim::Fx::fromInt(100));
+}
 
 TEST_CASE("C-378: a dead owner's in-flight enhancement work retires with it",
           "[fa-progress][enhancement]") {
