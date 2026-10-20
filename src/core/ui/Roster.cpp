@@ -158,6 +158,11 @@ InfoCard rosterTileCard(const RosterTile& tile) {
                      + (tile.siloQueued > 0 ? "+" + std::to_string(tile.siloQueued) : "")
                      + " / " + std::to_string(tile.siloStock->second),
             .tint = tile.siloStock->first > 0 ? kGain : kWarn});
+        // C-502's progress mirror: a running head build drives the card's
+        // progress bar the way a construction drives its own card.
+        if (tile.siloBuildProgress.has_value()) {
+            card.progress = tile.siloBuildProgress;
+        }
     }
     // The X-key setting rides the CORNER, not a row: the card caps at three rows
     // and an armed unit already spends them on MASS, ENERGY and HEALTH, so a fourth

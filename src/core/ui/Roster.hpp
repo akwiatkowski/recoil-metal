@@ -99,6 +99,11 @@ struct RosterTile {
     /// summed like `siloStock`. Zero means nothing is queued, so the card stays quiet.
     int siloQueued = 0;
 
+    /// The head silo build's progress as a 0..1 fraction — C-502's `Unit+0x2ac`
+    /// progress mirror (`siloBuildFraction`). Set only while a silo build runs;
+    /// absent (nullopt) reads as idle and the card shows no progress bar.
+    std::optional<float> siloBuildProgress;
+
     /// The group's shared target focus (#15809), when every unit of the type
     /// agrees on a non-Default one — the card stays silent while the group is
     /// unfocused, the same way the underbar is silent at full health. `focusMixed`

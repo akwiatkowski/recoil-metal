@@ -2190,6 +2190,10 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
 
     // Queued builds land on the same tile the stock did: the queue is per silo record,
     // so each entry's owner identifies its type's tile exactly as a record's does.
+    // The head build's progress rides along too — C-502's `Unit+0x2ac` mirror
+    // (`siloBuildFraction`) — so the selection card's progress bar reads the
+    // build the silo is funding now. Later owners must not overwrite an
+    // earlier one's fraction: one tile, one head.
     for (const rm::sim::SiloBuild& entry : scene.siloQueue) {
         if (!scene.store.alive(entry.owner)) continue;
         const auto* def = scene.catalog.def(scene.store.typeAt(entry.owner.index));
@@ -2197,6 +2201,13 @@ void gatherRoster(const UnitScene& scene, std::span<const rm::sim::UnitId> selec
         auto tile = std::ranges::find(out, def->name, &rm::ui::RosterTile::id);
         if (tile == out.end() || !tile->siloStock) continue;
         tile->siloQueued += 1;
+        if (!tile->siloBuildProgress.has_value()) {
+            const float fraction = rm::sim::fxToFloat(rm::sim::siloBuildFraction(
+                scene.siloAmmo, scene.siloQueue, entry.owner));
+            if (fraction > 0.0f) {
+                tile->siloBuildProgress = fraction;
+            }
+        }
     }
 }
 

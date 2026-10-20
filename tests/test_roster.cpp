@@ -167,6 +167,24 @@ TEST_CASE("the gutter between tiles is a miss", "[ui][roster]") {
     CHECK(insideRoster(layout, gutterX, y));
 }
 
+TEST_CASE("a silo tile's hover card shows the head-build progress", "[ui][roster]") {
+    // C-502's `Unit+0x2ac` progress mirror (`siloBuildFraction`) reaches the
+    // selection card: a silo mid-build shows its fraction on the card's
+    // progress bar, an idle silo shows none. Currently fails: the tile
+    // carries stock and queued counts but no build fraction.
+    rm::ui::RosterTile building{.id = "UAA0303", .count = 1};
+    building.siloStock.emplace(0, 2);
+    building.siloQueued = 1;
+    building.siloBuildProgress = 0.5f;
+    const rm::ui::InfoCard card = rm::ui::rosterTileCard(building);
+    REQUIRE(card.progress.has_value());
+    CHECK(*card.progress == 0.5f);
+
+    rm::ui::RosterTile idle{.id = "UAA0303", .count = 1};
+    idle.siloStock.emplace(2, 2);
+    CHECK_FALSE(rm::ui::rosterTileCard(idle).progress.has_value());
+}
+
 TEST_CASE("hundreds of selection types page and report what is not shown",
           "[ui][roster][stress]") {
     // A roster that silently omits types lies about the selection, and the lie is invisible —
