@@ -146,6 +146,24 @@ TEST_CASE("C-346: SetResourceSharing and SetOfferDraw write the army flags",
     CHECK_FALSE(channel.call("SetResourceSharing", {.army = 1, .value = false}));
     CHECK(channel.armies[1].resourceSharing);  // unchanged
 }
+TEST_CASE("C-383: SetIgnoreArmyUnitCap lifts the creation gate for one army", "[sim]") {
+    // `CArmyImpl::SetIgnoreArmyUnitCap` (vfunc `0xac`): `Unit.lua:586-593`
+    // wraps the campaign capture transfer in set/unset so the replacement
+    // always exists. The flag exists on the army but nothing in the sim can
+    // set it — the channel is the retail path (`SetIgnoreArmyUnitCap`, the
+    // same global `Unit.lua` calls), guarded by `OkayToMessWithArmy` like
+    // the other single-flag writes.
+    Channel channel;
+    CHECK(channel.call("SetIgnoreArmyUnitCap", {.army = 1, .value = true}));
+    CHECK(channel.armies[1].ignoreUnitCap);
+    CHECK(channel.call("SetIgnoreArmyUnitCap", {.army = 1, .value = false}));
+    CHECK_FALSE(channel.armies[1].ignoreUnitCap);
+
+    channel.armies[1].defeated = true;
+    CHECK_FALSE(channel.call("SetIgnoreArmyUnitCap", {.army = 1, .value = true}));
+    CHECK_FALSE(channel.armies[1].ignoreUnitCap);  // unchanged
+}
+
 
 
 TEST_CASE("C-346: DiplomacyHandler accepts only an offer that was made",

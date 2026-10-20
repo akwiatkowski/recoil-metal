@@ -251,6 +251,15 @@ bool doSimCallback(const SimCallbackContext& context, const std::string_view nam
         context.armies[static_cast<std::size_t>(args.army)].offeringDraw = args.value;
         return true;
     }
+    if (name == "SetIgnoreArmyUnitCap") {
+        // `CArmyImpl::SetIgnoreArmyUnitCap` (vfunc `0xac`, `C-383`):
+        // `Unit.lua:586-593` wraps the campaign capture transfer in
+        // set/unset so the replacement always exists. Single-flag write
+        // guarded by `OkayToMessWithArmy` like its neighbours.
+        if (!okayToMessWith(context, args.army)) return false;
+        context.armies[static_cast<std::size_t>(args.army)].ignoreUnitCap = args.value;
+        return true;
+    }
     if (name == "BreakAlliance") {
         return breakAlliance(context, args);
     }

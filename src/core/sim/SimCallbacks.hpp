@@ -17,9 +17,10 @@
 // selection, for `GiveUnitsToPlayer`/`OnControlGroup*`) is not in the bounded slice:
 // no whitelisted name here consumes it.
 //
-// WHAT RIDES IT (`C-346`): diplomacy (`DiplomacyHandler`, `BreakAlliance`,
-// `RequestAlliedVictory`, `SetOfferDraw`), resource sharing (`GiveResourcesToPlayer`,
-// `SetResourceSharing`) and pings/markers (`SpawnPing`, `UpdateMarker`). What does
+// WHAT RIDES IT (`C-346`/`C-383`): diplomacy (`DiplomacyHandler`,
+// `BreakAlliance`, `RequestAlliedVictory`, `SetOfferDraw`), resource sharing
+// (`GiveResourcesToPlayer`, `SetResourceSharing`), the unit-cap bypass
+// (`SetIgnoreArmyUnitCap`) and pings/markers (`SpawnPing`, `UpdateMarker`).
 // NOT: chat — `SessionSendChatMessage` is a sibling channel (`C-344`), so
 // `sendChatMessage` is a separate entry point beside the dispatch rather than a name
 // inside it.
