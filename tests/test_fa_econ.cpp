@@ -562,6 +562,28 @@ TEST_CASE("C-192: sacrifice grants min(mass, energy) of build time once and cons
           == Catch::Approx(50.0f).margin(0.01f));
 }
 
+TEST_CASE("C-192: a consumed sacrificer leaves the death path entirely", "[fa-econ]") {
+    // Retail `OnStopSacrifice` (`lua/sim/Unit.lua:1749-1752`) runs
+    // `SetDeathWeaponEnabled(false)` then `Destroy()`: the consumed unit is
+    // gone without the death path — no corpse to shove the living, no
+    // kill credit, no death blast. `store.kill` leaves a tombstone whose
+    // radius `retireDead` must zero; `Destroy()` zeroes it at once so the
+    // corpse never exists at all.
+    SacrificeFixture f;
+    const UnitId sacrificer = f.roster.add(f.sacrificerType, 200.0f, 200.0f, 0, 100.0f);
+    f.scaffold(f.structureType, 210.0f, 200.0f, 80.0f);
+    REQUIRE(f.sacrifice(sacrificer, {}, 210.0f, 200.0f));
+
+    f.tick();
+    REQUIRE(f.building.size() == 1);
+    CHECK(rm::test::asFloat(f.building[0].buildTimeRemaining)
+          == Catch::Approx(50.0f).margin(0.01f));
+    CHECK_FALSE(f.roster.store.alive(sacrificer));
+    // `Destroy()` zeroes the collision radius at once: nothing shoves the
+    // living and nothing reports a death on the next tick.
+    CHECK(f.roster.store.motion()[sacrificer.index].radiusElmos == rm::sim::Fx{});
+}
+
 TEST_CASE("C-192: a builder with no sacrifice mult cannot sacrifice", "[fa-econ]") {
     SacrificeFixture f;
     const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);

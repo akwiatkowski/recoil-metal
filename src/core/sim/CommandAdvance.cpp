@@ -1733,9 +1733,10 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
         // or a drain like reclaim: the order walks into reach, grants
         // `min(m, e)` of the work's total build time ONCE — retail's single
         // `Materialize` call, not a stream — and the sacrificer is consumed.
-        // Retail's `OnStopSacrifice` runs `SetDeathWeaponEnabled(false)` then
-        // `Destroy()`, so `store.kill` is the faithful end: no wreck, no death
-        // weapon, the queue cleared with the unit. A work that finished or was
+        // Retail's `OnStopSacrifice` (`lua/sim/Unit.lua:1749-1752`) runs
+        // `SetDeathWeaponEnabled(false)` then `Destroy()`, so `store.destroy`
+        // is the faithful end: no tombstone, no wreck, no death weapon, the
+        // queue cleared with the unit. A work that finished or was
         // cancelled under the order retires it like a gone reclaim target.
         if (const QueuedCommand* head = orders[slot].active();
             head != nullptr && head->kind() == CommandKind::Sacrifice) {
@@ -1784,7 +1785,7 @@ std::size_t advanceOrders(UnitStore& store, const UnitCatalog& catalog, const Te
                         // task makes, so the thresholds fire here too.
                         emitProgressCrossings(target, progressBefore, events);
                     }
-                    store.kill(store.idAt(slot));
+                    store.destroy(store.idAt(slot));
                     continue;
                 }
                 if (mine.moving) {
