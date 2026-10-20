@@ -1964,3 +1964,31 @@ TEST_CASE("C-456: a docked aircraft takes the pad's facing", "[fa-transport]") {
     REQUIRE(rm::sim::dockOnStagingBone(roster.store, roster.catalog, pad, jet));
     CHECK(roster.transform(jet).heading == roster.transform(pad).heading);
 }
+TEST_CASE("C-225: a carrier launch exits through its bones round-robin", "[fa-transport]") {
+    // `C-225`: the carrier pool consults no bone for capacity, but the bone
+    // is consulted round-robin as the launch aperture — launched aircraft
+    // leave through the hooks in attach order, not stacked at the origin.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex carrierType = roster.addType(carrierDef());
+    const rm::UnitTypeIndex jetType = roster.addType(airCargoDef());
+    const std::array<rm::sim::UnitCatalog::AttachBoneSpec, 2> bones{{
+        {.bone = 7, .cargoClass = 1, .rest = {4.0f, 1.0f, -1.0f}},
+        {.bone = 8, .cargoClass = 1, .rest = {-4.0f, 1.0f, -1.0f}},
+    }};
+    roster.catalog.setAttachBones(carrierType, bones);
+    const UnitId carrier = roster.add(carrierType, 100.0f, 100.0f, 0, 500.0f);
+    const UnitId first = roster.add(jetType, 120.0f, 120.0f, 0, 500.0f);
+    const UnitId second = roster.add(jetType, 130.0f, 130.0f, 0, 500.0f);
+    const rm::unitdef::UnitDef& carrierDef = *roster.catalog.def(carrierType);
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog, carrierDef, carrier, first));
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog, carrierDef, carrier, second));
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    rm::sim::detachCargo(roster.store, roster.catalog, terrain, carrier);
+    CHECK(roster.motion(first).airborne);
+    CHECK(roster.motion(second).airborne);
+    CHECK(roster.transform(first).x - roster.transform(carrier).x == Fx::fromInt(4));
+    CHECK(roster.transform(first).z - roster.transform(carrier).z == Fx::fromInt(-1));
+    CHECK(roster.transform(second).x - roster.transform(carrier).x == Fx::fromInt(-4));
+    CHECK(roster.transform(second).z - roster.transform(carrier).z == Fx::fromInt(-1));
+}

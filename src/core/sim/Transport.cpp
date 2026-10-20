@@ -537,14 +537,26 @@ void detachCargo(UnitStore& store, const UnitCatalog& catalog, const Terrain& te
         const Transform& at = store.transforms()[carrier.index];
         const unitdef::UnitDef* carrierDef = catalog.def(store.typeAt(carrier.index));
         if (carrierDef != nullptr && carrierDef->isCarrier()) {
-            // `C-225`: a carrier launch is a detach, not a landing.
+            // `C-225`: a carrier launch is a detach, not a landing. The first
+            // resolved bone is the aperture when one exists — the round-robin
+            // half in the multi-child path below.
             if (!store.detach(lone)) {
                 return;
             }
             Transform& place = store.transforms()[lone.index];
-            place.x = at.x;
-            place.z = at.z;
-            place.y = at.y;
+            const std::span<const UnitCatalog::AttachBone> bones =
+                catalog.attachBones(store.typeAt(carrier.index));
+            if (!bones.empty()) {
+                const std::array<Fx, 2> world = rotateByHeading(
+                    at.heading, {bones.front().rest[0], bones.front().rest[2]});
+                place.x = at.x + world[0];
+                place.z = at.z + world[1];
+                place.y = at.y + bones.front().rest[1];
+            } else {
+                place.x = at.x;
+                place.z = at.z;
+                place.y = at.y;
+            }
             place.pitch = 0;
             place.roll = 0;
             MoveState& launched = store.motion()[lone.index];
@@ -573,16 +585,30 @@ void detachCargo(UnitStore& store, const UnitCatalog& catalog, const Terrain& te
     const unitdef::UnitDef* carrierDef = catalog.def(store.typeAt(carrier.index));
     if (carrierDef != nullptr && carrierDef->isCarrier()) {
         // `C-225`: a carrier launch is a detach, not a landing — the stored
-        // aircraft leaves the hold already airborne at the carrier's own
-        // position, engines on, ready for whatever order comes next.
+        // aircraft leaves the hold already airborne, engines on, ready for
+        // whatever order comes next. The bone is consulted round-robin as
+        // the launch aperture: child `i` exits through bone `i % n` in
+        // attach order, not stacked at the origin.
+        const std::span<const UnitCatalog::AttachBone> bones =
+            catalog.attachBones(store.typeAt(carrier.index));
+        std::size_t i = 0;
         for (const UnitId child : children) {
             if (!store.detach(child)) {
                 continue;
             }
             Transform& place = store.transforms()[child.index];
-            place.x = at.x;
-            place.z = at.z;
-            place.y = at.y;
+            if (!bones.empty()) {
+                const UnitCatalog::AttachBone& bone = bones[i % bones.size()];
+                const std::array<Fx, 2> world = rotateByHeading(
+                    at.heading, {bone.rest[0], bone.rest[2]});
+                place.x = at.x + world[0];
+                place.z = at.z + world[1];
+                place.y = at.y + bone.rest[1];
+            } else {
+                place.x = at.x;
+                place.z = at.z;
+                place.y = at.y;
+            }
             place.pitch = 0;
             place.roll = 0;
             MoveState& launched = store.motion()[child.index];
@@ -590,6 +616,7 @@ void detachCargo(UnitStore& store, const UnitCatalog& catalog, const Terrain& te
             launched.moving = false;
             launched.path.clear();
             launched.pathIndex = 0;
+            ++i;
         }
         return;
     }
