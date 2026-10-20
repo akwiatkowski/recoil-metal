@@ -855,6 +855,82 @@ TEST_CASE("the scene's water level feeds effect water-gating", "[weapon-visuals]
     REQUIRE(level != nullptr);
     CHECK(*level == Catch::Approx(12.0f));
 }
+TEST_CASE("charge muzzle flashes resolve from their authored effect list", "[weapon-visuals]") {
+    // `DefaultProjectileWeapon.PlayFxMuzzleChargeSequence`
+    // (`mohodata/lua/sim/defaultweapons.lua`): `FxChargeMuzzleFlash` is a
+    // separate authored list from `FxMuzzleFlash` (e.g. `SDFChronotronCannonWeapon`
+    // in `lua/seraphimweapons.lua` pairs `SChronotronCannonMuzzle` with
+    // `SChronotronCannonMuzzleCharge` from `EffectTemplates.lua:2964`). The
+    // loader resolves only the fire list, so the charge flash has no key.
+    const auto root = std::filesystem::temp_directory_path() / "rm_charge_muzzle";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "units/xsa0001");
+    std::filesystem::create_directories(root / "lua");
+    std::filesystem::create_directories(root / "effects/emitters");
+    std::filesystem::create_directories(root / "textures/particles");
+    {
+        std::ofstream bp(root / "units/xsa0001/xsa0001_unit.bp");
+        bp << "UnitBlueprint {\n    Physics = { MotionType = \"RULEUMT_Land\", MaxSpeed = 1 },\n    Weapon = { { Label = \"Cannon\" } },\n}\n";
+    }
+    {
+        std::ofstream script(root / "units/xsa0001/xsa0001_script.lua");
+        script << "local Parent = import('/lua/seraphimweapons.lua').SDFChronotronCannonWeapon\n"
+                  "TypeClass = Class(Parent) {\n"
+                  "    Weapons = { Cannon = Class(Parent) {} },\n"
+                  "}\n";
+    }
+    {
+        std::ofstream weapon(root / "lua/seraphimweapons.lua");
+        weapon << "SDFChronotronCannonWeapon = Class(DefaultProjectileWeapon) {\n"
+                  "    FxMuzzleFlash = { [[/effects/emitters/fire_emit.bp]] },\n"
+                  "    FxChargeMuzzleFlash = { [[/effects/emitters/charge_emit.bp]] },\n"
+                  "    FxChargeMuzzleFlashScale = 2,\n"
+                  "}\n";
+    }
+    for (const char* name : {"fire_emit.bp", "charge_emit.bp"}) {
+        std::ofstream emit(root / ("effects/emitters/" + std::string{name}));
+        emit << "EmitterBlueprint {\n"
+                "    Texture = [[/textures/particles/dot.dds]],\n"
+                "    Blendmode = 3.00,\n"
+                "}\n";
+    }
+    {
+        std::ofstream tex(root / "textures/particles/dot.dds", std::ios::binary);
+        const char magic[4]{'D', 'D', 'S', ' '};
+        tex.write(magic, 4);
+        std::vector<std::byte> header(124, std::byte{0});
+        auto put = [&](std::size_t at, std::uint32_t v) {
+            header[at] = static_cast<std::byte>(v & 0xFFu);
+            header[at + 1] = static_cast<std::byte>((v >> 8) & 0xFFu);
+            header[at + 2] = static_cast<std::byte>((v >> 16) & 0xFFu);
+            header[at + 3] = static_cast<std::byte>((v >> 24) & 0xFFu);
+        };
+        put(0, 124);
+        put(8, 16);
+        put(12, 16);
+        put(24, 16);
+        put(72, 32);
+        put(76, 0x00000004u);
+        header[80] = std::byte{'D'};
+        header[81] = std::byte{'X'};
+        header[82] = std::byte{'T'};
+        header[83] = std::byte{'1'};
+        tex.write(reinterpret_cast<const char*>(header.data()),
+                  static_cast<std::streamsize>(header.size()));
+        const std::vector<char> payload(128, 0);
+        tex.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+    }
+    rm::vfs::Vfs content;
+    content.mountDirectory(root);
+    const auto visuals = rm::loadWeaponVisuals(content);
+    std::filesystem::remove_all(root);
+    for (const auto& error : visuals.unavailable) INFO(error);
+    REQUIRE_FALSE(visuals.find("XSA0001:Cannon#FxMuzzleFlash").empty());
+    const auto charge = visuals.find("XSA0001:Cannon#FxChargeMuzzleFlash");
+    REQUIRE(charge.size() == 1);
+    CHECK(visuals.materials[charge.front()].emitter == "/effects/emitters/charge_emit.bp");
+    CHECK(visuals.scale("XSA0001:Cannon#FxChargeMuzzleFlash") == Catch::Approx(2.0f));
+}
 TEST_CASE("the offline capture loop feeds the scene waterline to effect gating", "[weapon-visuals]") {
     // The windowed loop passes `waterLevelForEffects()` into `emitCombatEffects`,
     // so an `OnlyEmitOnWater` burst above the waterline is dropped. The offline

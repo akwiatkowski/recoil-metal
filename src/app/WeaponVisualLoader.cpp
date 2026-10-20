@@ -111,11 +111,13 @@ function visualEmitters(path, label, effect)
         local weapon = class.Weapons and class.Weapons[label]
         local beam = weapon and weapon.BeamType
         if effect then
-            local source = effect == 'FxMuzzleFlash' and weapon or beam
+            -- `PlayFxMuzzleChargeSequence` (`defaultweapons.lua`): the charge
+            -- flash lives on the WEAPON like the fire flash, not on the beam.
+            local source = (effect == 'FxMuzzleFlash' or effect == 'FxChargeMuzzleFlash') and weapon or beam
             if source then
                 add(source[effect])
                 local suffix = effect:match('^FxImpact(.+)$')
-                scale = suffix and source['Fx'..suffix..'HitScale'] or source.FxMuzzleFlashScale or 1
+                scale = suffix and source['Fx'..suffix..'HitScale'] or (effect == 'FxChargeMuzzleFlash' and source.FxChargeMuzzleFlashScale) or source.FxMuzzleFlashScale or 1
             end
         elseif beam then add(beam.FxBeam) end
     elseif effect then
@@ -227,6 +229,11 @@ WeaponVisuals loadWeaponVisuals(const vfs::Vfs& content) {
                     resolve(script, key + "#" + effect, weapon.label.c_str(), effect);
             }
             resolve(script, key + "#FxMuzzleFlash", weapon.label.c_str(), "FxMuzzleFlash");
+            // `PlayFxMuzzleChargeSequence` (`defaultweapons.lua`): the charge
+            // flash is its own authored list (`FxChargeMuzzleFlash`), resolved
+            // beside the fire flash. An explicitly empty list pins no flash
+            // through the same `try_emplace` path as the fire effect.
+            resolve(script, key + "#FxChargeMuzzleFlash", weapon.label.c_str(), "FxChargeMuzzleFlash");
         }
     }
     // Projectile.lua:347-349 adds terrain-table FX after the projectile class's
