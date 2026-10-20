@@ -3125,6 +3125,21 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
                         && store.motion()[aimTarget.index].submerged, sourceSubmerged)) {
                 continue;
             }
+            if (aimTarget.generation != 0) {
+                // C-229's per-weapon restrict + C-322's Seabed-only target gate, in the
+                // launch order's place — overcharge and `canShootExplicitTarget` both
+                // apply them to named targets, and `fireMissiles` walked past them.
+                const unitdef::UnitDef* namedDef =
+                    catalog.def(store.typeAt(aimTarget.index));
+                if (namedDef != nullptr && !passesTargetRestrictions(weapon, *namedDef)) {
+                    continue;
+                }
+                if (!passesWaterTargetGate(weapon, namedDef,
+                                           store.motion()[aimTarget.index].seabed,
+                                           transforms[aimTarget.index].y)) {
+                    continue;
+                }
+            }
             // The same `CanFire` water gates as the automatic path (`C-321`/
             // `C-327`): a launch order does not exempt a submerged silo.
             if (!firerWaterGateOpen(weapon, *def, weaponGateFirerY(*def, from[1]),

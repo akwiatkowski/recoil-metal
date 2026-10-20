@@ -165,6 +165,22 @@ struct Fixture {
 
 } // namespace
 
+TEST_CASE("a launch order holds when the named unit fails the weapon's restrictions") {
+    // `C-088`/`C-229`: every other explicit path refuses a named target failing the
+    // weapon's allow/disallow lists — but `fireMissiles` walks the order target
+    // directly and never asks. A surface-only missile (allow AIR) on a tank holds.
+    Fixture f;
+    const UnitId silo = f.roster.add(f.siloType, 200.0f, 200.0f, 0, 2000.0f);
+    const UnitId tank = f.roster.add(f.tankType, 800.0f, 800.0f, 1, 500.0f);
+    f.roster.defs[static_cast<std::size_t>(f.siloType)].weapons[0].targetRestrictOnlyAllow =
+        std::vector<std::string>{"AIR"};
+    f.loadSilo(silo, 1);
+    REQUIRE(f.launchAt(silo, tank));
+    const rm::sim::TickReport report = f.tick(3);
+    CHECK(report.shotsFired == 0);
+    CHECK(f.shots.empty());
+    CHECK(f.stored(silo) == 1);
+}
 TEST_CASE("a loaded silo launches one missile at a ground position and the order completes") {
     Fixture f;
     const UnitId silo = f.roster.add(f.siloType, 200.0f, 200.0f, 0, 2000.0f);
