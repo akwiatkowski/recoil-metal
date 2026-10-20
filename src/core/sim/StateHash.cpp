@@ -1340,6 +1340,43 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         }
     }
 
+    // `C-319`/`C-344`'s sim-callback channel: a pending diplomacy offer decides
+    // whether an accept lands, live markers decide what a defeat flushes, and
+    // the ping lock decides whether a spawn is refused — so two matches
+    // differing only in the channel must hash apart. Conditional like
+    // `endGamePending` — a match that never touched the channel hashes exactly
+    // as before (retail source: `SimDiplomacy.lua` offers, `SimPing.lua`
+    // `PingMarkers`/`PingLocked`).
+    if (match.simCallbacks != nullptr
+        && (!match.simCallbacks->diplomacyOffers.empty()
+            || !match.simCallbacks->diplomacyIgnored.empty()
+            || !match.simCallbacks->markers.empty()
+            || match.simCallbacks->pingLockedUntil != 0)) {
+        feedText(h, "sim-callbacks");
+        feed(h, match.simCallbacks->diplomacyOffers.size());
+        for (const auto& [from, to] : match.simCallbacks->diplomacyOffers) {
+            feed(h, from);
+            feed(h, to);
+        }
+        feed(h, match.simCallbacks->diplomacyIgnored.size());
+        for (const auto& [from, to] : match.simCallbacks->diplomacyIgnored) {
+            feed(h, from);
+            feed(h, to);
+        }
+        feed(h, match.simCallbacks->markers.size());
+        for (const auto& [key, marker] : match.simCallbacks->markers) {
+            feed(h, key.first);
+            feed(h, key.second);
+            feed(h, marker.owner);
+            feed(h, marker.id);
+            feedText(h, marker.name);
+            feed(h, marker.location[0]);
+            feed(h, marker.location[1]);
+            feed(h, marker.location[2]);
+        }
+        feed(h, static_cast<std::uint64_t>(match.simCallbacks->pingLockedUntil));
+    }
+
     return h;
 }
 

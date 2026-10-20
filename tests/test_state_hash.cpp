@@ -2,8 +2,8 @@
 
 #include "core/map/HeightField.hpp"
 #include "core/sim/ArmyStats.hpp"
+#include "core/sim/SimCallbacks.hpp"
 #include "core/sim/Skirmish.hpp"
-#include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -76,6 +76,7 @@ struct Fixture {
     std::vector<rm::sim::MissileRedirect> redirects;
     std::vector<rm::sim::SelfDestructWork> selfDestructs;
     std::vector<rm::sim::ArmyStats> stats;
+    rm::sim::SimCallbackState callbacks;
     std::vector<int> commandersEver;
 
     Fixture() {
@@ -112,6 +113,7 @@ struct Fixture {
             .commandersEver = commandersEver,
             .armyStats = &stats,
             .selfDestructs = &selfDestructs,
+            .simCallbacks = &callbacks,
         };
     }
 
@@ -1121,4 +1123,19 @@ TEST_CASE("army statistics change the hash", "[state-hash]") {
                                      .op = rm::sim::StatCompare::LessThan,
                                      .value = rm::test::mag(0.5f)}}});
     CHECK(scored.hash() != armed);
+}
+TEST_CASE("sim-callback channel state changes the hash", "[state-hash]") {
+    // `Match::simCallbacks` holds `SimDiplomacy.lua`'s offers/ignored pairs and
+    // `SimPing.lua`'s markers/lock (`C-319`/`C-344`): an accept only lands when
+    // the reverse offer pair is present, so a match with a pending offer must
+    // hash apart from one with none. Null-or-empty feeds nothing, keeping the
+    // pre-channel stream.
+    Fixture offered;
+    Fixture quiet;
+    offered.callbacks.diplomacyOffers.emplace(0, 1);
+    CHECK(offered.hash() != quiet.hash());
+    const auto armed = offered.hash();
+    offered.callbacks.markers[{0, 1}] =
+        rm::sim::SimMarker{.owner = 0, .id = 1, .name = "rally"};
+    CHECK(offered.hash() != armed);
 }
