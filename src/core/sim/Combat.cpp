@@ -3093,6 +3093,13 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
                 head->setTarget(store.idAt(slot));
                 continue;
             }
+            // C-156 (`FindBestEnemy` reject step 8): BENIGN hulls are never valid
+            // targets — explicit Attack, automatic acquisition, and overcharge
+            // already hold on them, and the launch order holds too.
+            const unitdef::UnitDef* aimDef = catalog.def(store.typeAt(head->target().index));
+            if (aimDef != nullptr && aimDef->hasCategory("BENIGN")) {
+                continue;
+            }
             // An attached unit rides its carrier's hull — guns shoot the
             // transport, not the cargo racked under it (retail's transport
             // invulnerability, the attached reject `nearestTarget` and

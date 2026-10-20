@@ -371,6 +371,26 @@ TEST_CASE("a launch order at cargo riding its carrier holds without firing") {
     CHECK(f.stored(silo) == 1);
 }
 
+TEST_CASE("a launch order at a BENIGN hull holds without firing") {
+    // `C-156` (`FindBestEnemy` reject step 8): BENIGN hulls are never valid
+    // targets — explicit Attack, automatic acquisition, and overcharge all
+    // hold on them, but `fireMissiles` walks the order target directly and
+    // never asks — so a clicked civilian would take the missile.
+    Fixture f;
+    rm::unitdef::UnitDef civilian;
+    civilian.name = "test_civilian";
+    civilian.categories = {"BENIGN", "LAND"};
+    const rm::UnitTypeIndex civilianType = f.roster.addType(civilian);
+    const UnitId silo = f.roster.add(f.siloType, 200.0f, 200.0f, 0, 2000.0f);
+    const UnitId victim = f.roster.add(civilianType, 800.0f, 800.0f, 1, 500.0f);
+    f.loadSilo(silo, 1);
+    REQUIRE(f.launchAt(silo, victim));
+    const rm::sim::TickReport report = f.tick(3);
+    CHECK(report.shotsFired == 0);
+    CHECK(f.shots.empty());
+    CHECK(f.stored(silo) == 1);
+}
+
 TEST_CASE("a refused launch order leaves a walking launcher on its route") {
     // The intake door (`validMissileLaunch`) must ask the per-unit gate
     // (`weaponSiloLaunchedFor`, `C-255`), not the def-level `Weapon::siloLaunched`:
