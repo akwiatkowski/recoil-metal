@@ -1041,3 +1041,40 @@ TEST_CASE("C-238: a gift of an attached child is refused", "[fa-match]") {
     CHECK_FALSE(result.acceptedUnit(cargo));
     CHECK(roster.store.motion()[cargo.index].armyIndex == 0);
 }
+
+TEST_CASE("C-238: a gift of a commander is refused", "[fa-match]") {
+    // `SimUtils.lua:58-62` (`TransferUnitsOwnership`): "don't allow commanders
+    // to be given" — the comment sits beside the top-level-only gate. A
+    // gifted commander would hand over the Assassination count, so like the
+    // capture path (`Capture.cpp`) the gift path refuses `COMMAND` outright.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    const rm::sim::TickRate rate{};
+
+    rm::test::Roster roster;
+    UnitDef commander = commanderDef();
+    commander.categories = {"COMMAND"};
+    const rm::UnitTypeIndex acutype = roster.addType(commander);
+    const UnitId acu = roster.add(acutype, 0.0f, 0.0f, 0, 12000.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    armies[0].alliance = armies[1].alliance;
+    const std::vector<rm::sim::Player> players = rm::sim::onePlayerPerArmy(2, 0);
+
+    const rm::sim::CommandIssue gift{
+        .tick = 0,
+        .source = 0,
+        .id = rm::commandId(0, 0),
+        .player = 0,
+        .kind = rm::sim::CommandKind::Gift,
+        .units = {acu},
+        .scriptBit = 1,
+    };
+    const rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
+        gift, roster.store, roster.catalog, players, armies, terrain,
+        [&](UnitId) { return &grid; }, rate, nullptr, nullptr, nullptr, nullptr, {},
+        nullptr, nullptr, nullptr, nullptr);
+    CHECK_FALSE(result.acceptedUnit(acu));
+    CHECK(roster.store.motion()[acu.index].armyIndex == 0);
+}

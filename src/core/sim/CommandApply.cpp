@@ -1669,7 +1669,13 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         for (const UnitId unit : canonical) {
             // `SimUtils.lua:58-62`: only top-level units are given — an
             // attached child never transfers on its own; it rides its parent.
+            // Commanders are never given either ("don't allow commanders to
+            // be given"): a gifted commander would hand over the Assassination
+            // count, so like the capture path (`Capture.cpp`) the gift is
+            // refused outright.
+            const unitdef::UnitDef* offered = catalog.def(store.typeAt(unit.index));
             if (!store.alive(unit) || store.motion()[unit.index].attached
+                || (offered != nullptr && offered->hasCategory("COMMAND"))
                 || recipientArmy == armies.end() || recipientArmy->defeated) {
                 continue;
             }
