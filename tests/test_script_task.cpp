@@ -1192,6 +1192,42 @@ TEST_CASE("enhancement stat mods override range, rate, and damage", "[enhancemen
     CHECK(weaponDamageModFor(roster.store, roster.catalog, unit.index, gun)
           == Mag{});
 }
+TEST_CASE("EMPCharge re-enables the disintegrator's STUN buff", "[enhancement][script-task]") {
+    // `C-255`: `URL0301_script.lua:270-275` — the stock `RightDisintegrator`
+    // `OnCreate` runs `DisableBuff('STUN')` on its own weapon; installing
+    // `EMPCharge` runs `ReEnableBuff('STUN')`, its Remove `DisableBuff`s again
+    // (`weapon.lua:442-467`: the `Disabledbf` list filters the blueprint's
+    // `Buffs` out of the damage table). The sim models the registry
+    // per-weapon: the authored STUN buff lands disabled, and only the
+    // enhancement flips it back on.
+    using namespace rm::sim;
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef def;
+    def.name = "test_cybran_acu";
+    def.health = Mag::fromInt(100);
+    rm::unitdef::Weapon disintegrator;
+    disintegrator.label = "RightDisintegrator";
+    disintegrator.role = rm::unitdef::WeaponRole::DirectFire;
+    disintegrator.maxRange = Fx::fromInt(200);
+    disintegrator.rateOfFire = 1.0f;
+    disintegrator.damage = Mag::fromInt(100);
+    disintegrator.stunBuffed = true;
+    def.weapons = {disintegrator};
+    def.enhancements.push_back({.name="EMPCharge", .slot="Torso"});
+    def.enhancements.push_back({.name="EMPChargeRemove", .slot="Torso",
+        .prerequisite="EMPCharge", .removes={"EMPCharge", "EMPChargeRemove"}});
+    const auto unit = roster.add(roster.addType(def), 40, 40, 0, 100);
+
+    // Stock: the authored STUN buff starts disabled by the script's OnCreate.
+    CHECK_FALSE(weaponStunEnabledFor(roster.store, roster.catalog, unit.index,
+                                     def.weapons[0]));
+    REQUIRE(installEnhancement(roster.store, roster.catalog, unit, "EMPCharge"));
+    CHECK(weaponStunEnabledFor(roster.store, roster.catalog, unit.index,
+                               def.weapons[0]));
+    REQUIRE(installEnhancement(roster.store, roster.catalog, unit, "EMPChargeRemove"));
+    CHECK_FALSE(weaponStunEnabledFor(roster.store, roster.catalog, unit.index,
+                                     def.weapons[0]));
+}
 TEST_CASE("CoolingUpgrade retunes only RightRipper's rate, not the MLG's", "[enhancement][script-task]") {
     // Retail `URL0001_script.lua:440-448`: the install `ChangeRateOfFire`s
     // only `RightRipper` (the MLG and OverCharge get `ChangeMaxRadius`

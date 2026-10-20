@@ -200,6 +200,17 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
             weapon.targetRestrictOnlyDisallow = parseCategoryTerm(*disallow);
         }
 
+        // `Buffs = {{ BuffType = 'STUN', ... }}` (`URL0301_unit.bp:600-610`):
+        // the weapon authors a stun payload. Table entries only — a bare
+        // string is not a buff list.
+        if (const lua::Value* buffs = entry.find("Buffs"); buffs != nullptr) {
+            for (const lua::Value& buff : buffs->items) {
+                if (buff.stringAt("BuffType").value_or("") == "STUN") {
+                    weapon.stunBuffed = true;
+                    break;
+                }
+            }
+        }
         weapon.damage = sim::magFromFloat(numberOr(entry, "Damage", 0.0f));
         weapon.damageType = std::string{entry.stringAt("DamageType").value_or("")};
 

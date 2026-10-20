@@ -222,6 +222,11 @@ constexpr ScriptEffectRow kScriptEffects[] = {
     {"StabilitySuppressantRemove", {.damageRadiusLabels = kWeaponRightReacton}},
     {"FocusConvertor", {.damageModLabels = kWeaponRightDisintegrator}},
     {"FocusConvertorRemove", {.damageModLabels = kWeaponRightDisintegrator}},
+    // `EMPCharge` (`URL0301_script.lua:270-275`): the install `ReEnableBuff`s
+    // the stock `RightDisintegrator`'s STUN buff its `OnCreate` disabled, and
+    // the Remove `DisableBuff`s it again.
+    {"EMPCharge", {.stunEnables = kWeaponRightDisintegrator}},
+    {"EMPChargeRemove", {.stunDisables = kWeaponRightDisintegrator}},
     {"AdvancedCoolingUpgrade", {.rateOfFireLabels = kWeaponRightHeavyPlasma}},
     {"AdvancedCoolingUpgradeRemove", {.rateOfFireLabels = kWeaponRightHeavyPlasma}},
     // `CoolingUpgrade` (`URL0001_script.lua:440-448`): the install
@@ -352,6 +357,23 @@ bool weaponEnabledForUnit(const UnitStore& store, const UnitCatalog& catalog,
         if (capListHas(effects.weaponEnables, weapon.label)) enabled = true;
         if (capListHas(effects.weaponDisables, weapon.label)) enabled = false;
     }
+    return enabled;
+}
+bool weaponStunEnabledFor(const UnitStore& store, const UnitCatalog& catalog,
+                          UnitIndex slot, const unitdef::Weapon& weapon) noexcept {
+    // No authored buff, no stun — the gate only re-enables what the blueprint
+    // states (`URL0301_unit.bp:600-610`). The stock weapon's own `OnCreate`
+    // `DisableBuff`s it (`URL0301_script.lua:26-30`), so it starts off and an
+    // installed `EMPCharge` branch is the only way back on.
+    if (!weapon.stunBuffed) return false;
+    if (slot >= store.enhancements().size()) return false;
+    bool enabled = false;
+    for (const auto& [position, installed] : store.enhancements()[slot]) {
+        const EnhancementScriptEffects effects = enhancementScriptEffects(installed);
+        if (capListHas(effects.stunEnables, weapon.label)) enabled = true;
+        if (capListHas(effects.stunDisables, weapon.label)) enabled = false;
+    }
+    (void)catalog;
     return enabled;
 }
 Resources enhancementProductionPerTick(const UnitStore& store,

@@ -49,6 +49,13 @@ struct EnhancementScriptEffects {
     /// enables `TacNukeMissile` while disabling `TacMissile`.
     std::span<const std::string_view> weaponEnables;
     std::span<const std::string_view> weaponDisables;
+    /// `DisableBuff('STUN')`/`ReEnableBuff('STUN')` — the weapon LABELS whose
+    /// authored STUN buff the branch disables/re-enables (`C-255`:
+    /// `URL0301_script.lua:270-275` — `EMPCharge` re-enables the stock
+    /// `RightDisintegrator`'s stun its `OnCreate` disabled). Labels, like the
+    /// enable gate above.
+    std::span<const std::string_view> stunEnables;
+    std::span<const std::string_view> stunDisables;
     /// `C-255`: the weapon labels `ChangeMaxRadius`/`ChangeRateOfFire`/
     /// `ChangeDamageRadius`/`AddDamageMod` land on (`GetWeaponByLabel` in the
     /// scripts); the values ride `EnhancementEffects::maxRadiusElmos`/
@@ -130,6 +137,15 @@ struct EnhancementScriptEffects {
 /// enables its label and none disables it (`SetWeaponEnabledByLabel`,
 /// `C-255`/`C-379`).
 [[nodiscard]] bool weaponEnabledForUnit(
+    const UnitStore& store, const UnitCatalog& catalog, UnitIndex slot,
+    const unitdef::Weapon& weapon) noexcept;
+/// Whether the weapon's authored STUN buff applies FOR THIS UNIT
+/// (`URL0301_script.lua:26-30,270-275`, `weapon.lua:442-467`): the stock
+/// `RightDisintegrator` authors the buff but its `OnCreate` disables it, so
+/// a stun-buffed weapon starts disabled; an installed branch naming its label
+/// in `stunEnables` re-enables it, one naming it in `stunDisables` turns it
+/// off again. A weapon with no authored STUN buff never stuns.
+[[nodiscard]] bool weaponStunEnabledFor(
     const UnitStore& store, const UnitCatalog& catalog, UnitIndex slot,
     const unitdef::Weapon& weapon) noexcept;
 

@@ -291,6 +291,16 @@ struct Weapon {
     /// its own table instead of through the matrix.
     std::string damageType;
 
+    /// `Buffs = {{ BuffType = 'STUN', ... }}` on the weapon block
+    /// (`URL0301_unit.bp:600-610`: the `RightDisintegrator`'s 6-second stun):
+    /// the weapon authors a stun payload at all. Retail's `OnCreate` then runs
+    /// `DisableBuff('STUN')` on its own weapon
+    /// (`URL0301_script.lua:26-30`), and `EMPCharge`/`EMPChargeRemove` flip it
+    /// back on/off via `ReEnableBuff`/`DisableBuff` (`weapon.lua:442-467`'s
+    /// `Disabledbf` filter on the damage table). Parsed from the block; the
+    /// per-unit gate lives in `core/sim/Enhancement.hpp`.
+    bool stunBuffed = false;
+
     /// Radius over which that damage is spread, in ELMOS, converted from the ogrids
     /// the file states. Zero means a point hit: 222 of the 494 weapons state no radius
     /// at all, and one states a negative one, which is read as zero rather than as an
