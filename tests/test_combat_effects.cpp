@@ -170,6 +170,34 @@ TEST_CASE("a beam earns a hot core and a soft halo per node", "[effects]") {
     CHECK(out[6].colour == std::array{0.7f, 0.85f, 1.0f, 0.0f});
 }
 
+TEST_CASE("a beam also bursts its authored charge flash", "[effects]") {
+    // The loader resolves `UNIT:Label#FxChargeMuzzleFlash` for every weapon
+    // (`WeaponVisualLoader.cpp`), but the `BeamFired` branch bursts only the
+    // fire flash — the charge emitters never draw on a beam shot.
+    rm::WeaponVisuals visuals;
+    rm::WeaponMaterial fire;
+    fire.emitter = "/effects/emitters/fire_emit.bp";
+    rm::WeaponMaterial charge;
+    charge.emitter = "/effects/emitters/charge_emit.bp";
+    visuals.materials.push_back(fire);
+    visuals.materials.push_back(charge);
+    visuals.definitions[rm::foldedVisualKey("test_laser:Beam#fxmuzzleflash")] = {0};
+    visuals.definitions[rm::foldedVisualKey("test_laser:Beam#fxchargemuzzleflash")] = {1};
+    const rm::sim::Event beam{.kind = EventKind::BeamFired,
+        .at = {rm::test::fx(8.0f), rm::test::fx(0.0f), rm::test::fx(0.0f)},
+        .at2 = {rm::test::fx(0.0f), rm::test::fx(0.0f), rm::test::fx(0.0f)},
+        .visualId = "test_laser:Beam"};
+    rm::CombatEffectState state;
+    std::vector<rm::Particle> out;
+    rm::emitCombatEffects(out, std::array{beam}, &visuals, &state);
+    const auto has = [&](std::uint32_t id) {
+        return std::ranges::any_of(state.bursts,
+            [id](const rm::CombatEffectBurst& b) { return b.material == id; });
+    };
+    CHECK(has(0));
+    CHECK(has(1));
+}
+
 TEST_CASE("a death leaves a smoke plume that outlives the flash", "[effects]") {
     std::vector<rm::Particle> out;
     const Event death{.kind = EventKind::UnitDestroyed,

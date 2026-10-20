@@ -173,6 +173,10 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
                                                sim::fxToFloat(event.at2[1]),
                                                sim::fxToFloat(event.at2[2])};
             (void)burst(event.visualId + "#FxMuzzleFlash", from, direction, event.unit, event.visualId);
+            // The charge flash is its own authored list beside the fire flash
+            // (`defaultweapons.lua:177-182`, same as the `WeaponFired` branch):
+            // a beam's start flash never draws without this burst.
+            (void)burst(event.visualId + "#FxChargeMuzzleFlash", from, direction, event.unit, event.visualId);
             if (visuals && state && !visuals->find(event.visualId).empty()) {
                 // A weapon fires one beam at a time: a new shot replaces the live one rather
                 // than stacking a second strip on top of it. The strips themselves are drawn
