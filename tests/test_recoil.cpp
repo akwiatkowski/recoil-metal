@@ -360,6 +360,33 @@ TEST_CASE("registering the Laanse wires its reload clip into the batch", "[recoi
     REQUIRE(scene.batches[batch].reloadAnimation != nullptr);
     CHECK(scene.batches[batch].reloadAnimation->duration > 0.0f);
 }
+TEST_CASE("a --units crowd of Laanses keeps the reload clip", "[recoil]") {
+    // The third spawn path: `spawnCommanders` and `ensureDrawableType` both
+    // call `loadReloadAnimation`, but the `--units` crowd loop in
+    // `resolveUnits` wires unpack and never reload — the Laanse crowd draws
+    // with no clip. Same corpus proof as the registering case above.
+    const char* home = std::getenv("HOME");
+    const std::filesystem::path root =
+        home ? std::filesystem::path{home} / "projects/llm/input/faf" : std::filesystem::path{};
+    if (!std::filesystem::is_directory(root / "units/XSL0111")) SKIP("retail corpus unavailable");
+    rm::vfs::Vfs content;
+    content.mountDirectory(root);
+    rm::vfs::AssetSearch search;
+    rm::HeightField field;
+    field.squaresX = 128;
+    field.squaresZ = 128;
+    field.baseHeight = 0.0f;
+    field.heightScale = 1.0f;
+    field.raw.assign(field.sampleCount(), std::uint16_t{0});
+    const rm::app::UnitOptions request{.modelPath = "/units/XSL0111/XSL0111_unit.bp",
+                                       .count = 1};
+    rm::app::UnitScene scene = rm::app::resolveUnits(
+        std::span<const rm::app::UnitOptions>{&request, 1}, field, {}, false, 0.0f,
+        search, content);
+    REQUIRE(!scene.batches.empty());
+    REQUIRE(scene.batches[0].reloadAnimation != nullptr);
+    CHECK(scene.batches[0].reloadAnimation->duration > 0.0f);
+}
 
 
 

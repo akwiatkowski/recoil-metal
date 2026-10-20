@@ -2166,6 +2166,8 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             resolveTurretRig(scene.models.back(), def ? &*def : nullptr);
         const rm::sca::Animation* unpack =
             def ? loadUnpackAnimation(scene, content, *def) : nullptr;
+        const rm::sca::Animation* reload =
+            def ? loadReloadAnimation(scene, content, *def) : nullptr;
         scene.batches.push_back(rm::UnitBatch{
             .model = &scene.models.back(),
             .instances = {},
@@ -2184,6 +2186,7 @@ void orderFirstExtractors(UnitScene& scene, std::span<const rm::scenario::Marker
             .telescopeReturnPerTick = turretRig.telescopeReturnPerTick,
             .unpackAnimation = unpack,
             .unpackOneshot = unpack != nullptr,
+            .reloadAnimation = reload,
         });
         // A bare mesh names no blueprint, so no `ShaderName`: the variant falls
         // back to the model's own faction letter (UEL/UAL/URL/XSL) and no LUT
