@@ -1667,8 +1667,10 @@ ApplyCommandResult applyCommand(const CommandIssue& issued, UnitStore& store,
         const auto recipientArmy = std::ranges::find_if(
             armies, [recipient](const Army& army) { return army.index == recipient; });
         for (const UnitId unit : canonical) {
-            if (!store.alive(unit) || recipientArmy == armies.end()
-                || recipientArmy->defeated) {
+            // `SimUtils.lua:58-62`: only top-level units are given — an
+            // attached child never transfers on its own; it rides its parent.
+            if (!store.alive(unit) || store.motion()[unit.index].attached
+                || recipientArmy == armies.end() || recipientArmy->defeated) {
                 continue;
             }
             const Player* player = playerFor(issue.player, players);

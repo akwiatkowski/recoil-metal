@@ -1005,3 +1005,39 @@ TEST_CASE("C-383: an army ignoring the cap accepts a gift at its ceiling", "[fa-
     CHECK(result.acceptedUnit(unit));
     CHECK(roster.store.motion()[unit.index].armyIndex == 1);
 }
+
+TEST_CASE("C-238: a gift of an attached child is refused", "[fa-match]") {
+    // `SimUtils.lua:58-62` (`TransferUnitsOwnership`): only top-level units
+    // are given — an attached child never transfers on its own. The carrier
+    // keeps it; the gift is refused outright.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    const rm::sim::TickRate rate{};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex tank = roster.addType(tankDef());
+    const UnitId carrier = roster.add(tank, 0.0f, 0.0f, 0, 500.0f);
+    const UnitId cargo = roster.add(tank, 0.0f, 0.0f, 0, 500.0f);
+    REQUIRE(roster.store.attach(carrier, cargo));
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    armies[0].alliance = armies[1].alliance;
+    const std::vector<rm::sim::Player> players = rm::sim::onePlayerPerArmy(2, 0);
+
+    const rm::sim::CommandIssue gift{
+        .tick = 0,
+        .source = 0,
+        .id = rm::commandId(0, 0),
+        .player = 0,
+        .kind = rm::sim::CommandKind::Gift,
+        .units = {cargo},
+        .scriptBit = 1,
+    };
+    const rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
+        gift, roster.store, roster.catalog, players, armies, terrain,
+        [&](UnitId) { return &grid; }, rate, nullptr, nullptr, nullptr, nullptr, {},
+        nullptr, nullptr, nullptr, nullptr);
+    CHECK_FALSE(result.acceptedUnit(cargo));
+    CHECK(roster.store.motion()[cargo.index].armyIndex == 0);
+}
