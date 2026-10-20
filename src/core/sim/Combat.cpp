@@ -2894,7 +2894,9 @@ std::size_t fireOvercharge(UnitStore& store, const UnitCatalog& catalog,
         }
         QueuedCommand* head = orders[slot].activeMutable();
         if (head == nullptr || head->kind() != CommandKind::Overcharge
-            || !store.alive(head->target())) {
+            || !store.alive(head->target())
+            || head->target().index >= store.health().size()
+            || !store.health()[head->target().index].alive()) {
             continue;  // no order, or a spent/expired one advanceOrders will retire
         }
 
