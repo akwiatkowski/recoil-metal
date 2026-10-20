@@ -474,6 +474,31 @@ TEST_CASE("a v10 save round-trips redirector state", "[save-state]") {
     CHECK(restored->redirects.front().cooldownTicks == 10);
     CHECK(SaveState::encode(*restored) == bytes);
 }
+TEST_CASE("a v68 save round-trips the redirector exclusion serial", "[save-state]") {
+    // `C-088`'s `other != self.EnemyProj`: a turned shot loitering inside the
+    // radius must not be re-caught after a save, so the serial rides v68 and
+    // pre-v68 decodes exclude nothing, as before.
+    RandomStream random{std::uint32_t{1}};
+    const SaveState state{
+        .tick = 42,
+        .random = random.snapshot(),
+        .redirects = {{.owner = {.index = 5, .generation = 1},
+                       .radiusElmos = rm::sim::fxFromFloat(40.0f),
+                       .cooldownTicks = 10,
+                       .remaining = 4,
+                       .lastRedirectedSerial = 77}},
+    };
+    const auto bytes = SaveState::encode(state);
+    const auto restored = SaveState::decode(bytes);
+    REQUIRE(restored.has_value());
+    REQUIRE(restored->redirects.size() == 1);
+    CHECK(restored->redirects.front().lastRedirectedSerial == 77);
+    CHECK(SaveState::encode(*restored) == bytes);
+    const auto legacy = SaveState::decode(SaveState::encodeAtVersion(state, 67));
+    REQUIRE(legacy.has_value());
+    REQUIRE(legacy->redirects.size() == 1);
+    CHECK(legacy->redirects.front().lastRedirectedSerial == 0);
+}
 
 TEST_CASE("a v1 save state refuses invalid and truncated input", "[save-state]") {
     RandomStream random{std::uint32_t{1}};
