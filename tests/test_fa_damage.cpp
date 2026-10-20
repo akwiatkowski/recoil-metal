@@ -562,3 +562,46 @@ TEST_CASE("a crashing aircraft's blast passes through shields", "[fa-damage]") {
     CHECK(roster.health(generator).shield.current == rm::sim::Mag::fromInt(100));
     CHECK(roster.health(sheltered).current == rm::sim::Mag::fromInt(60));
 }
+
+TEST_CASE("a harmless flagged DeathWeapon reports no death blast",
+          "[fa-damage]") {
+    // `reference/supcom-wiki/pages/weapons/Blueprint_Weapon.md:303-314`: a
+    // death weapon IS its `Damage` over its `DamageRadius` (the ACU rings are
+    // the same idea through `NukeInner/OuterRingDamage`). A Death-labelled,
+    // non-dummy, `FireOnDeath` weapon stating no damage, no radius and no
+    // rings is therefore not a blast — `Weapon::harmful()` already says so —
+    // so the death thread must skip it without counting a detonation.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex targetType = roster.addType(mobileDef());
+    const UnitId bystander = roster.add(targetType, 0.0f, 0.0f, 1, 100.0f);
+
+    UnitDef flagged;
+    flagged.name = "test_harmless_flagged_death";
+    flagged.categories = {"STRUCTURE"};
+    rm::unitdef::Weapon blank;
+    blank.label = "DeathWeapon";
+    blank.role = rm::unitdef::WeaponRole::Death;
+    blank.fireOnDeath = true;
+    flagged.weapons.push_back(blank);
+
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<int> commandersEver(2, 0);
+    std::vector<rm::sim::Projectile> projectiles;
+    rm::sim::EventQueue events;
+    Match match = loneMatch(armies, economies, commandersEver);
+    match.projectiles = &projectiles;
+    match.events = &events;
+
+    const rm::UnitTypeIndex flaggedType = roster.addType(flagged);
+    const UnitId doomed = roster.add(flaggedType, 0.0f, 0.0f, 0, 100.0f);
+    roster.health(doomed).current = rm::sim::Mag{};
+    const rm::sim::TickReport report =
+        rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+
+    // Nothing to detonate: the bystander is unhurt and no blast is reported.
+    CHECK(roster.health(bystander).current == rm::sim::Mag::fromInt(100));
+    CHECK(report.deathBlasts == 0);
+}

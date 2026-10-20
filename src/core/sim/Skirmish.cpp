@@ -1140,8 +1140,12 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         // firing `DeathWeapon`s (ACUs, `UEL0001_unit.bp`) carry retail's
         // `FireOnDeath = true`; a labelled non-dummy blast omitting the flag
         // is not marked for firing and likewise leaves no detonation.
+        // `Blueprint_Weapon.md:303-314`: a death weapon IS its `Damage` over
+        // its `DamageRadius` (rings for the ACUs) — a flagged weapon stating
+        // none of those is not a blast (`harmful()`), so the thread skips it
+        // without counting a detonation.
         if (blast == nullptr || blast->label != "DeathWeapon" || blast->dummyWeapon
-            || !blast->fireOnDeath) {
+            || !blast->fireOnDeath || !blast->harmful()) {
             continue;
         }
         // `Unit.lua:957`: `DoDeathWeapon` returns before the blueprint loop
