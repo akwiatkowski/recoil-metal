@@ -910,6 +910,38 @@ TEST_CASE("an installed enhancement's maintenance drain bills the army", "[enhan
     CHECK(enhancementMaintenancePerTick(roster.store, roster.catalog, unit.index)
           == magFromFloat(25.0f));
 }
+TEST_CASE("an installed enhancement's production income feeds the army", "[enhancement][script-task]") {
+    // `C-255`: `ResourceAllocation` carries `ProductionPerSecondMass/Energy` —
+    // the script's `SetProductionPerSecond*(bp + base)`. Installed, the
+    // enhancement's fields add to the unit's own output per tick; before
+    // install there is nothing. UEL0001 bp: 14 mass/s, 3300 energy/s, i.e.
+    // 1.4 mass and 330 energy a tick at 10 Hz.
+    using namespace rm::sim;
+    rm::test::Roster roster;
+    roster.rate = TickRate{10};
+    rm::unitdef::UnitDef def;
+    def.name = "test_commander";
+    def.buildRate = 10;
+    def.health = Mag::fromInt(100);
+    const auto parameters = rm::lua::parseTable(
+        "{ ProductionPerSecondMass=14, ProductionPerSecondEnergy=3300 }");
+    REQUIRE(parameters);
+    def.enhancements.push_back({.name="ResourceAllocation", .slot="RCH",
+        .buildCostMass=Mag::fromInt(1), .buildCostEnergy=Mag::fromInt(1),
+        .buildTime=Fx::fromInt(1), .parameters=*parameters});
+    const auto unit = roster.add(roster.addType(def), 40, 40, 0, 100);
+
+    CHECK(enhancementProductionPerTick(roster.store, roster.catalog, unit.index).mass
+          == Mag{});
+    CHECK(enhancementProductionPerTick(roster.store, roster.catalog, unit.index).energy
+          == Mag{});
+    REQUIRE(installEnhancement(roster.store, roster.catalog, unit, "ResourceAllocation"));
+    CHECK(enhancementProductionPerTick(roster.store, roster.catalog, unit.index).mass
+          == magFromFloat(1.4f));
+    CHECK(enhancementProductionPerTick(roster.store, roster.catalog, unit.index).energy
+          == magFromFloat(330.0f));
+}
+
 
 TEST_CASE("enhancement weapon labels gate firing until the branch enables them", "[enhancement][script-task]") {
     using namespace rm::sim;
