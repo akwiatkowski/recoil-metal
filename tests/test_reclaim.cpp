@@ -654,15 +654,30 @@ TEST_CASE("an engineer un-builds an enemy unit into its store, and the unit leav
     CHECK(f.roster.store.orders()[engineer.index].empty());  // the order completed with the unit
 }
 
-TEST_CASE("only a builder un-builds, and never an ally or itself") {
+TEST_CASE("only a builder un-builds, and never itself") {
     Fixture f;
     const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
     const UnitId tank = f.roster.add(f.tankType, 210.0f, 200.0f, 0, 100.0f);
     const UnitId enemy = f.roster.add(f.tankType, 220.0f, 200.0f, 1, 100.0f);
     CHECK_FALSE(f.reclaimUnit(tank, enemy));        // a tank has no build rate
-    CHECK_FALSE(f.reclaimUnit(engineer, tank));     // own side: retail permits it, we do not yet
+    CHECK(f.reclaimUnit(engineer, tank));           // own side: admitted, like retail
     CHECK_FALSE(f.reclaimUnit(engineer, engineer)); // itself
     CHECK(f.reclaimUnit(engineer, enemy));
+}
+TEST_CASE("an engineer un-builds its own unit into its store") {
+    // `Unit.lua:2699-2712` (`GetReclaimCosts`, unit branch) carries no
+    // alliance gate — the reclaimer's own side is a legal target, and the
+    // C-157 exemption ("a unit an own-side engineer is un-building") presumes
+    // exactly this task. Intake refusing it is the invention, not parity.
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId own = f.roster.add(f.tankType, 206.0f, 200.0f, 0, 100.0f);
+    REQUIRE(f.reclaimUnit(engineer, own));
+    f.tick(20);
+    CHECK_FALSE(f.roster.store.alive(own));
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 100.0f);
+    CHECK(rm::test::asFloat(f.economies[0].stored.energy) == 200.0f);
+    CHECK(f.features.size() == 0);
 }
 TEST_CASE("a slowed reclaimer's ReclaimTimeMultiplier stretches the un-build") {
     // `Unit.lua:2699-2712` (`GetReclaimCosts`, unit branch): the RECLAIMER's

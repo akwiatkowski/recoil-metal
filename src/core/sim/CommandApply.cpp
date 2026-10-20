@@ -189,8 +189,10 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     }
     return true;
 }
-/// Issue-time gate for ReclaimUnit: a builder, a living target of another side, and a target
-/// with a build cost to give back. Own and allied units are refused (Command.hpp explains).
+/// Issue-time gate for ReclaimUnit: a builder, a living target that is not
+/// itself, and a target with a build cost to give back. `Unit.lua:2699-2712`
+/// (`GetReclaimCosts`, unit branch) carries no alliance gate, so own and
+/// allied units are admitted — the C-157 exemption presumes exactly this task.
 [[nodiscard]] bool validReclaimUnit(const Command& command, const UnitStore& store,
                                     const UnitCatalog& catalog,
                                     std::span<const Army> armies) noexcept {
@@ -215,7 +217,7 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     const auto theirs = std::ranges::find_if(armies, [targetOwner](const Army& army) {
         return army.index == targetOwner;
     });
-    return mine != armies.end() && theirs != armies.end() && !allied(*mine, *theirs);
+    return mine != armies.end() && theirs != armies.end();
 }
 /// Issue-time gate for Sacrifice (`C-192`, `0x00601c50`): a sacrificer whose
 /// blueprint carries a nonzero `SacrificeMassMult`/`SacrificeEnergyMult`, and
