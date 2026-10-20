@@ -1137,7 +1137,10 @@ TEST_CASE("C-255: an installed RegenAura lends its RegenPerSecond to nearby alli
     rm::unitdef::UnitDef ally;
     ally.name = "test_ally_tank";
     ally.health = rm::test::mag(100.0f);
-    ally.categories = {"MOBILE"};
+    // NB: the aura only lends to `BUILTBYTIER3FACTORY + BUILTBYQUANTUMGATE +
+    // NEEDMOBILEBUILD` allies (`XSL0001_script.lua:259`); the lone `MOBILE`
+    // tag the fixture carried never qualified. Sorted for `hasCategory`.
+    ally.categories = {"BUILTBYTIER3FACTORY", "MOBILE"};
     ally.speedElmosPerSecond = 20.0f;
     const auto seraType = roster.addType(sera);
     const auto allyType = roster.addType(ally);

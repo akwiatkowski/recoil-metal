@@ -244,6 +244,17 @@ void tickRegeneration(UnitStore& store, const UnitCatalog& catalog, TickRate rat
             if (allyDef == nullptr || !allyDef->isMobile()) {
                 continue;
             }
+            // `XSL0001_script.lua:259` (`RegenBuffThread`) queries
+            // `BUILTBYTIER3FACTORY + BUILTBYQUANTUMGATE + NEEDMOBILEBUILD` — the
+            // ACU itself wears no such tag, so retail's own query excludes the
+            // carrier too; the sim keeps the existing self-lend as the standing
+            // approximation and gates only OTHER allies on the filter.
+            if (slot != carrier
+                && !allyDef->hasCategory("BUILTBYTIER3FACTORY")
+                && !allyDef->hasCategory("BUILTBYQUANTUMGATE")
+                && !allyDef->hasCategory("NEEDMOBILEBUILD")) {
+                continue;
+            }
             if (healths[slot].current >= healths[slot].maximum) {
                 continue;
             }

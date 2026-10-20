@@ -882,6 +882,48 @@ TEST_CASE("regen writes are last-writer-wins, incoherence included", "[enhanceme
     CHECK(health.regenWrite == Health::RegenWrite::None);
     CHECK(healOnce() == magFromFloat(1.4f));
 }
+TEST_CASE("the RegenAura skips allies outside retail's tier filter", "[enhancement][script-task]") {
+    // `XSL0001_script.lua:259` (`RegenBuffThread`): the aura queries
+    // `BUILTBYTIER3FACTORY + BUILTBYQUANTUMGATE + NEEDMOBILEBUILD` — a T1 tank
+    // (built by a T1 factory: `UAL0201_unit.bp` carries `BUILTBYTIER1FACTORY`,
+    // not the T3 tag) is in radius but ineligible, while a T3-tagged peer is
+    // lent. The sim's current same-army-mobile check heals both.
+    using namespace rm::sim;
+    rm::test::Roster roster;
+    roster.rate = TickRate{10};
+    rm::unitdef::UnitDef sera;
+    sera.name = "test_sera_acu";
+    sera.health = Mag::fromInt(1000);
+    sera.categories = {"COMMAND", "MOBILE"};
+    sera.speedElmosPerSecond = 20.0f;
+    const auto auraParams = rm::lua::parseTable(
+        "{ Radius=15, RegenPerSecond=0.0055555555, RegenFloor=0, RegenCeiling=75 }");
+    REQUIRE(auraParams);
+    sera.enhancements.push_back({.name = "RegenAura", .slot = "RCH",
+        .buildCostMass = Mag::fromInt(1), .buildCostEnergy = Mag::fromInt(1),
+        .buildTime = Fx::fromInt(1), .parameters = *auraParams});
+    rm::unitdef::UnitDef t1;
+    t1.name = "test_t1_tank";
+    t1.health = Mag::fromInt(100);
+    // NB: sorted — `hasCategory` binary-searches (`UnitBlueprint.cpp:877`
+    // sorts real blueprints; the hand-built def sorts by hand).
+    t1.categories = {"BUILTBYTIER1FACTORY", "LAND", "MOBILE"};
+    t1.speedElmosPerSecond = 20.0f;
+    rm::unitdef::UnitDef t3;
+    t3.name = "test_t3_bot";
+    t3.health = Mag::fromInt(100);
+    t3.categories = {"BUILTBYTIER3FACTORY", "LAND", "MOBILE"};
+    t3.speedElmosPerSecond = 20.0f;
+    const auto seraUnit = roster.add(roster.addType(sera), 0, 0, 0, 1000);
+    const auto t1Unit = roster.add(roster.addType(t1), 10, 0, 0, 100);
+    const auto t3Unit = roster.add(roster.addType(t3), 20, 0, 0, 100);
+    roster.store.health()[t1Unit.index].current = Mag::fromInt(50);
+    roster.store.health()[t3Unit.index].current = Mag::fromInt(50);
+    REQUIRE(installEnhancement(roster.store, roster.catalog, seraUnit, "RegenAura"));
+    tickRegeneration(roster.store, roster.catalog, roster.rate);
+    CHECK(roster.store.health()[t1Unit.index].current == Mag::fromInt(50));
+    CHECK(roster.store.health()[t3Unit.index].current > Mag::fromInt(50));
+}
 
 TEST_CASE("an installed enhancement's maintenance drain bills the army", "[enhancement][script-task]") {
     // `C-255`: `Shield`/`CloakingGenerator` carry
