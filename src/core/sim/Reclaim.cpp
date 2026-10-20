@@ -325,7 +325,7 @@ std::size_t harvestReclaim(UnitStore& store, const UnitCatalog& catalog,
 }
 
 std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
-                         std::span<Economy> economies, EventQueue* events,
+                         std::span<Economy> economies, EventQueue* /*events*/,
                          std::span<ArmyStats> armyStats) {
     std::size_t reclaiming = 0;
     const std::span<const CommandQueue> orders = store.orders();
@@ -397,22 +397,13 @@ std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
         creditReclaimed(owner, massGrant, energyGrant, armyStats);
 
         if (finalSlice) {
-            // Destroyed, not killed: no kill credit, no wreck, no death explosion. Retiring
-            // the corpse here (radius zero, health zero, handle released) is what keeps
-            // `retireDead` from treating it as a death next tick — its `radiusElmos > 0`
-            // guard is the once-per-death rule, and this unit never died.
-            emit(events, Event{
-                             .kind = EventKind::UnitDestroyed,
-                             .unit = target,
-                             .instigator = store.idAt(slot),
-                             .army = motion[victim].armyIndex,
-                             .at = positionOf(transforms[victim]),
-                         });
-            health.current = Mag{};
-            motion[victim].moving = false;
-            motion[victim].speedPerTick = Fx{};
-            motion[victim].radiusElmos = Fx{};
-            store.kill(target);
+            // Retail `OnReclaimed` (`lua/sim/Unit.lua:517-521`) runs `Destroy()`,
+            // not the kill path: the un-built victim leaves WITHOUT the death
+            // path — no `UnitDestroyed` event, no kill credit, no death blast,
+            // no wreck. `store.destroy` zeroes the radius first (the
+            // `retireDead` once-per-death guard), then the health, then
+            // releases the handle — the same end the sacrifice slice takes.
+            store.destroy(target);
         } else {
             health.current -= proportionalWork(health.maximum, applied, total);
         }
@@ -505,11 +496,8 @@ std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
                         }
                         creditReclaimed(owner, massGrant, energyGrant, armyStats);
                         if (finalSlice) {
-                            health.current = Mag{};
-                            store.motion()[item.target.index].moving = false;
-                            store.motion()[item.target.index].speedPerTick = Fx{};
-                            store.motion()[item.target.index].radiusElmos = Fx{};
-                            store.kill(item.target);
+                            // Same `Destroy()` end as the manual un-build above.
+                            store.destroy(item.target);
                         } else {
                             health.current -=
                                 proportionalWork(health.maximum, applied, total);

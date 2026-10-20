@@ -61,6 +61,7 @@ struct Fixture {
     std::vector<rm::sim::Construction> building;
     std::vector<int> commandersEver{0, 0};
     FeatureStore features;
+    rm::sim::EventQueue events;
     // Refreshed by liveMatch: the catalog grows when new types spawn, so a table built
     // once would hole exactly where the new unit is. A member (not a liveMatch local)
     // because Match only borrows it.
@@ -185,6 +186,7 @@ struct Fixture {
                               .projectiles = &shots,
                               .building = &building,
                               .features = &features,
+                              .events = &events,
                               .passability = grids,
                               .commandersEver = commandersEver,
                               .baseStorage = {.mass = rm::sim::magFromFloat(storageMass),
@@ -671,6 +673,24 @@ TEST_CASE("an engineer un-builds an enemy unit into its store, and the unit leav
     CHECK(f.features.size() == 0);  // and retireDead does not mistake it for a death later
     CHECK(f.roster.store.orders()[engineer.index].empty());  // the order completed with the unit
 }
+TEST_CASE("a fully un-built unit leaves the death path entirely") {
+    // Retail `OnReclaimed` (`lua/sim/Unit.lua:517-521`) runs `Destroy()`, not
+    // the kill path: the un-built victim is gone without the death path — no
+    // `UnitDestroyed` event, no kill credit, no death blast. The manual path
+    // below emits `UnitDestroyed` and `store.kill`s, so the app's death
+    // reaction (`Match.cpp` alerts, kill matrix) fires on a unit that was
+    // reclaimed away. `store.destroy` is the faithful end: radius zeroed at
+    // once, no tombstone for `retireDead` to report.
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId victim = f.roster.add(f.tankType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.reclaimUnit(engineer, victim));
+    f.tick(20);
+    REQUIRE_FALSE(f.roster.store.alive(victim));
+    CHECK(f.roster.store.motion()[victim.index].radiusElmos == rm::sim::Fx{});
+    CHECK(f.events.count(rm::sim::EventKind::UnitDestroyed) == 0);
+}
+
 
 TEST_CASE("only a builder un-builds, and never itself") {
     Fixture f;
