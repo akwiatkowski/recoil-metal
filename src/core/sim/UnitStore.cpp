@@ -544,7 +544,17 @@ void UnitStore::kill(UnitId id, RandomStream* random, const UnitCatalog* catalog
         }
         // `C-197`: the roll kills "with the transport as instigator" — stamp
         // the carrier before recursing so the passenger's death names it.
-        health_[child.index].lastHitBy = id;
+        // Retail's `Unit::Kill` overwrites the caller's `overkillRatio` with
+        // `10.0f`, so `CreateWreckage` bails: cascade cargo leaves no wreck.
+        // The sim's shape is the `overkillExcess` the wreck path reads — ten
+        // hulls of excess, past the `> 1.0` vaporise gate — with the hull
+        // zeroed so `retireDead` reports the death it scores.
+        Health& doomed = health_[child.index];
+        doomed.lastHitBy = id;
+        const Mag hull =
+            childDef != nullptr ? childDef->health : doomed.maximum;
+        doomed.current = Mag{};
+        doomed.overkillExcess = hull * Fx::fromInt(10);
         kill(child, random, catalog);
     }
     children_[id.index].clear();

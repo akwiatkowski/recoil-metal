@@ -2026,3 +2026,29 @@ TEST_CASE("C-197: vetoed COMMAND cargo takes the 10000-damage fallback", "[fa-tr
     REQUIRE(roster.store.alive(cargo));
     CHECK(roster.health(cargo).current == rm::sim::Mag::fromInt(10000));
 }
+TEST_CASE("C-197: cascade-killed cargo leaves no wreck", "[fa-transport]") {
+    // `Unit::Kill` overwrites the caller's `overkillRatio` with `10.0f` and
+    // `CreateWreckage` bails above `1.0` (C-197): cargo killed with its
+    // transport leaves no wreckage. The sim's shape: the cascade zeroes the
+    // cargo's health (so `retireDead` reports the death) and stamps
+    // `overkillExcess` past the hull (so the wreck path vaporises it).
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    UnitDef wreckable = cargoDef();
+    wreckable.name = "test_cascade_cargo";
+    wreckable.health = rm::sim::Mag::fromInt(500);
+    wreckable.wreckMass = rm::sim::Mag::fromInt(300);
+    wreckable.wreckEnergy = rm::sim::Mag::fromInt(200);
+    wreckable.wreckHealth = rm::sim::Mag::fromInt(500);
+    const rm::UnitTypeIndex cargoType = roster.addType(wreckable);
+    const UnitId transport = landedTransport(roster, transportType, 50.0f, 50.0f);
+    const UnitId cargo = roster.add(cargoType, 51.0f, 50.0f, 0, 500.0f);
+    REQUIRE(roster.store.attach(transport, cargo));
+    roster.store.kill(transport, nullptr, &roster.catalog);
+    // The cascade itself zeroes the hull — no test-side setup stands in.
+    CHECK(roster.store.health()[cargo.index].current == rm::sim::Mag{});
+    const auto& health = roster.store.health()[cargo.index];
+    REQUIRE(health.overkillExcess.has_value());
+    const rm::sim::Fx overkill = health.overkillExcess->toFx() / wreckable.health.toFx();
+    CHECK(overkill > rm::sim::kFxOne);
+}
