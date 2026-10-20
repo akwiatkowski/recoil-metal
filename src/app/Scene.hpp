@@ -811,7 +811,12 @@ struct UnitScene {
         NapalmScorch,  ///< `TIFNapalmCarpetBomb01/02_script.lua` (3.75-5 elmos)
         EmpScorch,  ///< `CIFEMPFluxWarhead02_script.lua:116` (28 elmos)
         FragScorch,  ///< `AIFFragmentationSensorShell03_script.lua:20` (2.25-3.75 elmos)
+        AntimatterScorch,  ///< `TIFHETacticalNuclearShell01` (`terranprojectiles.lua:94-95`, 16 elmos, 50 s)
+        AntimatterShellScorch,  ///< `TIFAntiMatterShells01` (`terranprojectiles.lua:117-118`, 16 elmos, 30 s)
+        AntimatterSmallScorch,  ///< `TIFAntiMatterShells02` (`terranprojectiles.lua:117-118` at `FxSplatScale` 4, 8 elmos, 30 s)
+        SmallYieldScorch,  ///< `TIFSmallYieldNuclearBomb01` (`terranprojectiles.lua:284`, 6 elmos, 200 s)
         ZhanaseeScorch,  ///< `SBOZhanaseeBomb01_script.lua:29` (40 elmos)
+        CybranProtonScorch,  ///< `CIFProtonBomb01` (`cybranprojectiles.lua:79`, 12 elmos, 200 s)
         QuantumCrater,  ///< `AIFQuantumWarhead02_script.lua:119-120` (`Crater01_*` pair, 50 elmos)
     };
     /// Where shots hit ground that killed nothing. Retail scorches terrain hits, and

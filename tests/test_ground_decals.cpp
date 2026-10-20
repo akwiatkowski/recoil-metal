@@ -759,7 +759,22 @@ TEST_CASE("impact marks tag a weapon's own decal from the shot's projectile id",
     // lays LIVE `Crater01_albedo`/`_normals` decals at 50 elmos through the
     // forked `ShakeAndBurnMe` thread — the old "commented-out draws" comment
     // was wrong (only line 117 is a comment, naming the arg order). The tag
-    // table must match it, or a nuke impact rides base scorch.
+    // Retail's nuke/proton-bomb decals (C-484): the antimatter family
+    // (`TArtilleryAntiMatterProjectile`, `terranprojectiles.lua:94-95`)
+    // lays `nuke_scorch_001`/`002` at `FxSplatScale`/`x2` with LOD 150 and
+    // lifetime 50 (30 on the `02` line) — a doubled albedo pair over one
+    // normals pass, not the blast-derived splat/decal split. The small-yield
+    // bomb (`TIFSmallYieldNuclearBombProjectile`, `:284`) lays
+    // `scorch_008_albedo` at 6 elmos with LOD 250 and lifetime 200, and the
+    // Cybran proton bomb (`CIFProtonBombProjectile`,
+    // `cybranprojectiles.lua:79`) lays `scorch_011_albedo` at 12 elmos with
+    // LOD 150 and lifetime 200. Each stem must tag its own mark.
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/TIFAntiMatterShells01/TIFAntiMatterShells01_proj.bp")
+          == Script::AntimatterShellScorch);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/CIFProtonBomb01/CIFProtonBomb01_proj.bp")
+          == Script::CybranProtonScorch);
     CHECK(rm::app::scriptTagForProjectile(
               "/projectiles/AIFQuantumWarhead02/AIFQuantumWarhead02_proj.bp")
           == Script::QuantumCrater);
