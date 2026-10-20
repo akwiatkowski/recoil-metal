@@ -521,6 +521,24 @@ TEST_CASE("a guard copies its guardee's live-unit reclaim target") {
     CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 50.0f);
     CHECK(rm::test::asFloat(f.economies[0].stored.energy) == 100.0f);
 }
+TEST_CASE("a slowed guard's ReclaimTimeMultiplier stretches the copied un-build") {
+    // `Unit.lua:2699-2712` unit branch, guard half: the mult lives on the
+    // RECLAIMER, however the work was reached — a mult-2 guard copying its
+    // guardee's reclaim lends half pace. Guardee 10/tick + guard 5/tick is 15
+    // a tick, so five ticks take 75 of 200 work: health 62.5, not the 50 two
+    // full-rate builders would reach.
+    Fixture f;
+    const UnitId guardee = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId guard = f.roster.add(f.guardType, 205.0f, 200.0f, 0, 100.0f);
+    const UnitId victim = f.roster.add(f.tankType, 208.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.roster.store.setReclaimTimeMultiplier(guard, rm::sim::Fx::fromInt(2)));
+    REQUIRE(f.reclaimUnit(guardee, victim));
+    REQUIRE(f.assist(guard, guardee));
+    f.tick(5);
+    CHECK(f.roster.store.alive(victim));
+    CHECK(rm::test::asFloat(f.roster.health(victim).current) == 62.5f);
+}
+
 
 
 TEST_CASE("a Mantis Guard cannot borrow a reclaim capability from its guardee", "[guard][guard-work-regression]") {

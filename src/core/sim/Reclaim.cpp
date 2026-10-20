@@ -471,6 +471,14 @@ std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
                                        store.motion()[item.target.index])) {
                     Mag pace = effectiveBuildPerTick(store, catalog, item.builder);
                     pace *= Fx::fromInt(10);
+                    // Same reclaimer-side stretch as the manual un-build: mult 2
+                    // halves the copied pace (`Unit.lua:2699-2712` unit branch).
+                    const Fx guardMult =
+                        store.reclaimTimeMultiplier(store.idAt(item.builder));
+                    if (guardMult > Fx::fromInt(1)) {
+                        pace = proportionalWork(pace, Mag::fromInt(1),
+                                                Mag::fromFx(guardMult));
+                    }
                     Health& health = store.health()[item.target.index];
                     const Mag remaining =
                         proportionalWork(total, health.current, health.maximum);
