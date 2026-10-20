@@ -1103,6 +1103,20 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, static_cast<std::size_t>(entry.slot));
         }
     }
+    // The self-destruct countdowns (`C-345`): the remaining ticks pick the
+    // kill tick, so a unit five seconds from death must hash apart from one
+    // that was never ordered to die — the same save-covers-it-but-hash-ignored
+    // shape as the fog/explored and ferry-phase gaps. Empty-or-null feeds
+    // nothing, keeping the pre-countdown stream.
+    if (match.selfDestructs != nullptr && !match.selfDestructs->empty()) {
+        feedText(h, "self-destructs");
+        feed(h, match.selfDestructs->size());
+        for (const SelfDestructWork& work : *match.selfDestructs) {
+            feed(h, static_cast<std::size_t>(work.unit.index));
+            feed(h, static_cast<std::size_t>(work.unit.generation));
+            feed(h, static_cast<std::uint64_t>(work.remainingTicks));
+        }
+    }
 
     // Empty enhancement storage preserves hashes of matches without upgrade tasks.
     if (match.enhancements != nullptr && !match.enhancements->empty()) {

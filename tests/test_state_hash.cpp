@@ -74,6 +74,7 @@ struct Fixture {
     std::vector<rm::sim::SiloAmmo> siloAmmo;
     std::vector<rm::sim::SiloBuild> siloQueue;
     std::vector<rm::sim::MissileRedirect> redirects;
+    std::vector<rm::sim::SelfDestructWork> selfDestructs;
     std::vector<int> commandersEver;
 
     Fixture() {
@@ -108,6 +109,7 @@ struct Fixture {
                 .siloQueue = &siloQueue,
                 .redirects = &redirects,
             .commandersEver = commandersEver,
+            .selfDestructs = &selfDestructs,
         };
     }
 
@@ -1063,4 +1065,19 @@ TEST_CASE("ferry route state changes the hash", "[state-hash]") {
     outbound->beginFerry({rm::test::fx(100.0f), rm::test::fx(100.0f)});
     outbound->setTransportPhase(rm::sim::TransportPhase::ToDrop);
     CHECK(anchored.hash() != drifting.hash());
+}
+
+TEST_CASE("self-destruct countdowns change the hash", "[state-hash]") {
+    // `SelfDestructWork` rides the save (v34) but `hashMatch` never feeds it:
+    // a unit five seconds from death hashes identically to one that was never
+    // ordered to die. `selfdestruct.lua`'s `StartCountdown` is sim state — the
+    // remaining ticks pick the kill tick — so the hash must separate them.
+    Fixture ticking;
+    Fixture idle;
+    ticking.selfDestructs.push_back(
+        {.unit = ticking.store.idAt(0), .remainingTicks = 150});
+    CHECK(ticking.hash() != idle.hash());
+    const auto armed = ticking.hash();
+    --ticking.selfDestructs.front().remainingTicks;
+    CHECK(ticking.hash() != armed);
 }
