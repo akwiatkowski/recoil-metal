@@ -13,7 +13,9 @@
 
 #include "core/sim/Combat.hpp"
 #include "core/sim/Command.hpp"
+#include "core/sim/CommandInternal.hpp"
 #include "core/sim/Economy.hpp"
+#include "core/sim/Enhancement.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/UnitStore.hpp"
 
@@ -367,4 +369,45 @@ TEST_CASE("a launch order at cargo riding its carrier holds without firing") {
     CHECK(report.shotsFired == 0);
     CHECK(f.shots.empty());
     CHECK(f.stored(silo) == 1);
+}
+
+TEST_CASE("a refused launch order leaves a walking launcher on its route") {
+    // The intake door (`validMissileLaunch`) must ask the per-unit gate
+    // (`weaponSiloLaunchedFor`, `C-255`), not the def-level `Weapon::siloLaunched`:
+    // retail's ACU silo weapons carry BOTH gates — `UEL0001_unit.bp` authors
+    // `Label = 'TacMissile'` (script-table gated, enabled only by `TacticalMissile`)
+    // AND `EnabledByEnhancement = 'TacticalMissile'` (the flag). A fixture with the
+    // label gate but WITHOUT the flag is the shape the def-level question cannot see:
+    // `siloLaunched()` is true while the per-unit gate is false until install. The
+    // room (`startCommand`'s MissileLaunch arm) already asks per-unit and refuses —
+    // but the door admits first, and admission tears the unit's motion down
+    // (`teardownMovement`) before the room says no. A refused click must not halt
+    // a launcher walking its route: the door refuses, the motion survives.
+    Fixture f;
+    rm::unitdef::Weapon gated = cruiseMissile();
+    gated.label = "TacMissile";  // script-table gated (`TacticalMissile` enables it, C-255)
+    // NOTE: no `EnabledByEnhancement` flag — the label gate alone is the def-invisible half.
+    rm::unitdef::UnitDef launcher;
+    launcher.name = "test_gated_silo";
+    launcher.categories = {"LAND"};
+    launcher.speedElmosPerSecond = 30.0f;
+    launcher.turnRateRadiansPerSecond = 100.0f;
+    launcher.weapons.push_back(gated);
+    // Declare the enhancement so the label is script-table gated: `weaponGatedByEnhancement`
+    // keys off the def's declared specs. Nothing installed yet — the click must refuse.
+    launcher.enhancements.push_back({.name = "TacticalMissile", .slot = "RCH"});
+    const rm::UnitTypeIndex gatedType = f.roster.addType(launcher);
+    const UnitId unit = f.roster.add(gatedType, 200.0f, 200.0f, 0, 2000.0f);
+    // Walk the launcher first: a queued move starts immediately and owns its motion.
+    const Command walk{.kind = CommandKind::Move,
+                       .unit = unit,
+                       .targetX = rm::sim::fxFromFloat(1200.0f),
+                       .targetZ = rm::sim::fxFromFloat(200.0f)};
+    REQUIRE(rm::sim::startCommand(walk, f.roster.store, f.roster.catalog, f.terrain,
+                                  f.grid, f.roster.rate, &f.building, nullptr, nullptr,
+                                  f.armies));
+    REQUIRE(f.roster.store.motion()[unit.index].moving);
+    // The gated click refuses — and the walk survives it.
+    CHECK_FALSE(f.launchAt(unit, 800.0f, 800.0f));
+    CHECK(f.roster.store.motion()[unit.index].moving);
 }

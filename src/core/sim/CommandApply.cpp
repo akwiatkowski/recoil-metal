@@ -251,10 +251,14 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     });
     return mine != armies.end() && theirs != armies.end() && allied(*mine, *theirs);
 }
-/// Issue-time gate for MissileLaunch: a unit carrying a counted manual weapon — the silo's
-/// round — and, when a unit is named, one that is alive enough to aim at. Ammunition is
-/// deliberately NOT checked: the stockpile may fill while the order sits, so an empty silo
-/// holds the order rather than refusing the click (`fireMissiles` gates the trigger).
+/// Issue-time gate for MissileLaunch: a unit whose counted manual weapon is live FOR THIS
+/// UNIT (`weaponSiloLaunchedFor`, `C-255`) — the silo's round — and, when a unit is named,
+/// one that is alive enough to aim at. Ammunition is deliberately NOT checked: the
+/// stockpile may fill while the order sits, so an empty silo holds the order rather than
+/// refusing the click (`fireMissiles` gates the trigger). An `EnabledByEnhancement` silo
+/// weapon before its install (the ACU's `TacticalNukeMissile`) refuses the click the way
+/// `fireMissiles` refuses the trigger — overcharge's intake already asks its own per-unit
+/// question (`weaponManuallyFiredFor`, `CommandAdvance.cpp`).
 [[nodiscard]] bool validMissileLaunch(const Command& command, const UnitStore& store,
                                       const UnitCatalog& catalog) noexcept {
     if (command.target.generation != 0 && !store.alive(command.target)) {
@@ -262,7 +266,9 @@ void cancelConstructionFor(std::vector<Construction>* building, const Command& c
     }
     const unitdef::UnitDef* def = catalog.def(store.typeAt(command.unit.index));
     return def != nullptr
-           && std::ranges::any_of(def->weapons, &unitdef::Weapon::siloLaunched);
+           && std::ranges::any_of(def->weapons, [&](const unitdef::Weapon& weapon) {
+                  return weaponSiloLaunchedFor(store, catalog, command.unit.index, weapon);
+              });
 }
 /// Issue-time gate for LoadTransport: a live transportable unit boarding a live
 /// same-army carrier whose attach table could ever take its class. A FULL
