@@ -1117,6 +1117,40 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, static_cast<std::uint64_t>(work.remainingTicks));
         }
     }
+    // `C-227`'s `CArmyStats` store: named aggregate and per-blueprint stats
+    // drive one-shot triggers (`0x00712920`), so a match that recorded kills
+    // hashes apart from one that recorded nothing — the same
+    // save-covers-it-but-hash-ignored shape as the self-destruct gap above.
+    // Empty-or-null feeds nothing, keeping the pre-stats stream.
+    if (match.armyStats != nullptr && !match.armyStats->empty()) {
+        feedText(h, "army-stats");
+        feed(h, match.armyStats->size());
+        for (const ArmyStats& stats : *match.armyStats) {
+            feed(h, stats.stats.size());
+            for (const auto& [name, value] : stats.stats) {
+                feedText(h, name);
+                feed(h, value);
+            }
+            feed(h, stats.blueprintStats.size());
+            for (const auto& [key, value] : stats.blueprintStats) {
+                feedText(h, key.first);
+                feedText(h, key.second);
+                feed(h, value);
+            }
+            feed(h, stats.triggers.size());
+            for (const ArmyStatTrigger& trigger : stats.triggers) {
+                feedText(h, trigger.name);
+                feed(h, trigger.conditions.size());
+                for (const ArmyStatCondition& condition : trigger.conditions) {
+                    feedText(h, condition.stat);
+                    feedText(h, condition.category);
+                    feed(h, static_cast<std::uint8_t>(condition.op));
+                    feed(h, condition.value);
+                }
+            }
+        }
+    }
+
 
     // Empty enhancement storage preserves hashes of matches without upgrade tasks.
     if (match.enhancements != nullptr && !match.enhancements->empty()) {

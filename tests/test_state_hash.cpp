@@ -1,7 +1,7 @@
 #include "core/sim/StateHash.hpp"
 
 #include "core/map/HeightField.hpp"
-#include "core/sim/Intel.hpp"
+#include "core/sim/ArmyStats.hpp"
 #include "core/sim/Skirmish.hpp"
 #include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
@@ -75,6 +75,7 @@ struct Fixture {
     std::vector<rm::sim::SiloBuild> siloQueue;
     std::vector<rm::sim::MissileRedirect> redirects;
     std::vector<rm::sim::SelfDestructWork> selfDestructs;
+    std::vector<rm::sim::ArmyStats> stats;
     std::vector<int> commandersEver;
 
     Fixture() {
@@ -109,6 +110,7 @@ struct Fixture {
                 .siloQueue = &siloQueue,
                 .redirects = &redirects,
             .commandersEver = commandersEver,
+            .armyStats = &stats,
             .selfDestructs = &selfDestructs,
         };
     }
@@ -1098,4 +1100,25 @@ TEST_CASE("self-destruct countdowns change the hash", "[state-hash]") {
     const auto armed = ticking.hash();
     --ticking.selfDestructs.front().remainingTicks;
     CHECK(ticking.hash() != armed);
+}
+TEST_CASE("army statistics change the hash", "[state-hash]") {
+    // `C-227`'s `CArmyStats` rides the save (v34) but `hashMatch` never feeds
+    // it: a match whose stat store recorded kills hashes identically to one
+    // that recorded nothing. Stats drive one-shot triggers and scoring, so
+    // the hash must separate them. Empty-or-null feeds nothing, keeping the
+    // pre-stats stream.
+    Fixture scored;
+    Fixture fresh;
+    scored.stats.assign(1, rm::sim::ArmyStats{});
+    rm::sim::setArmyStat(scored.stats.front(), "Units_Killed", rm::test::mag(1.0f));
+    CHECK(scored.hash() != fresh.hash());
+    const auto armed = scored.hash();
+    rm::sim::setArmyStatsTrigger(
+        scored.stats.front(),
+        rm::sim::ArmyStatTrigger{.name = "EconLowMassStore",
+                                 .conditions = {rm::sim::ArmyStatCondition{
+                                     .stat = "Economy_Ratio_Mass",
+                                     .op = rm::sim::StatCompare::LessThan,
+                                     .value = rm::test::mag(0.5f)}}});
+    CHECK(scored.hash() != armed);
 }
