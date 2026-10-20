@@ -188,6 +188,23 @@ TEST_CASE("C-346: DiplomacyHandler accepts only an offer that was made",
     CHECK(channel.armies[0].alliance == channel.armies[1].alliance);
     CHECK(channel.state.diplomacyOffers.empty());
 }
+TEST_CASE("C-346: DiplomacyHandler accept clears only the accepted offer",
+          "[sim]") {
+    // `SimDiplomacy.lua:14-18`: 'accept' removes only the `offers[action.To]`
+    // entry naming `action.From` — the offer it accepted. A mirrored standing
+    // offer (`offers[action.From]` naming `action.To`) is untouched: retail
+    // never clears it, so it stays on the table until accepted or rejected.
+    Channel channel;
+    CHECK(channel.call("DiplomacyHandler",
+                       {.from = 0, .to = 1, .action = "offer"}));
+    CHECK(channel.call("DiplomacyHandler",
+                       {.from = 1, .to = 0, .action = "offer"}));
+    CHECK(channel.call("DiplomacyHandler",
+                       {.from = 1, .to = 0, .action = "accept"}));
+    CHECK(channel.armies[0].alliance == channel.armies[1].alliance);
+    CHECK(channel.state.diplomacyOffers.size() == 1);
+    CHECK(channel.state.diplomacyOffers.contains({1, 0}));
+}
 
 TEST_CASE("C-346: reject and never close an offer; break splits the alliance",
           "[sim]") {

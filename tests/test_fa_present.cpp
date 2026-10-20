@@ -456,3 +456,57 @@ TEST_CASE("C-374: an emitter's emission carries the per-army visibility mask",
     }
     CHECK(reported);
 }
+
+TEST_CASE("a beam's trigger pull spawns its sim emitter at the muzzle",
+          "[fa-present][effects]") {
+    // `PlayFxBeamStart` is the beam's muzzle FX (named by the Combat.cpp
+    // C-381 claw gate): a beam delivers with no projectile, but the sim
+    // emitter pool (C-296/C-298) spawns one record per shot at the muzzle
+    // bone — and only `WeaponFired` feeds it, so a beam's start flash never
+    // enters the pool, carries no viewer mask, and obeys no bone hide.
+    rm::test::Roster roster;
+    rm::unitdef::UnitDef gunDef;
+    gunDef.name = "test_laser";
+    rm::unitdef::Weapon gun;
+    gun.label = "test beam";
+    gun.role = rm::unitdef::WeaponRole::DirectFire;
+    gun.targetPriorities = {{"LAND"}};
+    gun.turreted = true;
+    gun.beam = true;
+    gun.damage = rm::test::mag(10.0f);
+    gun.maxRange = rm::test::fx(400.0f);
+    gun.rateOfFire = 1.0f;
+    gunDef.weapons.push_back(gun);
+    rm::unitdef::UnitDef targetDef;
+    targetDef.name = "test_target";
+    targetDef.categories = {"LAND"};
+
+    (void)roster.add(roster.addType(gunDef), 0.0f, 0.0f, 0, 500.0f);
+    (void)roster.add(roster.addType(targetDef), 200.0f, 0.0f, 1, 500.0f);
+
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<rm::sim::Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<rm::sim::Projectile> projectiles;
+    std::vector<rm::sim::SimEmitter> effects;
+    rm::sim::EventQueue events;
+    const std::vector<int> commandersEver(2, 0);
+    rm::sim::Match match{.armies = armies,
+                         .economies = economies,
+                         .projectiles = &projectiles,
+                         .events = &events,
+                         .commandersEver = commandersEver,
+                         .effects = &effects};
+
+    events.beginFrame(0);
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain,
+                                roster.rate, 0);
+    REQUIRE(events.count(rm::sim::EventKind::BeamFired) == 1);
+    CHECK(projectiles.empty());
+    REQUIRE(effects.size() == 1);
+    CHECK(effects[0].bone == rm::sim::kMuzzleBone);
+    CHECK(effects[0].effect == "test_laser:test beam");
+    CHECK(effects[0].alive);
+    REQUIRE(events.count(rm::sim::EventKind::EffectEmitted) == 1);
+}

@@ -239,13 +239,17 @@ void tickEffects(UnitStore& store, std::vector<SimEmitter>* pool,
     }
 
     // The spawn trigger this slice implements: one emitter per shot, at the
-    // muzzle bone (`CreateEmitterAtBone`, `0x677800` → `C-298`). The events are
-    // collected first because the spawns emit `EffectEmitted` into the same
-    // queue — iterating a vector being appended to is a use-after-invalidate.
+    // muzzle bone (`CreateEmitterAtBone`, `0x677800` → `C-298`), plus the
+    // beam's start flash (`PlayFxBeamStart`): a beam delivers with no
+    // projectile, but its trigger pull still hangs an emitter at the muzzle.
+    // The events are collected first because the spawns emit `EffectEmitted`
+    // into the same queue — iterating a vector being appended to is a
+    // use-after-invalidate.
     std::vector<Event> shots;
     if (events != nullptr) {
         for (const Event& event : events->all()) {
-            if (event.kind == EventKind::WeaponFired) {
+            if (event.kind == EventKind::WeaponFired
+                || event.kind == EventKind::BeamFired) {
                 shots.push_back(event);
             }
         }

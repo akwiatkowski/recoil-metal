@@ -3319,7 +3319,13 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     shot.doNotCollide = weapon.projectileTraits.doNotCollide;
     shot.useGravity = weapon.projectileTraits.useGravity;
     shot.arc = weapon.arc;
-    shot.ticksRemaining = static_cast<int>(rate.ticks(kProjectileLifetime));
+    // The authored `Physics.LifeTime` arrives as ticks (converted at parse):
+    // the Aeon interceptor (`AIMAntiMissile01`) flies 4 seconds,
+    // tacticals/strategics 30. Unstated keeps the 30-second engine default,
+    // scaled by the rate — a hardcoded 300 is only 30 s at 10 Hz.
+    const int authoredTicks = weapon.projectileTraits.lifeTimeTicks;
+    shot.ticksRemaining =
+        authoredTicks > 0 ? authoredTicks : static_cast<int>(rate.ticks(seconds(30.0f)));
 
     // Aimed from the MUZZLE at the target's middle, not from foot to foot: a shot that
     // leaves four elmos up and is aimed level would sail over its target.

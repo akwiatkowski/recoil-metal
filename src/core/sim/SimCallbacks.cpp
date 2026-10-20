@@ -104,12 +104,13 @@ bool diplomacyHandler(const SimCallbackContext& context, const SimCallbackArgs& 
     if (args.action == "accept") {
         // `table.find(offers[action.To], action.From)`: the acceptance only lands
         // when the accepter had offered the sender first — mutual offers make an
-        // alliance, a one-sided accept does not.
+        // alliance, a one-sided accept does not. Only the accepted entry is
+        // removed (`table.remove(offers[action.To], …)`); a mirrored standing
+        // offer stays on the table until accepted or rejected.
         if (!context.state.diplomacyOffers.contains({args.to, args.from})) {
             return false;
         }
         context.state.diplomacyOffers.erase({args.to, args.from});
-        context.state.diplomacyOffers.erase(offered);
         mergeAlliance(context.armies, args.from, args.to);
         return true;
     }

@@ -1151,6 +1151,10 @@ loadProjectileTraits(std::string_view source) {
         .doNotCollide = std::move(doNotCollide),
         .desiredShooterCap = physics ? static_cast<int>(numberOr(*physics, "DesiredShooterCap", 0.0f)) : 0,
         .useGravity = physics && flagAt(*physics, "UseGravity"),
+        // Content boundary: seconds → ticks here so the sim never sees a float.
+        .lifeTimeTicks = physics ? static_cast<int>(sim::TickRate{}.ticks(
+                                       sim::seconds(numberOr(*physics, "LifeTime", 0.0f))))
+                                 : 0,
     };
 }
 

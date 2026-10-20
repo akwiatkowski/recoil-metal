@@ -1222,6 +1222,21 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         feed(h, match.pendingSurvivorMask);
     }
     feed(h, static_cast<std::uint64_t>(match.winnerStableTicks));
+    // C-210's three-second commander-defeat poll phase and twenty-second
+    // OnDefeat cleanup countdowns ride the save, and both decide future
+    // ticks — the phase picks the next poll tick, the countdowns pick the
+    // cleanup tick — so a match one tick from its poll must hash apart from
+    // one that just polled. The phase feeds unconditionally (zero is the
+    // just-polled phase, not absence); cleanup feeds its nonzero entries by
+    // slot, so a match with nothing pending hashes exactly as before.
+    feed(h, static_cast<std::uint64_t>(match.defeatPollElapsedTicks));
+    for (std::size_t army = 0; army < match.defeatCleanupRemainingTicks.size(); ++army) {
+        if (match.defeatCleanupRemainingTicks[army] != 0) {
+            feedText(h, "defeat-cleanup");
+            feed(h, army);
+            feed(h, static_cast<std::uint64_t>(match.defeatCleanupRemainingTicks[army]));
+        }
+    }
     // `victory.lua:93-98`'s delayed `EndGame()` pause decides a future
     // `endGameFired` report, so it is authority while armed. Conditional so a
     // match that never reached a verdict hashes exactly as before.

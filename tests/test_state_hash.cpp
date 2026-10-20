@@ -835,6 +835,24 @@ TEST_CASE("pending winner confirmation changes the hash") {
     REQUIRE(hashMatch(a.store, running) != hashMatch(a.store, confirming));
 }
 
+TEST_CASE("defeat poll phase and pending cleanup change the hash", "[state-hash]") {
+    // C-210: the three-second commander poll phase and the twenty-second
+    // OnDefeat cleanup countdowns ride the save (SaveState v34) and decide
+    // future ticks — a match one tick from its poll must hash apart from one
+    // that just polled, like the winner-stability ticks above.
+    Fixture a;
+    rm::sim::Match phased = a.match();
+    phased.defeatPollElapsedTicks = 1;
+    REQUIRE(hashMatch(a.store, a.match()) != hashMatch(a.store, phased));
+
+    Fixture b;
+    rm::sim::Match cleaning = b.match();
+    cleaning.defeatCleanupRemainingTicks.assign(b.armies.size(), 0);
+    cleaning.defeatCleanupRemainingTicks[0] = 200;
+    REQUIRE(hashMatch(b.store, b.match()) != hashMatch(b.store, cleaning));
+}
+
+
 TEST_CASE("negative zero is not a divergence") {
     // -0.0f == 0.0f arithmetically but their bit patterns differ. A sim that produced one
     // where it previously produced the other has not diverged, and reporting it as such

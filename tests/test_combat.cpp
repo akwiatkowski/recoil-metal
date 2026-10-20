@@ -833,6 +833,27 @@ TEST_CASE("an interceptor skips a projectile on its DoNotCollideList") {
     CHECK(shots.size() == 2);
 }
 
+TEST_CASE("a fired shot lives its authored lifetime, not the thirty-second default") {
+    // `Physics.LifeTime` (`AIMAntiMissile01_proj.bp: 4`, tacticals/strategics:
+    // 30): the tube stamps the projectile blueprint's own seconds onto the shot.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    Weapon gun = directFire(10.0f, 300.0f);
+    gun.targetsProjectiles = true;
+    gun.projectileTraits.lifeTimeTicks = 40;
+    (void)roster.add(roster.addType(gunnerDef(gun)), 0.0f, 0.0f, 0, 100.0f);
+    std::vector<Projectile> shots{{.position = rm::test::at(0, 4, 50),
+                                   .firedByArmy = 1,
+                                   .ticksRemaining = 10}};
+    REQUIRE(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots,
+                                 roster.rate)
+            == 1);
+    REQUIRE(shots.size() == 2);
+    CHECK(shots.back().ticksRemaining
+          == static_cast<int>(roster.rate.ticks(rm::sim::seconds(4.0f))));
+}
+
+
 TEST_CASE("interception uses projectile positions from the start of the tick") {
     const std::vector<Army> armies = rm::sim::freeForAll(2);
     Roster roster;
