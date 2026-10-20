@@ -1,6 +1,10 @@
 #include "core/scene/WeaponVisuals.hpp"
 #include "core/scene/ProjectileFx.hpp"
 #include "core/scene/CombatEffects.hpp"
+#include "app/Match.hpp"
+#include "core/data/MoveDef.hpp"
+#include "core/map/HeightField.hpp"
+#include "core/sim/StateHash.hpp"
 #include "app/Scene.hpp"
 #include "app/SceneBuild.hpp"
 #include "app/FafAi.hpp"
@@ -850,4 +854,84 @@ TEST_CASE("the scene's water level feeds effect water-gating", "[weapon-visuals]
     const float* level = wet.waterLevelForEffects();
     REQUIRE(level != nullptr);
     CHECK(*level == Catch::Approx(12.0f));
+}
+TEST_CASE("the offline capture loop feeds the scene waterline to effect gating", "[weapon-visuals]") {
+    // The windowed loop passes `waterLevelForEffects()` into `emitCombatEffects`,
+    // so an `OnlyEmitOnWater` burst above the waterline is dropped. The offline
+    // `march` capture path drops the trailing waterline argument instead, so the
+    // same dry-land shot on a wet map still bursts. Same `cannon_muzzle_water_shock`
+    // shape as the parse case above, on a whole scene rather than one event.
+    auto visualsWithShock = [] {
+        rm::WeaponVisuals visuals;
+        rm::WeaponMaterial material;
+        material.onlyEmitOnWater = true;
+        visuals.materials.push_back(material);
+        visuals.definitions[rm::foldedVisualKey("test_boat:Gun#fxmuzzleflash")] = {0};
+        return visuals;
+    };
+    auto run = [&](bool wet) {
+        rm::app::UnitScene scene;
+        scene.armies = rm::sim::freeForAll(2);
+        scene.players = rm::sim::onePlayerPerArmy(2, 0);
+        scene.economies.assign(2, rm::sim::Economy{});
+        scene.commandersEver.assign(2, 0);
+        scene.hasWater = wet;
+        scene.waterLevelElmos = 0.0f;
+        scene.weaponVisuals = visualsWithShock();
+        rm::unitdef::UnitDef boat;
+        boat.health = rm::sim::Mag::fromInt(100);
+        boat.name = "test_boat";
+        boat.motion = rm::unitdef::MotionType::Land;
+        boat.speedElmosPerSecond = 10.0f;
+        boat.weapons = {rm::unitdef::Weapon{
+            .label = "Gun",
+            .role = rm::unitdef::WeaponRole::DirectFire,
+            .damage = rm::sim::Mag::fromInt(1),
+            .maxRange = rm::sim::Fx::fromInt(100),
+            .rateOfFire = 1.0f,
+            .muzzleVelocityElmosPerSecond = 100.0f,
+            .targetPriorities = {{"TARGET"}},
+            .turreted = true,
+        }};
+        scene.definitions.push_back(boat);
+        const rm::UnitTypeIndex boatType =
+            scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+        scene.setTypeTraits(boatType, rm::data::moveDefFor(boat), 1.0f);
+        rm::unitdef::UnitDef target;
+        target.health = rm::sim::Mag::fromInt(100);
+        target.name = "test_target";
+        target.categories = {"TARGET"};
+        target.motion = rm::unitdef::MotionType::Land;
+        scene.definitions.push_back(target);
+        const rm::UnitTypeIndex targetType =
+            scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+        scene.setTypeTraits(targetType, rm::data::moveDefFor(target), 1.0f);
+        const auto spawn = [&](rm::UnitTypeIndex type, float x, int army) {
+            return scene.store.spawn(rm::sim::UnitStore::Spawn{
+                .type = type,
+                .transform = {.x = rm::sim::fxFromFloat(x), .z = rm::sim::fxFromFloat(40.0f)},
+                .motion = rm::app::motionFor(scene.definitions[type], army),
+                .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+            });
+        };
+        (void)spawn(boatType, 200.0f, 0);
+        (void)spawn(targetType, 220.0f, 1);
+        rm::HeightField field;
+        field.squaresX = 128;
+        field.squaresZ = 128;
+        field.baseHeight = 0.0f;
+        field.heightScale = 1.0f;
+        field.raw.assign(field.sampleCount(), std::uint16_t{0});
+        rm::app::PassabilitySet passability{field, false, 0.0f};
+        rm::vfs::Vfs content;
+        std::vector<rm::Particle> dust;
+        rm::app::march(scene, field, passability,
+                       rm::app::MarchOptions{.orderAll = false, .seconds = 5.0f},
+                       {}, dust, content, {}, {}, {});
+        return scene.combatEffectState.bursts.size();
+    };
+    // The dry run proves the wiring: shots left the muzzle and the authored
+    // water shock burst. The wet run must gate them at the waterline.
+    REQUIRE(run(false) > 0);
+    CHECK(run(true) == 0);
 }

@@ -2574,7 +2574,8 @@ void march(UnitScene& scene, const rm::HeightField& field, PassabilitySet& passa
             },
             [&scene](rm::sim::Fx x, rm::sim::Fx z) {
                 return scene.terrainTypeGrid.at(x, z);
-            });
+            },
+            nullptr, scene.waterLevelForEffects());
         rm::emitProjectileTrails(dust, scene.projectiles, &scene.weaponVisuals, kTickSeconds);
         scene.projectileTrails.update(scene.projectiles, scene.weaponVisuals, kTickSeconds,
             [&](rm::sim::UnitId id, std::string_view key) { return scene.trailOrigin(id, key); });
