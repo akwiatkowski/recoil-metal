@@ -411,6 +411,7 @@ bool unitCapBlocks(std::span<const Army> armies, int armyIndex,
         return false;
     }
     const Army& army = armies[static_cast<std::size_t>(armyIndex)];
+    if (army.ignoreUnitCap) return false;
     return army.unitCostTotal + reservedCapCost(building, catalog, armyIndex)
                + product.capCost
            > army.unitCap;

@@ -147,6 +147,10 @@ struct Army {
     /// fixed-point count: blueprint `CapCost` is fractional (0.1 sonars).
     Fx unitCap = Fx::fromInt(500);
 
+    /// `CArmyImpl::SetIgnoreArmyUnitCap` (vfunc `0xac`, `C-383`): lifts the
+    /// creation gate (`0x0074fda0`) for this army.
+    bool ignoreUnitCap = false;
+
     /// Retail's per-army handicap (`C-060`): `DealDamage` divides the damage a
     /// unit takes by `(handicap + 1)` — the TARGET's army, not the shooter's.
     /// Zero is the unhandicapped default; the skirmish option never sets it in

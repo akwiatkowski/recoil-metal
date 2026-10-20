@@ -968,3 +968,40 @@ TEST_CASE("C-210: the native EndGame pause lands three seconds after the verdict
     CHECK(match.endGameDone);
     CHECK(report.endGameFired);
 }
+
+TEST_CASE("C-383: an army ignoring the cap accepts a gift at its ceiling", "[fa-match]") {
+    // `CArmyImpl::SetIgnoreArmyUnitCap` (`0xac`, `C-383`): the flag lifts
+    // retail's creation gate (`0x0074fda0`) for that army. A capped recipient
+    // with the flag set still receives the gift — the gate is bypassed, not
+    // merely raised.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid = rm::sim::buildPassability(field, 0.0f);
+    const rm::sim::TickRate rate{};
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex tank = roster.addType(tankDef());
+    const UnitId unit = roster.add(tank, 0.0f, 0.0f, 0, 500.0f);
+
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    armies[0].alliance = armies[1].alliance;
+    armies[1].unitCap = rm::sim::Fx::fromInt(0);
+    armies[1].ignoreUnitCap = true;
+    const std::vector<rm::sim::Player> players = rm::sim::onePlayerPerArmy(2, 0);
+
+    const rm::sim::CommandIssue gift{
+        .tick = 0,
+        .source = 0,
+        .id = rm::commandId(0, 0),
+        .player = 0,
+        .kind = rm::sim::CommandKind::Gift,
+        .units = {unit},
+        .scriptBit = 1,
+    };
+    const rm::sim::ApplyCommandResult result = rm::sim::applyCommand(
+        gift, roster.store, roster.catalog, players, armies, terrain,
+        [&](UnitId) { return &grid; }, rate, nullptr, nullptr, nullptr, nullptr, {},
+        nullptr, nullptr, nullptr, nullptr);
+    CHECK(result.acceptedUnit(unit));
+    CHECK(roster.store.motion()[unit.index].armyIndex == 1);
+}
