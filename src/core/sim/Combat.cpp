@@ -4146,8 +4146,8 @@ void sweepFlight(Projectile& shot, std::array<Fx, 3> from,
 /// single-target or area — and finally the shot's own fields reset for
 /// removal. This writes the world (health, features, events), which is why it
 /// is the segment boundary the parallel flight phases are built around.
-void resolvePendingImpact(Projectile& shot, UnitStore& store,
-                          std::span<const Army> armies,
+void resolvePendingImpact(Projectile& shot, std::vector<Projectile>& projectiles,
+                          UnitStore& store, std::span<const Army> armies,
                           const UnitCatalog* catalog, EventQueue* events,
                           FeatureStore* features) {
     const UnitId target = store.alive(shot.impactTarget)
@@ -4206,6 +4206,33 @@ void resolvePendingImpact(Projectile& shot, UnitStore& store,
                             shot.friendlyFire || shot.splashFriendly, std::nullopt,
                             impactTarget, features, shot.friendlyFire, Fx{},
                             shieldPenetrating);
+        // `C-086`: the area path queries 0xF00, which includes projectiles — a
+        // blast overlapping a hostile in-flight missile damages its authored
+        // pool like a contact hit, never the firing side's own shots.
+        for (Projectile& other : projectiles) {
+            if (&other == &shot || other.ticksRemaining <= 0
+                || other.pendingImpact != ImpactType::Invalid
+                || !projectileHostile(shot.firedByArmy, other, armies)) {
+                continue;
+            }
+            const Fx dx = other.position[0] - shot.position[0];
+            const Fx dy = other.position[1] - shot.position[1];
+            const Fx dz = other.position[2] - shot.position[2];
+            if (fxHypot(fxHypot(dx, dz), dy) > shot.damageRadiusElmos) {
+                continue;
+            }
+            if (shot.damage.base <= Mag{}) {
+                continue;
+            }
+            if (other.maxHealth > Mag{}) {
+                other.health -= shot.damage.base;
+            }
+            if (other.maxHealth <= Mag{} || other.health <= Mag{}) {
+                other.pendingImpact = ImpactType::Invalid;
+                other.impactTarget = {};
+                other.ticksRemaining = 0;
+            }
+        }
     }
 
     // Recoil Metal has no Lua projectile lifecycle yet, so retain its established
@@ -4408,8 +4435,8 @@ void advanceProjectiles(std::vector<Projectile>& projectiles, UnitStore& store,
             continue;
         }
         runSegment(segmentStart, i);
-        resolvePendingImpact(projectiles[i], store, armies, catalog, events,
-                             features);
+        resolvePendingImpact(projectiles[i], projectiles, store, armies, catalog,
+                             events, features);
         segmentStart = i + 1;
     }
     runSegment(segmentStart, projectiles.size());
