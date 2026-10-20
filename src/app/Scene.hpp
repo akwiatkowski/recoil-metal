@@ -819,6 +819,7 @@ struct UnitScene {
         ZhanaseeScorch,  ///< `SBOZhanaseeBomb01_script.lua:29` (40 elmos)
         CybranProtonScorch,  ///< `CIFProtonBomb01` (`cybranprojectiles.lua:79`, 12 elmos, 200 s)
         QuantumCrater,  ///< `AIFQuantumWarhead02_script.lua:119-120` (`Crater01_*` pair, 50 elmos)
+        StrategicNukeCrater,  ///< `TIFMissileNuke01/02` via `UEFNukeEffectController01_script.lua:50-52` (`Crater01_*` pair at 50, permanent)
     };
     /// Where shots hit ground that killed nothing. Retail scorches terrain hits, and
     /// a battle that only marks its kills forgets most of what happened there.

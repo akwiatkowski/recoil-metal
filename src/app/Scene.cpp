@@ -251,6 +251,7 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::FragScorch: return 3.0f;  // elmos (2.25-3.75 midpoint, `:20`)
         case Script::ZhanaseeScorch: return 40.0f;  // elmos (`SBOZhanaseeBomb01:29`)
         case Script::QuantumCrater: return 50.0f;  // elmos (`AIFQuantumWarhead02:119-120`)
+        case Script::StrategicNukeCrater: return 50.0f;  // elmos (`UEFNukeEffectController01:50-51`)
         case Script::AntimatterScorch: return 16.0f;  // elmos (`FxSplatScale` 8 x2 albedo, `:95`)
         case Script::AntimatterShellScorch: return 16.0f;  // elmos (`FxSplatScale` 8 x2 albedo, `:118`)
         case Script::AntimatterSmallScorch: return 8.0f;  // elmos (`FxSplatScale` 4 x2 albedo, `:118`)
@@ -281,6 +282,7 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::FragScorch: return 15.0f;  // s (`:20`)
         case Script::ZhanaseeScorch: return 200.0f;  // s (`:29`)
         case Script::QuantumCrater: return 0.0f;  // s (`:119-120` permanent)
+        case Script::StrategicNukeCrater: return 0.0f;  // s (`:50-52` permanent)
         case Script::AntimatterScorch: return 50.0f;  // s (`terranprojectiles.lua:95`)
         case Script::AntimatterShellScorch: return 30.0f;  // s (`terranprojectiles.lua:118`)
         case Script::AntimatterSmallScorch: return 30.0f;  // s (`terranprojectiles.lua:118`)
@@ -304,6 +306,7 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::FragScorch: return 14;  // `scorch_004_albedo` scripted draw
         case Script::ZhanaseeScorch: return 15;  // `Scorch_012_albedo` scripted draw
         case Script::QuantumCrater: return 16;  // `Crater01_albedo` scripted draw
+        case Script::StrategicNukeCrater: return 18;  // `Crater01_albedo` through the nuke controller (`:50-52`)
         case Script::AntimatterScorch: return 19;  // `nuke_scorch_002_albedo` scripted draw
         case Script::AntimatterShellScorch: return 19;  // `nuke_scorch_002_albedo` scripted draw
         case Script::AntimatterSmallScorch: return 19;  // `nuke_scorch_002_albedo` scripted draw
@@ -419,6 +422,9 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     if (stem.starts_with("TIFSmallYieldNuclearBomb01")) return Script::SmallYieldScorch;
     if (stem.starts_with("CIFProtonBomb01")) return Script::CybranProtonScorch;
     if (stem.starts_with("AIFBombQuark01")) return Script::QuarkSplat;
+    if (stem.starts_with("TIFMissileNukeCDR")) return Script::StrategicNukeCrater;
+    if (stem.starts_with("TIFMissileNuke02")) return Script::StrategicNukeCrater;
+    if (stem.starts_with("TIFMissileNuke01")) return Script::StrategicNukeCrater;
     if (stem.starts_with("SBOZhanaseeBomb01")) return Script::ZhanaseeScorch;
     return Script::BaseScorch;
 }

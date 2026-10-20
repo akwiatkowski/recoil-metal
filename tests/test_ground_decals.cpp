@@ -781,6 +781,16 @@ TEST_CASE("impact marks tag a weapon's own decal from the shot's projectile id",
     CHECK(rm::app::scriptTagForProjectile(
               "/projectiles/AIFQuantumWarhead02/AIFQuantumWarhead02_proj.bp")
           == Script::QuantumCrater);
+    // Retail's strategic nuke crater (C-484): `TIFMissileNuke01/02` detonate
+    // through `UEFNukeEffectController01_script.lua:50-52`, which lays a
+    // `Crater01_albedo`/`_normals` pair at 50 elmos (plus `nuke_scorch_003`
+    // at 60), duration 0 = permanent — not the blast-derived split.
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/TIFMissileNuke01/TIFMissileNuke01_proj.bp")
+          == Script::StrategicNukeCrater);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/TIFMissileNuke02/TIFMissileNuke02_proj.bp")
+          == Script::StrategicNukeCrater);
     CHECK(rm::app::scriptTagForProjectile("") == Script::BaseScorch);
 }
 TEST_CASE("scripted decals retire at their authored duration", "[decals]") {
