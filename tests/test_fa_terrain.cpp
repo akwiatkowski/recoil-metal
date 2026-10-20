@@ -917,3 +917,55 @@ TEST_CASE("C-287: a footprinted prop blocks the cells under its footprint",
     });
     CHECK(throughOpen);
 }
+TEST_CASE("C-484: a scripted shell that hits a hull still lays its decal", "[fa-terrain]") {
+    // Retail's per-weapon `OnImpact` writers gate wider than the drain does:
+    // `AIFSonanceShell02_script.lua` lays its crater pair unconditionally,
+    // `SIFSuthanusArtilleryShell02_script.lua` lays it on anything but
+    // Shield/Water/UnitAir, `TIFNapalmCarpetBomb01/02_script.lua` on anything
+    // but Water, `AIFFragmentationSensorShell03_script.lua` unconditionally —
+    // so a hull strike still scorches the ground beneath it. The drain only
+    // notes Terrain/Prop impacts, so a sonance shell that kills a tank leaves
+    // no mark. The mark must land at the victim's ground position.
+    rm::HeightField field = flatField(128, 0.0f);
+    rm::app::UnitScene scene = makeScene(false, 0.0f);
+    rm::unitdef::UnitDef tank;
+    tank.name = "test_tank";
+    scene.definitions.push_back(tank);
+    const rm::UnitTypeIndex type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(type, rm::data::moveDefFor(tank), 1.0f);
+    const rm::sim::UnitId victim = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = type,
+        .transform = {.x = rm::test::fx(500.0f), .z = rm::test::fx(500.0f)},
+        .motion = rm::app::motionFor(tank, 1),
+        .health = rm::sim::initialHealth(rm::test::mag(100.0f)),
+    });
+    scene.store.motion()[victim.index].radiusElmos = rm::test::fx(8.0f);
+
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+
+    scene.projectiles.push_back(rm::sim::Projectile{
+        .position = rm::test::at(500, 1, 480),
+        .velocity = rm::test::at(0, 0, 20),
+        .damage = rm::unitdef::flatDamage(rm::test::mag(10.0f)),
+        .targetLayers = rm::unitdef::TargetLayerMask::Surface,
+        .firedByArmy = 0,
+        .ticksRemaining = 1,
+        .visualId = "/projectiles/AIFSonanceShell02/AIFSonanceShell02_proj.bp",
+    });
+    (void)rm::app::advanceMatch(runner, 0, 0.0f);
+    (void)rm::app::advanceMatch(runner, 1, 0.0f);
+
+    REQUIRE(scene.events.count(rm::sim::EventKind::ProjectileImpact) == 1);
+    const rm::sim::Event* impact =
+        firstOf(scene.events, rm::sim::EventKind::ProjectileImpact);
+    REQUIRE(impact != nullptr);
+    REQUIRE(impact->impactType == rm::sim::ImpactType::Unit);
+    REQUIRE(scene.impactMarks.size() == 1);
+    CHECK(scene.impactMarks[0].script
+          == rm::app::UnitScene::ImpactMarkScript::SonanceCrater);
+}

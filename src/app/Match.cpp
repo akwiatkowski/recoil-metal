@@ -1897,12 +1897,19 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             }
         } else if (event.kind == rm::sim::EventKind::ProjectileImpact
                    && (event.impactType == rm::sim::ImpactType::Terrain
-                       || event.impactType == rm::sim::ImpactType::Prop)) {
+                       || event.impactType == rm::sim::ImpactType::Prop
+                       || (event.impactType == rm::sim::ImpactType::Unit
+                           && scriptTagMarksHull(
+                               scriptTagForProjectile(event.visualId))))) {
             // Non-lethal ground hits scorch too: a battle that only marks its kills
             // forgets most of what happened there. Water and shields leave no mark.
             // Sized from the shot's blast radius (`defaultexplosions.lua` C-290):
             // the event carries the base damage profile's blast, zero when the
-            // shot is a direct hit with no area damage.
+            // shot is a direct hit with no area damage. A hull-struck ground
+            // unit still lays the per-weapon `OnImpact` decal beneath it
+            // (C-484): sonance/suthanus lay their crater pair, napalm its
+            // scorch, frag its scorch — all gated wider than Terrain/Prop in
+            // the corpus scripts.
             noteImpactMark(scene, rm::sim::fxToFloat(event.at[0]),
                            rm::sim::fxToFloat(event.at[2]),
                            rm::sim::fxToFloat(event.blastRadiusElmos),

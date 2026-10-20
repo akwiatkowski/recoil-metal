@@ -1743,8 +1743,16 @@ void refreshWreckDecals(UnitScene& scene, const HeightField& field, TickIndex no
 /// beside the base-class scorch — `AIFSonanceShell02` crater pair,
 /// `CIFArtilleryProton01` scorch_011, `TIFNapalmCarpetBomb01` napalm scorch,
 /// `CIFEMPFluxWarhead02` nuke scorch. Anything else is `BaseScorch`.
-/// Presentation only, never hashed.
 [[nodiscard]] UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId) noexcept;
+/// Whether a per-weapon `OnImpact` decal also lays on a hull strike (C-484):
+/// `AIFSonanceShell02` lays its crater pair unconditionally,
+/// `SIFSuthanusArtilleryShell02` on anything but Shield/Water/UnitAir,
+/// `TIFNapalmCarpetBomb01/02` on anything but Water,
+/// `AIFFragmentationSensorShell03` unconditionally — so a ground-unit impact
+/// still scorches beneath the victim. The Terrain/Prop-only writers (proton,
+/// zhanasee, antimatter, small-yield, quark, Cybran proton, nuke controllers)
+/// gate on their impact type and mark nothing on a hull. Presentation only.
+[[nodiscard]] bool scriptTagMarksHull(UnitScene::ImpactMarkScript script) noexcept;
 /// Records one non-lethal ground hit for the scorch projection, stamped with
 /// the app tick so the projection can retire it at retail's scorch lifetime.
 /// Drops the oldest sixty-four past the cap — amortised, so a bombardment

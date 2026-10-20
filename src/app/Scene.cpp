@@ -433,6 +433,33 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     if (stem.starts_with("SBOZhanaseeBomb01")) return Script::ZhanaseeScorch;
     return Script::BaseScorch;
 }
+[[nodiscard]] bool scriptTagMarksHull(UnitScene::ImpactMarkScript script) noexcept {
+    using Script = UnitScene::ImpactMarkScript;
+    switch (script) {
+        // `AIFSonanceShell02_script.lua` lays the crater pair with no
+        // `TargetType` test; `SIFSuthanusArtilleryShell02_script.lua` refuses
+        // only Shield/Water/UnitAir, so a ground-unit strike still lays it;
+        // `TIFNapalmCarpetBomb01/02_script.lua` refuses only Water; and
+        // `AIFFragmentationSensorShell03_script.lua` lays with no test.
+        case Script::SonanceCrater: return true;
+        case Script::NapalmScorch: return true;
+        case Script::FragScorch: return true;
+        case Script::BaseScorch:
+        case Script::ProtonScorch:
+        case Script::EmpScorch:
+        case Script::AntimatterScorch:
+        case Script::AntimatterShellScorch:
+        case Script::AntimatterSmallScorch:
+        case Script::SmallYieldScorch:
+        case Script::QuarkSplat:
+        case Script::ZhanaseeScorch:
+        case Script::CybranProtonScorch:
+        case Script::StrategicNukeCrater:
+        case Script::QuantumCrater:
+        case Script::SeraphimNukeCrater: return false;
+    }
+    return false;
+}
 /// Whether a collision-beam class forks `ScorchThread` (C-290): the 8 classes
 /// in `defaultcollisionbeams.lua` whose `OnImpact` forks the thread on
 /// `impactType == 'Terrain'`, plus the two subclasses that inherit it
