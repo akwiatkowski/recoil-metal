@@ -919,6 +919,54 @@ TEST_CASE("C-255: NewDamageRadius adds to a nonzero authored blast",
     CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, cannon)
           == rm::sim::Fx::fromInt(100));
 }
+TEST_CASE("C-255: HighExplosiveOrdnanceRemove leaves the authored blast",
+          "[fa-progress][enhancement]") {
+    // Retail `UEL0301_script.lua:205-207`: the Remove branch runs the SAME
+    // `wep:AddDamageRadiusMod(bp.NewDamageRadius)` call with its OWN table,
+    // which authors `NewDamageRadius = -4` (`UEL0301_unit.bp`) — but retail's
+    // own registry (`Unit.lua:2032-2059`) then erases BOTH names: the Remove's
+    // `RemoveEnhancements` lists `HighExplosiveOrdnance` AND itself, and the
+    // slot write lands the Remove name first. The -4 never survives as
+    // installed state; the net observable is the authored blast. The sim's
+    // slot map already models exactly this, so this pins install-widens and
+    // Remove-restores against the real -4 row.
+    rm::test::Roster roster;
+    roster.rate = rm::sim::TickRate{10};
+    rm::unitdef::UnitDef def;
+    def.name = "test_heo_gunner";
+    def.health = rm::test::mag(100.0f);
+    rm::unitdef::Weapon cannon;
+    cannon.label = "RightHeavyPlasmaCannon";
+    cannon.role = rm::unitdef::WeaponRole::DirectFire;
+    cannon.maxRange = rm::sim::Fx::fromInt(30);
+    cannon.rateOfFire = 1.0f;
+    cannon.damage = rm::test::mag(10.0f);
+    cannon.damageRadius = rm::sim::Fx::fromInt(80);
+    def.weapons = {cannon};
+    const auto installParams = rm::lua::parseTable("{ NewDamageRadius=2.5 }");
+    const auto removeParams = rm::lua::parseTable("{ NewDamageRadius=-4 }");
+    REQUIRE(installParams);
+    REQUIRE(removeParams);
+    def.enhancements.push_back({.name = "HighExplosiveOrdnance", .slot = "RCH",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .parameters = *installParams});
+    def.enhancements.push_back({.name = "HighExplosiveOrdnanceRemove", .slot = "RCH",
+        .prerequisite = "HighExplosiveOrdnance",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f),
+        .removes = {"HighExplosiveOrdnance", "HighExplosiveOrdnanceRemove"},
+        .parameters = *removeParams});
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "HighExplosiveOrdnance"));
+    // 2.5 ogrids = 20 elmos on top of the 80-elmo authored blast.
+    CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, cannon)
+          == rm::sim::Fx::fromInt(100));
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "HighExplosiveOrdnanceRemove"));
+    // The Remove erases itself with its target: the authored blast returns.
+    CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, cannon)
+          == rm::sim::Fx::fromInt(80));
+}
 
 TEST_CASE("C-378: a dead owner's in-flight enhancement work retires with it",
           "[fa-progress][enhancement]") {
