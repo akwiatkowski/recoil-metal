@@ -3119,6 +3119,13 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
             if (!weaponSiloLaunchedFor(store, catalog, slot, weapon)) {
                 continue;
             }
+            // Cargo rides silent unless its own Transport block allows it
+            // (`weapon.lua:SetOnTransport`, C-198) — the firer-side hold the
+            // automatic pass and `fireOvercharge` already keep.
+            if (slot < store.motion().size() && store.motion()[slot].attached
+                && !cargoMayFireFromRack(store, catalog, slot)) {
+                continue;
+            }
             if (aimTarget.generation != 0
                 && !weapon.canTarget(store.motion()[aimTarget.index].airborne,
                     store.motion()[aimTarget.index].submersible

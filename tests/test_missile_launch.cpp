@@ -368,6 +368,24 @@ TEST_CASE("a launch order at a zero-health corpse holds without firing") {
     CHECK(f.stored(silo) == 1);
 }
 
+TEST_CASE("a launch order from cargo riding its carrier holds without firing") {
+    // C-198 (`weapon.lua:SetOnTransport`): a weapon on a transported unit is
+    // disabled unless the CARGO's own `Transport.CanFireFromTransport` is set.
+    // `fireWeapons` and `fireOvercharge` both hold via `cargoMayFireFromRack`,
+    // but `fireMissiles` never asks whether the LAUNCHER is attached — a silo
+    // racked on a carrier would loose its ordered missile.
+    Fixture f;
+    const UnitId carrier = f.roster.add(f.tankType, 200.0f, 200.0f, 0, 2000.0f);
+    const UnitId silo = f.roster.add(f.siloType, 200.0f, 200.0f, 0, 2000.0f);
+    REQUIRE(f.roster.store.attach(carrier, silo));
+    f.loadSilo(silo, 1);
+    REQUIRE(f.launchAt(silo, 800.0f, 800.0f));
+    const rm::sim::TickReport report = f.tick(3);
+    CHECK(report.shotsFired == 0);
+    CHECK(f.shots.empty());
+    CHECK(f.stored(silo) == 1);
+}
+
 TEST_CASE("a launch order at cargo riding its carrier holds without firing") {
     // Retail's transport invulnerability (`nearestTarget`'s attached reject):
     // an attached unit rides its carrier's hull — guns shoot the transport,
