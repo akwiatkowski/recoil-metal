@@ -1139,3 +1139,14 @@ TEST_CASE("sim-callback channel state changes the hash", "[state-hash]") {
         rm::sim::SimMarker{.owner = 0, .id = 1, .name = "rally"};
     CHECK(offered.hash() != armed);
 }
+TEST_CASE("army handicap changes the hash", "[state-hash]") {
+    // `Army::handicap` (`C-060`) rides the save (v53) and `DealDamage`
+    // divides by `(handicap + 1)`, but `hashMatch` never feeds it: a
+    // handicapped match hashes identically to an unhandicapped one. The
+    // divide changes damage dealt, so the hash must separate them. Zero
+    // stays silent, keeping the pre-handicap stream.
+    Fixture handicapped;
+    Fixture plain;
+    handicapped.armies.front().handicap = 1;
+    CHECK(handicapped.hash() != plain.hash());
+}

@@ -720,6 +720,16 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, army.cheatEnabled);
         }
     }
+    // `handicap` (`C-060`) joins the stream only once some army is
+    // handicapped, so a match with no handicap hashes exactly as before.
+    // The save carries it (v53) and `DealDamage` divides by
+    // `(handicap + 1)`, so it is live damage state like the flag above.
+    if (std::ranges::any_of(match.armies,
+                          [](const Army& army) { return army.handicap != 0; })) {
+        for (const Army& army : match.armies) {
+            feed(h, army.handicap);
+        }
+    }
     // `RequestingAlliedVictory` (C-346) joins the stream only once some army has
     // asked for the shared win, so a match that never touches diplomacy hashes
     // exactly as before. `resourceSharing` stays out: it gates nothing in the
