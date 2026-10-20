@@ -3086,6 +3086,13 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
                 head->setTarget(store.idAt(slot));
                 continue;
             }
+            // An attached unit rides its carrier's hull — guns shoot the
+            // transport, not the cargo racked under it (retail's transport
+            // invulnerability, the attached reject `nearestTarget` and
+            // `canShootExplicitTarget` already hold on).
+            if (store.motion()[head->target().index].attached) {
+                continue;
+            }
             to = positionOf(transforms[head->target().index]);
             aimTarget = head->target();
         }

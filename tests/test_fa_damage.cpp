@@ -472,3 +472,59 @@ TEST_CASE("an air crash blast detonates through the death-weapon path",
           > rm::sim::Mag{});
     CHECK(roster.health(bystander).current < rm::sim::Mag::fromInt(100));
 }
+
+TEST_CASE("a death blast that kills detonates again on the next tick",
+          "[fa-damage]") {
+    // `src/core/sim/Skirmish.cpp` (death-blast loop): anything a blast kills
+    // is retired on the NEXT tick rather than this one, so a chain of
+    // detonations propagates one link per tick instead of recursing — the
+    // deterministic answer, since recursion would order by slot layout.
+    // Retail shape: `reference/supcom-wiki/pages/weapons/Death_weapon.md` —
+    // a death blast destroys what stands beside the corpse, and volatile
+    // neighbours (fabricators, generators) go up in turn.
+    rm::test::Roster roster;
+    UnitDef bomb;
+    bomb.name = "test_chain_bomb";
+    bomb.categories = {"STRUCTURE"};
+    rm::unitdef::Weapon blast;
+    blast.label = "DeathWeapon";
+    blast.role = rm::unitdef::WeaponRole::Death;
+    blast.fireOnDeath = true;
+    blast.damage = rm::sim::Mag::fromInt(400);
+    blast.damageRadius = rm::sim::Fx::fromInt(100);
+    bomb.weapons.push_back(blast);
+    const rm::UnitTypeIndex bombType = roster.addType(bomb);
+    const rm::UnitTypeIndex targetType = roster.addType(mobileDef());
+    // Two live bombs in a row and a bystander past the second: the first
+    // blast kills the second, whose blast reaches the bystander a tick later.
+    const UnitId first = roster.add(bombType, 0.0f, 0.0f, 0, 100.0f);
+    const UnitId second = roster.add(bombType, 50.0f, 0.0f, 1, 100.0f);
+    // Past the first blast's rim (100) but inside the second's (50 +- 100).
+    // A third side: each blast is hostile-only, so the bystander must be
+    // hostile to the bomb that kills it, not to the one that started it.
+    const UnitId bystander = roster.add(targetType, 120.0f, 0.0f, 2, 1000.0f);
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<Army> armies = rm::sim::freeForAll(3);
+    std::vector<rm::sim::Economy> economies(3);
+    std::vector<int> commandersEver(3, 0);
+    std::vector<rm::sim::Projectile> projectiles;
+    std::vector<rm::sim::Construction> building;
+    rm::sim::EventQueue events;
+    Match match = loneMatch(armies, economies, commandersEver);
+    match.projectiles = &projectiles;
+    match.building = &building;
+    match.events = &events;
+    roster.health(first).current = rm::sim::Mag{};
+    const rm::sim::TickReport firstTick =
+        rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    // One link this tick: the second bomb died to the first blast, but its
+    // own blast waits for the next retirement pass.
+    CHECK(firstTick.deathBlasts == 1);
+    CHECK(!roster.health(second).alive());
+    CHECK(roster.health(bystander).current == rm::sim::Mag::fromInt(1000));
+    const rm::sim::TickReport secondTick =
+        rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    CHECK(secondTick.deathBlasts == 1);
+    CHECK(roster.health(bystander).current < rm::sim::Mag::fromInt(1000));
+}

@@ -349,3 +349,22 @@ TEST_CASE("a launch order at a zero-health corpse holds without firing") {
     CHECK(f.shots.empty());
     CHECK(f.stored(silo) == 1);
 }
+
+TEST_CASE("a launch order at cargo riding its carrier holds without firing") {
+    // Retail's transport invulnerability (`nearestTarget`'s attached reject):
+    // an attached unit rides its carrier's hull — guns shoot the transport,
+    // not the cargo racked under it. `fireOvercharge` holds on a clicked
+    // cargo, but `fireMissiles` walks the order target directly and never
+    // asks — so a clicked cargo would take the missile.
+    Fixture f;
+    const UnitId silo = f.roster.add(f.siloType, 200.0f, 200.0f, 0, 2000.0f);
+    const UnitId carrier = f.roster.add(f.tankType, 800.0f, 800.0f, 1, 500.0f);
+    const UnitId cargo = f.roster.add(f.tankType, 802.0f, 800.0f, 1, 500.0f);
+    REQUIRE(f.roster.store.attach(carrier, cargo));
+    f.loadSilo(silo, 1);
+    REQUIRE(f.launchAt(silo, cargo));
+    const rm::sim::TickReport report = f.tick(3);
+    CHECK(report.shotsFired == 0);
+    CHECK(f.shots.empty());
+    CHECK(f.stored(silo) == 1);
+}
