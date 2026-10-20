@@ -1,3 +1,4 @@
+#include "core/sim/UnitCatalog.hpp"
 #include "core/sim/UnitStore.hpp"
 
 #include <algorithm>
@@ -456,7 +457,7 @@ void UnitStore::propagateAttachments() {
     }
 }
 
-void UnitStore::kill(UnitId id, RandomStream* random) {
+void UnitStore::kill(UnitId id, RandomStream* random, const UnitCatalog* catalog) {
     if (!ids_.alive(id)) {
         return;
     }
@@ -485,6 +486,13 @@ void UnitStore::kill(UnitId id, RandomStream* random) {
     enhancements_[id.index].clear();
     lifetimeRemainingTicks_[id.index] = kLifetimeUnset;
     (void)detach(id);
+    // `C-197` Phase C: a dying carrier's stored pool cargo is destroyed
+    // outright via retail's `Entity::Destroy` path — no sim-RNG roll, no
+    // survivor. The store owns no defs, so the carrier check needs the
+    // catalog; without one every child rolls, the pre-Phase-C behaviour.
+    const unitdef::UnitDef* carrierDef =
+        catalog != nullptr ? catalog->def(typeAt(id.index)) : nullptr;
+    const bool storedPool = carrierDef != nullptr && carrierDef->isCarrier();
     const std::vector<UnitId> cargo = children_[id.index];
     for (const UnitId child : cargo) {
         if (attachmentParentBones_[child.index] == kTractorAttachBone) {
@@ -494,6 +502,13 @@ void UnitStore::kill(UnitId id, RandomStream* random) {
             // again, never through the `C-197` roll below.
             (void)detach(child);
             (void)setDoNotTarget(child, false);
+            continue;
+        }
+        if (storedPool) {
+            // No roll, no instigator stamp, no wreck downstream: `destroy`
+            // zeroes the radius first, so `retireDead` never reports the jet
+            // as a death, and detaches any grandchild cargo alive.
+            destroy(child);
             continue;
         }
         if (random != nullptr) {
@@ -509,7 +524,7 @@ void UnitStore::kill(UnitId id, RandomStream* random) {
         // `C-197`: the roll kills "with the transport as instigator" — stamp
         // the carrier before recursing so the passenger's death names it.
         health_[child.index].lastHitBy = id;
-        kill(child, random);
+        kill(child, random, catalog);
     }
     children_[id.index].clear();
     ids_.release(id);

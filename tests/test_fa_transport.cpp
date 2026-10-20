@@ -1853,6 +1853,24 @@ TEST_CASE("C-197: cargo killed with its carrier names the transport as instigato
     REQUIRE_FALSE(roster.store.alive(cargo));
     CHECK(roster.health(cargo).lastHitBy == transport);
 }
+TEST_CASE("C-197: a killed carrier destroys its stored aircraft outright, no roll",
+          "[fa-transport]") {
+    // `TransportDetachAllUnits` Phase C (`0x005edeb0`, C-197): stored cargo
+    // is destroyed outright via `Entity::Destroy` — no sim-RNG roll, no
+    // survivor. A carrier pool aircraft dies with the carrier even on the
+    // stream draw that spares external cargo.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex carrierType = roster.addType(carrierDef());
+    const rm::UnitTypeIndex jetType = roster.addType(airCargoDef());
+    const UnitId carrier = roster.add(carrierType, 50.0f, 50.0f, 0, 500.0f);
+    const UnitId jet = roster.add(jetType, 50.0f, 50.0f, 0, 100000.0f);
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog,
+                                 *roster.catalog.def(carrierType), carrier, jet));
+    rm::sim::RandomStream spared{319};  // the draw that spares external cargo below
+    roster.store.kill(carrier, &spared, &roster.catalog);
+    CHECK_FALSE(roster.store.alive(carrier));
+    CHECK_FALSE(roster.store.alive(jet));
+}
 TEST_CASE("C-199: naval waiters stage onto the wide Guard ring", "[fa-transport]") {
     // `lua/formations.lua: GuardFormation` (ART-S007) widens when any waiter
     // is `NAVAL * MOBILE`: `sizeMult` starts at 8 elmos, not 3, and grows 8

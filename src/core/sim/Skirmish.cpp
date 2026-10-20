@@ -177,9 +177,8 @@ void retireDead(UnitStore& store, const UnitCatalog& catalog, TickReport& report
     // handle should stop naming it: anything still holding one from an earlier tick now
     // fails cleanly instead of finding whoever inherits the slot.
     for (const Death& death : report.died) {
-        // `C-197`: the cargo roll draws from the match's own stream, so a
         // transport's death is replay-deterministic like everything else.
-        store.kill(death.ref, random);
+        store.kill(death.ref, random, &catalog);
     }
 }
 

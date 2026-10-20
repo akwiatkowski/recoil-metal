@@ -21,6 +21,7 @@
 #include <vector>
 
 namespace rm::sim {
+class UnitCatalog;
 
 /// `C-265`'s "not yet armed" marker for `UnitStore::lifetimeRemainingTicks`:
 /// the tick's lifetime pass writes the blueprint's `Lifetime` here on first
@@ -238,7 +239,11 @@ public:
     /// carrier, and the survivors detach where it fell. Without a stream —
     /// callers outside the match tick, which have no deterministic draw to
     /// offer — cargo dies unconditionally, the pre-`C-197` behaviour.
-    void kill(UnitId id, RandomStream* random = nullptr);
+    /// `catalog`, when given, lets the cascade tell stored pool cargo from
+    /// external cargo (`C-197` Phase C): a dying carrier's stored children
+    /// are destroyed outright — no sim-RNG roll, no survivor — while external
+    /// cargo rolls `r < 0.99` as before.
+    void kill(UnitId id, RandomStream* random = nullptr, const UnitCatalog* catalog = nullptr);
 
     /// Retail's `unit:Destroy()` (`C-261`, `C-265`): the unit leaves WITHOUT the
     /// death path — no wreck, no `UnitDestroyed` event, no kill credit, no death
