@@ -2110,10 +2110,18 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
                             scene.roster.byId(built.upgradesTo)) {
                         if (const auto type =
                                 resolveBuildable(scene, runner.content, next->path())) {
-                            (void)issueBuild(scene, *spawned,
-                                             playerDriving(scene, work.armyIndex),
-                                             static_cast<rm::TickIndex>(tickIndex), *type,
-                                             work.position[0], work.position[2], false);
+                            (void)submitCommand(scene, rm::sim::CommandIssue{
+                                .tick = static_cast<rm::TickIndex>(tickIndex),
+                                .phase = rm::sim::CommandPhase::PostSpawn,
+                                .source = static_cast<rm::CommandSource>(
+                                    playerDriving(scene, work.armyIndex)),
+                                .player = playerDriving(scene, work.armyIndex),
+                                .kind = rm::sim::CommandKind::Build,
+                                .units = {*spawned},
+                                .targetX = work.position[0],
+                                .targetZ = work.position[2],
+                                .buildType = *type,
+                            });
                         }
                     }
                 }

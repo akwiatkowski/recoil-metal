@@ -1261,6 +1261,120 @@ TEST_CASE("a commander that built a factory still assists its upgrade") {
     CHECK(upgrade->builder == factoryId);
     CHECK(rm::sim::magToFloat(upgrade->assistPerTick) > 0.0f);
 }
+TEST_CASE("C-190: a mobile-built structure chains into its authored upgrade") {
+    // `CUnitMobileBuildTask` state 4 ends by issuing `UNITCOMMAND_Upgrade` to
+    // the unit it just built when the ordered blueprint's `+0x1ec` is nonzero
+    // — the build-then-upgrade chain. Here: a MOBILE engineer founds a T1
+    // point defence whose blueprint names its T2 successor, and completion
+    // issues the upgrade order onto the risen structure by itself.
+    const rm::HeightField field = flatField();
+    rm::app::UnitScene scene;
+    scene.armies = rm::sim::freeForAll(1);
+    scene.players = rm::sim::onePlayerPerArmy(1, 0);
+    scene.economies.assign(1, rm::sim::Economy{});
+    scene.commandersEver.assign(1, 0);
+    scene.economies[0].stored = {.mass = rm::sim::magFromFloat(1000000.0f),
+                                 .energy = rm::sim::magFromFloat(1000000.0f)};
+
+    rm::unitdef::UnitDef engineer;
+    engineer.name = "test_chain_engineer";
+    engineer.categories = {"ENGINEER", "MOBILE", "UEF"};
+    engineer.buildRate = 60.0f;
+    engineer.motion = rm::unitdef::MotionType::Land;
+    engineer.speedElmosPerSecond = 100.0f;
+    engineer.buildableCategory = {{"TEST_CHAIN_STRUCTURE"}};
+    scene.definitions.push_back(engineer);
+    const rm::UnitTypeIndex engineerType =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(engineerType, rm::data::moveDefFor(engineer), 1.0f);
+
+    rm::unitdef::UnitDef pd1;
+    pd1.name = "TEST_PD1";
+    pd1.categories = {"TEST_CHAIN_STRUCTURE", "UEF"};
+    pd1.buildRate = 10.0f;
+    pd1.buildCostMass = rm::sim::magFromFloat(100.0f);
+    pd1.buildCostEnergy = rm::sim::magFromFloat(100.0f);
+    pd1.buildTime = rm::sim::magFromFloat(10.0f);
+    pd1.collisionRadiusElmos = 4.0f;
+    pd1.health = rm::sim::magFromFloat(1000.0f);
+    pd1.upgradesTo = "TEST_PD2";
+    pd1.buildableCategory = {{"TEST_CHAIN_STRUCTURE"}};
+    scene.definitions.push_back(pd1);
+    const rm::UnitTypeIndex pd1Type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(pd1Type, rm::data::moveDefFor(pd1), 1.0f);
+    constexpr std::string_view kPd1Path{"/test_pd1"};
+    scene.setPathForType(pd1Type, kPd1Path);
+    scene.typeForBlueprint.emplace(kPd1Path, pd1Type);
+
+    rm::unitdef::UnitDef pd2;
+    pd2.name = "TEST_PD2";
+    pd2.categories = {"TEST_CHAIN_STRUCTURE", "UEF"};
+    pd2.buildRate = 10.0f;
+    pd2.buildCostMass = rm::sim::magFromFloat(100.0f);
+    pd2.buildCostEnergy = rm::sim::magFromFloat(100.0f);
+    pd2.buildTime = rm::sim::magFromFloat(600.0f);
+    pd2.collisionRadiusElmos = 4.0f;
+    pd2.health = rm::sim::magFromFloat(2000.0f);
+    scene.definitions.push_back(pd2);
+    const rm::UnitTypeIndex pd2Type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(pd2Type, rm::data::moveDefFor(pd2), 1.0f);
+    constexpr std::string_view kPd2Path{"/units/TEST_PD2/TEST_PD2_unit.bp"};
+    scene.setPathForType(pd2Type, kPd2Path);
+    scene.typeForBlueprint.emplace(kPd2Path, pd2Type);
+
+    // The roster seam the chain reads: `byId` over the built successor id.
+    scene.roster = rm::data::Roster::build(
+        std::vector<rm::unitdef::UnitDef>{engineer, pd1, pd2},
+        std::vector<std::string>{"TEST_ENG", "TEST_PD1", "TEST_PD2"});
+
+    const rm::sim::UnitId engineerId = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = engineerType,
+        .transform = {.x = rm::sim::fxFromFloat(196.0f),
+                      .z = rm::sim::fxFromFloat(200.0f)},
+        .motion = rm::app::motionFor(engineer, 0),
+        .health = rm::sim::initialHealth(rm::sim::Mag::fromInt(100)),
+    });
+
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.match.baseStorage = {.mass = rm::sim::magFromFloat(1000000.0f),
+                                .energy = rm::sim::magFromFloat(1000000.0f)};
+    runner.scripts.clear();
+
+    REQUIRE(rm::app::issueBuild(scene, engineerId, 0, 0, pd1Type,
+                                rm::sim::fxFromFloat(200.0f),
+                                rm::sim::fxFromFloat(200.0f)));
+    rm::sim::UnitId risen{};
+    int now = 0;
+    for (; now < 200 && !scene.store.alive(risen); ++now) {
+        (void)rm::app::advanceMatch(runner, now, 0.0f);
+        for (rm::UnitIndex slot = 0; slot < scene.store.slotCount(); ++slot) {
+            if (slot != engineerId.index && scene.store.slotAlive(slot)
+                && scene.store.typeAt(slot) == pd1Type) {
+                risen = scene.store.idAt(slot);
+            }
+        }
+    }
+    REQUIRE(scene.store.alive(risen));
+    // The chain issues into the PostSpawn phase, so it lands on the queue on
+    // the next dispatch: one more tick, then the risen structure carries a
+    // Build order for its authored successor with no further input.
+    (void)rm::app::advanceMatch(runner, now, 0.0f);
+    const rm::sim::CommandQueue& queue = scene.store.orders()[risen.index];
+    bool chained = false;
+    for (const auto& entry : queue.entries()) {
+        if (entry.kind() == rm::sim::CommandKind::Build
+            && entry.buildType() == pd2Type) {
+            chained = true;
+        }
+    }
+    CHECK(chained);
+}
+
 
 TEST_CASE("the app runner flushes a defeated army's map markers") {
     // C-210's `OnDefeat` flush (`aibrain.lua:786` -> `SimPing.OnArmyDefeat`):
