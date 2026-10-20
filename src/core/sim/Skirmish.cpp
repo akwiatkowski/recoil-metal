@@ -1119,9 +1119,11 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
                &match.random);
     // Retail `DoDeathWeapon` (`lua/sim/Unit.lua:955-970`) detonates only the
     // weapon labelled `DeathWeapon` that the blueprint marks with
-    // `FireOnDeath`. Crash/scripted labels (`DeathImpact`, `CollossusDeath`,
-    // `MegalithDeath`) never fire on the death thread, and neither does an
-    // unflagged `DeathWeapon` — the corpus's 40 blocks split exactly that way.
+    // `FireOnDeath` — and never while `IsBeingBuilt()` (`Unit.lua:957`): an
+    // unfinished unit leaves no death blast. Crash/scripted labels
+    // (`DeathImpact`, `CollossusDeath`, `MegalithDeath`) never fire on the
+    // death thread, and neither does an unflagged `DeathWeapon` — the
+    // corpus's 40 blocks split exactly that way.
     // Anything a blast kills is retired on the NEXT tick rather than this one, so a
     // chain of detonations propagates one link per tick instead of recursing here. That
     // is both the cheaper answer and the deterministic one: recursion would make the
@@ -1142,6 +1144,23 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         if (blast == nullptr || blast->label != "DeathWeapon" || blast->dummyWeapon
             || !blast->fireOnDeath) {
             continue;
+        }
+        // `Unit.lua:957`: `DoDeathWeapon` returns before the blueprint loop
+        // while `IsBeingBuilt()`. The sim's only live-unit `IsBeingBuilt` is
+        // an unfinished upgrade row's `upgradeOf` target (Adjacency.cpp
+        // `beingBuilt`); the upgrade-cancel prune below has not run yet, so
+        // the row is still live here and the check reads it directly.
+        if (match.building != nullptr) {
+            bool beingBuilt = false;
+            for (const Construction& work : *match.building) {
+                if (!work.finished() && work.upgradeOf == death.ref) {
+                    beingBuilt = true;
+                    break;
+                }
+            }
+            if (beingBuilt) {
+                continue;
+            }
         }
         // ATTRIBUTED TO THE CORPSE, by handle as well as by army — so a unit killed by a
         // commander's detonation names the commander, and the chain of a base going up reads

@@ -388,3 +388,60 @@ TEST_CASE("a DeathWeapon without FireOnDeath leaves no death-site blast",
     CHECK(roster.health(bystander).current == rm::sim::Mag::fromInt(100));
     CHECK(report.deathBlasts == 0);
 }
+
+TEST_CASE("a unit killed while upgrading leaves no death-site blast",
+          "[fa-damage]") {
+    // Retail `DoDeathWeapon` (`lua/sim/Unit.lua:955-957`) returns before
+    // touching the blueprint while `IsBeingBuilt()` — an unfinished unit has
+    // no death blast. The sim's only live-unit `IsBeingBuilt` is an
+    // unfinished upgrade row's `upgradeOf` target (`src/core/sim/Adjacency.cpp`,
+    // `beingBuilt`), so a factory mid-upgrade to a firing ACU-grade
+    // `DeathWeapon` still leaves no detonation at its death site.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex targetType = roster.addType(mobileDef());
+    const UnitId bystander = roster.add(targetType, 0.0f, 0.0f, 1, 100.0f);
+
+    UnitDef upgrading;
+    upgrading.name = "test_upgrading_factory";
+    upgrading.categories = {"STRUCTURE"};
+    rm::unitdef::Weapon blast;
+    blast.label = "DeathWeapon";
+    blast.role = rm::unitdef::WeaponRole::Death;
+    blast.fireOnDeath = true;
+    blast.damage = rm::test::mag(250.0f);
+    blast.damageRadius = rm::test::fx(16.0f);
+    upgrading.weapons.push_back(blast);
+
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<int> commandersEver(2, 0);
+    std::vector<rm::sim::Projectile> projectiles;
+    std::vector<rm::sim::Construction> building;
+    rm::sim::EventQueue events;
+    Match match = loneMatch(armies, economies, commandersEver);
+    match.projectiles = &projectiles;
+    match.building = &building;
+    match.events = &events;
+
+    const rm::UnitTypeIndex upgradingType = roster.addType(upgrading);
+    const UnitId doomed = roster.add(upgradingType, 0.0f, 0.0f, 0, 100.0f);
+    // An unfinished upgrade of the dying factory: its `upgradeOf` names the
+    // corpse, which is what `IsBeingBuilt` reads in the sim.
+    building.push_back(rm::sim::Construction{
+        .armyIndex = 0,
+        .buildTimeRemaining = rm::sim::Mag::fromInt(60),
+        .totalBuildTime = rm::sim::Mag::fromInt(60),
+        .blueprintIndex = 0,
+        .upgradeOf = doomed,
+    });
+    roster.health(doomed).current = rm::sim::Mag{};
+    const rm::sim::TickReport report =
+        rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+
+    // No death-site detonation: the bystander on the corpse is unhurt and no
+    // blast is reported.
+    CHECK(roster.health(bystander).current == rm::sim::Mag::fromInt(100));
+    CHECK(report.deathBlasts == 0);
+}
