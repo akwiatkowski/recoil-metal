@@ -1011,3 +1011,37 @@ TEST_CASE("the offline capture loop feeds the scene waterline to effect gating",
     REQUIRE(run(false) > 0);
     CHECK(run(true) == 0);
 }
+TEST_CASE("a fired shot also bursts its authored charge flash", "[weapon-visuals]") {
+    // Retail `DefaultProjectileWeapon.PlayFxMuzzleChargeSequence`
+    // (`mohodata/lua/sim/defaultweapons.lua:177-182`): the charge flash is its
+    // own authored list (`FxChargeMuzzleFlash`, e.g. the Seraphim Chronotron's
+    // `SChronotronCannonMuzzleCharge`), created at the same muzzle as the fire
+    // flash. The loader resolves the key; nothing bursts it, so the charge
+    // emitters never draw.
+    rm::WeaponVisuals visuals;
+    rm::WeaponMaterial fire;
+    fire.emitter = "/effects/emitters/fire_emit.bp";
+    rm::WeaponMaterial charge;
+    charge.emitter = "/effects/emitters/charge_emit.bp";
+    visuals.materials.push_back(fire);
+    visuals.materials.push_back(charge);
+    visuals.definitions[rm::foldedVisualKey("test_gun:Main#fxmuzzleflash")] = {0};
+    visuals.definitions[rm::foldedVisualKey("test_gun:Main#fxchargemuzzleflash")] = {1};
+    visuals.scales[rm::foldedVisualKey("test_gun:Main#fxchargemuzzleflash")] = 2.0f;
+    const rm::sim::Event fired{.kind = rm::sim::EventKind::WeaponFired,
+        .at2 = {rm::sim::Fx::fromInt(100), rm::sim::Fx::fromInt(20), {}},
+        .visualId = "test_gun:Main"};
+    rm::CombatEffectState state;
+    std::vector<rm::Particle> out;
+    rm::emitCombatEffects(out, std::array{fired}, &visuals, &state);
+    const auto has = [&](std::uint32_t id) {
+        return std::ranges::any_of(state.bursts,
+            [id](const rm::CombatEffectBurst& b) { return b.material == id; });
+    };
+    CHECK(has(0));
+    CHECK(has(1));
+    const auto it = std::ranges::find_if(state.bursts,
+        [](const rm::CombatEffectBurst& b) { return b.material == 1; });
+    REQUIRE(it != state.bursts.end());
+    CHECK(it->scale == Catch::Approx(2.0f));
+}

@@ -95,7 +95,12 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
         case sim::EventKind::WeaponFired: {
             const std::array<float,3> muzzle{sim::fxToFloat(event.at2[0]),
                 sim::fxToFloat(event.at2[1]), sim::fxToFloat(event.at2[2])};
-            if (burst(event.visualId + "#FxMuzzleFlash", muzzle, direction, event.unit, event.visualId)) break;
+            const bool fired = burst(event.visualId + "#FxMuzzleFlash", muzzle, direction, event.unit, event.visualId);
+            // Retail `PlayFxMuzzleChargeSequence` (`defaultweapons.lua:177-182`): the charge
+            // flash is a second authored list at the same muzzle, not an alternative to
+            // the fire flash — the fallback below is still skipped when the fire list exists.
+            (void)burst(event.visualId + "#FxChargeMuzzleFlash", muzzle, direction, event.unit, event.visualId);
+            if (fired) break;
             {
             const ShotClass cls =
                 shotClass ? shotClass(event.unit, event.visualId) : ShotClass::Shell;
