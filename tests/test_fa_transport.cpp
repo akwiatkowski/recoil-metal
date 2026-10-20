@@ -1992,3 +1992,37 @@ TEST_CASE("C-225: a carrier launch exits through its bones round-robin", "[fa-tr
     CHECK(roster.transform(second).x - roster.transform(carrier).x == Fx::fromInt(-4));
     CHECK(roster.transform(second).z - roster.transform(carrier).z == Fx::fromInt(-1));
 }
+TEST_CASE("C-197: cargo that vetoes the kill survives the cascade", "[fa-transport]") {
+    // `TransportDetachAllUnits` (`0x005edeb0`, C-197): a cargo whose script
+    // vetoes `CheckCanBeKilled` is never rolled — a non-`COMMAND` veto simply
+    // survives, detached where the carrier fell.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    UnitDef veto = cargoDef();
+    veto.name = "test_veto_cargo";
+    veto.invulnerable = true;  // the `SetCanBeKilled(false)` script veto
+    const rm::UnitTypeIndex vetoType = roster.addType(veto);
+    const UnitId transport = landedTransport(roster, transportType, 50.0f, 50.0f);
+    const UnitId cargo = roster.add(vetoType, 51.0f, 50.0f, 0, 500.0f);
+    REQUIRE(roster.store.attach(transport, cargo));
+    roster.store.kill(transport, nullptr, &roster.catalog);
+    CHECK(roster.store.alive(cargo));
+    CHECK_FALSE(roster.store.parentOf(cargo).has_value());
+}
+TEST_CASE("C-197: vetoed COMMAND cargo takes the 10000-damage fallback", "[fa-transport]") {
+    // Same veto (`0x005edeb0`, C-197), but the cargo is `COMMAND`: the engine
+    // deals 10000 damage instead of detaching it untouched.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    UnitDef veto = cargoDef();
+    veto.name = "test_veto_commander";
+    veto.categories = {"COMMAND", "LAND", "MOBILE"};  // sorted for hasCategory
+    veto.invulnerable = true;
+    const rm::UnitTypeIndex vetoType = roster.addType(veto);
+    const UnitId transport = landedTransport(roster, transportType, 50.0f, 50.0f);
+    const UnitId cargo = roster.add(vetoType, 51.0f, 50.0f, 0, 20000.0f);
+    REQUIRE(roster.store.attach(transport, cargo));
+    roster.store.kill(transport, nullptr, &roster.catalog);
+    REQUIRE(roster.store.alive(cargo));
+    CHECK(roster.health(cargo).current == rm::sim::Mag::fromInt(10000));
+}

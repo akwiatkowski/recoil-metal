@@ -507,8 +507,29 @@ void UnitStore::kill(UnitId id, RandomStream* random, const UnitCatalog* catalog
         if (storedPool) {
             // No roll, no instigator stamp, no wreck downstream: `destroy`
             // zeroes the radius first, so `retireDead` never reports the jet
-            // as a death, and detaches any grandchild cargo alive.
+            // as a death, and detaches any grandchild cargo alive. Phase C
+            // runs before the Phase B veto below: stored cargo is destroyed
+            // outright with no roll, no veto, no survivor.
             destroy(child);
+            continue;
+        }
+        // `C-197` (`0x005edeb0`) Phase B: a cargo whose script vetoes
+        // `CheckCanBeKilled` is never rolled — the engine deals 10000 damage
+        // only when the cargo is in category `COMMAND`, and a non-`COMMAND`
+        // veto simply survives. `invulnerable` is this sim's `SetCanBeKilled`
+        // model (XSL0402's `SetCanTakeDamage(false)`/`SetCanBeKilled(false)`
+        // pair, C-265).
+        const unitdef::UnitDef* childDef =
+            catalog != nullptr ? catalog->def(typeAt(child.index)) : nullptr;
+        if (childDef != nullptr && childDef->invulnerable) {
+            if (childDef->hasCategory("COMMAND")) {
+                Health& vetoed = health_[child.index];
+                vetoed.lastHitBy = id;
+                vetoed.current = vetoed.current > Mag::fromInt(10000)
+                                     ? vetoed.current - Mag::fromInt(10000)
+                                     : Mag{};
+            }
+            (void)detach(child);
             continue;
         }
         if (random != nullptr) {
