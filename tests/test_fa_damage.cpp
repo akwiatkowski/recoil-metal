@@ -445,3 +445,30 @@ TEST_CASE("a unit killed while upgrading leaves no death-site blast",
     CHECK(roster.health(bystander).current == rm::sim::Mag::fromInt(100));
     CHECK(report.deathBlasts == 0);
 }
+
+TEST_CASE("an air crash blast detonates through the death-weapon path",
+          "[fa-damage]") {
+    // `reference/supcom-wiki/pages/weapons/Blueprint_Weapon.md:320`: the death
+    // label is "DeathWeapon, or DeathImpact for air units crashing" — air
+    // units (e.g. `DAA0206_unit.bp:318`, the Aeon air scout) carry ONLY a
+    // `DeathImpact` blast, and the corpus sweep requires it to hurt. The prior
+    // reject on this label was wrong; the wiki line misread.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex targetType = roster.addType(mobileDef());
+    const UnitId bystander = roster.add(targetType, 0.0f, 0.0f, 1, 100.0f);
+    UnitDef crashing;
+    crashing.name = "test_air_crash_only";
+    crashing.categories = {"AIR", "MOBILE"};
+    rm::unitdef::Weapon impact;
+    impact.label = "DeathImpact";
+    impact.role = rm::unitdef::WeaponRole::Death;
+    impact.dummyWeapon = true;
+    impact.damage = rm::sim::Mag::fromInt(100);
+    impact.damageRadius = rm::sim::Fx::fromInt(8);
+    crashing.weapons.push_back(impact);
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    CHECK(rm::sim::explodeOnDeath(crashing, rm::test::at(0, 0, 0), 0, roster.store,
+                                  armies)
+          > rm::sim::Mag{});
+    CHECK(roster.health(bystander).current < rm::sim::Mag::fromInt(100));
+}

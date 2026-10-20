@@ -3070,8 +3070,12 @@ std::size_t fireMissiles(UnitStore& store, const UnitCatalog& catalog,
                              head->targetZ()};
         UnitId aimTarget{};
         if (head->target().generation != 0) {
-            if (!store.alive(head->target())) {
-                continue;  // advanceOrders retires the order; do not fire at the grave
+            if (!store.alive(head->target())
+                || head->target().index >= store.health().size()
+                || !store.health()[head->target().index].alive()) {
+                continue;  // C-231: liveness is HEALTH, not the handle — a zero-health
+                // corpse whose death `retireDead` has not reported yet is already
+                // dead, and the order holds like overcharge's gate above.
             }
             const int theirArmy = armyAt(store, head->target().index);
             const Army* mine = armyFor(army, armies);
@@ -4474,6 +4478,11 @@ Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy
                      UnitStore& store, std::span<const Army> armies, UnitId by,
                      EventQueue* events, const UnitCatalog* catalog, FeatureStore* features) {
     const unitdef::Weapon* blast = deathWeapon(def);
+    // `deathWeapon` returns the first `Death`-category blast, which covers the
+    // retail `DeathWeapon` label and the air-crash `DeathImpact` label
+    // (`Blueprint_Weapon.md:320`: "DeathWeapon, or DeathImpact for air units
+    // crashing") — corpus air units (e.g. `DAA0206_unit.bp:318`) carry only
+    // `DeathImpact`, and it must detonate where the unit died.
     if (blast == nullptr || !blast->harmful()) {
         return Mag{};
     }

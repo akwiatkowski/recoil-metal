@@ -330,3 +330,22 @@ TEST_CASE("a strategic launch reports the nuke-launch edge") {
     CHECK(edge.unit == launcher);
     CHECK(edge.army == 0);
 }
+
+TEST_CASE("a launch order at a zero-health corpse holds without firing") {
+    // `fireMissiles` gates the unit-target path on the handle (`store.alive`), the same
+    // hole overcharge closed (`C-231`, retail `Moho::Unit::IsDead`): a hull at zero
+    // health whose death `retireDead` has not reported yet is already dead, and the
+    // corpse window below holds the order instead of spending a round on it.
+    Fixture f;
+    const UnitId silo = f.roster.add(f.siloType, 200.0f, 200.0f, 0, 2000.0f);
+    const UnitId victim = f.roster.add(f.tankType, 800.0f, 800.0f, 1, 500.0f);
+    f.loadSilo(silo, 1);
+    REQUIRE(f.launchAt(silo, victim));
+    // The corpse window: health at zero, handle still live — `retireDead` has not run.
+    f.roster.health(victim).current = rm::sim::Mag{};
+    REQUIRE(f.roster.store.alive(victim));
+    const rm::sim::TickReport report = f.tick(1);
+    CHECK(report.shotsFired == 0);
+    CHECK(f.shots.empty());
+    CHECK(f.stored(silo) == 1);
+}
