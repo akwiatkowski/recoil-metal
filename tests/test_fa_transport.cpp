@@ -2052,3 +2052,59 @@ TEST_CASE("C-197: cascade-killed cargo leaves no wreck", "[fa-transport]") {
     const rm::sim::Fx overkill = health.overkillExcess->toFx() / wreckable.health.toFx();
     CHECK(overkill > rm::sim::kFxOne);
 }
+TEST_CASE("C-199: a ferry re-routes when the drop moves more than one elmo", "[fa-transport]") {
+    // `CUnitFerryTask` re-reads the order's target each tick and recomputes
+    // the route when the point moved more than 1.0 (`ART-E001` `0x00616770`,
+    // C-199): a carrier already flying the drop leg must answer the moved
+    // point, not keep flying the stale one.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex cargoType = roster.addType(cargoDef());
+    const UnitId transport = landedTransport(roster, transportType, 30.0f, 30.0f);
+    const UnitId cargo = roster.add(cargoType, 31.0f, 30.0f, 0, 500.0f);
+    const UnitDef carrierDef = transportDef();
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog, carrierDef,
+                                 transport, cargo));
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+
+    REQUIRE(rm::sim::applyCommand(
+                CommandIssue{.source = 0,
+                             .id = rm::commandId(0, 1),
+                             .player = 0,
+                             .kind = CommandKind::Ferry,
+                             .units = {transport},
+                             .targetX = rm::sim::fxFromFloat(80.0f),
+                             .targetZ = rm::sim::fxFromFloat(80.0f)},
+                roster.store, roster.catalog, players, armies, terrain, gridFor,
+                roster.rate)
+                .accepted.size()
+            == 1);
+
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    for (int i = 0; i < 5; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+    }
+    // Aboard from the start, so the carrier is already flying the drop leg —
+    // assert the committed destination, not the `moving` flag, which the
+    // winged mover clears while still steering the leg.
+    REQUIRE(roster.motion(transport).destinationX == rm::sim::fxFromFloat(80.0f));
+
+    // The order's target moves well past the 1.0-elmo recompute gate.
+    roster.store.orders()[transport.index].activeMutable()->setTargetPosition(
+        rm::sim::fxFromFloat(40.0f), rm::sim::fxFromFloat(80.0f));
+    (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+
+    CHECK(roster.motion(transport).destinationX == rm::sim::fxFromFloat(40.0f));
+    CHECK(roster.motion(transport).destinationZ == rm::sim::fxFromFloat(80.0f));
+}

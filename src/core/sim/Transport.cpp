@@ -743,10 +743,32 @@ void advanceLoading(UnitStore& store, const UnitCatalog& catalog, const Terrain&
 /// And retail's `CUnitFerryTask` recomputes its route when the order's target
 /// moves more than 1.0 — the guard-ferry path re-reads the beacon's command
 /// target every tick, which is the same behaviour for the only movable end.
-void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
-                       std::span<const PassabilityGrid* const> gridForType, UnitIndex slot,
-                       QueuedCommand& order, std::array<Fx, 2> beacon,
-                       std::array<Fx, 2> drop) {
+/// The per-tick ferry bookkeeping `CUnitFerryTask` performs (`0x00616770`,
+/// C-199): the order's target is re-read every beat, and when the far end
+/// moved more than 1.0 elmo the route is recomputed — retail re-issues the
+/// leg rather than flying the stale one. True when this tick re-committed
+/// the leg toward `far`.
+[[nodiscard]] bool trackFerryFarEnd(UnitIndex slot, std::array<Fx, 2> far,
+                                   UnitStore& store, const Terrain& terrain,
+                                   std::span<const PassabilityGrid* const> gridForType) noexcept {
+    // The 1.0-elmo recompute gate, squared: under it the old leg stands.
+    const MoveState& motion = store.motion()[slot];
+    const Fx dx = motion.destinationX - far[0];
+    const Fx dz = motion.destinationZ - far[1];
+    if (dx * dx + dz * dz <= Fx::fromInt(1) * Fx::fromInt(1)) {
+        return false;
+    }
+    // Retail re-issues the leg; `commitLeg` refuses a unit already committed,
+    // so clear the commit first. A flyer keeps its flight state — only the
+    // leg destination is stale, not the takeoff.
+    store.motion()[slot].moving = false;
+    return commitLeg(slot, far[0], far[1], store, terrain, gridForType);
+}
+
+ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
+                        std::span<const PassabilityGrid* const> gridForType, UnitIndex slot,
+                        QueuedCommand& order, std::array<Fx, 2> beacon,
+                        std::array<Fx, 2> drop) {
     const UnitId self = store.idAt(slot);
     const Transform& at = store.transforms()[slot];
     MoveState& motion = store.motion()[slot];
@@ -757,7 +779,6 @@ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terra
         const Fx dz = at.z - point[1];
         return dx * dx + dz * dz <= radius * radius;
     };
-
     switch (order.transportPhase()) {
     case TransportPhase::ToBeacon: {
         if (grounded(motion) && !motion.moving
@@ -765,7 +786,9 @@ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terra
             order.setTransportPhase(TransportPhase::Loading);
             return;
         }
-        (void)commitLeg(slot, beacon[0], beacon[1], store, terrain, gridForType);
+        // `C-199` (`0x00616770`): symmetric with the drop leg — a moved
+        // pickup recomputes the route past the same 1.0-elmo gate.
+        (void)trackFerryFarEnd(slot, beacon, store, terrain, gridForType);
         return;
     }
     case TransportPhase::Loading: {
@@ -865,7 +888,9 @@ void advanceFerryRoute(UnitStore& store, const UnitCatalog& catalog, const Terra
             order.setTransportPhase(TransportPhase::ToBeacon);
             return;
         }
-        (void)commitLeg(slot, drop[0], drop[1], store, terrain, gridForType);
+        // `C-199` (`0x00616770`): re-read the order's target each beat and
+        // recompute the route when the drop moved more than 1.0.
+        (void)trackFerryFarEnd(slot, drop, store, terrain, gridForType);
         return;
     }
     case TransportPhase::None:
