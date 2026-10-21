@@ -967,6 +967,54 @@ TEST_CASE("C-255: HighExplosiveOrdnanceRemove leaves the authored blast",
     CHECK(rm::sim::weaponDamageRadiusFor(roster.store, roster.catalog, unit.index, cannon)
           == rm::sim::Fx::fromInt(80));
 }
+TEST_CASE("C-255: FocusConvertorRemove clears the disintegrator's damage bonus",
+          "[fa-progress][enhancement]") {
+    // Retail `URL0301_script.lua:262-268`: the install `AddDamageMod`s the
+    // branch's own `NewDamageMod` (250 in `URL0301_unit.bp`) onto
+    // `RightDisintegrator`; the Remove re-reads `bp` — the REMOVE's own
+    // table, which authors no `NewDamageMod` — and `AddDamageMod`s that 0.
+    // The net observable is the bonus gone: the Remove restores the authored
+    // damage, the same shape as every absolute-write Remove in the corpus.
+    rm::test::Roster roster;
+    roster.rate = rm::sim::TickRate{10};
+    rm::unitdef::UnitDef def;
+    def.name = "test_cybran_acu";
+    def.health = rm::test::mag(100.0f);
+    rm::unitdef::Weapon disintegrator;
+    disintegrator.label = "RightDisintegrator";
+    disintegrator.role = rm::unitdef::WeaponRole::DirectFire;
+    disintegrator.maxRange = rm::sim::Fx::fromInt(200);
+    disintegrator.rateOfFire = 1.0f;
+    disintegrator.damage = rm::test::mag(100.0f);
+    def.weapons = {disintegrator};
+    const auto installParams = rm::lua::parseTable("{ NewDamageMod=250 }");
+    const auto removeParams = rm::lua::parseTable("{}");
+    REQUIRE(installParams);
+    REQUIRE(removeParams);
+    def.enhancements.push_back({.name = "FocusConvertor", .slot = "RCH",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .parameters = *installParams});
+    def.enhancements.push_back({.name = "FocusConvertorRemove", .slot = "RCH",
+        .prerequisite = "FocusConvertor",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f),
+        .removes = {"FocusConvertor", "FocusConvertorRemove"},
+        .parameters = *removeParams});
+    const auto type = roster.addType(def);
+    const auto unit = roster.add(type, 40.0f, 40.0f, 0, 100.0f);
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "FocusConvertor"));
+    CHECK(rm::sim::weaponDamageModFor(roster.store, roster.catalog, unit.index,
+                                       disintegrator)
+          == rm::test::mag(250.0f));
+    // The Remove's `AddDamageMod(0)` runs against the registry FIRST — but the
+    // registry then erases both names, so the stranded 0 never survives as
+    // installed state. The authored damage returns.
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "FocusConvertorRemove"));
+    CHECK(rm::sim::weaponDamageModFor(roster.store, roster.catalog, unit.index,
+                                       disintegrator)
+          == rm::sim::Mag{});
+}
+
 
 TEST_CASE("C-255: a Teleporter install bills no upkeep without its override",
           "[fa-progress][enhancement]") {
