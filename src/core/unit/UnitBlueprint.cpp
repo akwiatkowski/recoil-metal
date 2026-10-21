@@ -1152,8 +1152,13 @@ loadProjectileTraits(std::string_view source) {
         .desiredShooterCap = physics ? static_cast<int>(numberOr(*physics, "DesiredShooterCap", 0.0f)) : 0,
         .useGravity = physics && flagAt(*physics, "UseGravity"),
         // Content boundary: seconds → ticks here so the sim never sees a float.
-        .lifeTimeTicks = physics ? static_cast<int>(sim::TickRate{}.ticks(
-                                       sim::seconds(numberOr(*physics, "LifeTime", 0.0f))))
+        // The engine schema names the key `Lifetime`
+        // (`blueprint_layout.tsv:424`, "Numbers of seconds I'm alive"); the
+        // `LifeTime` capital-T spelling is the legacy sibling 11 shipped
+        // blueprints still author. Both mean the same seconds.
+        .lifeTimeTicks = physics ? static_cast<int>(sim::TickRate{}.ticks(sim::seconds(
+                                       std::max(numberOr(*physics, "Lifetime", 0.0f),
+                                                numberOr(*physics, "LifeTime", 0.0f)))))
                                  : 0,
     };
 }

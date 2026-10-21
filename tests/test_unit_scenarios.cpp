@@ -935,6 +935,19 @@ TEST_CASE("retail Aurora crosses water above the seabed and returns to land",
     CHECK(at.y >= rm::sim::Fx::fromInt(16));
 }
 
+TEST_CASE("projectile parse accepts the native Lifetime spelling", "[capability][guidance]") {
+    // Engine schema `RProjectileBlueprintPhysics.Lifetime+0x1f4`
+    // (`blueprint_layout.tsv:424`, "Numbers of seconds I'm alive"): 84 shipped
+    // `_proj.bp` files author `Lifetime`, including every strategic nuke
+    // (`TIFMissileNuke01_proj.bp: Lifetime = 600`); 11 author `LifeTime`.
+    const auto traits = rm::unitbp::loadProjectileTraits(R"(
+        ProjectileBlueprint { Physics = { Lifetime = 600 } }
+    )");
+    REQUIRE(traits);
+    CHECK(traits->lifeTimeTicks
+          == static_cast<int>(rm::app::gAppTickRate.ticks(rm::sim::Seconds{600.0f})));
+}
+
 TEST_CASE("projectile guidance does not require a silo economy table", "[capability][guidance]") {
     const auto traits = rm::unitbp::loadProjectileTraits(R"(
         ProjectileBlueprint { Physics = { TrackTarget = true, TurnRate = 80,
@@ -947,6 +960,7 @@ TEST_CASE("projectile guidance does not require a silo economy table", "[capabil
     CHECK(traits->maxSpeedElmosPerSecond == 200.0f);
     CHECK(traits->buildTime == rm::sim::Mag{});
 }
+
 
 TEST_CASE("guided shots turn within their budget and do not follow recycled targets", "[guidance]") {
     Scenario scenario;

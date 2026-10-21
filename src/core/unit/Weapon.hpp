@@ -192,13 +192,14 @@ struct Weapon {
         /// acceleration even with no arc — and, like the arc term, only while
         /// it is not tracking (`TrackTarget` suppresses it).
         bool useGravity = false;
-        /// `Physics.LifeTime` as authored shot life in TICKS (converted at parse
+        /// `Physics.Lifetime` as authored shot life in TICKS (converted at parse
         /// via `TickRate::ticks` from the blueprint seconds): how long the shot
-        /// flies before the `C-173` timeout impact. Missiles author 30
-        /// (`TIFMissileNuke01`, `AIFMissileTactical01`); the Aeon interceptor
-        /// (`AIMAntiMissile01`) authors 4. Zero means unstated — the 30-second
-        /// engine default holds. Ticks, not seconds, because `core/sim` bans
-        /// floats and the sim must never convert content mid-tick.
+        /// flies before the `C-173` timeout impact. Nukes author 600 seconds under
+        /// the schema spelling (`TIFMissileNuke01`); tacticals and the Aeon
+        /// interceptor use the legacy `LifeTime` sibling (30 and 4). Zero means
+        /// unstated — the 30-second engine default holds. Ticks, not seconds,
+        /// because `core/sim` bans floats and the sim must never convert
+        /// content mid-tick.
         int lifeTimeTicks = 0;
     } projectileTraits;
 
