@@ -254,6 +254,12 @@ constexpr std::uint32_t kVersion70 = 70;
 // match with every multiplier at 1 writes an empty section, so older saves
 // decode with every unit unslowed.
 constexpr std::uint32_t kVersion71 = 71;
+// v72 adds the sim-callback channel (`C-319`/`C-344`): `SimDiplomacy.lua`'s
+// offers/ignored pairs plus `SimPing.lua`'s markers and ping lock — live
+// match state the hash already feeds but no save version rode. A match that
+// never touched the channel saves the absent byte, so older saves decode
+// with an untouched channel.
+constexpr std::uint32_t kVersion72 = 72;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -2228,6 +2234,79 @@ void writePlayerSeat(PayloadWriter& w, const std::optional<int>& seat) {
     seat = value;
     return true;
 }
+// v72 trails the payload after the player seat: the sim-callback channel —
+// offers/ignored pairs, per-owner markers with names and Fx locations, and
+// the ping lock tick. An untouched channel saves the absent byte; a pre-v72
+// reader keeps none. Marker order follows the map so the wire is canonical
+// (retail sources: `SimDiplomacy.lua`, `SimPing.lua`).
+void writeSimCallbacks(PayloadWriter& w, const std::optional<SimCallbackState>& state) {
+    w.u8(state.has_value());
+    if (!state) {
+        return;
+    }
+    w.count(state->diplomacyOffers.size());
+    for (const auto& [from, to] : state->diplomacyOffers) {
+        w.i32(from);
+        w.i32(to);
+    }
+    w.count(state->diplomacyIgnored.size());
+    for (const auto& [from, to] : state->diplomacyIgnored) {
+        w.i32(from);
+        w.i32(to);
+    }
+    w.count(state->markers.size());
+    for (const auto& [key, marker] : state->markers) {
+        w.i32(key.first);
+        w.i32(key.second);
+        w.i32(marker.owner);
+        w.i32(marker.id);
+        w.text(marker.name);
+        w.i32(marker.location[0].raw());
+        w.i32(marker.location[1].raw());
+        w.i32(marker.location[2].raw());
+    }
+    w.u64(state->pingLockedUntil);
+}
+[[nodiscard]] bool readSimCallbacks(PayloadReader& r, std::optional<SimCallbackState>& state) {
+    std::uint8_t present{};
+    if (!r.u8(present) || present > 1) return false;
+    if (!present) {
+        state.reset();
+        return true;
+    }
+    SimCallbackState out;
+    std::size_t count{};
+    if (!r.count(count, 8)) return false;
+    for (std::size_t i = 0; i < count; ++i) {
+        std::int32_t from{}, to{};
+        if (!r.i32(from) || !r.i32(to)) return false;
+        out.diplomacyOffers.emplace(from, to);
+    }
+    if (!r.count(count, 8)) return false;
+    for (std::size_t i = 0; i < count; ++i) {
+        std::int32_t from{}, to{};
+        if (!r.i32(from) || !r.i32(to)) return false;
+        out.diplomacyIgnored.emplace(from, to);
+    }
+    if (!r.count(count, 0)) return false;
+    for (std::size_t i = 0; i < count; ++i) {
+        std::int32_t ownerKey{}, idKey{}, owner{}, id{};
+        std::string name;
+        std::int32_t loc0{}, loc1{}, loc2{};
+        if (!r.i32(ownerKey) || !r.i32(idKey) || !r.i32(owner) || !r.i32(id) || !r.text(name)
+            || !r.i32(loc0) || !r.i32(loc1) || !r.i32(loc2)) {
+            return false;
+        }
+        SimMarker marker{.owner = owner, .id = id, .name = std::move(name)};
+        marker.location = {Fx::fromRaw(loc0), Fx::fromRaw(loc1), Fx::fromRaw(loc2)};
+        out.markers[{ownerKey, idKey}] = std::move(marker);
+    }
+    std::uint64_t locked{};
+    if (!r.u64(locked)) return false;
+    out.pingLockedUntil = locked;
+    state = std::move(out);
+    return true;
+}
 // V45 trails the payload after the unit pose: the emitter pool, nullable like
 // `features` — a match with no effect manager saves the absent byte, and an
 // older reader keeps no effects.
@@ -3095,6 +3174,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion71) writeTimeMultipliers(payloadWriter, state.units);
     if (version >= kVersion67) writePendingInput(payloadWriter, state.pendingInput);
     if (version >= kVersion69) writePlayerSeat(payloadWriter, state.playerSeat);
+    if (version >= kVersion72) writeSimCallbacks(payloadWriter, state.simCallbacks);
     const std::vector<std::byte> payload = payloadWriter.take();
     if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("MT19937 state exceeds the v1 save-state payload limit");
@@ -3151,7 +3231,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion61 && version != kVersion62 && version != kVersion63
                && version != kVersion64 && version != kVersion65 && version != kVersion66
                && version != kVersion67 && version != kVersion68 && version != kVersion69
-               && version != kVersion70 && version != kVersion71)
+               && version != kVersion70 && version != kVersion71 && version != kVersion72)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -3280,6 +3360,10 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion69 && !readPlayerSeat(reader, playerSeat)) {
         return std::nullopt;
     }
+    std::optional<SimCallbackState> simCallbacks;
+    if (version >= kVersion72 && !readSimCallbacks(reader, simCallbacks)) {
+        return std::nullopt;
+    }
     // Pre-v51 saves predate the flag: every feature they hold is a wreck, and
     // every wreck then marked the ground — restore that, or a loaded match
     // loses its scorch.
@@ -3307,7 +3391,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                        .standingOrders = std::move(standingOrders),
                        .opponentWaves = std::move(opponentWaves),
                        .pendingInput = std::move(pendingInput),
-                       .playerSeat = std::move(playerSeat)};
+                       .playerSeat = std::move(playerSeat),
+                       .simCallbacks = std::move(simCallbacks)};
     // One binary representation per state rejects alternate encodings and trailing data.
     const std::vector<std::byte> canonical = encode(decoded, version);
     if (canonical.size() != bytes.size()
@@ -3335,7 +3420,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion71);
+    return rm::sim::encode(state, kVersion72);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

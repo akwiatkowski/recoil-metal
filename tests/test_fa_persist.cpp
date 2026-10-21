@@ -1030,3 +1030,27 @@ TEST_CASE("v69: player seat capture and restore onto the scene", "[fa-persist]")
     CHECK(rm::sim::commands(continued.scene.players[0], 0));
     CHECK(!continued.scene.players[1].human);
 }
+// v72: the sim-callback channel feeds the state hash (offers/markers/lock) but
+// rode no save version — a mid-combat save dropped in-flight diplomacy offers
+// and ping markers the resumed match still hashes (`SimDiplomacy.lua` offers,
+// `SimPing.lua` `PingMarkers`/`PingLocked`).
+TEST_CASE("v72: sim-callback channel survives a save round-trip", "[fa-persist]") {
+    rm::sim::SaveState state;
+    rm::sim::SimCallbackState channel;
+    channel.diplomacyOffers.emplace(0, 1);
+    channel.diplomacyIgnored.emplace(1, 0);
+    channel.markers[{0, 1}] = rm::sim::SimMarker{.owner = 0, .id = 1, .name = "rally"};
+    channel.pingLockedUntil = 42;
+    state.simCallbacks = channel;
+    const auto saved = rm::sim::SaveState::decode(rm::sim::SaveState::encode(state));
+    REQUIRE(saved);
+    REQUIRE(saved->simCallbacks.has_value());
+    CHECK(saved->simCallbacks->diplomacyOffers.count({0, 1}) == 1);
+    CHECK(saved->simCallbacks->diplomacyIgnored.count({1, 0}) == 1);
+    CHECK(saved->simCallbacks->markers.at({0, 1}).name == "rally");
+    CHECK(saved->simCallbacks->pingLockedUntil == 42);
+    const auto legacy = rm::sim::SaveState::decode(
+        rm::sim::SaveState::encodeAtVersion(state, 71));
+    REQUIRE(legacy);
+    CHECK(!legacy->simCallbacks.has_value());
+}

@@ -144,6 +144,11 @@ struct SaveState {
     /// derived from. `kNoArmy` seats nobody (observer). Absent on pre-v69
     /// decodes; the match resumes as observer, as before.
     std::optional<int> playerSeat;
+    /// The sim-callback channel (v72): `SimDiplomacy.lua`'s offers/ignored
+    /// pairs plus `SimPing.lua`'s markers and ping lock — live match state
+    /// the hash feeds but no save version rode. Empty when the channel is
+    /// untouched; absent (nullopt) on pre-v72 decodes.
+    std::optional<SimCallbackState> simCallbacks;
 
     [[nodiscard]] static std::vector<std::byte> encodeV1(const SaveState& state);
     [[nodiscard]] static std::optional<SaveState> decodeV1(std::span<const std::byte> bytes);
