@@ -540,9 +540,6 @@ TEST_CASE("a slowed guard's ReclaimTimeMultiplier stretches the copied un-build"
     CHECK(f.roster.store.alive(victim));
     CHECK(rm::test::asFloat(f.roster.health(victim).current) == 62.5f);
 }
-
-
-
 TEST_CASE("a Mantis Guard cannot borrow a reclaim capability from its guardee", "[guard][guard-work-regression]") {
     const char* home = std::getenv("HOME");
     REQUIRE(home != nullptr);
@@ -733,6 +730,22 @@ TEST_CASE("a slowed reclaimer's ReclaimTimeMultiplier stretches the un-build") {
     f.tick(20);
     CHECK_FALSE(f.roster.store.alive(victim));
 }
+TEST_CASE("a hastened reclaimer's fractional ReclaimTimeMultiplier quickens the un-build") {
+    // `Unit.lua:2699-2712` (`GetReclaimCosts`, unit branch): the mult applies
+    // unconditionally — `time * (self.ReclaimTimeMultiplier or 1)`. A 0.5 mult
+    // halves the bill, so the same 200-work tank at rate 10/s takes 10 ticks,
+    // not 20. The `> 1` guard below used to swallow that half.
+    Fixture f;
+    const UnitId engineer = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId victim = f.roster.add(f.tankType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.roster.store.setReclaimTimeMultiplier(engineer, rm::sim::Fx::fromRatio(1, 2)));
+    REQUIRE(f.reclaimUnit(engineer, victim));
+    f.tick(10);
+    CHECK_FALSE(f.roster.store.alive(victim));
+    CHECK(rm::test::asFloat(f.economies[0].stored.mass) == 100.0f);
+    CHECK(rm::test::asFloat(f.economies[0].stored.energy) == 200.0f);
+}
+
 
 TEST_CASE("a unit reclaim survives the log round trip") {
     rm::sim::CommandLog log;

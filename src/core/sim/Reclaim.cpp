@@ -367,12 +367,11 @@ std::size_t reclaimUnits(UnitStore& store, const UnitCatalog& catalog,
         // 0.1 × cost / BuildRate seconds for `cost` units of work, so a tick advances
         // BuildRate of them — ten times the per-tick build figure the catalog derived.
         // `Unit.lua:2699-2712` unit branch: the RECLAIMER's `ReclaimTimeMultiplier`
-        // stretches the un-build — mult 2 halves the per-tick pace. Fx-exact via
-        // the Mag product over the multiplier (mult >= 1 by contract; guard anyway).
-        const Fx reclaimMult = store.reclaimTimeMultiplier(store.idAt(slot));
-        if (reclaimMult > Fx::fromInt(1)) {
-            pace = proportionalWork(pace, Mag::fromInt(1), Mag::fromFx(reclaimMult));
-        }
+        // scales the un-build — mult 2 halves the per-tick pace, mult 1/2
+        // doubles it. Retail multiplies unconditionally
+        // (`time * (self.ReclaimTimeMultiplier or 1)`); the pace divides by
+        // the mult via its Fx reciprocal.
+        pace *= Fx::fromInt(1) / store.reclaimTimeMultiplier(store.idAt(slot));
         Health& health = store.health()[victim];
         // The work left follows the fraction, and the fraction is the health (C-099).
         const Mag remaining = proportionalWork(total, health.current, health.maximum);
@@ -460,16 +459,13 @@ std::size_t applyGuardReclaim(UnitStore& store, const UnitCatalog& catalog,
                 if (gap <= repairReach(catalog, store.typeAt(item.builder),
                                        store.motion()[item.builder],
                                        store.motion()[item.target.index])) {
-                    Mag pace = effectiveBuildPerTick(store, catalog, item.builder);
-                    pace *= Fx::fromInt(10);
-                    // Same reclaimer-side stretch as the manual un-build: mult 2
-                    // halves the copied pace (`Unit.lua:2699-2712` unit branch).
-                    const Fx guardMult =
-                        store.reclaimTimeMultiplier(store.idAt(item.builder));
-                    if (guardMult > Fx::fromInt(1)) {
-                        pace = proportionalWork(pace, Mag::fromInt(1),
-                                                Mag::fromFx(guardMult));
-                    }
+                Mag pace = effectiveBuildPerTick(store, catalog, item.builder);
+                pace *= Fx::fromInt(10);
+                // Same reclaimer-side stretch as the manual un-build: the mult
+                // divides the pace unconditionally
+                // (`Unit.lua:2699-2712` unit branch).
+                pace *= Fx::fromInt(1)
+                        / store.reclaimTimeMultiplier(store.idAt(item.builder));
                     Health& health = store.health()[item.target.index];
                     const Mag remaining =
                         proportionalWork(total, health.current, health.maximum);
