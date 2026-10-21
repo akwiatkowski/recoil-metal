@@ -1171,7 +1171,7 @@ TickReport tickSkirmish(UnitStore& store, const UnitCatalog& catalog, Match& mat
         report.deathBlastDamage += explodeOnDeath(*def, death.at,
                                                  store.motion()[slot].armyIndex, store,
                                                  match.armies, death.ref, match.events,
-                                                 &catalog, match.features);
+                                                 &catalog, match.features, match.projectiles);
         ++report.deathBlasts;
     }
 

@@ -594,10 +594,18 @@ Mag damageArea(std::array<Fx, 3> centre, Fx radiusElmos, const unitdef::DamagePr
 /// firing is per-shot and hot, so it reads a profile computed once at load; a death blast happens
 /// a few times a match, so recomputing costs nothing and saves threading a weapon index through
 /// the death report.
+/// `projectiles` lets the blast chip hostile in-flight shots overlapping it —
+/// the `C-086` `0xF00` half of retail's `DamageArea`, which the death thread
+/// reaches through `DeathWeaponDamageThread` (`Unit.lua:2000-2003`). Null
+/// keeps the pre-slice direct-call shape (no sweep); the tick passes the
+/// match list like the impact path does. Never the firing side's own shots.
+/// The pools it chips are untouched by the return: `dealt` counts unit and
+/// shield damage only, as on the impact path.
 Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy,
-                     UnitStore& store, std::span<const Army> armies, UnitId by = {},
-                     EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr,
-                     FeatureStore* features = nullptr);
+                    UnitStore& store, std::span<const Army> armies, UnitId by = {},
+                    EventQueue* events = nullptr, const UnitCatalog* catalog = nullptr,
+                    FeatureStore* features = nullptr,
+                    std::vector<Projectile>* projectiles = nullptr);
 
 /// Which units died this tick, so a caller can leave wreckage and check for a defeat.
 [[nodiscard]] std::vector<UnitId> deadUnits(const UnitStore& store);

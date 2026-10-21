@@ -605,3 +605,61 @@ TEST_CASE("a harmless flagged DeathWeapon reports no death blast",
     CHECK(roster.health(bystander).current == rm::sim::Mag::fromInt(100));
     CHECK(report.deathBlasts == 0);
 }
+
+TEST_CASE("a death blast chips a hostile missile overhead", "[fa-damage]") {
+    // Retail `DoDeathWeapon` (`lua/sim/Unit.lua:1735-1749`) detonates through
+    // `DeathWeaponDamageThread` (`Unit.lua:2000-2003`), which calls the engine
+    // `DamageArea` — the same area path whose `0xF00` query includes
+    // projectiles (`C-086`), so a death blast chips hostile in-flight shots
+    // overlapping it like any other blast does (pinned for impacts in
+    // `test_combat.cpp:"a blast impact damages a hostile missile in flight"`).
+    // Nuke pools are 25 HP (`C-087`), so a 400-point death blast one-shots
+    // the 25-HP nuke overhead while the hull below takes its share.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex targetType = roster.addType(mobileDef());
+    const UnitId bystander = roster.add(targetType, 0.0f, 0.0f, 1, 1000.0f);
+
+    UnitDef bomb;
+    bomb.name = "test_death_blast_aa";
+    bomb.categories = {"STRUCTURE"};
+    rm::unitdef::Weapon blast;
+    blast.label = "DeathWeapon";
+    blast.role = rm::unitdef::WeaponRole::Death;
+    blast.fireOnDeath = true;
+    blast.damage = rm::sim::Mag::fromInt(400);
+    blast.damageRadius = rm::sim::Fx::fromInt(100);
+    bomb.weapons.push_back(blast);
+
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    std::vector<Army> armies = rm::sim::freeForAll(2);
+    std::vector<rm::sim::Economy> economies(2);
+    std::vector<int> commandersEver(2, 0);
+    std::vector<rm::sim::Projectile> projectiles;
+    rm::sim::EventQueue events;
+    Match match = loneMatch(armies, economies, commandersEver);
+    match.projectiles = &projectiles;
+    match.events = &events;
+
+    const rm::UnitTypeIndex bombType = roster.addType(bomb);
+    const UnitId doomed = roster.add(bombType, 0.0f, 0.0f, 0, 100.0f);
+    const rm::sim::Projectile nuke{
+        .position = rm::test::at(0, 4, 0),
+        .firedByArmy = 1,
+        .ticksRemaining = 10,
+        .maxHealth = rm::sim::Mag::fromInt(25),
+        .health = rm::sim::Mag::fromInt(25),
+    };
+    projectiles.push_back(nuke);
+    roster.health(doomed).current = rm::sim::Mag{};
+    const rm::sim::TickReport report =
+        rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+
+    REQUIRE(report.deathBlasts == 1);
+    // The 400-point blast spends the 25-HP pool: the shot is zeroed for
+    // removal (`ticksRemaining == 0`), the impact path's own spent shape.
+    REQUIRE(projectiles.size() == 1);
+    CHECK(projectiles.front().ticksRemaining == 0);
+    CHECK(projectiles.front().health <= rm::sim::Mag{});
+    CHECK(roster.health(bystander).current < rm::sim::Mag::fromInt(1000));
+}
