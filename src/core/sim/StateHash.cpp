@@ -641,6 +641,18 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
         if (!store.capturableAt(slot) && store.slotAlive(slot)) {
             feed(h, std::uint8_t{14});
         }
+        // `C-236`'s capture-time multiplier stretches the captor's live capture
+        // budget, and the reclaim-time multiplier stretches the un-build pace —
+        // a slowed unit and an unslowed one diverge next tick, so both hash.
+        // 1 stays silent, keeping the pre-mult stream.
+        if (store.captureTimeMultiplierAt(slot) != Fx::fromInt(1)) {
+            feed(h, std::uint8_t{15});
+            feed(h, store.captureTimeMultiplierAt(slot).raw());
+        }
+        if (store.reclaimTimeMultiplier(store.idAt(slot)) != Fx::fromInt(1)) {
+            feed(h, std::uint8_t{16});
+            feed(h, store.reclaimTimeMultiplier(store.idAt(slot)).raw());
+        }
         // WHETHER THE SLOT IS OCCUPIED, which the generation cannot say on its own. Death is
         // a tombstone: `kill` leaves every array untouched and deliberately does NOT advance
         // the generation mirror, because a stale mirror is what makes a dead unit's handle

@@ -248,6 +248,12 @@ constexpr std::uint32_t kVersion69 = 69;
 // the armed/done flags plus the elapsed ticks. Pre-v70 saves decode with
 // nothing pending and nothing done — the pre-pause verdict behaviour.
 constexpr std::uint32_t kVersion70 = 70;
+// v71 adds the per-slot capture/reclaim time multipliers (retail's
+// `CaptureTimeMultiplier`/`ReclaimTimeMultiplier` live-unit state,
+// `Unit.lua:2740`/`Unit.lua:2693-2712`), sparse like the custom names — a
+// match with every multiplier at 1 writes an empty section, so older saves
+// decode with every unit unslowed.
+constexpr std::uint32_t kVersion71 = 71;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -1937,6 +1943,54 @@ void writeCapturable(PayloadWriter& w, const UnitStore::Snapshot& s) {
     }
     return true;
 }
+// v71 trails the payload after the capturable flags: only slots whose capture
+// or reclaim multiplier differs from 1 are listed, so an unslowed match
+// writes an empty section — the same sparse shape as the custom names.
+void writeTimeMultipliers(PayloadWriter& w, const UnitStore::Snapshot& s) {
+    std::size_t count = 0;
+    for (std::size_t slot = 0; slot < s.transforms.size(); ++slot) {
+        const Fx capture =
+            slot < s.captureTimeMultipliers.size() ? s.captureTimeMultipliers[slot] : Fx::fromInt(1);
+        const Fx reclaim =
+            slot < s.reclaimTimeMultipliers.size() ? s.reclaimTimeMultipliers[slot] : Fx::fromInt(1);
+        if (capture != Fx::fromInt(1) || reclaim != Fx::fromInt(1)) {
+            ++count;
+        }
+    }
+    w.count(count);
+    for (std::size_t slot = 0; slot < s.transforms.size(); ++slot) {
+        const Fx capture =
+            slot < s.captureTimeMultipliers.size() ? s.captureTimeMultipliers[slot] : Fx::fromInt(1);
+        const Fx reclaim =
+            slot < s.reclaimTimeMultipliers.size() ? s.reclaimTimeMultipliers[slot] : Fx::fromInt(1);
+        if (capture != Fx::fromInt(1) || reclaim != Fx::fromInt(1)) {
+            w.u32(static_cast<std::uint32_t>(slot));
+            w.i32(capture.raw());
+            w.i32(reclaim.raw());
+        }
+    }
+}
+
+[[nodiscard]] bool readTimeMultipliers(PayloadReader& r, UnitStore::Snapshot& s) {
+    std::size_t count{};
+    if (!r.count(count, 12) || count > s.transforms.size()) return false;
+    s.captureTimeMultipliers.assign(s.transforms.size(), Fx::fromInt(1));
+    s.reclaimTimeMultipliers.assign(s.transforms.size(), Fx::fromInt(1));
+    for (std::size_t entry = 0; entry < count; ++entry) {
+        std::uint32_t slot{};
+        std::int32_t capture{}, reclaim{};
+        if (!r.u32(slot) || slot >= s.captureTimeMultipliers.size() || !r.i32(capture)
+            || !r.i32(reclaim)) return false;
+        const Fx keptCapture = Fx::fromRaw(capture);
+        const Fx keptReclaim = Fx::fromRaw(reclaim);
+        if (keptCapture == Fx::fromInt(1) && keptReclaim == Fx::fromInt(1)) return false;
+        if (s.captureTimeMultipliers[slot] != Fx::fromInt(1)
+            || s.reclaimTimeMultipliers[slot] != Fx::fromInt(1)) return false;
+        s.captureTimeMultipliers[slot] = keptCapture;
+        s.reclaimTimeMultipliers[slot] = keptReclaim;
+    }
+    return true;
+}
 // v64 trails the payload after the custom names: the caller-owned standing
 // orders, nullable like `features` — a match with no rally points and no
 // auto-expand flags saves the absent byte, and a pre-v64 reader keeps none.
@@ -3038,6 +3092,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion64) writeStandingOrders(payloadWriter, state.standingOrders);
     if (version >= kVersion65) writeOpponentWaves(payloadWriter, state.opponentWaves);
     if (version >= kVersion66) writeCapturable(payloadWriter, state.units);
+    if (version >= kVersion71) writeTimeMultipliers(payloadWriter, state.units);
     if (version >= kVersion67) writePendingInput(payloadWriter, state.pendingInput);
     if (version >= kVersion69) writePlayerSeat(payloadWriter, state.playerSeat);
     const std::vector<std::byte> payload = payloadWriter.take();
@@ -3096,7 +3151,7 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion61 && version != kVersion62 && version != kVersion63
                && version != kVersion64 && version != kVersion65 && version != kVersion66
                && version != kVersion67 && version != kVersion68 && version != kVersion69
-               && version != kVersion70)
+               && version != kVersion70 && version != kVersion71)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -3214,6 +3269,9 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
     if (version >= kVersion66 && !readCapturable(reader, units)) {
         return std::nullopt;
     }
+    if (version >= kVersion71 && !readTimeMultipliers(reader, units)) {
+        return std::nullopt;
+    }
     std::optional<std::vector<CommandIssue>> pendingInput;
     if (version >= kVersion67 && !readPendingInput(reader, pendingInput)) {
         return std::nullopt;
@@ -3277,7 +3335,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion70);
+    return rm::sim::encode(state, kVersion71);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {

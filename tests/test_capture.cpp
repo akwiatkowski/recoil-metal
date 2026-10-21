@@ -865,3 +865,21 @@ TEST_CASE("a unit marked uncapturable refuses capture", "[capture]") {
     REQUIRE(f.roster.store.setCapturable(target, true));
     CHECK(f.capture(captor, target));
 }
+TEST_CASE("a slowed unit keeps its multipliers across a save round trip", "[capture][save]") {
+    // `SetCaptureTimeMultiplier`/`SetReclaimTimeMultiplier` are live-unit state
+    // (`Unit.lua:2740`, `Unit.lua:2693-2712`): the transfer already carries both
+    // onto the replacement, but the save drops them — a slowed unit that saves
+    // mid-match reloads at full speed. Retail keeps per-unit Lua fields across
+    // saves, so the round trip must preserve both multipliers.
+    Fixture f;
+    const UnitId unit = f.roster.add(f.structureType, 200.0f, 200.0f, 0, 100.0f);
+    REQUIRE(f.roster.store.setCaptureTimeMultiplier(unit, rm::sim::Fx::fromInt(2)));
+    REQUIRE(f.roster.store.setReclaimTimeMultiplier(unit, rm::sim::Fx::fromInt(3)));
+    const rm::sim::SaveState mid{.tick = 7, .units = f.roster.store.snapshot()};
+    const auto bytes = rm::sim::SaveState::encode(mid);
+    const auto back = rm::sim::SaveState::decode(bytes);
+    REQUIRE(back);
+    rm::sim::UnitStore reloaded(back->units);
+    CHECK(reloaded.captureTimeMultiplier(reloaded.idAt(unit.index)) == rm::sim::Fx::fromInt(2));
+    CHECK(reloaded.reclaimTimeMultiplier(reloaded.idAt(unit.index)) == rm::sim::Fx::fromInt(3));
+}
