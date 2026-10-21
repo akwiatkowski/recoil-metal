@@ -250,15 +250,16 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::EmpScorch: return 28.0f;  // elmos (`CIFEMPFluxWarhead02:116`)
         case Script::FragScorch: return 3.0f;  // elmos (2.25-3.75 midpoint, `:20`)
         case Script::ZhanaseeScorch: return 40.0f;  // elmos (`SBOZhanaseeBomb01:29`)
-        case Script::StrategicNukeCrater: return 50.0f;  // elmos (`UEFNukeEffectController01:50-51`)
-        case Script::QuantumCrater: return 50.0f;  // elmos (`AIFQuantumWarhead02:119-120`)
-        case Script::SeraphimNukeCrater: return 300.0f;  // elmos (`SeraphimNukeEffectController01:187`)
         case Script::AntimatterScorch: return 16.0f;  // elmos (`FxSplatScale` 8 x2 albedo, `:95`)
         case Script::AntimatterShellScorch: return 16.0f;  // elmos (`FxSplatScale` 8 x2 albedo, `:118`)
         case Script::AntimatterSmallScorch: return 8.0f;  // elmos (`FxSplatScale` 4 x2 albedo, `:118`)
         case Script::SmallYieldScorch: return 6.0f;  // elmos (`:284` splat)
-        case Script::QuarkSplat: return 12.0f;  // elmos (scale 3 splat x4, `aeonprojectiles.lua:600`)
-        case Script::OhwalliScorch: return 80.0f;  // elmos (`SBOOhwalliBombEffectController01:75`, `InainoEffectController01:76`)
+        case Script::QuarkSplat: break;  // base splat/decal split (`defaultexplosions.lua:211`)
+        case Script::StrategicNukeCrater: return 50.0f;  // elmos (`UEFNukeEffectController01:50-51`)
+        case Script::QuantumCrater: return 50.0f;  // elmos (`AIFQuantumWarhead02:119-120`)
+        case Script::SeraphimNukeCrater: return 300.0f;  // elmos (`SeraphimNukeEffectController01:187`)
+        case Script::ScuDeathCrater: return 20.0f;  // elmos (`SCUDeath01_script.lua` crater pair)
+        case Script::OhwalliScorch: return 80.0f;  // elmos (`SBOOhwalliBombEffectController01:75`)
         case Script::CybranProtonScorch: return 12.0f;  // elmos (`cybranprojectiles.lua:79`)
         case Script::BaseScorch: break;
     }
@@ -291,6 +292,7 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::AntimatterSmallScorch: return 30.0f;  // s (`terranprojectiles.lua:118`)
         case Script::SmallYieldScorch: return 200.0f;  // s (`terranprojectiles.lua:284`)
         case Script::OhwalliScorch: return 0.0f;  // s (`:75-76` permanent)
+        case Script::ScuDeathCrater: return 0.0f;  // s (`SCUDeath01_script.lua` duration 0 = permanent)
         case Script::QuarkSplat: break;  // s (base 300-600 s spread, `defaultexplosions.lua:211`)
         case Script::CybranProtonScorch: return 200.0f;  // s (`cybranprojectiles.lua:79`)
         case Script::BaseScorch: break;
@@ -317,6 +319,7 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
         case Script::AntimatterSmallScorch: return 19;  // `nuke_scorch_002_albedo` scripted draw
         case Script::SmallYieldScorch: return 20;  // `scorch_008_albedo` scripted draw
         case Script::OhwalliScorch: return 21;  // `Scorch_012_albedo` scripted draw through `SBOOhwalliBombEffectController01:75`
+        case Script::ScuDeathCrater: return 16;  // `Crater01_albedo` scripted draw through `SCUDeath01`
         case Script::QuarkSplat: break;  // base ten stream, `defaultexplosions.lua:222-232`
         case Script::CybranProtonScorch: return 11;  // `scorch_011_albedo` scripted draw
         case Script::BaseScorch: break;
@@ -413,6 +416,10 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     // The filename stem names the script family (`.../NAME/NAME_proj.bp`):
     // match the live corpus decal writers (C-484) — trail-thread splats
     // (`ShellTankTerran01`) lay nothing on impact, so those ride base scorch.
+    // Death weapons bypass the impact drain: a commander dies through its
+    // scripted effect CONTROLLER (`UEFNukeEffectController01`,
+    // `SCUDeath01`), whose own stem never flies as a shot — map it alongside
+    // the missile that spawns it.
     const auto stem = projectileId.substr(projectileId.find_last_of('/') + 1);
     if (stem.starts_with("AIFQuantumWarhead02")) return Script::QuantumCrater;
     if (stem.starts_with("AIFSonanceShell02")) return Script::SonanceCrater;
@@ -431,12 +438,14 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     if (stem.starts_with("TIFMissileNukeCDR")) return Script::StrategicNukeCrater;
     if (stem.starts_with("TIFMissileNuke02")) return Script::StrategicNukeCrater;
     if (stem.starts_with("TIFMissileNuke01")) return Script::StrategicNukeCrater;
+    if (stem.starts_with("UEFNukeEffectController01")) return Script::StrategicNukeCrater;
     if (stem.starts_with("SIFExperimentalStrategicMissile01")) return Script::SeraphimNukeCrater;
     if (stem.starts_with("SBOInfernoExperimentalStrategicBomb01")) return Script::SeraphimNukeCrater;
     if (stem.starts_with("SBOZhanaseeBomb01")) return Script::ZhanaseeScorch;
     if (stem.starts_with("SBOOhwalliStrategicBomb01")) return Script::OhwalliScorch;
     if (stem.starts_with("SIFInainoStrategicMissile01")) return Script::OhwalliScorch;
     if (stem.starts_with("SIFInainoStrategicMissile02")) return Script::OhwalliScorch;
+    if (stem.starts_with("SCUDeath01")) return Script::ScuDeathCrater;
     return Script::BaseScorch;
 }
 [[nodiscard]] bool scriptTagMarksHull(UnitScene::ImpactMarkScript script) noexcept {
@@ -463,6 +472,7 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
         case Script::StrategicNukeCrater:
         case Script::QuantumCrater:
         case Script::SeraphimNukeCrater:
+        case Script::ScuDeathCrater:
         case Script::OhwalliScorch: return false;
     }
     return false;

@@ -992,3 +992,61 @@ TEST_CASE("C-484: a scripted shell that hits a hull still lays its decal", "[fa-
     CHECK(scene.impactMarks[0].script
           == rm::app::UnitScene::ImpactMarkScript::SonanceCrater);
 }
+TEST_CASE("C-484: a commander's death blast leaves its crater scorch", "[fa-terrain]") {
+    // Retail's commander/SCU death weapons detonate through their scripted
+    // controllers (`UEFNukeEffectController01_script.lua:50-52`,
+    // `SCUDeath01_script.lua`), which lay their own crater decals beside the
+    // blast — a `UnitDestroyed` the drain ignores leaves that ground clean.
+    // Driven end to end: a unit whose `DeathWeapon` fires the UEF nuke
+    // controller must leave a `StrategicNukeCrater` mark at the death site.
+    rm::app::UnitScene scene = makeScene(false, 0.0f);
+    rm::unitdef::Weapon death;
+    death.label = "DeathWeapon";
+    death.role = rm::unitdef::WeaponRole::Death;
+    death.damage = rm::test::mag(1000.0f);
+    death.damageRadius = rm::test::fx(10.0f);
+    death.fireOnDeath = true;
+    death.damageFriendly = true;
+    death.projectileId =
+        "/effects/Entities/UEFNukeEffectController01/UEFNukeEffectController01_proj.bp";
+    rm::unitdef::UnitDef commander;
+    commander.name = "test_commander";
+    commander.weapons.push_back(death);
+    scene.definitions.push_back(commander);
+    const rm::UnitTypeIndex type =
+        scene.catalog.add(&scene.definitions.back(), rm::app::gAppTickRate);
+    scene.setTypeTraits(type, rm::data::moveDefFor(commander), 1.0f);
+    const rm::sim::UnitId victim = scene.store.spawn(rm::sim::UnitStore::Spawn{
+        .type = type,
+        .transform = {.x = rm::test::fx(500.0f), .z = rm::test::fx(500.0f)},
+        .motion = rm::app::motionFor(commander, 1),
+        .health = rm::sim::initialHealth(rm::test::mag(100.0f)),
+    });
+    scene.store.motion()[victim.index].radiusElmos = rm::test::fx(8.0f);
+    rm::HeightField field = flatField(128, 0.0f);
+    rm::app::PassabilitySet passability{field, false, 0.0f};
+    rm::vfs::Vfs content;
+    rm::app::MatchRunner runner =
+        rm::app::makeMatchRunner(scene, field, passability, content, {}, {});
+    runner.scripts.clear();
+    scene.store.health()[victim.index].current = rm::sim::Mag{};
+    (void)rm::app::advanceMatch(runner, 0, 0.0f);
+    REQUIRE(scene.events.count(rm::sim::EventKind::UnitDestroyed) == 1);
+    REQUIRE(scene.impactMarks.size() == 1);
+    CHECK(scene.impactMarks[0].script
+          == rm::app::UnitScene::ImpactMarkScript::StrategicNukeCrater);
+    // The SCU death controller tags its own crater beside the UEF one:
+    // `SCUDeath01_script.lua` lays a `Crater01_*` pair at 20, permanent —
+    // not the blast-derived split, not the sonance 12-elmo pair either.
+    CHECK(rm::app::scriptTagForProjectile(
+              "/effects/Entities/SCUDeath01/SCUDeath01_proj.bp")
+          == rm::app::UnitScene::ImpactMarkScript::ScuDeathCrater);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/effects/Entities/UEFNukeEffectController01/UEFNukeEffectController01_proj.bp")
+          == rm::app::UnitScene::ImpactMarkScript::StrategicNukeCrater);
+    rm::app::UnitScene sizes;
+    rm::app::noteImpactMark(sizes, 10.0f, 20.0f, 0.0f, 0,
+                            rm::app::UnitScene::ImpactMarkScript::ScuDeathCrater);
+    REQUIRE(sizes.impactMarks.size() == 1);
+    CHECK(sizes.impactMarks[0].textureIndex == 16);
+}

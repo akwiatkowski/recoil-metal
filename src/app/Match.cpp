@@ -1877,8 +1877,43 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
             // From the DEFINITION, not the corpse's slot: retireDead zeroes the
             // motion radius on retirement ("stops shoving the living"), so by
             // the time events are read every corpse measures zero.
-            const float corpseRadius =
-                buildableDef(scene, static_cast<std::size_t>(victimType)).collisionRadiusElmos;
+            const rm::unitdef::UnitDef& victimDef =
+                buildableDef(scene, static_cast<std::size_t>(victimType));
+            const float corpseRadius = victimDef.collisionRadiusElmos;
+            // A commander's death blast scorches its own crater (C-484): retail's
+            // death weapons detonate through scripted controllers
+            // (`UEFNukeEffectController01_script.lua:50-52` at 50 elmos,
+            // `SCUDeath01_script.lua` crater pair at 20) that lay their own
+            // crater decals beside the blast. The victim's type names the
+            // controller, so the drain tags the death-site mark from its
+            // `DeathWeapon` projectile id — the same tag table the impact
+            // drain reads, with the same sim-thread firing gate the damage
+            // uses (`DeathWeapon` + `FireOnDeath` + harmful, no dummy). Gated
+            // on the C-292 water plane; hash-neutral, presentation only.
+            {
+                const rm::unitdef::Weapon* deathBlast = nullptr;
+                for (const rm::unitdef::Weapon& weapon : victimDef.weapons) {
+                    if (weapon.role == rm::unitdef::WeaponRole::Death
+                        && weapon.label == "DeathWeapon" && !weapon.dummyWeapon
+                        && weapon.fireOnDeath && weapon.harmful()) {
+                        deathBlast = &weapon;
+                        break;
+                    }
+                }
+                if (deathBlast != nullptr) {
+                    const float waterLevelElmos = rm::sim::fxToFloat(
+                        scene.terrain(runner.field).waterLevel());
+                    const float deathYElmos = rm::sim::fxToFloat(event.at[1]);
+                    if (!(waterLevelElmos > 0.0f
+                          && deathYElmos <= waterLevelElmos)) {
+                        noteImpactMark(
+                            scene, rm::sim::fxToFloat(event.at[0]),
+                            rm::sim::fxToFloat(event.at[2]), 0.0f,
+                            static_cast<TickIndex>(tickIndex),
+                            scriptTagForProjectile(deathBlast->projectileId));
+                    }
+                }
+            }
             UnitScene::AlertKind kind = UnitScene::AlertKind::UnderAttack;
             bool alarm = false;
             if (viewer != UnitScene::kNoAlliance && victimAlliance == viewer) {
