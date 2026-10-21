@@ -865,6 +865,32 @@ TEST_CASE("a unit marked uncapturable refuses capture", "[capture]") {
     REQUIRE(f.roster.store.setCapturable(target, true));
     CHECK(f.capture(captor, target));
 }
+TEST_CASE("a capture dropped mid-task by the uncapturable flag reports failure", "[capture]") {
+    // `C-250`'s per-tick preamble: the flag can flip UNDER a working task
+    // (cargo loaded mid-capture, a script marking the target). The task
+    // drops its progress, fires the live-target failure pair, and transfers
+    // nothing — the intake refusal's mid-task twin.
+    Fixture f;
+    const UnitId captor = f.roster.add(f.captorType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId target = f.roster.add(f.structureType, 206.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.capture(captor, target));
+    f.tick(10);
+    REQUIRE(f.captures.size() == 1);
+    REQUIRE(f.captures[0].progress == 10);
+    REQUIRE(f.roster.store.setCapturable(target, false));
+    f.tick(2);
+    CHECK(f.captures.empty());
+    CHECK(f.roster.store.alive(target));
+    CHECK(f.roster.store.motion()[target.index].armyIndex == 1);
+    bool failed = false;
+    bool captured = false;
+    for (const rm::sim::Event& event : f.events.all()) {
+        failed = failed || event.kind == rm::sim::EventKind::FailedCapture;
+        captured = captured || event.kind == rm::sim::EventKind::Captured;
+    }
+    CHECK(failed);
+    CHECK_FALSE(captured);
+}
 TEST_CASE("a slowed unit keeps its multipliers across a save round trip", "[capture][save]") {
     // `SetCaptureTimeMultiplier`/`SetReclaimTimeMultiplier` are live-unit state
     // (`Unit.lua:2740`, `Unit.lua:2693-2712`): the transfer already carries both
