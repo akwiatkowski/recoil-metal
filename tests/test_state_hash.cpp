@@ -1150,3 +1150,14 @@ TEST_CASE("army handicap changes the hash", "[state-hash]") {
     handicapped.armies.front().handicap = 1;
     CHECK(handicapped.hash() != plain.hash());
 }
+TEST_CASE("cap-bypass changes the hash", "[state-hash]") {
+    // `C-383`'s `SetIgnoreArmyUnitCap` lifts the creation gate (`0x0074fda0`)
+    // but `hashMatch` never feeds it: a match that builds past the ceiling
+    // hashes identically to one the gate still refuses. The flag rides the
+    // save (v73), so the hash must separate them. Capped stays silent,
+    // keeping the pre-bypass stream.
+    Fixture lifted;
+    Fixture plain;
+    lifted.armies.front().ignoreUnitCap = true;
+    CHECK(lifted.hash() != plain.hash());
+}

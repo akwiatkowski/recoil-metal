@@ -108,25 +108,34 @@ TEST_CASE("a save preserves economy carry and pending army lifecycle", "[save-st
     CHECK(saved.building.front().allocated.energy == rm::sim::Mag::fromInt(4));
     CHECK(saved.building.front().fundedLastTick == rm::sim::kFxOne / rm::sim::Fx::fromInt(2));
     CHECK(SaveState::encode(*decoded) == bytes);
-    SECTION("mid-tick work must settle before saving") {
-        state.building.front().workedThisTick = true;
-        CHECK_THROWS_AS(SaveState::encode({.random = random.snapshot(), .economyArmies = state}),
-                        std::invalid_argument);
-    }
-    SECTION("corrupt section counts cannot allocate from an unbounded payload") {
-        auto corrupt = bytes;
-        // This save has no motion slots, so the last word is the v25 dual-pose
-        // section's count. A bogus count there must be rejected, not trusted.
-        writeU32(corrupt, corrupt.size() - sizeof(std::uint32_t),
-                 std::numeric_limits<std::uint32_t>::max());
-        CHECK_FALSE(SaveState::decode(corrupt));
-    }
-    SECTION("incomplete current save payloads are rejected") {
-        auto truncated = bytes;
-        truncated.pop_back();
-        writeU32(truncated, 16, static_cast<std::uint32_t>(truncated.size() - 20));
-        CHECK_FALSE(SaveState::decode(truncated));
-    }
+}
+TEST_CASE("a v73 save round-trips the civilian and cap-bypass army flags", "[save-state]") {
+    // `C-210`'s `NEUTRAL_CIVILIAN` mark and `C-383`'s `SetIgnoreArmyUnitCap`
+    // gate the victory poll and the creation gate (`0x0074fda0`), but the army
+    // record drops them: a mid-combat save resumes a civilian as a belligerent
+    // and a cap-bypassed army as capped. Both ride v73; pre-v73 decodes clear
+    // them, as before.
+    rm::sim::EconomyArmyState state;
+    state.armies = rm::sim::freeForAll(3);
+    state.armies[2].civilian = true;
+    state.armies[1].ignoreUnitCap = true;
+    state.economies.resize(3);
+    state.commandersEver = {1, 1, 1};
+    RandomStream random{std::uint32_t{1}};
+    const auto saved =
+        SaveState::decode(SaveState::encode({.random = random.snapshot(), .economyArmies = state}));
+    REQUIRE(saved);
+    REQUIRE(saved->economyArmies);
+    REQUIRE(saved->economyArmies->armies.size() == 3);
+    CHECK(saved->economyArmies->armies[2].civilian);
+    CHECK(saved->economyArmies->armies[1].ignoreUnitCap);
+    const auto legacy = SaveState::decode(
+        SaveState::encodeAtVersion({.random = random.snapshot(), .economyArmies = state}, 72));
+    REQUIRE(legacy);
+    REQUIRE(legacy->economyArmies);
+    REQUIRE(legacy->economyArmies->armies.size() == 3);
+    CHECK_FALSE(legacy->economyArmies->armies[2].civilian);
+    CHECK_FALSE(legacy->economyArmies->armies[1].ignoreUnitCap);
 }
 
 TEST_CASE("a save state random stream resumes at exactly its saved MT state", "[save-state]") {

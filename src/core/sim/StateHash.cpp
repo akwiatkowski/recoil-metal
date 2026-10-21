@@ -761,6 +761,16 @@ StateHash hashMatch(const UnitStore& store, const Match& match) {
             feed(h, army.civilian);
         }
     }
+    // `ignoreUnitCap` (`C-383`) joins the stream only once some army lifts the
+    // creation gate (`0x0074fda0`), so a match under its cap hashes exactly as
+    // before. A lifted army builds past the ceiling a capped one refuses, so
+    // the flag is live creation state like `unitCap` above.
+    if (std::ranges::any_of(match.armies,
+                          [](const Army& army) { return army.ignoreUnitCap; })) {
+        for (const Army& army : match.armies) {
+            feed(h, army.ignoreUnitCap);
+        }
+    }
 
 
 

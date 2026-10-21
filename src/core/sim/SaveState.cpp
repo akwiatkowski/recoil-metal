@@ -260,6 +260,11 @@ constexpr std::uint32_t kVersion71 = 71;
 // never touched the channel saves the absent byte, so older saves decode
 // with an untouched channel.
 constexpr std::uint32_t kVersion72 = 72;
+// v73 adds `C-210`'s civilian mark and `C-383`'s cap-bypass flag on each army
+// record — both gate live ticks (the victory poll, the creation gate at
+// `0x0074fda0`) but rode no save version. Older saves decode with every army
+// a belligerent under its cap.
+constexpr std::uint32_t kVersion73 = 73;
 // MT19937 serializes its 624 state words plus an index, all as unsigned decimal numbers separated
 // by one space. This rejects oversized malformed frames before they allocate their payload.
 constexpr std::size_t kMaxRandomStatePayload =
@@ -397,7 +402,8 @@ bool readMag(PayloadReader& r, Mag& value) {
 void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>& state,
                         bool includesOfferingDraw, bool includesUnitCap,
                         bool includesCheat, bool includesDiplomacy, bool includesHandicap,
-                        bool includesPlayableRect, bool includesEndGamePause) {
+                        bool includesPlayableRect, bool includesEndGamePause,
+                        bool includesCivilianBypass) {
     w.u8(state.has_value());
     if (!state) return;
     const auto& s = *state;
@@ -412,6 +418,9 @@ void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>&
             w.u8(army.requestingAlliedVictory); w.u8(army.resourceSharing);
         }
         if (includesHandicap) w.i32(army.handicap);
+        if (includesCivilianBypass) {
+            w.u8(army.civilian); w.u8(army.ignoreUnitCap);
+        }
     }
     w.count(s.economies.size());
     for (const auto& economy : s.economies) {
@@ -461,7 +470,8 @@ void writeEconomyArmies(PayloadWriter& w, const std::optional<EconomyArmyState>&
 bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
                        bool includesOfferingDraw, bool includesUnitCap,
                        bool includesCheat, bool includesDiplomacy, bool includesHandicap,
-                       bool includesPlayableRect, bool includesEndGamePause) {
+                       bool includesPlayableRect, bool includesEndGamePause,
+                       bool includesCivilianBypass) {
     bool present{};
     if (!readFlag(r, present)) return false;
     if (!present) return true;
@@ -481,6 +491,8 @@ bool readEconomyArmies(PayloadReader& r, std::optional<EconomyArmyState>& state,
             && (!readFlag(r, army.requestingAlliedVictory)
                 || !readFlag(r, army.resourceSharing))) return false;
         if (includesHandicap && !r.i32(army.handicap)) return false;
+        if (includesCivilianBypass
+            && (!readFlag(r, army.civilian) || !readFlag(r, army.ignoreUnitCap))) return false;
         if (army.index != &army - s.armies.data()) return false;
     }
     if (!r.count(count, 142) || count != s.armies.size()) return false;
@@ -3129,7 +3141,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                                                   version >= kVersion40, version >= kVersion41,
                                                   version >= kVersion43, version >= kVersion47,
                                                   version >= kVersion53, version >= kVersion60,
-                                                  version >= kVersion70);
+                                                  version >= kVersion70,
+                                                  version >= kVersion73);
     if (version >= kVersion16)
         writeAirController(payloadWriter, state.units.motion, version >= kVersion21,
                            version >= kVersion55, version >= kVersion56,
@@ -3231,7 +3244,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                && version != kVersion61 && version != kVersion62 && version != kVersion63
                && version != kVersion64 && version != kVersion65 && version != kVersion66
                && version != kVersion67 && version != kVersion68 && version != kVersion69
-               && version != kVersion70 && version != kVersion71 && version != kVersion72)
+               && version != kVersion70 && version != kVersion71 && version != kVersion72
+               && version != kVersion73)
         || (requiredVersion && version != *requiredVersion) || !readU64(bytes, offset, tick)
         || !readU32(bytes, offset, payloadSize) || bytes.size() - offset != payloadSize) {
         return std::nullopt;
@@ -3283,7 +3297,8 @@ void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
                                                     version >= kVersion40, version >= kVersion41,
                                                     version >= kVersion43, version >= kVersion47,
                                                     version >= kVersion53, version >= kVersion60,
-                                                    version >= kVersion70)) return std::nullopt;
+                                                    version >= kVersion70,
+                                                    version >= kVersion73)) return std::nullopt;
     if (version >= kVersion16
         && !readAirController(reader, units.motion, version >= kVersion21,
                               version >= kVersion55, version >= kVersion56,
@@ -3420,7 +3435,7 @@ std::vector<std::byte> SaveState::encodeAtVersion(const SaveState& state,
 }
 
 std::vector<std::byte> SaveState::encode(const SaveState& state) {
-    return rm::sim::encode(state, kVersion72);
+    return rm::sim::encode(state, kVersion73);
 }
 
 std::optional<SaveState> SaveState::decode(std::span<const std::byte> bytes) {
