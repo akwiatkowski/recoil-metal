@@ -540,6 +540,31 @@ TEST_CASE("a slowed guard's ReclaimTimeMultiplier stretches the copied un-build"
     CHECK(f.roster.store.alive(victim));
     CHECK(rm::test::asFloat(f.roster.health(victim).current) == 62.5f);
 }
+TEST_CASE("a guard copying an un-build holds its attack on the victim") {
+    // `C-183` attack outranks reclaim, but `C-157` step 11 exempts what own
+    // side is taking apart — the victim is claimed by the guardee's
+    // `ReclaimUnit` head, so the guard's attack rung finds no prey and the
+    // copy rung below owns the beat. A guard whose gun still acquires the
+    // victim it is helping un-build chases its own work item.
+    Fixture f;
+    const UnitId guardee = f.roster.add(f.engineerType, 200.0f, 200.0f, 0, 100.0f);
+    const UnitId guard = f.roster.add(f.guardType, 205.0f, 200.0f, 0, 100.0f);
+    const UnitId victim = f.roster.add(f.tankType, 208.0f, 200.0f, 1, 100.0f);
+    REQUIRE(f.reclaimUnit(guardee, victim));
+    REQUIRE(f.assist(guard, guardee));
+    f.tick(5);
+    // Both builders worked the victim: two rate-10 drains take 100 of 200
+    // work in five ticks, like the existing guard-copy test.
+    CHECK(rm::test::asFloat(f.roster.health(victim).current) == 50.0f);
+    // The exemption behind the hold: the guard's attack rung sees the same
+    // claimed victim own guns spare, so removing the guardee's head from the
+    // claim set must restore prey. The copy rung's victim has no head of its
+    // own — the claim below is the manual order's, and the guard copy rides
+    // it. If the copy ever names its own victim, this documents that shape.
+    const auto claims = rm::sim::collectUnitWorkClaims(f.roster.store);
+    REQUIRE(claims.size() == 1);
+    CHECK(claims[0].target == victim.index);
+}
 TEST_CASE("a Mantis Guard cannot borrow a reclaim capability from its guardee", "[guard][guard-work-regression]") {
     const char* home = std::getenv("HOME");
     REQUIRE(home != nullptr);
