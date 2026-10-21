@@ -1361,29 +1361,55 @@ rm::sim::SimCallbackArgs simCallbackArgsFromLua(lua_State* lua, int table) {
     return args;
 }
 
-/// `SimCallback{callback, addUnitSelection}` — retail's `0x008c0520`. The
-/// selection flag is ignored: no whitelisted name in the bounded slice consumes
-/// the `units` argument it would append.
-int simCallbackBinding(lua_State* lua) {
-    Sandbox* sandbox = sandboxOf(lua);
-    if (sandbox == nullptr || !lua_istable(lua, 1)) {
+    /// `SimCallback{callback, addUnitSelection}` — retail's `0x008c0520`. A true
+    /// second argument appends the caller's unit selection (`SimCallbacks.lua`'s
+    /// `units`): each entry is a packed handle (`generation * 2^32 + index`,
+    /// `FafOpponent.cpp`'s `__rm_faf_handle`), resolved against the live store
+    /// only for `GiveUnitsToPlayer` — the one whitelisted name retail passes it
+    /// to (`SimUtils.GiveUnitsToPlayer`). Anything else ignores it.
+    int simCallbackBinding(lua_State* lua) {
+        Sandbox* sandbox = sandboxOf(lua);
+        if (sandbox == nullptr || !lua_istable(lua, 1)) {
+            return 0;
+        }
+        lua_getfield(lua, 1, "Func");
+        const char* name = lua_tostring(lua, -1);
+        lua_pop(lua, 1);
+        if (name == nullptr) {
+            return 0;
+        }
+        FafAi::SimMessage message{.name = name};
+        lua_getfield(lua, 1, "Args");
+        if (lua_istable(lua, -1)) {
+            message.args = simCallbackArgsFromLua(lua, lua_gettop(lua));
+        }
+        lua_pop(lua, 1);
+        if (std::string_view{name} == "GiveUnitsToPlayer" && lua_toboolean(lua, 2) != 0) {
+            lua_getglobal(lua, "GetSelection");
+            if (lua_isfunction(lua, -1)) {
+                if (lua_pcall(lua, 0, 1, 0) == 0 && lua_istable(lua, -1)) {
+                    const auto count = static_cast<std::size_t>(lua_rawlen(lua, -1));
+                    for (std::size_t i = 1; i <= count; ++i) {
+                        lua_rawgeti(lua, -1, static_cast<lua_Integer>(i));
+                        const auto packed = static_cast<std::uint64_t>(lua_tointeger(lua, -1));
+                        lua_pop(lua, 1);
+                        message.args.units.push_back(rm::sim::UnitId{
+                            .index = static_cast<rm::UnitIndex>(packed & 0xffffffffULL),
+                            .generation =
+                                static_cast<rm::Generation>(packed >> 32),
+                        });
+                    }
+                    lua_pop(lua, 1);
+                } else {
+                    lua_pop(lua, 1);
+                }
+            } else {
+                lua_pop(lua, 1);
+            }
+        }
+        sandbox->simMessages.push_back(std::move(message));
         return 0;
     }
-    lua_getfield(lua, 1, "Func");
-    const char* name = lua_tostring(lua, -1);
-    lua_pop(lua, 1);
-    if (name == nullptr) {
-        return 0;
-    }
-    FafAi::SimMessage message{.name = name};
-    lua_getfield(lua, 1, "Args");
-    if (lua_istable(lua, -1)) {
-        message.args = simCallbackArgsFromLua(lua, lua_gettop(lua));
-    }
-    lua_pop(lua, 1);
-    sandbox->simMessages.push_back(std::move(message));
-    return 0;
-}
 
 /// A Lua value → its `repr`-style source text, for the template payload
 /// (`build_templates.lua:89` sends the raw template table; the event carries

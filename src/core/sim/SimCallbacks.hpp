@@ -10,16 +10,17 @@
 // handlers "need to validate all arguments against cheats and exploits", which is why
 // the channel is a name table and not `ExecuteLuaInSim`.
 //
-// OUR SHAPE. `doSimCallback` is that dispatch: a fixed set of names, each a function
+    // OUR SHAPE. `doSimCallback` is that dispatch: a fixed set of names, each a function
 // over `SimCallbackContext`, and an unknown name is refused exactly like retail's
 // `error('No callback named …')` — the caller learns it was refused rather than the
 // sim silently doing nothing. The `units` argument retail passes (the sender's
-// selection, for `GiveUnitsToPlayer`/`OnControlGroup*`) is not in the bounded slice:
-// no whitelisted name here consumes it.
+// selection) rides `SimCallbackArgs.units` for `GiveUnitsToPlayer` alone —
+// no other whitelisted name consumes it.
 //
 // WHAT RIDES IT (`C-346`/`C-383`): diplomacy (`DiplomacyHandler`,
 // `BreakAlliance`, `RequestAlliedVictory`, `SetOfferDraw`), resource sharing
-// (`GiveResourcesToPlayer`, `SetResourceSharing`), the unit-cap bypass
+// (`GiveResourcesToPlayer`, `SetResourceSharing`), unit gifting
+// (`GiveUnitsToPlayer`), the unit-cap bypass
 // (`SetIgnoreArmyUnitCap`) and pings/markers (`SpawnPing`, `UpdateMarker`).
 // NOT: chat — `SessionSendChatMessage` is a sibling channel (`C-344`), so
 // `sendChatMessage` is a separate entry point beside the dispatch rather than a name
@@ -31,6 +32,8 @@
 #include "core/sim/Events.hpp"
 #include "core/sim/Fx.hpp"
 #include "core/sim/TickRate.hpp"
+#include "core/sim/UnitCatalog.hpp"
+#include "core/sim/UnitStore.hpp"
 
 #include <array>
 #include <cstdint>
@@ -119,8 +122,11 @@ struct SimCallbackArgs {
     Fx energy{};
     /// `data.Location` — the ping's world position.
     std::array<Fx, 3> location{};
+    /// `DoCallback`'s `units` — the sender's selection, consumed only by
+    /// `GiveUnitsToPlayer` (`mohodata lua/SimUtils.lua:46`). Empty for every
+    /// other name; the `Args` table never carries it.
+    std::vector<UnitId> units;
     /// `data.Action` — `DiplomacyHandler`'s verb ('offer'/'accept'/'reject'/
-    /// 'break'/'never') and `UpdateMarker`'s ('delete'/'move'/'rename'/'renew').
     std::string action;
     /// `data.Mesh`/`data.Type` — the ping kind, and `UpdateMarker`'s `Name` on a
     /// rename. Carried as text because the sim does not own the ping-mesh
@@ -139,6 +145,14 @@ struct SimCallbackContext {
     /// stored mass/energy between two of them. May be empty (a scene with no
     /// economies refuses transfers rather than indexing nothing).
     std::vector<Economy>& economies;
+    /// The stores `GiveUnitsToPlayer` transfers through — null when the caller
+    /// has no units to move (a bare flag check), which refuses the gift like a
+    /// missing economy refuses `GiveResourcesToPlayer`.
+    UnitStore* store = nullptr;
+    const UnitCatalog* catalog = nullptr;
+    std::vector<SiloAmmo>* siloAmmo = nullptr;
+    std::vector<SiloBuild>* siloQueue = nullptr;
+    std::vector<EnhancementWork>* enhancements = nullptr;
     /// Where ping/marker/chat notifications go. May be null — the mutation still
     /// happens, only the notification is dropped, like every other emit.
     EventQueue* events = nullptr;

@@ -20,9 +20,14 @@ using rm::sim::SimCallbackState;
 
 namespace {
 
-/// A context over four free-for-all armies with economies and a live event
-/// queue — the pieces every handler may touch.
+    /// A context over four free-for-all armies with economies, a live event
+    /// queue, and a store/catalog behind the gift path — `GiveUnitsToPlayer`
+    /// moves the sender's selection through them.
 struct Channel {
+    rm::test::Roster roster;
+    std::vector<rm::sim::SiloAmmo> siloAmmo;
+    std::vector<rm::sim::EnhancementWork> enhancements;
+    std::vector<rm::sim::SiloBuild> siloQueue;
     std::vector<Army> armies = rm::sim::freeForAll(4);
     std::vector<rm::sim::Economy> economies{4};
     rm::sim::EventQueue events;
@@ -33,6 +38,11 @@ struct Channel {
     [[nodiscard]] SimCallbackContext context() {
         return SimCallbackContext{.armies = armies,
                                   .economies = economies,
+                                  .store = &roster.store,
+                                  .catalog = &roster.catalog,
+                                  .siloAmmo = &siloAmmo,
+                                  .siloQueue = &siloQueue,
+                                  .enhancements = &enhancements,
                                   .events = &events,
                                   .state = state,
                                   .tick = tick,
@@ -55,10 +65,36 @@ struct Channel {
     return field;
 }
 
+[[nodiscard]] rm::unitdef::UnitDef tankDef() {
+    rm::unitdef::UnitDef def;
+    def.name = "test_tank";
+    return def;
+}
+
 [[nodiscard]] rm::unitdef::UnitDef commanderDef() {
     rm::unitdef::UnitDef def;
     def.name = "UEL0001";
     return def;
+}
+
+TEST_CASE("C-346: GiveUnitsToPlayer gifts the sender's selection to an ally", "[sim]") {
+    // `SimUtils.GiveUnitsToPlayer` (mohodata `lua/SimUtils.lua:46`): the UI's
+    // `SimCallback({Func="GiveUnitsToPlayer", ...}, true)` (`diplomacy.lua:187`)
+    // appends the sender's selection as `units`. Each top-level non-commander
+    // unit whose owner is messable moves to `data.To` when allied — the same
+    // replacement-entity `ChangeUnitArmy` swap the `Gift` command reaches
+    // (`C-238`), with the recipient-side cap gate and its brain notification
+    // (`C-383`).
+    Channel channel;
+    const rm::UnitTypeIndex tank = channel.roster.addType(tankDef());
+    const rm::sim::UnitId mine = channel.roster.add(tank, 0.0f, 0.0f, 0, 500.0f);
+    channel.armies[0].alliance = channel.armies[1].alliance;  // allies, not enemies
+
+    CHECK(channel.call("GiveUnitsToPlayer", {.from = 0, .to = 1, .units = {mine}}));
+    CHECK_FALSE(channel.roster.store.alive(mine));
+    const rm::sim::UnitId replacement = channel.roster.store.idAt(mine.index);
+    REQUIRE(replacement.generation != mine.generation);
+    CHECK(channel.roster.store.motion()[replacement.index].armyIndex == 1);
 }
 
 } // namespace

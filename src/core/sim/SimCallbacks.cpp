@@ -1,6 +1,7 @@
 #include "core/sim/SimCallbacks.hpp"
 
-#include <algorithm>
+#include "core/sim/Capture.hpp"
+#include "core/sim/CommandInternal.hpp"
 
 // The whitelisted handlers, in `SimCallbacks.lua`'s registration order where the
 // bounded slice covers them. Every handler validates before it mutates — the module
@@ -84,6 +85,61 @@ bool giveResourcesToPlayer(const SimCallbackContext& context, const SimCallbackA
     receiver.stored.mass += massTaken;
     receiver.stored.energy += energyTaken;
     return true;
+}
+
+/// `SimUtils.GiveUnitsToPlayer` (`mohodata lua/SimUtils.lua:46`): the UI's
+/// `SimCallback({Func="GiveUnitsToPlayer", ...}, true)` appends the sender's
+/// selection as `units`. Each unit whose owner is messable, allied to the
+/// recipient, and undefeated moves via the shared `ChangeUnitArmy` swap
+/// (`transferUnitArmy`), with the same per-unit guards the `Gift` command
+/// applies: top-level only, no commanders, cap-gated with the recipient
+/// brain's `UnitCapLimitReached` notice (`C-383`).
+bool giveUnitsToPlayer(const SimCallbackContext& context, const SimCallbackArgs& args) {
+    if (!okayToMessWith(context, args.to) || context.store == nullptr
+        || context.catalog == nullptr || args.units.empty()) {
+        return false;
+    }
+    bool movedAny = false;
+    for (const UnitId unit : args.units) {
+        if (!context.store->alive(unit)) {
+            continue;
+        }
+        const int owner = context.store->motion()[unit.index].armyIndex;
+        if (owner == args.to || !okayToMessWith(context, owner)) {
+            continue;
+        }
+        const Army& giver = context.armies[static_cast<std::size_t>(owner)];
+        const Army& recipient = context.armies[static_cast<std::size_t>(args.to)];
+        if (!allied(giver, recipient)) {
+            continue;
+        }
+        if (context.store->motion()[unit.index].attached) {
+            continue;
+        }
+        const unitdef::UnitDef* offered = context.catalog->def(context.store->typeAt(unit.index));
+        if (offered != nullptr && offered->hasCategory("COMMAND")) {
+            continue;
+        }
+        if (offered != nullptr
+            && unitCapBlocks(context.armies, args.to, *context.catalog,
+                             std::span<const Construction>{}, *offered)) {
+            emit(context.events, Event{.kind = EventKind::UnitCapLimitReached,
+                                       .unit = unit,
+                                       .army = args.to});
+            continue;
+        }
+        const UnitId replacement = transferUnitArmy(
+            *context.store, *context.catalog, unit, args.to, context.events,
+            context.siloAmmo != nullptr ? std::span<SiloAmmo>{*context.siloAmmo}
+                                        : std::span<SiloAmmo>{},
+            context.enhancements != nullptr
+                ? std::span<EnhancementWork>{*context.enhancements}
+                : std::span<EnhancementWork>{},
+            context.siloQueue != nullptr ? std::span<SiloBuild>{*context.siloQueue}
+                                         : std::span<SiloBuild>{});
+        movedAny = replacement.generation != 0 || movedAny;
+    }
+    return movedAny;
 }
 
 /// `SimDiplomacy.DiplomacyHandler` (`SimDiplomacy.lua:5`): the offer/accept/reject/
@@ -230,6 +286,9 @@ bool doSimCallback(const SimCallbackContext& context, const std::string_view nam
     // The whitelist — `SimCallbacks.lua`'s `Callbacks` table, bounded to the names
     // this slice implements. An unlisted name is refused like retail's
     // `error('No callback named …')`: the caller is told, the sim is untouched.
+    if (name == "GiveUnitsToPlayer") {
+        return giveUnitsToPlayer(context, args);
+    }
     if (name == "GiveResourcesToPlayer") {
         return giveResourcesToPlayer(context, args);
     }

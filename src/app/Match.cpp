@@ -1755,6 +1755,11 @@ rm::sim::TickReport advanceMatch(MatchRunner& runner, int tickIndex, float now) 
         rm::sim::SimCallbackContext callbacks{
             .armies = scene.armies,
             .economies = scene.economies,
+            .store = &scene.store,
+            .catalog = &scene.catalog,
+            .siloAmmo = &scene.siloAmmo,
+            .siloQueue = &scene.siloQueue,
+            .enhancements = &scene.enhancementWork,
             .events = &scene.events,
             .state = scene.simCallbacks,
             .teamLock = scene.teamLock,
