@@ -143,6 +143,10 @@ TEST_CASE("C-346: GiveResourcesToPlayer moves a fraction of the sender's stores"
                         .energy = rm::sim::fxFromFloat(2.0f)}));
     CHECK(rm::sim::magToFloat(channel.economies[0].stored.mass) == 0.0f);
     CHECK(rm::sim::magToFloat(channel.economies[1].stored.mass) == 1000.0f);
+    // Energy rides the same TakeResource clamp (`SimUtils.lua:153`) — a past-1
+    // energy fraction empties the sender's store into the receiver as well.
+    CHECK(rm::sim::magToFloat(channel.economies[0].stored.energy) == 0.0f);
+    CHECK(rm::sim::magToFloat(channel.economies[1].stored.energy) == 2000.0f);
 
     // `OkayToMessWithArmy`: a defeated army can neither give nor receive.
     channel.armies[2].defeated = true;
