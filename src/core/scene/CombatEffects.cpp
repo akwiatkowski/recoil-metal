@@ -177,6 +177,13 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
             // (`defaultweapons.lua:177-182`, same as the `WeaponFired` branch):
             // a beam's start flash never draws without this burst.
             (void)burst(event.visualId + "#FxChargeMuzzleFlash", from, direction, event.unit, event.visualId);
+            // The collision beam's endpoint emitters hang at the bones
+            // (`CollisionBeam.lua:98-112` `CreateBeamEffects`): `FxBeamStartPoint`
+            // at bone 0 (the muzzle), `FxBeamEndPoint` at bone 1 (the strike) —
+            // e.g. `ZapperCollisionBeam` (`defaultcollisionbeams.lua:64-67`) ends
+            // on `cannon_muzzle_flash_01` plus `sparks_07`.
+            (void)burst(event.visualId + "#FxBeamStartPoint", from, direction, event.unit, event.visualId);
+            (void)burst(event.visualId + "#FxBeamEndPoint", to, direction, event.unit, event.visualId);
             if (visuals && state && !visuals->find(event.visualId).empty()) {
                 // A weapon fires one beam at a time: a new shot replaces the live one rather
                 // than stacking a second strip on top of it. The strips themselves are drawn

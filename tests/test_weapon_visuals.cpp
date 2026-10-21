@@ -1045,3 +1045,40 @@ TEST_CASE("a fired shot also bursts its authored charge flash", "[weapon-visuals
     REQUIRE(it != state.bursts.end());
     CHECK(it->scale == Catch::Approx(2.0f));
 }
+TEST_CASE("a beam burst hangs its authored start- and end-point emitters", "[weapon-visuals]") {
+    // Retail `CollisionBeam.CreateBeamEffects` (`mohodata/lua/sim/CollisionBeam.lua:98-112`):
+    // `FxBeamStartPoint` attaches at bone 0 (the muzzle) scaled by
+    // `FxBeamStartPointScale`, `FxBeamEndPoint` at bone 1 (the strike) scaled
+    // by `FxBeamEndPointScale` (e.g. `ZapperCollisionBeam` in
+    // `lua/lua/defaultcollisionbeams.lua:64-67` ends on `cannon_muzzle_flash_01`
+    // plus `sparks_07`). The loader resolves only `FxBeam`, so the endpoints
+    // never draw.
+    rm::WeaponVisuals visuals;
+    rm::WeaponMaterial start;
+    start.emitter = "/effects/emitters/start_emit.bp";
+    rm::WeaponMaterial end;
+    end.emitter = "/effects/emitters/end_emit.bp";
+    visuals.materials.push_back(start);
+    visuals.materials.push_back(end);
+    visuals.definitions[rm::foldedVisualKey("test_zap:Zap#fxbeamstartpoint")] = {0};
+    visuals.definitions[rm::foldedVisualKey("test_zap:Zap#fxbeamendpoint")] = {1};
+    visuals.scales[rm::foldedVisualKey("test_zap:Zap#fxbeamendpoint")] = 0.5f;
+    const rm::sim::Event fired{.kind = rm::sim::EventKind::BeamFired,
+        .at = {rm::sim::Fx::fromInt(100), {}, {}},
+        .at2 = {rm::sim::Fx::fromInt(10), rm::sim::Fx::fromInt(20), {}},
+        .visualId = "test_zap:Zap"};
+    rm::CombatEffectState state;
+    std::vector<rm::Particle> out;
+    rm::emitCombatEffects(out, std::array{fired}, &visuals, &state);
+    const auto at = [&](std::uint32_t id) {
+        return std::ranges::find_if(state.bursts,
+            [id](const rm::CombatEffectBurst& b) { return b.material == id; });
+    };
+    const auto startIt = at(0);
+    REQUIRE(startIt != state.bursts.end());
+    CHECK(startIt->position[0] == Catch::Approx(10));
+    const auto endIt = at(1);
+    REQUIRE(endIt != state.bursts.end());
+    CHECK(endIt->position[0] == Catch::Approx(100));
+    CHECK(endIt->scale == Catch::Approx(0.5f));
+}

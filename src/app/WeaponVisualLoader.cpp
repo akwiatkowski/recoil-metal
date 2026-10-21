@@ -227,6 +227,14 @@ WeaponVisuals loadWeaponVisuals(const vfs::Vfs& content) {
                      "FxImpactUnderWater", "FxImpactProjectile", "FxImpactProjectileUnderWater",
                      "FxImpactProp", "FxImpactShield", "FxImpactUnit", "FxImpactAirUnit"})
                     resolve(script, key + "#" + effect, weapon.label.c_str(), effect);
+                // `CollisionBeam.CreateBeamEffects` (`mohodata/lua/sim/CollisionBeam.lua:98-112`):
+                // `FxBeamStartPoint` hangs at bone 0 (the muzzle), `FxBeamEndPoint`
+                // at bone 1 (the strike), each scaled by its `...PointScale`
+                // (e.g. `ZapperCollisionBeam` in `lua/lua/defaultcollisionbeams.lua:64-67`
+                // ends on `cannon_muzzle_flash_01` plus `sparks_07`). Resolved
+                // beside the impact lists through the same `try_emplace` path.
+                for (const auto* effect : {"FxBeamStartPoint", "FxBeamEndPoint"})
+                    resolve(script, key + "#" + effect, weapon.label.c_str(), effect);
             }
             resolve(script, key + "#FxMuzzleFlash", weapon.label.c_str(), "FxMuzzleFlash");
             // `PlayFxMuzzleChargeSequence` (`defaultweapons.lua`): the charge
