@@ -8,16 +8,17 @@ CategoryTerm parseCategoryTerm(std::string_view text) {
     CategoryTerm tags;
     std::size_t at = 0;
     while (at < text.size()) {
-        // Whitespace-separated, and any whitespace counts: the corpus uses single spaces, but a
-        // hand-written data file will use whatever it uses, and splitting on one specific
-        // character would fail on a tab in a way that reads as a missing unit.
+        // Separators, not just whitespace: the weapon restrict fields are a "Comma
+        // separated list" (`blueprint_layout.tsv:245-246`) and the corpus uses
+        // commas without spaces (`'UNTARGETABLE,LAND,STRUCTURE,NAVAL'`). A comma
+        // rejoins the split with the whitespace rule below.
         while (at < text.size() && (text[at] == ' ' || text[at] == '\t' || text[at] == '\n'
-                                    || text[at] == '\r')) {
+                                    || text[at] == '\r' || text[at] == ',')) {
             ++at;
         }
         const std::size_t start = at;
         while (at < text.size() && text[at] != ' ' && text[at] != '\t' && text[at] != '\n'
-               && text[at] != '\r') {
+               && text[at] != '\r' && text[at] != ',') {
             ++at;
         }
         if (at > start) {

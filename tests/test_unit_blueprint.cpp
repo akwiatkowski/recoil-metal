@@ -604,6 +604,35 @@ TEST_CASE("FA weapon target restrictions retain complete category expressions") 
           == std::vector<std::string>{"NAVAL", "EXPERIMENTAL"});
 }
 
+TEST_CASE("FA weapon target restrictions read the legacy disallow list") {
+    // The engine field is `TargetRestrictDisallow` (`blueprint_layout.tsv:246`,
+    // "Comma separated list of Entity Category that are always invalid
+    // targets") — `TargetRestrictOnlyDisallow` occurs nowhere in the corpus —
+    // and the corpus separates with commas: UAA0102 authors
+    // `TargetRestrictDisallow = 'UNTARGETABLE,LAND,STRUCTURE,NAVAL'`. The
+    // parser read neither the name nor the commas, so the disallow was
+    // silently inert.
+    const Blueprint bp{"target_restrictions_commas_unit.bp", R"(
+        UnitBlueprint {
+            Physics = { MotionType = 'RULEUMT_Land', MaxSpeed = 1 },
+            SizeX = 1, SizeZ = 1,
+            Weapon = {
+                {
+                    WeaponCategory = 'Direct Fire', Damage = 10, MaxRadius = 20, RateOfFire = 1,
+                    TargetRestrictOnlyAllow = 'AIR',
+                    TargetRestrictDisallow = 'UNTARGETABLE,LAND,STRUCTURE,NAVAL',
+                },
+            },
+        }
+    )"};
+    const auto def = rm::unitbp::loadFile(bp.path());
+    REQUIRE(def.has_value());
+    REQUIRE(def->weapons.size() == 1);
+    REQUIRE(def->weapons[0].targetRestrictOnlyDisallow.has_value());
+    CHECK(*def->weapons[0].targetRestrictOnlyDisallow
+          == std::vector<std::string>{"UNTARGETABLE", "LAND", "STRUCTURE", "NAVAL"});
+}
+
 TEST_CASE("FA point defence weapons retain their projectile target type") {
     const Blueprint bp{"point_defence_unit.bp", R"(
         UnitBlueprint {

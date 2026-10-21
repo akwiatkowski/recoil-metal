@@ -198,6 +198,11 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
         if (const std::optional<std::string_view> disallow =
                 entry.stringAt("TargetRestrictOnlyDisallow")) {
             weapon.targetRestrictOnlyDisallow = parseCategoryTerm(*disallow);
+        } else if (const std::optional<std::string_view> legacy =
+                       entry.stringAt("TargetRestrictDisallow")) {
+            // The engine field (`blueprint_layout.tsv:246`); `OnlyDisallow` occurs
+            // nowhere in the corpus but stays the winner when both state one.
+            weapon.targetRestrictOnlyDisallow = parseCategoryTerm(*legacy);
         }
 
         // `Buffs = {{ BuffType = 'STUN', ... }}` (`URL0301_unit.bp:600-610`):
