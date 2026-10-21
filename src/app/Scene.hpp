@@ -821,6 +821,7 @@ struct UnitScene {
         StrategicNukeCrater,  ///< `TIFMissileNuke01/02` via `UEFNukeEffectController01_script.lua:50-52` (`Crater01_*` pair at 50, permanent)
         QuantumCrater,  ///< `AIFQuantumWarhead02_script.lua:119-120` (`Crater01_*` pair, 50 elmos)
         SeraphimNukeCrater,  ///< `SIFExperimentalStrategicMissile01`/`SBOInfernoExperimentalStrategicBomb01` via `SeraphimNukeEffectController01_script.lua:187-188` (`Scorch_012` at 300, permanent)
+        OhwalliScorch,  ///< `SBOOhwalliStrategicBomb01` + `SIFInainoStrategicMissile01/02` via `SBOOhwalliBombEffectController01`/`InainoEffectController01:75-76` (`Scorch_012_albedo` at 80, permanent)
     };
     /// Where shots hit ground that killed nothing. Retail scorches terrain hits, and
     /// a battle that only marks its kills forgets most of what happened there.

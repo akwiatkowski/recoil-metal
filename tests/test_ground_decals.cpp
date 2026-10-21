@@ -803,6 +803,20 @@ TEST_CASE("impact marks tag a weapon's own decal from the shot's projectile id",
     CHECK(rm::app::scriptTagForProjectile(
               "/projectiles/SBOInfernoExperimentalStrategicBomb01/SBOInfernoExperimentalStrategicBomb01_proj.bp")
           == Script::SeraphimNukeCrater);
+    // Retail's Ohwalli/Inaino crater (C-484): `SBOOhwalliStrategicBomb01`
+    // spawns its effect controller unconditionally on impact, and the
+    // `SIFInainoStrategicMissile01/02` pair spawns `InainoEffectController01`
+    // on anything but a projectile hit — both controllers lay
+    // `Scorch_012_albedo` at 80 elmos (LOD 1000, duration 0 = permanent).
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/SBOOhwalliStrategicBomb01/SBOOhwalliStrategicBomb01_proj.bp")
+          == Script::OhwalliScorch);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/SIFInainoStrategicMissile01/SIFInainoStrategicMissile01_proj.bp")
+          == Script::OhwalliScorch);
+    CHECK(rm::app::scriptTagForProjectile(
+              "/projectiles/SIFInainoStrategicMissile02/SIFInainoStrategicMissile02_proj.bp")
+          == Script::OhwalliScorch);
     CHECK(rm::app::scriptTagForProjectile("") == Script::BaseScorch);
 }
 TEST_CASE("scripted decals retire at their authored duration", "[decals]") {
