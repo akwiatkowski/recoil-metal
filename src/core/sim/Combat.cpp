@@ -4283,31 +4283,44 @@ void resolvePendingImpact(Projectile& shot, std::vector<Projectile>& projectiles
                             shieldPenetrating);
         // `C-086`: the area path queries 0xF00, which includes projectiles — a
         // blast overlapping a hostile in-flight missile damages its authored
-        // pool like a contact hit, never the firing side's own shots.
-        for (Projectile& other : projectiles) {
-            if (&other == &shot || other.ticksRemaining <= 0
-                || other.pendingImpact != ImpactType::Invalid
-                || !projectileHostile(shot.firedByArmy, other, armies)) {
-                continue;
+        // pool like a contact hit, never the firing side's own shots. A ringed
+        // warhead resolves the union of its discs (inner first, then outer,
+        // matching `explodeOnDeath`'s order), so each band chips the shots it
+        // overlaps: a missile inside the outer ring but beyond the small main
+        // radius still takes the ring's damage.
+        const auto chipBand = [&](Fx radiusElmos, Mag amount) {
+            if (radiusElmos <= Fx{} || amount <= Mag{}) {
+                return;
             }
-            const Fx dx = other.position[0] - shot.position[0];
-            const Fx dy = other.position[1] - shot.position[1];
-            const Fx dz = other.position[2] - shot.position[2];
-            if (fxHypot(fxHypot(dx, dz), dy) > shot.damageRadiusElmos) {
-                continue;
+            for (Projectile& other : projectiles) {
+                if (&other == &shot || other.ticksRemaining <= 0
+                    || other.pendingImpact != ImpactType::Invalid
+                    || !projectileHostile(shot.firedByArmy, other, armies)) {
+                    continue;
+                }
+                const Fx dx = other.position[0] - shot.position[0];
+                const Fx dy = other.position[1] - shot.position[1];
+                const Fx dz = other.position[2] - shot.position[2];
+                if (fxHypot(fxHypot(dx, dz), dy) > radiusElmos) {
+                    continue;
+                }
+                if (other.maxHealth > Mag{}) {
+                    other.health -= amount;
+                }
+                if (other.maxHealth <= Mag{} || other.health <= Mag{}) {
+                    other.pendingImpact = ImpactType::Invalid;
+                    other.impactTarget = {};
+                    other.ticksRemaining = 0;
+                }
             }
-            if (shot.damage.base <= Mag{}) {
-                continue;
-            }
-            if (other.maxHealth > Mag{}) {
-                other.health -= shot.damage.base;
-            }
-            if (other.maxHealth <= Mag{} || other.health <= Mag{}) {
-                other.pendingImpact = ImpactType::Invalid;
-                other.impactTarget = {};
-                other.ticksRemaining = 0;
-            }
+        };
+        if (shot.innerRing.harmful() && shot.innerRingRadiusElmos > Fx{}) {
+            chipBand(shot.innerRingRadiusElmos, shot.innerRing.base);
         }
+        if (shot.outerRing.harmful() && shot.outerRingRadiusElmos > Fx{}) {
+            chipBand(shot.outerRingRadiusElmos, shot.outerRing.base);
+        }
+        chipBand(shot.damageRadiusElmos, shot.damage.base);
     }
 
     // Recoil Metal has no Lua projectile lifecycle yet, so retain its established

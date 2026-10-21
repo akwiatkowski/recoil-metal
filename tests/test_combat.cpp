@@ -617,6 +617,45 @@ TEST_CASE("a blast impact damages a hostile missile in flight") {
     CHECK(rm::sim::magToFloat(shots.front().health) == Approx(15.0f));
 }
 
+TEST_CASE("a ringed blast impact chips a hostile missile in the ring band") {
+    // C-086's `DamageArea` 0xF00 query reaches projectiles, and the ringed
+    // warhead path resolves the UNION of its discs (inner first, then outer,
+    // matching `explodeOnDeath`'s order): a nuke sitting inside the outer
+    // ring but beyond the small main radius still takes the ring's damage.
+    // The overhead-chip loop currently sweeps only `damageRadiusElmos`, so a
+    // 10-point outer ring at radius 10 leaves a 25-HP nuke at 6 elmos up
+    // untouched at 25 HP instead of chipping it to 15.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Roster roster;
+    const UnitId hull = roster.add(roster.addType(targetDef()), 0.0f, 0.0f, 1, 100.0f);
+    roster.motion(hull).radiusElmos = rm::test::fx(2.0f);
+    roster.transform(hull).y = rm::test::fx(0.0f);
+    roster.reindex();
+    Projectile nuke{.position = rm::test::at(0, 6, 0),
+                    .firedByArmy = 1,
+                    .ticksRemaining = 10,
+                    .maxHealth = rm::test::mag(25.0f),
+                    .health = rm::test::mag(25.0f)};
+    Projectile shell{.position = rm::test::at(0, 0, 10),
+                     .velocity = rm::test::at(0, 0, -20),
+                     .damage = rm::unitdef::flatDamage(rm::test::mag(0.0f)),
+                     .damageRadiusElmos = rm::test::fx(2.0f),
+                     .targetLayers = rm::unitdef::TargetLayerMask::Surface,
+                     .firedByArmy = 0,
+                     .ticksRemaining = 10,
+                     .outerRing = rm::unitdef::flatDamage(rm::test::mag(10.0f)),
+                     .outerRingRadiusElmos = rm::test::fx(10.0f)};
+    std::vector<Projectile> shots{nuke, shell};
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                nullptr, &roster.catalog);
+    rm::sim::advanceProjectiles(shots, roster.store, armies,
+                                rm::sim::Terrain{flatField(-100.0f)}, roster.rate,
+                                nullptr, &roster.catalog);
+    REQUIRE(shots.size() == 1);
+    CHECK(rm::sim::magToFloat(shots.front().health) == Approx(15.0f));
+}
+
 TEST_CASE("an interceptor damages a projectile's health rather than force-destroying it") {
     // C-087: interception damages; it does not force-destroy. 34 projectile blueprints
     // declare Defense.MaxHealth — tacticals 1-3, nukes 25 (ART-S013) — so an SMD
