@@ -386,6 +386,12 @@ struct Weapon {
     /// How fast a projectile leaves, in elmos per second. Zero for a weapon whose
     /// projectile is instant.
     float muzzleVelocityElmosPerSecond = 0.0f;
+    /// `RUnitBlueprintWeapon.ProjectileLifetime+0x98` (`WeaponBlueprint.lua:260`):
+    /// the weapon's own shot life in seconds. Nonzero wins over the
+    /// projectile blueprint's `Lifetime`; zero means "use the shot's own
+    /// blueprint" — the `XSB4201` SMD's simultaneous `= 3` and multiplier
+    /// arm is untested retail behavior, so the stated-seconds arm lands first.
+    float projectileLifetimeSeconds = 0.0f;
 
     /// The bone the shot leaves from — `TurretBoneMuzzle`, or the rack's first muzzle
     /// bone when no turret names one. A NAME, because the blueprint knows the name and

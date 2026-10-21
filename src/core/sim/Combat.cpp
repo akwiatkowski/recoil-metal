@@ -3365,9 +3365,15 @@ Projectile launch(std::array<Fx, 3> from, std::array<Fx, 3> to,
     shot.doNotCollide = weapon.projectileTraits.doNotCollide;
     shot.useGravity = weapon.projectileTraits.useGravity;
     shot.arc = weapon.arc;
-    // The authored `Physics.LifeTime` arrives as ticks (converted at parse):
-    // the Aeon interceptor (`AIMAntiMissile01`) flies 4 seconds,
-    // tacticals/strategics 30. Unstated keeps the 30-second engine default,
+    // The authored `Physics.LifeTime`/`Lifetime` arrives as ticks (converted
+    // at parse): the Aeon interceptor flies 4 seconds, tacticals/strategics
+    // 30, nukes 600. `ProjectileLifetime` (weapon+0x98, "if 0 use the
+    // projectile's own") is correctly parsed but NOT applied here: the
+    // corpus shows stated values routinely cut flight short of MaxRadius
+    // (e.g. `UAS0401:Torpedo01` 5 elmo/s x 7 s = 35 < 80), so applying it as
+    // a hard expiry breaks the sweep — 2 failures. The precedence question
+    // (multiplier vs expiry) needs a retail Moho read; until then the shot
+    // flies its blueprint span. Unstated keeps the 30 s engine default,
     // scaled by the rate — a hardcoded 300 is only 30 s at 10 Hz.
     const int authoredTicks = weapon.projectileTraits.lifeTimeTicks;
     shot.ticksRemaining =

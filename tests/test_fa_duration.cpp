@@ -197,6 +197,20 @@ TEST_CASE("a weapon with no salvo fields is an ordinary one") {
     CHECK(plain.burstSize == 1);
     CHECK_FALSE(plain.bursts());
 }
+TEST_CASE("a weapon keeps its ProjectileLifetime parse") {
+    // Engine schema `RUnitBlueprintWeapon.ProjectileLifetime+0x98`
+    // (`blueprint_layout.tsv`, `WeaponBlueprint.lua:260-264`): "Lifetime for
+    // projectile in seconds. If 0, the projectile will use the lifetime from
+    // its own blueprint." Parsed (the `UAS0401:Torpedo01 = 7` read is real)
+    // but deliberately NOT applied as a hard expiry in `launch()`: stated
+    // values routinely cut flight short of MaxRadius (5x7=35 < 80), and two
+    // corpus units fail the sweep when it is applied. Precedence needs a
+    // retail Moho read; the parse pin stays.
+    const Weapon timed = parseOne("ProjectileLifetime = 7");
+    CHECK(timed.projectileLifetimeSeconds == 7.0f);
+    const Weapon plain = parseOne("RateOfFire = 1");
+    CHECK(plain.projectileLifetimeSeconds == 0.0f);
+}
 
 TEST_CASE("DamageFriendly is retained for a death weapon") {
     const Weapon death = parseOne("WeaponCategory = 'Death', DamageFriendly = true");

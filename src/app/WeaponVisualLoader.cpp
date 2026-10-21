@@ -241,6 +241,10 @@ WeaponVisuals loadWeaponVisuals(const vfs::Vfs& content) {
             // flash is its own authored list (`FxChargeMuzzleFlash`), resolved
             // beside the fire flash. An explicitly empty list pins no flash
             // through the same `try_emplace` path as the fire effect.
+            // `AAATemporalFizzWeapon.PlayFxRackSalvoChargeSequence` (`lua/lua/aeonweapons.lua:459-470`):
+            // the rack-charge flash is its own authored list (`FxChargeEffects`), resolved beside the
+            // fire and charge flashes. An explicitly empty list pins no flash the same way.
+            resolve(script, key + "#FxChargeEffects", weapon.label.c_str(), "FxChargeEffects");
             resolve(script, key + "#FxChargeMuzzleFlash", weapon.label.c_str(), "FxChargeMuzzleFlash");
         }
     }

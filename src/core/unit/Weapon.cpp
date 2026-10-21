@@ -417,6 +417,7 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
 
         weapon.muzzleVelocityElmosPerSecond =
             numberOr(entry, "MuzzleVelocity", 0.0f) * scmap::kElmosPerOgrid;
+        weapon.projectileLifetimeSeconds = numberOr(entry, "ProjectileLifetime", 0.0f);
 
         // `Flare = {Category, Radius}` on the Aeon decoy defences (`C-088`). Radius is
         // ogrids like every sibling range; a missing category defaults to 'MISSILE',

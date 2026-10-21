@@ -100,6 +100,12 @@ void emitCombatEffects(std::vector<Particle>& into, std::span<const sim::Event> 
             // flash is a second authored list at the same muzzle, not an alternative to
             // the fire flash — the fallback below is still skipped when the fire list exists.
             (void)burst(event.visualId + "#FxChargeMuzzleFlash", muzzle, direction, event.unit, event.visualId);
+            // Retail `AAATemporalFizzWeapon.PlayFxRackSalvoChargeSequence`
+            // (`lua/lua/aeonweapons.lua:459-470`): the rack-charge flash is a third
+            // authored list (`FxChargeEffects`, e.g. `SAAOlarisCannonWeapon`'s
+            // `SOlarisCannonMuzzleCharge`), created at the charge muzzles — same
+            // muzzle here, since the scene has no rack-charge event or bone table.
+            (void)burst(event.visualId + "#FxChargeEffects", muzzle, direction, event.unit, event.visualId);
             if (fired) break;
             {
             const ShotClass cls =

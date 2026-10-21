@@ -1082,3 +1082,31 @@ TEST_CASE("a beam burst hangs its authored start- and end-point emitters", "[wea
     CHECK(endIt->position[0] == Catch::Approx(100));
     CHECK(endIt->scale == Catch::Approx(0.5f));
 }
+TEST_CASE("a fired shot also bursts its authored rack-charge effects", "[weapon-visuals]") {
+    // `AAATemporalFizzWeapon.PlayFxRackSalvoChargeSequence` (`lua/lua/aeonweapons.lua:459-470`):
+    // the rack-charge flash is its own authored list (`FxChargeEffects`, e.g. `SAAOlarisCannonWeapon`
+    // in `lua/lua/seraphimweapons.lua:159-162` pairs `SOlarisCannonMuzzleFlash01` with
+    // `SOlarisCannonMuzzleCharge`), created at the charge muzzles. The loader resolves no such
+    // key and nothing bursts it, so the rack-charge emitters never draw.
+    rm::WeaponVisuals visuals;
+    rm::WeaponMaterial fire;
+    fire.emitter = "/effects/emitters/fire_emit.bp";
+    rm::WeaponMaterial rackCharge;
+    rackCharge.emitter = "/effects/emitters/rack_charge_emit.bp";
+    visuals.materials.push_back(fire);
+    visuals.materials.push_back(rackCharge);
+    visuals.definitions[rm::foldedVisualKey("test_gun:Main#fxmuzzleflash")] = {0};
+    visuals.definitions[rm::foldedVisualKey("test_gun:Main#fxchargeeffects")] = {1};
+    const rm::sim::Event fired{.kind = rm::sim::EventKind::WeaponFired,
+        .at2 = {rm::sim::Fx::fromInt(100), rm::sim::Fx::fromInt(20), {}},
+        .visualId = "test_gun:Main"};
+    rm::CombatEffectState state;
+    std::vector<rm::Particle> out;
+    rm::emitCombatEffects(out, std::array{fired}, &visuals, &state);
+    const auto has = [&](std::uint32_t id) {
+        return std::ranges::any_of(state.bursts,
+            [id](const rm::CombatEffectBurst& b) { return b.material == id; });
+    };
+    CHECK(has(0));
+    CHECK(has(1));
+}
