@@ -2165,3 +2165,29 @@ TEST_CASE("C-199: a ferry does not wait for cargo that cannot fit", "[fa-transpo
     CHECK(departed);
     CHECK(!roster.motion(waiter).attached);
 }
+
+TEST_CASE("C-198: cargo slung aboard shuts its shield off, and landing restores it",
+          "[fa-transport]") {
+    // `Unit.lua:3434-3455`: `OnTransportAttach` runs `DisableShield` on the
+    // cargo when its shield is up, `OnTransportDetach` runs `EnableShield` on
+    // the way out. The sim's analog is the `RULEUTC_ShieldToggle` script bit:
+    // a shielded cargo boards with the bit disabled and lands with it clear.
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    UnitDef shielded = cargoDef();
+    shielded.name = "shielded_cargo";
+    shielded.shield.maximum = rm::sim::Mag::fromInt(100);
+    shielded.shield.radiusElmos = rm::sim::Fx::fromInt(10);
+    const rm::UnitTypeIndex cargoType = roster.addType(shielded);
+    const UnitId transport = landedTransport(roster, transportType, 50.0f, 50.0f);
+    const UnitId cargo = roster.add(cargoType, 51.0f, 50.0f, 0, 500.0f);
+    const rm::unitdef::UnitDef& carrierDef = *roster.catalog.def(transportType);
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog, carrierDef,
+                                 transport, cargo));
+    CHECK(roster.store.scriptBitDisabled(cargo, 0));
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    rm::sim::detachCargo(roster.store, roster.catalog, terrain, transport);
+    CHECK_FALSE(roster.motion(cargo).attached);
+    CHECK_FALSE(roster.store.scriptBitDisabled(cargo, 0));
+}

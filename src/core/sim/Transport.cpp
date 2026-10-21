@@ -440,9 +440,21 @@ bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
     if (!store.alive(carrierId) || !store.alive(cargo) || store.parentOf(cargo)) {
         return false;
     }
+    // `Unit.lua:3434-3444` (`OnTransportAttach`): a cargo unit whose shield is
+    // up has it disabled on boarding — `DisableShield` writes the
+    // `RULEUTC_ShieldToggle` bit off and `MyShield:TurnOff()`. The sim's
+    // analog is the script bit: absorption and regen already gate on it, so a
+    // shielded cargo boards with bit 0 set and lands with it clear. Retail
+    // SKU CITATION: `mohodata.scd:lua/sim/Unit.lua:3434-3444`.
+    const auto shieldDown = [&] {
+        const UnitCatalog::ShieldInfo& shield = catalog.shield(store.typeAt(cargo.index));
+        if (shield.exists() && store.health()[cargo.index].shield.active()) {
+            (void)store.setScriptBitDisabled(cargo, 0, true);
+        }
+    };
     if (carrier.isCarrier()) {
         // `C-481`: `AddUnitToStorage` refuses a full pool — `stored <
-        // StorageSlots` — so the attach itself refuses, not just the callers.
+        // `StorageSlots` — so the attach itself refuses, not just the callers.
         if (static_cast<int>(store.childrenOf(carrierId).size())
             >= carrier.transport.storageSlots) {
             return false;
@@ -454,6 +466,7 @@ bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
         at.x = transforms[carrierId.index].x;
         at.z = transforms[carrierId.index].z;
         at.y = transforms[carrierId.index].y;
+        shieldDown();
         return store.attach(carrierId, cargo);
     }
     if (!grounded(motion[carrierId.index])) {
@@ -509,6 +522,7 @@ bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
         at.x = transforms[carrierId.index].x + world[0];
         at.z = transforms[carrierId.index].z + world[1];
         at.y = transforms[carrierId.index].y + best->rest[1];
+        shieldDown();
         return store.attach(carrierId, cargo,
                             UnitStore::AttachBones{.parent = best->bone,
                                                    .parentRest = {best->rest[0], best->rest[2]},
@@ -527,9 +541,20 @@ bool attachCargo(UnitStore& store, const UnitCatalog& catalog,
     // stood on, it keeps that clearance under the hull — a ground unit slung
     // aboard an airborne carrier hangs at its elevation below the keel.
     at.y = transforms[carrierId.index].y + Fx::fromInt(-2);
+    shieldDown();
     return store.attach(carrierId, cargo);
 }
 
+
+// `Unit.lua:3446-3455` (`OnTransportDetach`): landing re-enables the cargo
+// shield — `EnableShield` clears the `RULEUTC_ShieldToggle` bit.
+// Retail SKU CITATION: `mohodata.scd:lua/sim/Unit.lua:3446-3455`.
+[[nodiscard]] bool shieldUp(UnitStore& store, UnitId child) noexcept {
+    if (!store.alive(child)) {
+        return false;
+    }
+    return store.setScriptBitDisabled(child, 0, false);
+}
 
 void detachCargo(UnitStore& store, const UnitCatalog& catalog, const Terrain& terrain,
                  UnitId carrier) noexcept {
@@ -572,6 +597,7 @@ void detachCargo(UnitStore& store, const UnitCatalog& catalog, const Terrain& te
             launched.moving = false;
             launched.path.clear();
             launched.pathIndex = 0;
+            (void)shieldUp(store, lone);
             return;
         }
         if (!store.detach(lone)) {
@@ -587,6 +613,7 @@ void detachCargo(UnitStore& store, const UnitCatalog& catalog, const Terrain& te
         dropped.moving = false;
         dropped.path.clear();
         dropped.pathIndex = 0;
+        (void)shieldUp(store, lone);
         return;
     }
     const Transform& at = store.transforms()[carrier.index];
@@ -624,6 +651,7 @@ void detachCargo(UnitStore& store, const UnitCatalog& catalog, const Terrain& te
             launched.moving = false;
             launched.path.clear();
             launched.pathIndex = 0;
+            (void)shieldUp(store, child);
             ++i;
         }
         return;
@@ -652,6 +680,7 @@ void detachCargo(UnitStore& store, const UnitCatalog& catalog, const Terrain& te
         dropped.moving = false;
         dropped.path.clear();
         dropped.pathIndex = 0;
+        (void)shieldUp(store, child);
         ++i;
     }
 }
