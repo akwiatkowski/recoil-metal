@@ -301,6 +301,11 @@ struct Weapon {
     /// `Disabledbf` filter on the damage table). Parsed from the block; the
     /// per-unit gate lives in `core/sim/Enhancement.hpp`.
     bool stunBuffed = false;
+    /// The payload's own `Duration` seconds (`Buff.lua:306-308` stuns for
+    /// `buffDef.Duration or 1`). Engine-clocked like `RateOfFire` (the unit
+    /// script calls `SetStunned` directly, no Lua `WaitSeconds`), so the raw
+    /// authored figure, no `faWaitSeconds` bias. Zero when unbuffed.
+    sim::Seconds stunDuration{};
 
     /// Radius over which that damage is spread, in ELMOS, converted from the ogrids
     /// the file states. Zero means a point hit: 222 of the 494 weapons state no radius

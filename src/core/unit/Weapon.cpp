@@ -212,6 +212,8 @@ std::vector<Weapon> weaponsFrom(const lua::Value& weaponArray, bool airborneSour
             for (const lua::Value& buff : buffs->items) {
                 if (buff.stringAt("BuffType").value_or("") == "STUN") {
                     weapon.stunBuffed = true;
+                    weapon.stunDuration = sim::seconds(static_cast<float>(
+                        buff.numberAt("Duration").value_or(0.0)));
                     break;
                 }
             }

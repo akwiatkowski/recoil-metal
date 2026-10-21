@@ -211,6 +211,21 @@ TEST_CASE("a weapon keeps its ProjectileLifetime parse") {
     const Weapon plain = parseOne("RateOfFire = 1");
     CHECK(plain.projectileLifetimeSeconds == 0.0f);
 }
+TEST_CASE("a STUN-buffed weapon keeps its authored Duration") {
+    // Retail `URL0301_unit.bp:600-610`: the `RightDisintegrator` authors a
+    // `Buffs = {{ BuffType = 'STUN', Duration = 6, ... }}` payload, and
+    // `Buff.lua:306-308` stuns for `buffDef.Duration or 1` — the seconds are
+    // the payload. The parse keeps them on the weapon; the `EMPCharge` gate
+    // (`Enhancement.{hpp,cpp}`) decides whether a given unit's shot may use
+    // them. Engine-clocked like `RateOfFire`, so no `faWaitSeconds` bias.
+    const Weapon dis = parseOne("Buffs = { { BuffType = 'STUN', Duration = 6 } }");
+    CHECK(dis.stunBuffed);
+    CHECK(dis.stunDuration.value == 6.0f);
+    const Weapon plain = parseOne("RateOfFire = 1");
+    CHECK_FALSE(plain.stunBuffed);
+    CHECK(plain.stunDuration.value == 0.0f);
+}
+
 
 TEST_CASE("DamageFriendly is retained for a death weapon") {
     const Weapon death = parseOne("WeaponCategory = 'Death', DamageFriendly = true");
