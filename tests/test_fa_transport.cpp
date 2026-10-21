@@ -2108,3 +2108,60 @@ TEST_CASE("C-199: a ferry re-routes when the drop moves more than one elmo", "[f
     CHECK(roster.motion(transport).destinationX == rm::sim::fxFromFloat(40.0f));
     CHECK(roster.motion(transport).destinationZ == rm::sim::fxFromFloat(80.0f));
 }
+
+TEST_CASE("C-199: a ferry does not wait for cargo that cannot fit", "[fa-transport]") {
+    // The Loading-phase hold waits on assigned units still inbound — but a
+    // waiter priced out of the remaining hold (`C-198` costs) will never
+    // board, so holding for it strands the ferry at the beacon forever. The
+    // carrier must fly the drop with what it has instead.
+    const rm::HeightField field = flatField();
+    const rm::sim::Terrain terrain{field};
+    const rm::sim::PassabilityGrid grid =
+        rm::sim::buildPassability(field, 0.0f, 60.0f, 0.0f);
+
+    rm::test::Roster roster;
+    const rm::UnitTypeIndex transportType = roster.addType(transportDef());
+    const rm::UnitTypeIndex heavyType = roster.addType(cargoDef(3));
+    const UnitId transport = landedTransport(roster, transportType, 30.0f, 30.0f);
+    // Four of six slots spoken for: a second class-3 (cost 4) can never board.
+    const UnitId aboard = roster.add(heavyType, 31.0f, 30.0f, 0, 500.0f);
+    const UnitDef carrierDef = transportDef();
+    REQUIRE(rm::sim::attachCargo(roster.store, roster.catalog, carrierDef,
+                                 transport, aboard));
+    const UnitId waiter = roster.add(heavyType, 32.0f, 30.0f, 0, 500.0f);
+
+    const std::vector<Player> players{Player{.index = 0, .army = 0}};
+    std::vector<Army> armies = rm::sim::freeForAll(1);
+    std::vector<rm::sim::Economy> economies(1);
+    std::vector<int> commandersEver(1, 0);
+    std::vector<const rm::sim::PassabilityGrid*> grids(roster.catalog.size(), &grid);
+    const auto gridFor = [&grid](UnitId) { return &grid; };
+
+    REQUIRE(rm::sim::applyCommand(
+                CommandIssue{.source = 0,
+                             .id = rm::commandId(0, 1),
+                             .player = 0,
+                             .kind = CommandKind::Ferry,
+                             .units = {transport},
+                             .targetX = rm::sim::fxFromFloat(80.0f),
+                             .targetZ = rm::sim::fxFromFloat(80.0f)},
+                roster.store, roster.catalog, players, armies, terrain, gridFor,
+                roster.rate)
+                .accepted.size()
+            == 1);
+    REQUIRE(rm::sim::applyCommand(moveIssue(waiter, 30.0f, 30.0f, 2), roster.store,
+                                  roster.catalog, players, armies, terrain, gridFor,
+                                  roster.rate)
+                .accepted.size()
+            == 1);
+
+    Match match = loneMatch(armies, economies, commandersEver, grids);
+    bool departed = false;
+    for (int i = 0; i < 600 && !departed; ++i) {
+        (void)rm::sim::tickSkirmish(roster.store, roster.catalog, match, terrain);
+        departed = roster.motion(transport).destinationX == rm::sim::fxFromFloat(80.0f);
+    }
+
+    CHECK(departed);
+    CHECK(!roster.motion(waiter).attached);
+}

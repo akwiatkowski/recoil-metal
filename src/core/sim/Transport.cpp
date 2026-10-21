@@ -870,6 +870,13 @@ void advanceLoading(UnitStore& store, const UnitCatalog& catalog, const Terrain&
             if (def == nullptr || !def->transportable()) {
                 continue;
             }
+            // A waiter priced out of the remaining hold (`C-198` costs) will
+            // never board — the Loading loop above already skips it — so it
+            // holds no claim on the departure. Boarding only shrinks the
+            // remainder, so a cost that fails now fails forever.
+            if (carrierDef == nullptr || !hasRoomFor(store, catalog, self, *def)) {
+                continue;
+            }
             if (waitingAtBeacon(store, other, beacon)) {
                 return;  // an arrived waiter still holds its ring spot
             }
