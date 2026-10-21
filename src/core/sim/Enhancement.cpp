@@ -319,6 +319,16 @@ Mag enhancementMaintenancePerTick(const UnitStore& store,
                                   const UnitCatalog& catalog, UnitIndex slot) noexcept {
     Mag result{};
     for (const auto& [position, name] : store.enhancements()[slot]) {
+        // Only branches whose install runs
+        // `SetEnergyMaintenanceConsumptionOverride` bill upkeep: `Shield`,
+        // `ShieldGeneratorField` (both set it inline) and `ShieldHeavy` (its
+        // `CreateHeavyShield` fork sets it a tick later). Every other
+        // `MaintenanceConsumptionPerSecondEnergy` authoring — `Teleporter`'s
+        // 10000/s, the cloak/stealth/jammer upkeep via their toggle bits —
+        // never reaches the override, so the generic param must not leak.
+        if (name != "Shield" && name != "ShieldGeneratorField" && name != "ShieldHeavy") {
+            continue;
+        }
         if (const auto* effects = catalog.enhancementEffects(store.typeAt(slot), name)) {
             result += effects->maintenanceEnergyPerTick;
         }

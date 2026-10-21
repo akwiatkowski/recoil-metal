@@ -968,6 +968,33 @@ TEST_CASE("C-255: HighExplosiveOrdnanceRemove leaves the authored blast",
           == rm::sim::Fx::fromInt(80));
 }
 
+TEST_CASE("C-255: a Teleporter install bills no upkeep without its override",
+          "[fa-progress][enhancement]") {
+    // Retail `UEL0001_script.lua`: the `Teleporter` branch runs only
+    // `AddCommandCap('RULEUCC_Teleport')` — no
+    // `SetEnergyMaintenanceConsumptionOverride`, no
+    // `SetMaintenanceConsumptionActive` — even though the blueprint authors
+    // `MaintenanceConsumptionPerSecondEnergy = 10000`. Upkeep is billed only
+    // where the script sets the override; the generic param must not leak a
+    // 10000/s drain onto a teleporter install.
+    rm::test::Roster roster;
+    roster.rate = rm::sim::TickRate{10};
+    rm::unitdef::UnitDef def;
+    def.name = "test_commander";
+    def.buildRate = 10;
+    def.health = rm::test::mag(100.0f);
+    const auto parameters = rm::lua::parseTable(
+        "{ MaintenanceConsumptionPerSecondEnergy=10000 }");
+    REQUIRE(parameters);
+    def.enhancements.push_back({.name = "Teleporter", .slot = "Back",
+        .buildCostMass = rm::test::mag(1.0f), .buildCostEnergy = rm::test::mag(1.0f),
+        .buildTime = rm::test::fx(1.0f), .parameters = *parameters});
+    const auto unit = roster.add(roster.addType(def), 40, 40, 0, 100);
+    REQUIRE(rm::sim::installEnhancement(roster.store, roster.catalog, unit, "Teleporter"));
+    CHECK(rm::sim::enhancementMaintenancePerTick(roster.store, roster.catalog, unit.index)
+          == rm::sim::Mag{});
+}
+
 TEST_CASE("C-378: a dead owner's in-flight enhancement work retires with it",
           "[fa-progress][enhancement]") {
     // The install/fund/work/cancel edge the lifecycle owns: a unit killed
