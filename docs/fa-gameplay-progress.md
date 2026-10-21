@@ -97,7 +97,7 @@ asset/performance skip kinds as the prior gate).
 
 ## What remains from 100% (2026-10-19, audited against code truth)
 
-Gate 2,481/2,481 green on a clean tree; ~125 behavior slices landed since the
+Gate 2,483/2,483 green on a clean tree; ~125 behavior slices landed since the
 printed scores below were written, so every per-row percentage beneath is STALE
 and understates the tree. Spot-checks against code (not section prose) confirm
 these row texts are already wrong: INTEL water-vision/omni-bypass/sonar-graves
