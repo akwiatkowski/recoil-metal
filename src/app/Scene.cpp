@@ -326,11 +326,11 @@ inline constexpr int kImpactMarkLodMax = 350;  // (C-290 `GetRandomFloat(200,350
 /// replay-identical, off the sim RNG (C-297). Presentation only, never hashed.
 inline constexpr float kImpactMarkLifetimeSecondsMin = 300.0f;  // s (C-290 floor)
 inline constexpr float kImpactMarkLifetimeSecondsWidth = 300.0f;  // s (C-290 600-300 spread)
-/// Retail's `ScorchThread` fixed lifetimes (`defaultcollisionbeams.lua` C-290):
-/// the thread lays `CreateSplat` directly, so the lifetime arg is the class's
-/// own — 100 s for the seven 100-life thread bodies, 250 s for the quantum
-/// thread, 15 s for the orbital death laser. Per-mark, from
-/// `beamClassLifetimeSeconds`; this engine never floors one class to another.
+/// Retail's `ScorchThread` fixed lifetimes (`lua/sim/collisionbeams/*_collisionbeam.lua`
+/// C-290): the thread lays `CreateSplat` directly, so the lifetime arg is the
+/// class's own — per-class, via `beamClassLifetimeSeconds` (quantum 150,
+/// hiro 70, ultra pair 50, the rest 100). Per-mark; this engine never floors
+/// one class to another.
 /// Retail rotates every scorch by 0..2pi (`defaultexplosions.lua` C-290). The
 /// engine has no texture to orient — the fan is rotationally symmetric — so the
 /// angle buys per-mark variety, not fidelity. Derived from the mark's own bits
@@ -460,16 +460,16 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     }
     return false;
 }
-/// Whether a collision-beam class forks `ScorchThread` (C-290): the 8 classes
-/// in `defaultcollisionbeams.lua` whose `OnImpact` forks the thread on
-/// `impactType == 'Terrain'`, plus the two subclasses that inherit it
-/// (`MicrowaveLaserCollisionBeam02` from `...01`, `Ultra...02` from `Ultra`).
-/// The `SCCollisionBeam` base and the 5 remaining leaves state no thread.
-/// Unknown names return true — an unmapped class is a content gap, not a
-/// proved opt-out. Presentation only, never hashed.
+/// Whether a collision-beam class forks `ScorchThread` (C-290): the 10 thread
+/// bodies in `lua/sim/collisionbeams/*_collisionbeam.lua` whose `OnImpact`
+/// forks the thread on a non-shield/water/air impact, plus the two subclasses
+/// that inherit it (`MicrowaveLaserCollisionBeam02` from `...01`,
+/// `Ultra...02` from `Ultra`). The `SCCollisionBeam` base and the 5 remaining
+/// leaves state no thread. Unknown names return true — an unmapped class is a
+/// content gap, not a proved opt-out. Presentation only, never hashed.
 [[nodiscard]] bool beamClassScorches(std::string_view beamClass) noexcept {
-    // The 5 scorch-less leaves (`defaultcollisionbeams.lua` C-290): no
-    // `ScorchThread` in their class body and no scorching parent.
+    // The 5 scorch-less leaves (C-290): no `ScorchThread` in their class body
+    // and no scorching parent.
     return beamClass != "GinsuCollisionBeam"
            && beamClass != "ParticleCannonCollisionBeam"
            && beamClass != "ZapperCollisionBeam"
@@ -477,55 +477,74 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
            && beamClass != "TractorClawCollisionBeam";
 }
 /// A collision-beam class's `ScorchThread` `CreateSplat` lifetime, in seconds
-/// (`defaultcollisionbeams.lua` C-290, the 7th arg): the quantum thread passes
-/// 250, the orbital death laser passes 15, the other seven thread bodies pass
-/// 100. Unknown/empty names read as the 100 s common case — the same default
-/// the scorch gate applies. Presentation only, never hashed.
+/// (`lua/sim/collisionbeams/*_collisionbeam.lua` C-290, the 7th arg — the
+/// `duration`): quantum 150, hiro 70, ultra pair 50, orbital/unstable-phason/
+/// microwaves/phason/experimental-phason/lightning-surface 100.
+/// `MicrowaveLaserCollisionBeam02`/`UltraChromatic...02` inherit their
+/// parent's thread. Unknown/empty names read as the 100 common case — the
+/// same default the scorch gate applies. Presentation only, never hashed.
 [[nodiscard]] float beamClassLifetimeSeconds(std::string_view beamClass) noexcept {
     if (beamClass == "QuantumBeamGeneratorCollisionBeam") {
-        return 250.0f;  // s (`defaultcollisionbeams.lua:120`)
+        return 150.0f;  // s (`quantumbeamgeneratorcollisionbeam.lua:53`)
     }
-    if (beamClass == "OrbitalDeathLaserCollisionBeam") {
-        return 15.0f;  // s (`defaultcollisionbeams.lua:555`)
+    if (beamClass == "TDFHiroCollisionBeam") {
+        return 70.0f;  // s (`tdfhirocollisionbeam.lua:50`)
     }
-    return 100.0f;  // s (the seven 100-life thread bodies)
+    if (beamClass == "UltraChromaticBeamGeneratorCollisionBeam"
+        || beamClass == "UltraChromaticBeamGeneratorCollisionBeam02") {
+        return 50.0f;  // s (`ultrachromaticbeamgeneratorcollisionbeam.lua:52`)
+    }
+    return 100.0f;  // s (orbital, microwaves, phason, unstable phason, experimental phason, lightning-surface)
 }
 /// A collision-beam class's `ScorchThread` `CreateSplat` LOD (C-290, the 6th
-/// arg): the quantum thread passes 250, the orbital death laser passes 250,
-/// the other seven thread bodies pass 100. Unknown/empty names read as the
-/// 100 common case — the same default the scorch gate applies. Presentation
-/// only, never hashed.
+/// arg — the `lodParam`): quantum/microwaves/phason/orbital-lightning bodies
+/// 200, unstable phason and orbital death laser 250, hiro 100, ultra pair 70,
+/// experimental phason and lightning-surface 100. `MicrowaveLaser02`/`Ultra02`
+/// inherit their parent's thread. Unknown/empty names read as the 100 common
+/// case — the same default the scorch gate applies. Presentation only, never
+/// hashed.
 [[nodiscard]] int beamClassLod(std::string_view beamClass) noexcept {
-    if (beamClass == "QuantumBeamGeneratorCollisionBeam") {
-        return 250;  // (`defaultcollisionbeams.lua:120`)
+    if (beamClass == "QuantumBeamGeneratorCollisionBeam"
+        || beamClass == "MicrowaveLaserCollisionBeam01"
+        || beamClass == "MicrowaveLaserCollisionBeam02"
+        || beamClass == "PhasonLaserCollisionBeam") {
+        return 200;  // (`quantumbeamgeneratorcollisionbeam.lua:53`, `:52` x2)
     }
-    if (beamClass == "OrbitalDeathLaserCollisionBeam") {
-        return 250;  // (`defaultcollisionbeams.lua:555`)
+    if (beamClass == "UnstablePhasonLaserCollisionBeam"
+        || beamClass == "OrbitalDeathLaserCollisionBeam") {
+        return 250;  // (`unstablephasonlasercollisionbeam.lua:62`, `orbitaldeathlasercollisionbeam.lua:53`)
     }
-    return 100;  // (the seven 100-LOD thread bodies)
+    if (beamClass == "UltraChromaticBeamGeneratorCollisionBeam"
+        || beamClass == "UltraChromaticBeamGeneratorCollisionBeam02") {
+        return 70;  // (`ultrachromaticbeamgeneratorcollisionbeam.lua:52`)
+    }
+    return 100;  // (hiro, experimental phason, lightning-surface, and the common default)
 }
 /// A collision-beam class's `ScorchThread` opening `CreateSplat` size, in
-/// elmos (`defaultcollisionbeams.lua` C-290, the 4th/5th args): the `size`
-/// local's first-pass band — quantum/orbital 3.5+Random*3.5, experimental
-/// phason 4+Random*1, photon-chromatic bodies 1.5+Random*1.5, hiro/ultra
-/// 0.75+Random*0.75. The pick is the mark's own position bits through one
-/// more splitmix32 round — replay-identical, off the sim RNG (C-297),
-/// presentation only, never hashed.
+/// elmos (`lua/sim/collisionbeams/*_collisionbeam.lua` C-290, the 4th/5th
+/// args): the `size` local's first-pass band — quantum/orbital 3.5+Random*3.5,
+/// experimental phason 4+Random*1, microwaves/phason 1.5+Random*1.5,
+/// lightning-surface 1.1+Random*1.1, ultra pair 1+Random*1, hiro 1.5+Random*1.5
+/// (its opening; the redraw unifies at 1.2+Random*1.5). The pick is the mark's
+/// own position bits through one more splitmix32 round — replay-identical,
+/// off the sim RNG (C-297), presentation only, never hashed.
 [[nodiscard]] float beamClassSize(float x, float z, std::string_view beamClass) noexcept {
-    float base = 1.5f;  // elmos (the photon-chromatic common case)
-    float width = 1.5f;  // elmos (1.5+Random*1.5, `:181`)
+    float base = 1.5f;  // elmos (microwave/phason/hiro opening: 1.5+Random*1.5)
+    float width = 1.5f;  // elmos (1.5+Random*1.5)
     if (beamClass == "QuantumBeamGeneratorCollisionBeam"
         || beamClass == "OrbitalDeathLaserCollisionBeam") {
-        base = 3.5f;  // elmos (3.5+Random*3.5, `:114`)
-        width = 3.5f;  // elmos (`:114`)
+        base = 3.5f;  // elmos (3.5+Random*3.5)
+        width = 3.5f;  // elmos
     } else if (beamClass == "ExperimentalPhasonLaserCollisionBeam") {
-        base = 4.0f;  // elmos (4+Random*1, `:303`)
-        width = 1.0f;  // elmos (`:303`)
-    } else if (beamClass == "TDFHiroCollisionBeam"
-               || beamClass == "UltraChromaticBeamGeneratorCollisionBeam"
+        base = 4.0f;  // elmos (4+Random*1)
+        width = 1.0f;  // elmos
+    } else if (beamClass == "LightningSmallSurfaceCollisionBeam") {
+        base = 1.1f;  // elmos (1.1+Random*1.1)
+        width = 1.1f;  // elmos
+    } else if (beamClass == "UltraChromaticBeamGeneratorCollisionBeam"
                || beamClass == "UltraChromaticBeamGeneratorCollisionBeam02") {
-        base = 0.75f;  // elmos (0.75+Random*0.75, `:419`)
-        width = 0.75f;  // elmos (`:419`)
+        base = 1.0f;  // elmos (1+Random*1)
+        width = 1.0f;  // elmos
     }
     std::uint32_t bits = static_cast<std::uint32_t>(std::llround(
                              static_cast<double>(x) * 4096.0))  // 1/4096 elmo
@@ -543,19 +562,28 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     return base + unit * width;  // elmos (C-290 `size` band)
 }
 /// A collision-beam class's `ScorchThread` redrawn `CreateSplat` size, in
-/// elmos (`defaultcollisionbeams.lua` C-290): the `size` reassignment after
-/// every pass — quantum/orbital 3.2+Random*3.5 (`:128`), experimental phason
-/// 4.0+Random*1.0 (`:317`, unchanged), every other thread body
-/// 1.2+Random*1.5 (`:195`). Same position-bit splitmix32 pick as the opening
-/// band — replay-identical, off the sim RNG (C-297), presentation only.
+/// elmos (`lua/sim/collisionbeams/*_collisionbeam.lua` C-290): the `size`
+/// reassignment after every pass — quantum/orbital 3.2+Random*3.5, experimental
+/// phason 4.0+Random*1.0 (unchanged), ultra pair 1.0+Random*1.0 (unchanged),
+/// hiro 1.2+Random*1.5, every other thread body 1.2+Random*1.5
+/// (lightning-surface redraws at 1+Random*1.1). Same position-bit splitmix32
+/// pick as the opening band — replay-identical, off the sim RNG (C-297),
+/// presentation only.
 [[nodiscard]] float beamClassRedrawSize(float x, float z, std::string_view beamClass) noexcept {
-    if (beamClass == "ExperimentalPhasonLaserCollisionBeam") {
-        return beamClassSize(x, z, beamClass);  // elmos (redraw == opening, `:317`)
+    float base = 1.2f;  // elmos (microwaves, phason, unstable phason, hiro redraw)
+    float width = 1.5f;  // elmos (1.2+Random*1.5)
+    if (beamClass == "QuantumBeamGeneratorCollisionBeam"
+        || beamClass == "OrbitalDeathLaserCollisionBeam") {
+        base = 3.2f;  // elmos (3.2+Random*3.5)
+        width = 3.5f;  // elmos
+    } else if (beamClass == "ExperimentalPhasonLaserCollisionBeam"
+               || beamClass == "UltraChromaticBeamGeneratorCollisionBeam"
+               || beamClass == "UltraChromaticBeamGeneratorCollisionBeam02") {
+        return beamClassSize(x, z, beamClass);  // elmos (redraw == opening)
+    } else if (beamClass == "LightningSmallSurfaceCollisionBeam") {
+        base = 1.0f;  // elmos (1+Random*1.1)
+        width = 1.1f;  // elmos
     }
-    const bool heavy = beamClass == "QuantumBeamGeneratorCollisionBeam"
-                    || beamClass == "OrbitalDeathLaserCollisionBeam";
-    const float base = heavy ? 3.2f : 1.2f;  // elmos (C-290 redraw bands)
-    const float width = heavy ? 3.5f : 1.5f;  // elmos (C-290 redraw bands)
     std::uint32_t bits = static_cast<std::uint32_t>(std::llround(
                              static_cast<double>(x) * 4096.0))  // 1/4096 elmo
                          * 0x85EBCA6Bu
@@ -573,22 +601,24 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
 }
 
 /// A collision-beam class's `ScorchThread` splat texture, as a mark texture
-/// index (`defaultcollisionbeams.lua` C-290): seven thread bodies lay
-/// `czar_mark01_albedo` (the base stream's pick), the experimental phason
-/// lays `scorch_004_albedo` (past the C-484 scripted stream, like the
-/// quantum `Crater01` pair at 16). Presentation only, never hashed.
+/// index (`lua/sim/collisionbeams/*_collisionbeam.lua` C-290): every thread
+/// body lays `czar_mark01_albedo` (the base stream's pick) except the
+/// experimental phason, which lays `scorch_004_albedo` (past the C-484
+/// scripted stream, like the quantum `Crater01` pair at 16). Presentation
+/// only, never hashed.
 [[nodiscard]] int beamClassTextureIndex(int base, std::string_view beamClass) noexcept {
     if (beamClass == "ExperimentalPhasonLaserCollisionBeam") {
         return 17;  // `scorch_004_albedo` (`:235`)
     }
     return base;
 }
-
+///
 /// One beam strike's scorch (C-290 `ScorchThread` half). Retail forks the
-/// thread when the beam's `OnImpact` sees `impactType == 'Terrain'`
-/// (`defaultcollisionbeams.lua` — 8 of 16 classes; the rest scorch nothing),
-/// and the thread lays `CreateSplat` marks at the beam's tracked end while it
-/// dwells. A beam is hitscan — no projectile, no `ProjectileImpact` — so the
+/// thread when the beam's `OnImpact` sees a non-shield/water/air impact
+/// (`lua/sim/collisionbeams/*_collisionbeam.lua` — 10 thread bodies across the
+/// exports, plus the unexported `LightningSmallSurfaceCollisionBeam`); the
+/// thread lays `CreateSplat` marks at the beam's tracked end while it dwells.
+/// A beam is hitscan — no projectile, no `ProjectileImpact` — so the
 /// `BeamFired` event's `at` is the strike record. With water present, a strike
 /// at or under the level leaves no mark (C-292); a waterless field (level 0,
 /// dry ground) never refuses — the gate is water, not height. Blast-less, so
@@ -612,16 +642,15 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     scene.impactMarks.back().textureIndex = beamClassTextureIndex(scene.impactMarks.back().textureIndex, beamClass);  // (`SplatTexture` C-290)
     scene.impactMarks.back().beamSizeElmos = beamClassSize(x, z, beamClass);  // elmos (C-290 `size`)
     // Retail's `ScorchThread` lays its pass splat only when the tracked end
-    // moved more than 0.25 (`defaultcollisionbeams.lua:119` C-290) — positions
-    // retail measures in ogrids, 8 elmos each (`Scmap.hpp kElmosPerOgrid`), so
-    // the gate is 2 elmos. A trembling end inside it lays nothing between
-    // strikes; past it the thread draws a continuous line, not one point per
-    // shot. Bridge from this shooter's last noted end to the current one with
-    // midpoint splats spaced one blast-less mark diameter apart (2.5 elmos,
-    // `kImpactMarkRadiusElmos` x2 — the same discs the projection draws, so
-    // the trail reads unbroken). Same-shooter only, matched on the firing
-    // handle's generation: a recycled slot's first strike notes but bridges
-    // nothing. Presentation only, never hashed.
+    // moved more than 0.25 ogrids — 2 elmos (`Scmap.hpp kElmosPerOgrid` = 8).
+    // A trembling end inside it lays nothing between strikes; past it the
+    // thread draws a continuous line, not one point per shot. Bridge from this
+    // shooter's last noted end to the current one with midpoint splats spaced
+    // one blast-less mark diameter apart (2.5 elmos, `kImpactMarkRadiusElmos`
+    // x2 — the same discs the projection draws, so the trail reads unbroken).
+    // Same-shooter only, matched on the firing handle's generation: a recycled
+    // slot's first strike notes but bridges nothing. Presentation only, never
+    // hashed.
     const auto prior = scene.beamLastEnd.find(event.unit.index);
     const bool sameShooter = prior != scene.beamLastEnd.end()
                              && prior->second.first == event.unit.generation;
@@ -631,7 +660,7 @@ UnitScene::ImpactMarkScript scriptTagForProjectile(std::string_view projectileId
     if (sameShooter) {
         // Elmos per ogrid: 8 (Scmap.hpp `kElmosPerOgrid`), written out so this
         // app-side projection does not include a map header for one product.
-        constexpr float kBeamScorchMoveGateElmos = 0.25f * 8.0f;  // elmos (C-290 `:119`)
+        constexpr float kBeamScorchMoveGateElmos = 0.25f * 8.0f;  // elmos (0.25 ogrids, C-290)
         const float dx = x - prevX;
         const float dz = z - prevZ;
         const float span = std::sqrt(dx * dx + dz * dz);

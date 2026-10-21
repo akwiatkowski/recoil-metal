@@ -854,24 +854,21 @@ struct UnitScene {
         /// weapon's own authored texture at its authored size in elmos.
         ImpactMarkScript script = ImpactMarkScript::BaseScorch;
         /// Retail's `ScorchThread` `CreateSplat` lifetime for this mark, in
-        /// seconds (`defaultcollisionbeams.lua` C-290): 100 for the seven
-        /// 100-life thread bodies, 250 for the quantum thread, 15 for the
-        /// orbital death laser. Read only when `beamThread` is set.
-        /// Presentation only, never hashed.
+        /// seconds (`lua/sim/collisionbeams/*_collisionbeam.lua` C-290):
+        /// per-class — quantum 150, hiro 70, ultra pair 50, the rest 100.
+        /// Read only when `beamThread` is set. Presentation only, never hashed.
         float beamLifetimeSeconds = 100.0f;
         /// Retail's `ScorchThread` `CreateSplat` draw size for this mark, in
-        /// elmos (`defaultcollisionbeams.lua` C-290): the `size` local per
-        /// pass — 3.5+Random*3.5 opening on the quantum/orbital bodies,
-        /// 4+Random*1 on the experimental phason, 1.5+Random*1.5 on the
-        /// photon-chromatic bodies, 0.75+Random*0.75 on the hiro/ultra pair.
-        /// Derived from the mark's own position bits like the rotation angle
-        /// — replay-identical, off the sim RNG (C-297). Read only when
-        /// `beamThread` is set. Presentation only, never hashed.
+        /// elmos (`lua/sim/collisionbeams/*_collisionbeam.lua` C-290): the
+        /// `size` local per pass — 3.5+Random*3.5 opening on the
+        /// quantum/orbital bodies, 4+Random*1 on the experimental phason,
+        /// 1.5+Random*1.5 on the microwave/phason/hiro openings, 1.1+Random*1.1
+        /// on the lightning surface, 1+Random*1 on the ultra pair.
         float beamSizeElmos = 0.0f;
         /// True when laid by a dwelling collision beam's `ScorchThread`
-        /// (`defaultcollisionbeams.lua` C-290): the thread's `CreateSplat`
-        /// carries its own fixed lifetime (the 7th arg, per-class), not the
-        /// 300-600 s explosion spread. Presentation only.
+        /// (`lua/sim/collisionbeams/*_collisionbeam.lua` C-290): the thread's
+        /// `CreateSplat` carries its own fixed lifetime (the 7th arg,
+        /// per-class), not the 300-600 s explosion spread. Presentation only.
         bool beamThread = false;
     };
     static constexpr std::size_t kMaxImpactMarks = 512;
@@ -1765,32 +1762,33 @@ void noteImpactMark(UnitScene& scene, float x, float z, float blastRadiusElmos =
                     UnitScene::ImpactMarkScript script = UnitScene::ImpactMarkScript::BaseScorch,
                     bool beamThread = false, float beamLifetimeSeconds = 100.0f);
 /// Whether a collision-beam class lays scorch (C-290): retail forks
-/// `ScorchThread` on `impactType == 'Terrain'` in 8 of the 16 classes in
-/// `defaultcollisionbeams.lua` (`QuantumBeamGenerator`, both `MicrowaveLaser`,
-/// `PhasonLaser`, `ExperimentalPhasonLaser`, `UnstablePhasonLaser`,
-/// `UltraChromatic`, `TDFHiro`, `OrbitalDeathLaser`; `MicrowaveLaser02` and
-/// `Ultra02` inherit their parent's thread). The rest — `Ginsu`,
+/// `ScorchThread` on a non-shield/water/air impact in 10 thread bodies across
+/// `lua/sim/collisionbeams/*_collisionbeam.lua` (`QuantumBeamGenerator`, both
+/// `MicrowaveLaser`, `PhasonLaser`, `UnstablePhasonLaser`, `UltraChromatic/02`,
+/// `TDFHiro`, `OrbitalDeathLaser`, `ExperimentalPhasonLaser`, plus the
+/// unexported `LightningSmallSurfaceCollisionBeam`). The rest — `Ginsu`,
 /// `ParticleCannon`, `Zapper`, `DisruptorBeam`, the FX-only `TractorClaw` —
 /// lay nothing. Unknown names scorch: an unrecognised class is a content gap,
 /// not a proved opt-out. Presentation only, never hashed.
 [[nodiscard]] bool beamClassScorches(std::string_view beamClass) noexcept;
 /// A collision-beam class's `ScorchThread` `CreateSplat` lifetime, in seconds
-/// (`defaultcollisionbeams.lua` C-290, the 7th arg): 250 for the quantum
-/// thread, 15 for the orbital death laser, 100 for every other scorching
-/// class. Presentation only, never hashed.
+/// (`lua/sim/collisionbeams/*_collisionbeam.lua` C-290, the 7th arg — the
+/// `duration`): quantum 150, hiro 70, ultra pair 50, the rest 100.
+/// Presentation only, never hashed.
 [[nodiscard]] float beamClassLifetimeSeconds(std::string_view beamClass) noexcept;
 /// A collision-beam class's `ScorchThread` `CreateSplat` LOD
-/// (`defaultcollisionbeams.lua` C-290, the 6th arg): 250 for the quantum
-/// thread and the orbital death laser, 100 for every other scorching class.
-/// Presentation only, never hashed.
+/// (`lua/sim/collisionbeams/*_collisionbeam.lua` C-290, the 6th arg — the
+/// `lodParam`): quantum/microwaves/phason 200, unstable phason and orbital
+/// death laser 250, hiro 100, ultra pair 70, experimental phason and
+/// lightning-surface 100. Presentation only, never hashed.
 [[nodiscard]] int beamClassLod(std::string_view beamClass) noexcept;
 /// Notes one beam strike's scorch (C-290 `ScorchThread` half): a beam is
 /// hitscan — no projectile, no `ProjectileImpact` — so the `BeamFired` event
 /// is the only record of where the strike landed. Retail's `OnImpact` forks
-/// the thread on `impactType == 'Terrain'` (`defaultcollisionbeams.lua`);
-/// here the caller passes the strike height and the water level and only a
-/// strike above water notes a mark — the C-292 gate, with a waterless field
-/// (level 0, dry ground) never refusing. The strike point is `event.at`;
+/// the thread on a non-shield/water/air impact; here the caller passes the
+/// strike height and the water level and only a strike above water notes a
+/// mark — the C-292 gate, with a waterless field (level 0, dry ground) never
+/// refusing. The strike point is `event.at`;
 /// beams carry no blast radius, so the mark is blast-less and rides the base
 /// splat path. `beamClass` names the firing weapon's collision-beam class;
 /// empty (or unknown) means unmapped, which scorches — see `beamClassScorches`.

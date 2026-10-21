@@ -303,12 +303,12 @@ TEST_CASE("C-292: a shot into the sea leaves no scorch", "[fa-terrain]") {
 }
 TEST_CASE("C-290: a beam striking terrain leaves scorch at the strike point", "[fa-terrain]") {
     // Retail's collision beams scorch through `ScorchThread`
-    // (`defaultcollisionbeams.lua`: `OnImpact` forks the thread on
-    // `impactType == 'Terrain'`; the thread lays `CreateSplat` marks at the
-    // beam's tracked end while it dwells). A beam is hitscan — no projectile,
-    // no `ProjectileImpact` — so the `BeamFired` event is the only record of
-    // where the strike landed, and the app must note the mark from it. Water
-    // strikes leave nothing, matching the C-292 gate.
+    // (`lua/sim/collisionbeams/*_collisionbeam.lua`: `OnImpact` forks the
+    // thread on a non-shield/water/air impact; the thread lays `CreateSplat`
+    // marks at the beam's tracked end while it dwells). A beam is hitscan —
+    // no projectile, no `ProjectileImpact` — so the `BeamFired` event is the
+    // only record of where the strike landed, and the app must note the mark
+    // from it. Water strikes leave nothing, matching the C-292 gate.
     SECTION("a terrain strike marks, a water strike does not") {
         rm::app::UnitScene scene = makeScene(true, 32.0f);
         rm::sim::Event land{};
@@ -326,13 +326,13 @@ TEST_CASE("C-290: a beam striking terrain leaves scorch at the strike point", "[
         CHECK(scene.impactMarks.size() == 1);
     }
     SECTION("a beam that struck a hull scorches nothing through the match drain") {
-        // Retail forks `ScorchThread` only when the beam's `OnImpact` sees
-        // `impactType == 'Terrain'` (`defaultcollisionbeams.lua` C-290): a
-        // strike that landed on a hull is a unit impact, not terrain, so the
-        // drain must note nothing for it. Same rig as before — a turreted beam
-        // tank with vision vs a LAND victim in range — but firing means the
-        // `BeamFired` strike landed on the victim's hull (the event names it
-        // as instigator, `Combat.cpp`), so the ground stays clean.
+        // Retail forks `ScorchThread` only when the beam's `OnImpact` sees a
+        // non-shield/water/air impact (`lua/sim/collisionbeams/*_collisionbeam.lua`
+        // terrain, so the drain must note nothing for it. Same rig as before
+        // — a turreted beam tank with vision vs a LAND victim in range — but
+        // firing means the `BeamFired` strike landed on the victim's hull (the
+        // event names it as instigator, `Combat.cpp`), so the ground stays
+        // clean.
         rm::app::UnitScene scene = makeScene(false, 0.0f);
         rm::unitdef::Weapon gun;
         gun.label = "BeamGun";
@@ -386,16 +386,17 @@ TEST_CASE("C-290: a beam striking terrain leaves scorch at the strike point", "[
 }
 
 TEST_CASE("C-290: only ScorchThread beam classes scorch", "[fa-terrain]") {
-    // Retail's scorch opt-out (`defaultcollisionbeams.lua` C-290): 8 of the 16
-    // collision-beam classes fork `ScorchThread` on `impactType == 'Terrain'`
-    // (`QuantumBeamGenerator`, both `MicrowaveLaser`, `PhasonLaser`,
-    // `ExperimentalPhasonLaser`, `UnstablePhasonLaser`, `UltraChromatic`,
-    // `TDFHiro`, `OrbitalDeathLaser` — plus `MicrowaveLaser02`/`Ultra02` by
-    // inheritance); the rest — `Ginsu`, `ParticleCannon`, `Zapper`,
-    // `DisruptorBeam`, the FX-only `TractorClaw` — lay nothing. The gate is a
-    // per-class table consulted from the `BeamFired` event's beam class: a
-    // scorch-less class marks nothing, a scorching class marks through the
-    // same water gate as before.
+    // Retail's scorch opt-out (`lua/sim/collisionbeams/*_collisionbeam.lua`
+    // C-290): 10 exported thread bodies fork `ScorchThread` on a
+    // non-shield/water/air impact (`QuantumBeamGenerator`,
+    // `MicrowaveLaser01/02`, `PhasonLaser`, `UnstablePhasonLaser`,
+    // `UltraChromatic/02`, `TDFHiro`, `OrbitalDeathLaser`,
+    // `ExperimentalPhasonLaser` — plus the unexported
+    // `LightningSmallSurfaceCollisionBeam`, same body); the rest — `Ginsu`,
+    // `ParticleCannon`, `Zapper`, `DisruptorBeam`, the FX-only
+    // `TractorClaw` — lay nothing. The gate is a per-class table consulted
+    // from the `BeamFired` event's beam class: a scorch-less class marks
+    // nothing, a scorching class marks through the same water gate as before.
     CHECK_FALSE(rm::app::beamClassScorches("GinsuCollisionBeam"));
     CHECK_FALSE(rm::app::beamClassScorches("ParticleCannonCollisionBeam"));
     CHECK_FALSE(rm::app::beamClassScorches("ZapperCollisionBeam"));
@@ -412,6 +413,7 @@ TEST_CASE("C-290: only ScorchThread beam classes scorch", "[fa-terrain]") {
         "UltraChromaticBeamGeneratorCollisionBeam02"));
     CHECK(rm::app::beamClassScorches("TDFHiroCollisionBeam"));
     CHECK(rm::app::beamClassScorches("OrbitalDeathLaserCollisionBeam"));
+    CHECK(rm::app::beamClassScorches("LightningSmallSurfaceCollisionBeam"));
     // Unknown classes scorch: retail's default `CollisionBeam` base lays no
     // `ScorchThread`, but an unrecognised name is a content gap, not a proved
     // opt-out — failing closed would silently drop scorch for every future
@@ -431,12 +433,12 @@ TEST_CASE("C-290: only ScorchThread beam classes scorch", "[fa-terrain]") {
     CHECK(dry.impactMarks.size() == 1);
 }
 TEST_CASE("C-290: a dwelling beam lays a trail along its tracked end", "[fa-terrain]") {
-    // Retail's `ScorchThread` (`defaultcollisionbeams.lua` C-290) lays one
-    // `CreateSplat` per pass at the beam's tracked end while it dwells — a
-    // moving strike point draws a continuous line, not one point per shot. A
-    // beam that fires twice from the same shooter with its end dragged across
-    // dry ground must therefore leave marks spanning the drag, not a doubled
-    // mark at one end.
+    // Retail's `ScorchThread` (`lua/sim/collisionbeams/*_collisionbeam.lua`
+    // C-290) lays one `CreateSplat` per pass at the beam's tracked end while
+    // it dwells — a moving strike point draws a continuous line, not one point
+    // per shot. A beam that fires twice from the same shooter with its end
+    // dragged across dry ground must therefore leave marks spanning the drag,
+    // not a doubled mark at one end.
     rm::app::UnitScene scene = makeScene(false, 0.0f);
     rm::sim::Event first{};
     first.kind = rm::sim::EventKind::BeamFired;
@@ -455,12 +457,11 @@ TEST_CASE("C-290: a dwelling beam lays a trail along its tracked end", "[fa-terr
     CHECK(spansDrag);
 }
 TEST_CASE("C-290: beam scorch retires at retail's fixed thread lifetime", "[fa-terrain]") {
-    // Retail's `ScorchThread` (`defaultcollisionbeams.lua` C-290) lays its own
-    // `CreateSplat` at the tracked end — NOT through `CreateScorchMarkSplat` —
-    // so its args are fixed per class, not the explosion spread: seven thread
-    // bodies pass LOD 100 with lifetime 100, the quantum thread passes 250/250,
-    // and the orbital death laser passes 250/15. An explosion mark must still
-    // survive the 100 s floor; a beam mark must be gone by it.
+    // Retail's `ScorchThread` (`lua/sim/collisionbeams/*_collisionbeam.lua`
+    // C-290) lays its own `CreateSplat` at the tracked end — NOT through
+    // `CreateScorchMarkSplat` — so its args are fixed per class, not the
+    // explosion spread: the unnamed default reads 100 s. An explosion mark
+    // must still survive that floor; a beam mark must be gone by it.
     const rm::HeightField field = flatField(128, 0.0f);
     const rm::sim::TickRate rate{};
     const rm::TickIndex floor = rate.ticks(rm::sim::seconds(100.0f));  // ticks, s (C-290)
@@ -478,15 +479,14 @@ TEST_CASE("C-290: beam scorch retires at retail's fixed thread lifetime", "[fa-t
 }
 
 TEST_CASE("C-290: beam scorch lifetimes follow the thread's own CreateSplat args", "[fa-terrain]") {
-    // `defaultcollisionbeams.lua` C-290: seven `ScorchThread` bodies pass
-    // (LOD 100, lifetime 100), the quantum thread passes (250, 250), and the
-    // orbital death laser passes (250, 15) — the 7th `CreateSplat` arg is the
-    // lifetime. Each class's mark must retire at its own thread's lifetime.
+    // `lua/sim/collisionbeams/*_collisionbeam.lua` C-290: each `ScorchThread`
+    // passes its own (LOD, lifetime) pair to `CreateSplat` (6th/7th args) —
+    // quantum (200, 150), orbital (250, 100), microwave01 (200, 100). Each
+    // class's mark must retire at its own thread's lifetime.
     const rm::HeightField field = flatField(128, 0.0f);
     const rm::sim::TickRate rate{};
-    const rm::TickIndex life15 = rate.ticks(rm::sim::seconds(15.0f));  // ticks, s (C-290)
     const rm::TickIndex life100 = rate.ticks(rm::sim::seconds(100.0f));  // ticks, s (C-290)
-    const rm::TickIndex life250 = rate.ticks(rm::sim::seconds(250.0f));  // ticks, s (C-290)
+    const rm::TickIndex life150 = rate.ticks(rm::sim::seconds(150.0f));  // ticks, s (C-290)
     rm::app::UnitScene scene = makeScene(false, 0.0f);
     rm::sim::Event beam{};
     beam.kind = rm::sim::EventKind::BeamFired;
@@ -503,23 +503,17 @@ TEST_CASE("C-290: beam scorch lifetimes follow the thread's own CreateSplat args
     (void)rm::app::noteBeamScorch(scene, beam, 40.0f, 0.0f, 0,
                                   "MicrowaveLaserCollisionBeam01");
     REQUIRE(scene.impactMarks.size() == 3);
-    rm::app::refreshWreckDecals(scene, field, life15);
-    REQUIRE(scene.impactMarks.size() == 2);
-    CHECK(std::ranges::none_of(scene.impactMarks, [](const auto& mark) {
-        return mark.x == Catch::Approx(500.0f);
-    }));
     rm::app::refreshWreckDecals(scene, field, life100);
     REQUIRE(scene.impactMarks.size() == 1);
     CHECK(scene.impactMarks[0].x == Catch::Approx(520.0f));
-    rm::app::refreshWreckDecals(scene, field, life250);
+    rm::app::refreshWreckDecals(scene, field, life150);
     CHECK(scene.impactMarks.empty());
 }
 TEST_CASE("C-290: beam scorch LOD follows the thread's own CreateSplat args", "[fa-terrain]") {
-    // `defaultcollisionbeams.lua` C-290: seven `ScorchThread` bodies pass
-    // (LOD 100, lifetime 100), the quantum thread passes (250, 250), and the
-    // orbital death laser passes (250, 15) — the 6th `CreateSplat` arg is the
-    // LOD. A beam mark must carry its own thread's LOD, not the 200-350
-    // explosion spread (`defaultexplosions.lua:211,215`).
+    // `lua/sim/collisionbeams/*_collisionbeam.lua` C-290: each `ScorchThread`
+    // passes its own LOD (`CreateSplat` 6th arg) — microwave01 200, quantum
+    // 200, orbital 250. A beam mark must carry its own thread's LOD, not the
+    // 200-350 explosion spread (`defaultexplosions.lua:613,629`).
     rm::app::UnitScene scene = makeScene(false, 0.0f);
     rm::sim::Event beam{};
     beam.kind = rm::sim::EventKind::BeamFired;
@@ -528,13 +522,13 @@ TEST_CASE("C-290: beam scorch LOD follows the thread's own CreateSplat args", "[
     (void)rm::app::noteBeamScorch(scene, beam, 40.0f, 0.0f, 0,
                                   "MicrowaveLaserCollisionBeam01");
     REQUIRE(scene.impactMarks.size() == 1);
-    CHECK(scene.impactMarks[0].lod == 100);
+    CHECK(scene.impactMarks[0].lod == 200);
     beam.unit = rm::sim::UnitId{1, 1};
     beam.at = rm::test::at(520, 40, 500);
     (void)rm::app::noteBeamScorch(scene, beam, 40.0f, 0.0f, 0,
                                   "QuantumBeamGeneratorCollisionBeam");
     REQUIRE(scene.impactMarks.size() == 2);
-    CHECK(scene.impactMarks[1].lod == 250);
+    CHECK(scene.impactMarks[1].lod == 200);
     beam.unit = rm::sim::UnitId{2, 1};
     beam.at = rm::test::at(540, 40, 500);
     (void)rm::app::noteBeamScorch(scene, beam, 40.0f, 0.0f, 0,
@@ -542,15 +536,44 @@ TEST_CASE("C-290: beam scorch LOD follows the thread's own CreateSplat args", "[
     REQUIRE(scene.impactMarks.size() == 3);
     CHECK(scene.impactMarks[2].lod == 250);
 }
+TEST_CASE("C-290: every ScorchThread class retires at its own CreateSplat args", "[fa-terrain]") {
+    // Per-class corpus audit (`lua/sim/collisionbeams/*_collisionbeam.lua`
+    // C-290): the LOD/lifetime pair each `ScorchThread` passes to `CreateSplat`
+    // (6th/7th args) is fixed per thread body — quantum (200, 150), orbital
+    // (250, 100), microwave01/02 and phason (200, 100), unstable phason
+    // (250, 100), hiro (100, 70), ultra/ultra02 (70, 50), experimental phason
+    // and lightning-surface (100, 100). Each class's mark must carry its own
+    // pair, not one shared constant.
+    CHECK(rm::app::beamClassLod("QuantumBeamGeneratorCollisionBeam") == 200);
+    CHECK(rm::app::beamClassLifetimeSeconds("QuantumBeamGeneratorCollisionBeam") == 150.0f);
+    CHECK(rm::app::beamClassLod("OrbitalDeathLaserCollisionBeam") == 250);
+    CHECK(rm::app::beamClassLifetimeSeconds("OrbitalDeathLaserCollisionBeam") == 100.0f);
+    CHECK(rm::app::beamClassLod("MicrowaveLaserCollisionBeam01") == 200);
+    CHECK(rm::app::beamClassLod("MicrowaveLaserCollisionBeam02") == 200);
+    CHECK(rm::app::beamClassLod("PhasonLaserCollisionBeam") == 200);
+    CHECK(rm::app::beamClassLod("UnstablePhasonLaserCollisionBeam") == 250);
+    CHECK(rm::app::beamClassLifetimeSeconds("UnstablePhasonLaserCollisionBeam") == 100.0f);
+    CHECK(rm::app::beamClassLod("TDFHiroCollisionBeam") == 100);
+    CHECK(rm::app::beamClassLifetimeSeconds("TDFHiroCollisionBeam") == 70.0f);
+    CHECK(rm::app::beamClassLod("UltraChromaticBeamGeneratorCollisionBeam") == 70);
+    CHECK(rm::app::beamClassLod("UltraChromaticBeamGeneratorCollisionBeam02") == 70);
+    CHECK(rm::app::beamClassLifetimeSeconds("UltraChromaticBeamGeneratorCollisionBeam") == 50.0f);
+    CHECK(rm::app::beamClassLod("ExperimentalPhasonLaserCollisionBeam") == 100);
+    CHECK(rm::app::beamClassLifetimeSeconds("ExperimentalPhasonLaserCollisionBeam") == 100.0f);
+    CHECK(rm::app::beamClassLod("LightningSmallSurfaceCollisionBeam") == 100);
+    CHECK(rm::app::beamClassLifetimeSeconds("LightningSmallSurfaceCollisionBeam") == 100.0f);
+}
+
 TEST_CASE("C-290: beam scorch sizes follow the thread's own size bands", "[fa-terrain]") {
-    // `defaultcollisionbeams.lua` C-290: each `ScorchThread` body draws its
-    // own `CreateSplat` size band — the quantum thread opens at 3.5+Random*3.5
-    // (first-pass 3.5..7), the photon-chromatic bodies at 1.5+Random*1.5
-    // (1.5..3), the experimental phason at 4+Random*1 (4..5), the hiro/ultra
-    // bodies at 0.75+Random*0.75 (0.75..1.5), and every body redraws at
-    // 1.2+Random*1.5 (quantum/orbital 3.2+Random*3.5) on later passes. A
-    // quantum strike must draw bigger than a microwave one, and replay must
-    // draw it identically.
+    // `lua/sim/collisionbeams/*_collisionbeam.lua` C-290: each `ScorchThread`
+    // body draws its own `CreateSplat` size band — the quantum thread opens at
+    // 3.5+Random*3.5 (first-pass 3.5..7), the photon-chromatic bodies at
+    // 1.5+Random*1.5 (1.5..3), the experimental phason at 4+Random*1 (4..5),
+    // the lightning surface at 1.1+Random*1.1 (1.1..2.2), the ultra pair at
+    // 1+Random*1 (1..2), and most bodies redraw at 1.2+Random*1.5
+    // (quantum/orbital 3.2+Random*3.5, experimental phason and ultra unchanged,
+    // lightning-surface 1+Random*1.1) on later passes. A quantum strike must
+    // draw bigger than a microwave one, and replay must draw it identically.
     rm::app::UnitScene quantum = makeScene(false, 0.0f);
     rm::app::UnitScene micro = makeScene(false, 0.0f);
     rm::sim::Event beam{};
@@ -577,8 +600,9 @@ TEST_CASE("C-290: beam scorch sizes follow the thread's own size bands", "[fa-te
     CHECK(replay.impactMarks[0].beamSizeElmos == quantumSize);
 }
 TEST_CASE("C-290: beam scorch textures follow the thread's own SplatTexture", "[fa-terrain]") {
-    // `defaultcollisionbeams.lua` C-290: seven `ScorchThread` bodies lay
-    // `czar_mark01_albedo`; the experimental phason lays `scorch_004_albedo`.
+    // `lua/sim/collisionbeams/*_collisionbeam.lua` C-290: every `ScorchThread`
+    // body lays `czar_mark01_albedo` except the experimental phason, which
+    // lays `scorch_004_albedo`.
     // A beam mark must carry its own thread's texture, not the 0..9 explosion
     // splat stream — so the FA-PRESENT projection samples what retail drew.
     rm::app::UnitScene exp = makeScene(false, 0.0f);
@@ -601,11 +625,11 @@ TEST_CASE("C-290: beam scorch textures follow the thread's own SplatTexture", "[
     CHECK(replay.impactMarks[0].textureIndex == exp.impactMarks[0].textureIndex);
 }
 TEST_CASE("C-290: dwell-trail filler marks use the thread's redraw size band", "[fa-terrain]") {
-    // `defaultcollisionbeams.lua` C-290: each `ScorchThread` redraws `size`
-    // after every pass — the quantum thread at 3.2+Random*3.5 (first-pass
-    // 3.5..7), the photon-chromatic bodies at 1.2+Random*1.5 (first-pass
-    // 1.5..3). Trail filler marks stand in for later passes, so they must
-    // sample the redraw band, not the opening one.
+    // `lua/sim/collisionbeams/*_collisionbeam.lua` C-290: each `ScorchThread`
+    // redraws `size` after every pass — the quantum thread at 3.2+Random*3.5
+    // (first-pass 3.5..7), the photon-chromatic bodies at 1.2+Random*1.5
+    // (first-pass 1.5..3). Trail filler marks stand in for later passes, so
+    // they must sample the redraw band, not the opening one.
     rm::app::UnitScene scene = makeScene(false, 0.0f);
     rm::sim::Event first{};
     first.kind = rm::sim::EventKind::BeamFired;
@@ -630,13 +654,12 @@ TEST_CASE("C-290: dwell-trail filler marks use the thread's redraw size band", "
 }
 
 TEST_CASE("C-290: a dwelling beam lays splats only past retail's move gate", "[fa-terrain]") {
-    // `defaultcollisionbeams.lua` C-290 (`:119`): each `ScorchThread` pass
-    // lays its `CreateSplat` only when the tracked end moved more than 0.25
-    // (`Util.GetDistanceBetweenTwoVectors(CurrentPosition, LastPosition) >
-    // 0.25`) — positions retail measures in ogrids, where 0.25 ogrid is 2
-    // elmos (`Scmap.hpp kElmosPerOgrid` = 8). A 4-elmo drag clears retail's
-    // gate but steps no 5-elmo filler disc, so the bridge must lay nothing
-    // between the two endpoint marks: exactly two marks, not three.
+    // `lua/sim/collisionbeams/quantumbeamgeneratorcollisionbeam.lua:45-47`
+    // C-290: each `ScorchThread` pass lays its `CreateSplat` only when the
+    // tracked end moved more than 0.25 ogrids — 2 elmos
+    // (`Scmap.hpp kElmosPerOgrid` = 8). A 4-elmo drag clears retail's gate
+    // but steps no 5-elmo filler disc, so the bridge must lay nothing between
+    // the two endpoint marks: exactly two marks, not three.
     rm::app::UnitScene scene = makeScene(false, 0.0f);
     rm::sim::Event first{};
     first.kind = rm::sim::EventKind::BeamFired;
