@@ -95,9 +95,8 @@ Uncommitted at this checkpoint: `src/app/FafOpponent.cpp`,
 Full serial gate: **2,261 registered cases, 0 failures** (610.53 s; same
 asset/performance skip kinds as the prior gate).
 
-## What remains from 100% (2026-10-19, audited against code truth)
-
-Gate 2,491/2,491 green on a clean tree; ~125 behavior slices landed since the
+## What remains from 100% (2026-10-21, audited against code truth)
+Gate 2,491/2,491 green on a clean tree; ~240 behavior slices landed since the
 printed scores below were written, so every per-row percentage beneath is STALE
 and understates the tree. Spot-checks against code (not section prose) confirm
 these row texts are already wrong: INTEL water-vision/omni-bypass/sonar-graves
@@ -120,29 +119,34 @@ Structural gaps that no slice wave can close (architectural, need design sign-of
   script surface the sim lacks.
 - FA-LAND HPA*/reservations are deliberate divergences (C-175/C-177/C-496);
   arrival re-forming is retail-absent (C-178), not a gap.
-- FA-PROGRESS EMPCharge STUN buff registry (no weapon-buff modeling exists).
+- FA-PROGRESS STUN Duration parsed (authored 6 s payload pinned); full SetStunned
+  wiring (stun ticks, fire/regen gates) still open.
 - FA-TRANSPORT live-anchor refresh (shelved: regresses ferry route).
 - FA-DAMAGE installed-dome shelter (shelved: dome-centre vertical geometry).
 - FA-AI IssueDive naval dive (reverted: SIGSEGV in test, needs debug).
 
-Implementable remainder (slice-sized, verified genuinely absent at last check):
-- FA-CONTENT/FA-MATCH/FA-WEAPONS/FA-MISSILES/FA-TERRAIN/FA-INTEL/FA-UI rows:
-  continued retail-cite TDD slices; each wave keeps finding true small gaps.
-- FA-PRESENT reload/charge manipulator host; FA-UI split views (documented
-  single-view divergence unless re-decided).
+Implementable remainder (slice-sized; each wave keeps finding true small gaps):
+- FA-ECON live remainder: C-099 increase-side health floor, C-118/C-188/C-250
+  task-machine internals (no sim analog), C-160 binary32 artifact, C-218
+  explicit-0 family (needs UnitDef fields — deferred).
+- FA-PRESENT reload/charge manipulator host (FxChargeEffects burst landed);
+  FA-UI split views (documented single-view divergence unless re-decided).
 
 No subsystem is fully absent. The >97% bar needs 20/20 rows at 97%+ or an
-equivalent measured denominator; the printed count below (4/20 at 100%) is
-stale and cannot promote itself. Gate evidence: full serial ctest 2,388/2,388
+equivalent measured denominator; the per-row percentages below are stale and
+cannot promote themselves. Gate evidence: full serial ctest 2,491/2,491
 green (this turn, clean tree).
 Per-row gap texts below are retained as subsystem-owner input, not current truth:
 **Accuracy review (2026-09-23, `b845a1a`):** `ART-E001` still hashes to
 `c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0`.
-The current 16 local `build/re-fa/coverage/FA-*.md` files report 298 TESTED,
-17 PARTIAL, 163 NA_INTERNAL claim/subsystem rows (315 implementable rows;
-weighted test coverage 306.5/315 = 97.3%). These are **implementation test
-classifications, not a retail accuracy score**: some TESTED rows explicitly pin
-opposite behavior (`C-276`'s 10-second blip expiry, `C-267`'s last-mount-wins VFS).
+The 17 local `build/re-fa/coverage/FA-*.md` files report (2026-10-21 recount):
+16 files at 100% of implementable claims; FA-ECON 94.1% (7 PARTIAL:
+C-099/C-118/C-160/C-188/C-190/C-239/C-250, of which C-190 chain-upgrade and
+C-239 attached-costs are pinned and only the claim notes are stale);
+FA-FOUND-CONTENT 97.5% (1 PARTIAL: C-218 explicit-0 family, needs UnitDef
+fields — deferred). These are **implementation test classifications, not a
+retail accuracy score**: some TESTED rows explicitly pin opposite behavior
+(`C-276`'s 10-second blip expiry, `C-267`'s last-mount-wins VFS).
 
 **Decision:** adequate as a tested, bounded gameplay approximation, **not** as
 full retail parity or a bit-identical simulator. `WP-15` alone passes the
