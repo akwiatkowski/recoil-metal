@@ -1183,6 +1183,9 @@ constexpr std::size_t kUnidentifiedPriorityRow = 9999;
     if (!shootable(fromArmy, store, target.index, armies)) {
         return false;
     }
+    if (store.doNotTarget(target)) {
+        return false;  // C-131 state bit 34, C-157 reject step 12: protected hulls are not shot
+    }
     const std::span<const MoveState> motion = store.motion();
     if (target.index >= motion.size() || motion[target.index].attached
         || !weapon.canTarget(motion[target.index].airborne,
@@ -4522,10 +4525,45 @@ const unitdef::Weapon* deathWeapon(const unitdef::UnitDef& def) noexcept {
     }
     return nullptr;
 }
+// The `C-086` half of a death blast: retail's `DeathWeaponDamageThread`
+// (`lua/sim/Unit.lua:2000-2003`) calls the engine `DamageArea`, whose `0xF00`
+// query includes projectiles — so a death detonation chips hostile in-flight
+// shots overlapping it, like an impact blast does. Same rules as the impact
+// sweep: authored pools only, never the firing side's own shots, and a spent
+// pool zeroes the shot for removal. Null list keeps the direct-call shape.
+void chipOverheadShots(std::array<Fx, 3> at, Mag amount, Fx radiusElmos, int byArmy,
+                        std::span<const Army> armies,
+                        std::vector<Projectile>* projectiles) noexcept {
+    if (projectiles == nullptr || amount <= Mag{} || radiusElmos <= Fx{}) {
+        return;
+    }
+    for (Projectile& other : *projectiles) {
+        if (other.ticksRemaining <= 0 || other.pendingImpact != ImpactType::Invalid
+            || !projectileHostile(byArmy, other, armies)) {
+            continue;
+        }
+        const Fx dx = other.position[0] - at[0];
+        const Fx dy = other.position[1] - at[1];
+        const Fx dz = other.position[2] - at[2];
+        if (fxHypot(fxHypot(dx, dz), dy) > radiusElmos) {
+            continue;
+        }
+        if (other.maxHealth > Mag{}) {
+            other.health -= amount;
+        }
+        if (other.maxHealth <= Mag{} || other.health <= Mag{}) {
+            other.pendingImpact = ImpactType::Invalid;
+            other.impactTarget = {};
+            other.ticksRemaining = 0;
+        }
+    }
+}
+
 
 Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy,
-                     UnitStore& store, std::span<const Army> armies, UnitId by,
-                     EventQueue* events, const UnitCatalog* catalog, FeatureStore* features) {
+                    UnitStore& store, std::span<const Army> armies, UnitId by,
+                    EventQueue* events, const UnitCatalog* catalog, FeatureStore* features,
+                    std::vector<Projectile>* projectiles) {
     const unitdef::Weapon* blast = deathWeapon(def);
     // `deathWeapon` returns the first `Death`-category blast, which covers the
     // retail `DeathWeapon` label and the air-crash `DeathImpact` label
@@ -4559,19 +4597,26 @@ Mag explodeOnDeath(const unitdef::UnitDef& def, std::array<Fx, 3> at, int byArmy
     if (blast->hasRings()) {
         Mag dealt{};
         dealt += damageTargets(at, blast->outerRingRadius, profile(blast->outerRingDamage), byArmy,
-                                store, armies, catalog, by, events, blast->targetLayers,
-                                blast->damageFriendly, std::nullopt, std::nullopt, features,
-                                false, Fx{}, crashBlast);
+                               store, armies, catalog, by, events, blast->targetLayers,
+                               blast->damageFriendly, std::nullopt, std::nullopt, features,
+                               false, Fx{}, crashBlast);
         dealt += damageTargets(at, blast->innerRingRadius, profile(blast->innerRingDamage), byArmy,
-                                store, armies, catalog, by, events, blast->targetLayers,
-                                blast->damageFriendly, std::nullopt, std::nullopt, features,
-                                false, Fx{}, crashBlast);
+                               store, armies, catalog, by, events, blast->targetLayers,
+                               blast->damageFriendly, std::nullopt, std::nullopt, features,
+                               false, Fx{}, crashBlast);
+        chipOverheadShots(at, blast->outerRingDamage, blast->outerRingRadius, byArmy, armies,
+                          projectiles);
+        chipOverheadShots(at, blast->innerRingDamage, blast->innerRingRadius, byArmy, armies,
+                          projectiles);
         return dealt;
     }
 
-    return damageTargets(at, blast->damageRadius, profile(blast->damage), byArmy, store, armies,
-                         catalog, by, events, blast->targetLayers, blast->damageFriendly,
-                         std::nullopt, std::nullopt, features, false, Fx{}, crashBlast);
+    Mag dealt = damageTargets(at, blast->damageRadius, profile(blast->damage), byArmy, store,
+                              armies, catalog, by, events, blast->targetLayers,
+                              blast->damageFriendly, std::nullopt, std::nullopt, features, false,
+                              Fx{}, crashBlast);
+    chipOverheadShots(at, blast->damage, blast->damageRadius, byArmy, armies, projectiles);
+    return dealt;
 }
 
 std::vector<UnitId> deadUnits(const UnitStore& store) {

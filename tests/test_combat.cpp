@@ -4044,6 +4044,31 @@ TEST_CASE("an explicit Attack holds fire on a BENIGN hull") {
     CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 0);
     CHECK(roster.health(target).current == rm::test::mag(100.0f));
 }
+TEST_CASE("an explicit Attack holds fire on a DoNotTarget hull") {
+    // C-157's reject order runs IsTargetExempt (step 11) then state bit 34
+    // `DoNotTarget` (step 12, C-131) before range/arc classification — and the
+    // automatic path already holds there. The explicit path checks every
+    // neighbouring gate (attached, BENIGN, restrictions) but walks past this
+    // one, so a clicked tractor-style protected hull is still shot.
+    const std::vector<Army> armies = rm::sim::freeForAll(2);
+    Weapon weapon = directFire(10.0f, 300.0f);
+    weapon.beam = true;
+    Roster roster;
+    const UnitId gunner =
+        roster.add(roster.addType(gunnerDef(weapon)), 0.0f, 0.0f, 0, 100.0f);
+    const UnitId target = roster.add(roster.addType(targetDef()), 0.0f, 50.0f, 1, 100.0f);
+    REQUIRE(roster.store.setDoNotTarget(target, true));
+    const rm::sim::Command attack{.kind = rm::sim::CommandKind::Attack,
+                                   .unit = gunner,
+                                   .target = target};
+    (void)roster.store.orders()[gunner.index].give(attack, false);
+    roster.store.orders()[gunner.index].markCurrentActive();
+
+    std::vector<Projectile> shots;
+    CHECK(rm::sim::fireWeapons(roster.store, roster.catalog, armies, shots, roster.rate) == 0);
+    CHECK(roster.health(target).current == rm::test::mag(100.0f));
+}
+
 
 
 
